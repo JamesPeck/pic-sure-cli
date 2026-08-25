@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  go:
+    name: CLI (test, lint, smoke)
+    runs-on: ubuntu-latest
+    env:
+      PICSURE_PTY_TEST: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      # Same pinned version and same `make lint` entry point as local
+      # development. The version lives only in the Makefile.
+      - name: Install golangci-lint
+        run: |
+          version="$(make -s print-lint-version)"
+          curl -sSfL "https://raw.githubusercontent.com/golangci/golangci-lint/$version/install.sh" \
+            | sh -s -- -b "$(go env GOPATH)/bin" "$version"
+
+      - name: Lint
+        run: make lint
+
+      # go.mod/go.sum must match the import graph; catches missing
+      # `go mod tidy` (e.g. direct deps mislabeled // indirect).
+      - name: Tidy check
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+
+      - name: Test
+        run: make test
+
+      - name: Smoke
+        run: make smoke
+
+  shell:
+    name: Shell scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Shellcheck
+        run: |
+          shellcheck --version
+          shellcheck \
+            install.sh smoke/run.sh \
+            testdata/fixtures/root/status.sh \
+            testdata/fixtures/root/preflight.sh \
+            testdata/fixtures/root/update.sh

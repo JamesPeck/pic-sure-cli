@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "command": "status",
+  "env": {
+    "file_present": true,
+    "file_valid": true,
+    "compose_project_name": "pic\"sure\\back\ttab",
+    "db_mode": "remote",
+    "db_host": "db.example.com",
+    "db_port": "3307",
+    "auth_mode": "required",
+    "picsure_image_tag": "LATEST"
+  },
+  "release_control": {
+    "repo": "https://github.com/hms-dbmi/baseline-pic-sure-release-control",
+    "branch": "main",
+    "commit": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
+    "refs": {
+      "PICSURE_REF": "main",
+      "FRONTEND_REF": "main",
+      "MIGRATIONS_REF": "main",
+      "DICTIONARY_ETL_REF": "v2.1.0"
+    }
+  },
+  "repos": [
+    { "name": "pic-sure", "present": true, "current": "feat/we\"ird\\branch", "target": "main", "state": "dirty" },
+    { "name": "PIC-SURE-Frontend", "present": true, "current": "a1b2c3d", "target": "main", "state": "clean" },
+    { "name": "PIC-SURE-Migrations", "present": false, "current": null, "target": "main", "state": "missing" },
+    { "name": "picsure-dictionary-etl", "present": true, "current": "d4e5f60", "target": "v2.1.0", "state": "clean" }
+  ],
+  "docker": {
+    "cli_present": true,
+    "compose_available": true,
+    "daemon_reachable": true,
+    "compose_config_valid": true
+  },
+  "services": [
+    { "name": "gateway", "state": "running", "health": null, "exit_code": 0 },
+    { "name": "hpds", "state": "running", "health": "starting", "exit_code": null },
+    { "name": "picsure-db", "state": "exited", "health": "unhealthy", "exit_code": 137 }
+  ],
+  "health": { "checked": false, "healthy": null, "status": null, "message": "Skipped; pass --deep-health to probe the gateway" },
+  "database": { "mode": "remote", "service": null, "host": "db.example.com", "port": "3307" },
+  "migrations": { "checked": true, "ready": false, "message": "Migration input check failed; run ./run-migrations.sh --check" }
+}

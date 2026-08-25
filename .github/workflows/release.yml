@@ -1,0 +1,128 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Test + lint
+    runs-on: ubuntu-latest
+    # Mirror ci.yml so the release gate is no weaker than the per-PR gate:
+    # the PTY end-to-end test runs here too instead of self-skipping under CI.
+    env:
+      PICSURE_PTY_TEST: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Install golangci-lint
+        run: |
+          version="$(make -s print-lint-version)"
+          curl -sSfL "https://raw.githubusercontent.com/golangci/golangci-lint/$version/install.sh" \
+            | sh -s -- -b "$(go env GOPATH)/bin" "$version"
+
+      - name: Lint
+        run: make lint
+
+      # go.mod/go.sum must match the import graph; catches missing
+      # `go mod tidy` (e.g. direct deps mislabeled // indirect).
+      - name: Tidy check
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+
+      - name: Test
+        run: make test
+
+      # Same end-to-end smoke the per-PR CI runs (builds the binary, exercises
+      # script dispatch + install.sh against a local build, no docker needed).
+      - name: Smoke
+        run: make smoke
+
+      - name: Shellcheck
+        run: |
+          shellcheck \
+            install.sh smoke/run.sh \
+            testdata/fixtures/root/status.sh \
+            testdata/fixtures/root/preflight.sh \
+            testdata/fixtures/root/update.sh
+
+  build:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    needs: check
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goos: [linux, darwin]
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      # Asset naming is a contract with install.sh:
+      # pic-sure_<os>_<arch>.tar.gz
+      - name: Build
+        run: |
+          make build-release \
+            GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
+            VERSION=${{ github.ref_name }}
+          tar -C dist -czf "pic-sure_${{ matrix.goos }}_${{ matrix.goarch }}.tar.gz" pic-sure
+
+      # The runner is linux/amd64, so only that artifact is directly runnable.
+      # Assert the tag was wired into the binary via the Makefile ldflags
+      # (-X main.version): catches a broken ldflags/variable-name mismatch or
+      # an un-embedded "dev" default before the release is published.
+      - name: Verify embedded version matches the tag
+        if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
+        run: |
+          out="$(dist/pic-sure --version)"
+          echo "$out"
+          echo "$out" | grep -F -- "${{ github.ref_name }}" \
+            || { echo "::error::--version output '$out' does not contain the tag ${{ github.ref_name }}" >&2; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pic-sure_${{ matrix.goos }}_${{ matrix.goarch }}
+          path: pic-sure_${{ matrix.goos }}_${{ matrix.goarch }}.tar.gz
+          if-no-files-found: error
+
+  publish:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum pic-sure_*.tar.gz > checksums.txt
+          cat checksums.txt
+
+      - name: Create release with assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --verify-tag \
+            --generate-notes \
+            dist/pic-sure_*.tar.gz dist/checksums.txt
