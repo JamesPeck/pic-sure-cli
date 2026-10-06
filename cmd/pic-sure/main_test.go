@@ -20,10 +20,9 @@ func TestMain(m *testing.M) {
 	})
 }
 
-// TestScripts runs the CLI scenarios in testdata/script, one file per
-// command group, with the fake docker and git (internal/fakecmd) first on
-// PATH. HOME is the script's work directory, which is where the fakes look
-// for their scenarios.
+// TestScripts runs the CLI scenarios in testdata/script with the fake docker
+// and git (internal/fakecmd) first on PATH. HOME is the script's work
+// directory, which is where the fakes look for their scenarios.
 func TestScripts(t *testing.T) {
 	testscript.Run(t, testscript.Params{
 		Dir:                 "testdata/script",

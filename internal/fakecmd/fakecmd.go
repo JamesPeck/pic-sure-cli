@@ -147,28 +147,56 @@ func run(name string, args []string, home string, stdout, stderr io.Writer) int 
 	if home == "" {
 		return fail("HOME is not set")
 	}
-	// The CLI may run several fakes at once; one lock per fake keeps the log
-	// in call order and the times=N counts exact.
-	unlock, err := lockFile(filepath.Join(home, name+".lock"))
+	rule, err := claim(name, argv, home)
 	if err != nil {
 		return fail("%v", err)
 	}
+	for _, out := range []struct {
+		file string
+		w    io.Writer
+	}{{rule.Stdout, stdout}, {rule.Stderr, stderr}} {
+		if out.file == "" {
+			continue
+		}
+		path := out.file
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(home, path)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return fail("%v", err)
+		}
+		if _, err := out.w.Write(data); err != nil {
+			return fail("%v", err)
+		}
+	}
+	return rule.Exit
+}
+
+// claim logs the call and picks the rule that answers it. The CLI may run
+// several fakes at once, so claim holds a lock per fake name to keep the log
+// in call order and the times=N counts exact. The lock is released before
+// the caller writes output: a full pipe must not block other calls.
+func claim(name string, argv []string, home string) (Rule, error) {
+	unlock, err := lockFile(filepath.Join(home, name+".lock"))
+	if err != nil {
+		return Rule{}, err
+	}
 	defer unlock()
 	if err := appendLine(filepath.Join(home, name+".log"), docker.FormatArgv(argv)); err != nil {
-		return fail("%v", err)
+		return Rule{}, err
 	}
 
 	scenarioPath := filepath.Join(home, name+".scenario")
 	rules, err := readScenario(scenarioPath)
 	if err != nil {
-		return fail("%v", err)
+		return Rule{}, err
 	}
 	countsPath := filepath.Join(home, name+".counts")
 	counts, err := readCounts(countsPath)
 	if err != nil {
-		return fail("%v", err)
+		return Rule{}, err
 	}
-
 	for i, rule := range rules {
 		if rule.Times > 0 && counts[i] >= rule.Times {
 			continue
@@ -179,31 +207,12 @@ func run(name string, args []string, home string, stdout, stderr io.Writer) int 
 		if rule.Times > 0 {
 			counts[i]++
 			if err := writeCounts(countsPath, counts); err != nil {
-				return fail("%v", err)
+				return Rule{}, err
 			}
 		}
-		for _, out := range []struct {
-			file string
-			w    io.Writer
-		}{{rule.Stdout, stdout}, {rule.Stderr, stderr}} {
-			if out.file == "" {
-				continue
-			}
-			path := out.file
-			if !filepath.IsAbs(path) {
-				path = filepath.Join(home, path)
-			}
-			data, err := os.ReadFile(path)
-			if err != nil {
-				return fail("%v", err)
-			}
-			if _, err := out.w.Write(data); err != nil {
-				return fail("%v", err)
-			}
-		}
-		return rule.Exit
+		return rule, nil
 	}
-	return fail("no rule in %s matches: %s", scenarioPath, docker.FormatArgv(argv))
+	return Rule{}, fmt.Errorf("no rule in %s matches: %s", scenarioPath, docker.FormatArgv(argv))
 }
 
 func readScenario(path string) ([]Rule, error) {

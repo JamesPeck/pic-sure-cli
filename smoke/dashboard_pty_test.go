@@ -5,12 +5,14 @@ package smoke
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -148,6 +150,29 @@ func TestDashboardStartsAndQuitsUnderPTY(t *testing.T) {
 	s.waitFor("PIC-SURE", "Services")
 	s.send("q")
 	s.waitExit0()
+}
+
+// SIGTERM ends the TUI through the CLI's context: the terminal is restored
+// and the process exits 143 itself rather than dying by the signal.
+func TestTUIExitsWithSignalCode(t *testing.T) {
+	skipUnlessPTYAllowed(t)
+	s := startPTY(t, t.TempDir(), "--no-animations")
+	s.waitFor("Set up PIC-SURE")
+	if err := s.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- s.cmd.Wait() }()
+	select {
+	case err := <-done:
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) || exitErr.ExitCode() != 143 {
+			t.Fatalf("exit = %v, want exit status 143", err)
+		}
+	case <-time.After(10 * time.Second):
+		_ = s.cmd.Process.Kill()
+		t.Fatal("did not exit within 10s of SIGTERM")
+	}
 }
 
 func TestBareInvocationNonTTYPrintsHelp(t *testing.T) {

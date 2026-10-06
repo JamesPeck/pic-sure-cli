@@ -32,8 +32,8 @@ type App struct {
 
 	// IsTerminal reports whether stdin and stdout are both terminals.
 	IsTerminal func() bool
-	// StartTUI runs the full-screen TUI.
-	StartTUI func(tui.Options) error
+	// StartTUI runs the full-screen TUI until the user quits or ctx is done.
+	StartTUI func(context.Context, tui.Options) error
 
 	// running is set when a command's RunE starts. An error from before
 	// that point came from cobra rejecting the command line, so Run reports
@@ -61,8 +61,8 @@ func Execute(ctx context.Context, info BuildInfo, args []string) int {
 
 // Run runs one command line and returns its exit code. If ctx was cancelled
 // with an *exitcode.Error cause (main does this for SIGINT and SIGTERM), that
-// cause decides the code even when the command returned cleanly, as the TUI
-// does when Bubble Tea turns SIGTERM into a normal quit.
+// cause decides the code even when the command returned cleanly: an
+// interrupted command exits 128+N (spec §10.4).
 func (a *App) Run(ctx context.Context, args []string) int {
 	return a.execute(ctx, newRootCmd(a), args)
 }
@@ -97,7 +97,7 @@ func (a *App) canPrompt() bool {
 
 // startTUI opens the TUI's landing screen on the --stack directory, or the
 // current one.
-func (a *App) startTUI() error {
+func (a *App) startTUI(ctx context.Context) error {
 	dir := a.Global.Stack
 	if dir == "" {
 		wd, err := os.Getwd()
@@ -106,7 +106,7 @@ func (a *App) startTUI() error {
 		}
 		dir = wd
 	}
-	return a.StartTUI(tui.Options{
+	return a.StartTUI(ctx, tui.Options{
 		Root:       dir,
 		Start:      tui.ScreenLanding,
 		Animations: tui.AnimationsEnabled(a.Global.NoAnimations, os.Getenv),

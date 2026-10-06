@@ -27,7 +27,7 @@ func testApp(t *testing.T) (*App, *bytes.Buffer, *bytes.Buffer) {
 		Stdout:     &stdout,
 		Stderr:     &stderr,
 		IsTerminal: func() bool { return false },
-		StartTUI: func(tui.Options) error {
+		StartTUI: func(context.Context, tui.Options) error {
 			t.Error("the TUI started")
 			return nil
 		},
@@ -235,13 +235,10 @@ func TestSignalDecidesExitCode(t *testing.T) {
 		t.Errorf("stderr = %q, want it to say interrupted", stderr)
 	}
 
-	// The TUI returns cleanly when Bubble Tea turns SIGTERM into a quit; the
-	// signal still decides the exit code.
+	// A command that returns cleanly after the signal still exits 128+N.
 	a, _, _ = testApp(t)
-	a.IsTerminal = func() bool { return true }
-	a.StartTUI = func(tui.Options) error { return nil }
-	if code := a.Run(ctx, nil); code != 143 {
-		t.Errorf("TUI: exit = %d, want 143", code)
+	if code := a.Run(ctx, []string{"version"}); code != 143 {
+		t.Errorf("clean return: exit = %d, want 143", code)
 	}
 }
 
@@ -258,22 +255,29 @@ func TestRunIsRepeatable(t *testing.T) {
 }
 
 func TestHelpCommand(t *testing.T) {
-	for _, tt := range []struct {
-		args []string
-		code int
-		want string
-	}{
-		{[]string{"help"}, 0, "Usage:\n  pic-sure [flags]"},
-		{[]string{"help", "config", "set"}, 0, "Usage:\n  pic-sure config set KEY VALUE"},
-		{[]string{"help", "frobnicate"}, 2, ""},
-		{[]string{"help", "config", "frobnicate"}, 2, ""},
-	} {
-		a, stdout, stderr := testApp(t)
-		if code := a.Run(context.Background(), tt.args); code != tt.code {
-			t.Errorf("%v: exit = %d, want %d (stderr %q)", tt.args, code, tt.code, stderr)
+	// help TOPIC prints the same as TOPIC --help.
+	for _, topic := range [][]string{nil, {"config", "set"}} {
+		a, helpOut, _ := testApp(t)
+		if code := a.Run(context.Background(), append([]string{"help"}, topic...)); code != 0 {
+			t.Errorf("help %v: exit = %d", topic, code)
 		}
-		if !strings.Contains(stdout.String(), tt.want) {
-			t.Errorf("%v: stdout = %q, want it to contain %q", tt.args, stdout, tt.want)
+		b, flagOut, _ := testApp(t)
+		if code := b.Run(context.Background(), append(topic, "--help")); code != 0 {
+			t.Errorf("%v --help: exit = %d", topic, code)
+		}
+		if helpOut.String() != flagOut.String() || !strings.Contains(helpOut.String(), "-h, --help") {
+			t.Errorf("help %v:\n%s\n%v --help:\n%s", topic, helpOut, topic, flagOut)
+		}
+	}
+
+	// An unknown topic is a usage error and prints no help.
+	for _, args := range [][]string{{"help", "frobnicate"}, {"help", "config", "frobnicate"}} {
+		a, stdout, stderr := testApp(t)
+		if code := a.Run(context.Background(), args); code != exitcode.CodeUsage {
+			t.Errorf("%v: exit = %d, want %d", args, code, exitcode.CodeUsage)
+		}
+		if stdout.Len() != 0 || !strings.Contains(stderr.String(), "unknown help topic") {
+			t.Errorf("%v: stdout %q, stderr %q", args, stdout, stderr)
 		}
 	}
 }
@@ -292,7 +296,7 @@ func TestBareInvocation(t *testing.T) {
 		a, _, _ := testApp(t)
 		a.IsTerminal = func() bool { return true }
 		var got *tui.Options
-		a.StartTUI = func(o tui.Options) error { got = &o; return nil }
+		a.StartTUI = func(_ context.Context, o tui.Options) error { got = &o; return nil }
 		if code := a.Run(context.Background(), []string{"--stack", "/srv/demo", "--no-animations"}); code != 0 {
 			t.Errorf("exit = %d", code)
 		}

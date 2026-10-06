@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 
@@ -31,9 +32,12 @@ type Options struct {
 // openWizardMsg asks the app to open the embedded wizard screen.
 type openWizardMsg struct{ reconfigure bool }
 
-// Run starts the unified TUI and blocks until quit.
-func Run(o Options) error {
-	program := tea.NewProgram(newApp(o), tea.WithAltScreen())
+// Run starts the unified TUI and blocks until the user quits or ctx is
+// done. The CLI owns SIGINT and SIGTERM, which cancel ctx; Bubble Tea's own
+// handler is off so that a signal always ends the program through ctx, with
+// an error, and the CLI can exit 128+N.
+func Run(ctx context.Context, o Options) error {
+	program := tea.NewProgram(newApp(o), tea.WithAltScreen(), tea.WithContext(ctx), tea.WithoutSignalHandler())
 	_, err := program.Run()
 	return err
 }

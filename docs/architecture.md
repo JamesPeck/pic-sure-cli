@@ -64,9 +64,9 @@ layer. Global flags are in `a.Global`. Then turn the command's testscript
 
 An operation is a function in its own file in `internal/ops`. It takes a
 context, `*Deps`, the stack it acts on and an options struct, and returns an
-error, plus its report if it has one. A converging operation is a list of steps run by
-`steps.Run`: each step checks real state first, so a re-run skips what is
-already done.
+error, plus its report if it has one. A converging operation is a list of
+steps run by `steps.Run`: each step checks real state first, so a re-run
+skips what is already done.
 
 ```go
 // internal/ops/up.go
@@ -119,8 +119,8 @@ version variables are set with `-ldflags` (see the Makefile).
 
 `main_test.go` is the testscript harness. It registers the binary as
 `pic-sure` and the fakes from `internal/fakecmd` as `docker` and `git`, then
-runs every script in `testdata/script/`. Scripts must
-`exec` programs explicitly. The harness adds one command:
+runs every script in `testdata/script/`. Scripts must `exec` programs
+explicitly. The harness adds one command:
 `exitcode N PROGRAM [ARGS...]` runs PROGRAM and requires exit status N,
 because `! exec` accepts any failure.
 
@@ -132,10 +132,10 @@ it.
 - `app.go`: `App` (build info, global options, streams, and seams for the
   terminal check and the TUI), `Execute`, and the error-to-exit-code
   mapping. A signal received while a command runs decides the exit code,
-  because the TUI returns cleanly when Bubble Tea turns SIGTERM into a quit.
-  With no arguments, pic-sure opens the TUI when stdin and stdout are
-  terminals and none of `--json`, `--plain`, `--yes` or `--non-interactive`
-  is given. Otherwise it prints help.
+  even if the command then returns cleanly. With no arguments, pic-sure
+  opens the TUI when stdin and stdout are terminals and none of `--json`,
+  `--plain`, `--yes` or `--non-interactive` is given. Otherwise it prints
+  help.
 - `globals.go`: the global flags (§5). `--yes` answers yes to every
   confirmation. `--non-interactive` only forbids prompting, so a
   destructive command still needs `--yes`. `--json` implies
@@ -312,9 +312,11 @@ _Ticket 005 fills this in._
 ## internal/tui
 
 The v1 TUI shell: landing, setup wizard host, activity screen and load
-wizard. Ticket 001 removed its script layer: every action fails to start
-with "not implemented in v2 yet (ticket NNN)", the release-branch and
-dev-overlay lookups return nothing, and the archive lister fails. Ticket
+wizard. `tui.Run` takes the command's context and turns off Bubble Tea's
+signal handler, so SIGINT and SIGTERM end the TUI through the context and
+the CLI exits 128+N. Ticket 001 removed its script layer: every action fails
+to start with "not implemented in v2 yet (ticket NNN)", the release-branch
+and dev-overlay lookups return nothing, and the archive lister fails. Ticket
 002 moves it to Bubble Tea v2, and tickets 038, 039 and 047 rewire it onto
 in-process operations.
 
@@ -349,21 +351,21 @@ code. The constructors take `fmt.Errorf` arguments, so `%w` wraps a cause.
 ## internal/fakecmd
 
 Ticket 001. The fake `docker` and `git` the testscript harness puts on
-`PATH`. Each reads rules from `$HOME/<name>.scenario` and appends every call's
-argv to `$HOME/<name>.log` (quoting arguments with spaces, as
+`PATH`. Each reads rules from `$HOME/<name>.scenario` and appends every
+call's argv to `$HOME/<name>.log` (quoting arguments with spaces, as
 `docker.FormatArgv` does); the harness sets `HOME` to the script's work
-directory. Calls are serialized with a lock file, so concurrent calls keep
-the log in order and `times=N` exact. Rule syntax:
+directory. A lock file serializes choosing the rule, so concurrent calls
+keep the log in order and `times=N` exact. Rule syntax:
 
 ```
 PATTERN => EXIT [stdout=FILE] [stderr=FILE] [times=N]
 ```
 
 PATTERN is a glob over the space-joined, unquoted argv (program name
-included), or a regex after `re:`. FILE is relative to the scenario's directory. `times=N`
-retires a rule after N matches. A call that no rule matches exits 97 with
-the reason on stderr. `cmd/pic-sure/testdata/script/fakes.txtar` is a
-worked example.
+included), or a regex after `re:`. FILE is relative to the scenario's
+directory. `times=N` retires a rule after N matches. A call that no rule
+matches exits 97 with the reason on stderr.
+`cmd/pic-sure/testdata/script/fakes.txtar` is a worked example.
 
 The fakes find their scenario through `HOME`, which the exec runner (003)
 passes through to subprocesses.

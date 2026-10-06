@@ -30,18 +30,22 @@ func newGroup(use, short string, subs ...*cobra.Command) *cobra.Command {
 	return g
 }
 
-// newHelpCmd replaces cobra's help command, which prints the root help and
-// exits 0 for an unknown topic.
-func newHelpCmd(root *cobra.Command) *cobra.Command {
-	return &cobra.Command{
-		Use:   "help [command]",
-		Short: "Help about any command",
-		RunE: func(_ *cobra.Command, args []string) error {
-			target, rest, err := root.Find(args)
-			if err != nil || len(rest) > 0 {
-				return exitcode.Usage("unknown help topic %q", strings.Join(args, " "))
-			}
-			return target.Help()
-		},
+// rejectUnknownHelpTopics makes `help` with an unknown topic a usage error.
+// cobra's help command prints the root help and exits 0 for one; the rest of
+// it (flag listing, completion) is kept.
+func rejectUnknownHelpTopics(root *cobra.Command) {
+	root.InitDefaultHelpCmd()
+	help, _, err := root.Find([]string{"help"})
+	if err != nil || help == root || help.Run == nil {
+		return
+	}
+	show := help.Run
+	help.Run = nil
+	help.RunE = func(cmd *cobra.Command, args []string) error {
+		if _, rest, err := root.Find(args); err != nil || len(rest) > 0 {
+			return exitcode.Usage("unknown help topic %q", strings.Join(args, " "))
+		}
+		show(cmd, args)
+		return nil
 	}
 }

@@ -17,13 +17,12 @@ Run with no arguments on a terminal to open the TUI.`,
 		SilenceUsage:  true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if a.canPrompt() && !a.Global.Plain {
-				return a.startTUI()
+				return a.startTUI(cmd.Context())
 			}
 			return cmd.Help()
 		},
 	}
 	root.SetVersionTemplate("{{.Version}}\n")
-	root.SetHelpCommand(newHelpCmd(root))
 	a.Global.register(root)
 
 	root.AddCommand(
@@ -53,6 +52,7 @@ Run with no arguments on a terminal to open the TUI.`,
 		newSupportBundleCmd(a),
 		newVersionCmd(a),
 	)
+	rejectUnknownHelpTopics(root)
 	markRunning(a, root)
 	return root
 }
