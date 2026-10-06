@@ -269,7 +269,23 @@ _Ticket 012 fills this in._
 
 ## internal/jwt
 
-_Ticket 013 fills this in._
+Ticket 013. `jwt.Introspection(secret, appUUID, now, ttl)` returns the
+PSAMA introspection token and its expiry (§9.4), or an error. It replaces
+v1's jwt-creator container. Pass `ops.Deps.Clock`'s time as `now` and
+`jwt.DefaultTTL` (365 days) as `ttl`.
+
+- The token is HS256 with header `{"alg":"HS256"}` and claims
+  `sub=PSAMA_APPLICATION|<uuid>`, `jti="Foo"`, `iat`, `iss="bar"`, `exp`
+  (Unix seconds). Segments are base64url without padding.
+- The HMAC key is the first line of `secret` (split at `\n`, `\r` or `\r\n`),
+  as jwt-creator read it. PSAMA verifies with the whole secret, so only a
+  single-line secret, or one with just a trailing line break, works.
+- It rejects a key shorter than `jwt.MinSecretLen` (32 bytes, since PSAMA's
+  jjwt refuses shorter HS256 keys), an `appUUID` that isn't a UUID, and a
+  non-positive `ttl`. Error messages never contain the secret.
+- The returned expiry is in UTC and truncated to the second, like the `exp`
+  claim. Store it next to the token so `update` can renew it within 30 days
+  of expiry (§9.3).
 
 ## internal/sql
 
