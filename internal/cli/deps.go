@@ -12,6 +12,8 @@ import (
 // left nil: it belongs to one rendered stack, so the command sets it once it
 // has found or created the stack (tickets 007, 017, 021).
 func (a *App) newDeps() *ops.Deps {
+	// TODO(005): stack.SetSecretRegistrar(log.RegisterSecrets), so the log
+	// handler redacts every secret the stack loads or generates (§6.3).
 	runner := a.newRunner()
 	return &ops.Deps{
 		Runner: runner,

@@ -313,6 +313,44 @@ A directory is a stack when it holds `pic-sure.yaml` and `.pic-sure/`.
   and `org.hms-dbmi.picsure.stack-dir=<Dir>` (`LabelStack`,
   `LabelStackDir`).
 
+### Secrets (008)
+
+`secrets*.go`: `.pic-sure/secrets.yaml` and `.pic-sure/hpds/encryption_key`
+(§6.3), both 0600 and written through `WriteFile`, so they are atomic and in
+the manifest.
+
+- **`Secret`** is a string type that fmt, slog and encoding/json print as
+  `[REDACTED]` (`""` when empty). `string(s)` is the value; YAML encodes
+  the value. **`Secrets`** holds every field of §6.3 as a `Secret` (the
+  introspection token's expiry is a `time.Time`), so printing one shows no
+  value. Don't keep one in an unexported struct field, where fmt can't call
+  its methods.
+- **`EnsureSecrets(d.Rand, EnsureOptions{RemoteDB, Supplied})`** is the
+  step for init and other converging commands. It loads secrets.yaml (or starts
+  empty), stores the operator's `Supplied` secrets, fills every empty
+  generated secret, saves if anything changed, and creates the HPDS key
+  file if there is none. It never replaces a generated secret or an
+  existing key file, even a malformed one. Formats follow the bash: 24
+  `[A-Za-z0-9]` characters for DB passwords, 32-byte hex for the query,
+  application and logging tokens, 16-byte hex for the obfuscation salt,
+  lowercase v4 UUIDs, and 32 hex characters for the HPDS key. With
+  `RemoteDB`, the root password is the operator's and must be stored or
+  supplied; without it, supplying one is an error. A new Auth0 client
+  secret clears `IntrospectionToken`, and the caller issues a new one with
+  `jwt.Introspection`. Generating the token isn't EnsureSecrets' job.
+- `LoadSecrets`/`SaveSecrets` read and write secrets.yaml (`LoadSecrets`
+  wraps `fs.ErrNotExist` before there is one; unknown keys are ignored).
+  `LoadHPDSKey` reads the key and checks it is 32 hex characters.
+- **User-supplied secrets** (Auth0 client secret, remote DB root password,
+  email password) come from stdin or a file, never a flag value.
+  `ReadUserSecret(r, "--flag-name")` strips one trailing `\n` or `\r\n` and
+  returns exit 2, naming the flag, for any other CR or LF, an empty secret,
+  or one over 64 KiB.
+- **Redaction.** `LoadSecrets`, `SaveSecrets`, `EnsureSecrets` and
+  `LoadHPDSKey` pass every non-empty value to the function set with
+  `SetSecretRegistrar`. The cli layer sets it to `log.RegisterSecrets`
+  (ticket 005; until then it is a TODO in `internal/cli/deps.go`).
+
 ## internal/render
 
 Ticket 020 added the templates; ticket 021 adds rendering and the goldens.
