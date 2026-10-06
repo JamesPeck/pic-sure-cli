@@ -1,0 +1,8 @@
+# dev on dictionary: both dictionary services from the local pic-sure
+# checkout.
+
+services:
+  dictionary-api:
+    image: {{ q (.DevImage "pic-sure-dictionary-api") }}
+  dictionary-dump:
+    image: {{ q (.DevImage "pic-sure-dictionary-dump") }}

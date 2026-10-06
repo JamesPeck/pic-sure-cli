@@ -1,0 +1,8 @@
+# dev on gateway: gateway from the local pic-sure checkout, with a JDWP debug port on
+# 127.0.0.1. Render adds the JDWP agent (address *:5005) to its JAVA_OPTS.
+
+services:
+  gateway:
+    image: {{ q (.DevImage "pic-sure-gateway") }}
+    ports:
+      - "127.0.0.1:{{ .DevPort "gateway" }}:5005"

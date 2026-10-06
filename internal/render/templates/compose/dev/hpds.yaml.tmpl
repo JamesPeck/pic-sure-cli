@@ -1,0 +1,15 @@
+# dev on hpds: hpds from the local pic-sure checkout, with a JDWP debug port on
+# 127.0.0.1. Render adds the JDWP agent (address *:5005) to its JAVA_OPTS.
+
+services:
+  hpds:
+    image: {{ q (.DevImage "pic-sure-hpds") }}
+    # hpds normally sits only on the internal query network, and Docker does
+    # not forward published ports into a container with only internal
+    # networks, so the debug port would never connect. Joining app relaxes
+    # the isolation for the debug session.
+    networks:
+      - app
+      - query
+    ports:
+      - "127.0.0.1:{{ .DevPort "hpds" }}:5005"

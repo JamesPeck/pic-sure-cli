@@ -1,0 +1,50 @@
+# The bundled MySQL, for db.mode: local. A stack with a remote MySQL leaves
+# this fragment out, so nothing has to be reset or hidden in a profile.
+
+services:
+  # MySQL: the auth and picsure schemas.
+  picsure-db:
+    image: {{ q (.Image "mysql") }}
+    restart: always
+    labels: {{ flow .Labels }}
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      # Read by the db-init script, which creates the users on first start.
+      DB_PICSURE_PASSWORD: ${DB_PICSURE_PASSWORD}
+      DB_AUTH_PASSWORD: ${DB_AUTH_PASSWORD}
+      DB_AIRFLOW_PASSWORD: ${DB_AIRFLOW_PASSWORD}
+    volumes:
+      - picsure-db-data:/var/lib/mysql
+      - type: bind
+        source: {{ q (path .FilesDir "db-init") }}
+        target: /docker-entrypoint-initdb.d
+        read_only: true
+    networks:
+      - app
+    healthcheck:
+      # MYSQL_PWD from the container's own environment keeps the password off
+      # the probe's argv. This passes on access denied and on the temporary
+      # init server too, so pic-sure follows it with a real SELECT 1.
+      test: ["CMD-SHELL", "MYSQL_PWD=\"$$MYSQL_ROOT_PASSWORD\" mysqladmin ping -uroot"]
+      timeout: 20s
+      retries: 10
+      start_period: 15s
+      interval: 10s
+
+  # Nothing that connects to MySQL starts before it is healthy.
+  flyway-init:
+    depends_on:
+      picsure-db:
+        condition: service_healthy
+  psama:
+    depends_on:
+      picsure-db:
+        condition: service_healthy
+  pic-sure-operations-service:
+    depends_on:
+      picsure-db:
+        condition: service_healthy
+
+volumes:
+  picsure-db-data:
+    labels: {{ flow .Labels }}

@@ -1,0 +1,51 @@
+# A published HPDS data set, for hpds.data: shared (spec §9.7). The set's two
+# volumes are external, so stack teardown never touches them, and neither is
+# mounted writable:
+#
+# - The phenotype store is mounted read-only. HPDS opens it read-only, so every
+#   stack reads the same bytes.
+# - The genomic store can't be: HPDS opens each genomic storage file with
+#   RandomAccessFile mode "rwd", even though it never writes to them once
+#   loaded, so on a read-only mount the variant store fails to load.
+#   hpds-genomic-seed copies the shared genomic data into this stack's own
+#   hpds-genomic-copy whenever the published set changes, and HPDS mounts the
+#   copy, where it also writes its indexes.
+
+services:
+  hpds-genomic-seed:
+    image: {{ q (.Image "alpine") }}
+    network_mode: none
+    restart: "no"
+    labels: {{ flow .Labels }}
+    volumes:
+      - shared-hpds-genomic:/src:ro
+      - hpds-genomic-copy:/dst
+    # The publisher's .picsure-published marker identifies the set. Copy only
+    # when it differs from the copy's, so restarts are instant.
+    command:
+      - sh
+      - -c
+      - >-
+        if cmp -s /src/.picsure-published /dst/.picsure-published; then exit 0; fi;
+        find /dst -mindepth 1 -delete && cp -a /src/. /dst/
+
+  hpds:
+    depends_on:
+      hpds-genomic-seed:
+        condition: service_completed_successfully
+    volumes:
+      - shared-hpds-data:/opt/local/hpds:ro
+      - hpds-genomic-copy:/opt/local/hpds/all
+      - hpds-csv:/usr/local/docker-config/hpds_csv
+      - hpds-query-results:/gic_query_results
+      - hpds-logs:/var/log
+
+volumes:
+  shared-hpds-data:
+    external: true
+    name: {{ q (printf "%s_hpds-data" .SharedHPDS) }}
+  shared-hpds-genomic:
+    external: true
+    name: {{ q (printf "%s_hpds-genomic" .SharedHPDS) }}
+  hpds-genomic-copy:
+    labels: {{ flow .Labels }}

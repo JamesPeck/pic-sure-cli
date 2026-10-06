@@ -282,7 +282,49 @@ A directory is a stack when it holds `pic-sure.yaml` and `.pic-sure/`.
 
 ## internal/render
 
-_Tickets 020 (templates) and 021 (render and goldens) fill this in._
+Ticket 020 added the templates; ticket 021 adds rendering and the goldens.
+
+**Templates** (`templates/`, embedded; `templates.go`). Its README maps each
+template to the AIO file it was ported from and records the AIO commit, for
+the drift job (066), and lists every deliberate difference from AIO.
+
+- `compose/` holds compose fragments, Go `text/template`s that produce YAML.
+  `composeFragments(mode, dev)` picks them in merge order: `base`, one per
+  catalog `Condition` the stack meets (`local-db`, `local-hpds` or
+  `shared-hpds`, `truststore`), `dev/<variant>` for each enabled dev variant,
+  and `service-env` (the `services.<name>.env` overrides) last.
+  `renderCompose(data, fragments)` executes and merges them into the one
+  `compose.yaml`: mappings merge key by key, scalars and sequences replace
+  whole. No fragment can remove a key, so whatever only some stacks have
+  lives in its own fragment.
+- `files/` holds what render writes to `render/files/`: the httpd vhost (a
+  template), the Vite dev config, the Flyway scripts, the MySQL init script
+  and the demo facet config.
+- Templates are executed with `templateData`: names, labels, ports, image
+  references, source and render paths, and the config switches the services
+  read. It holds no secrets. A secret appears in the compose file only as
+  `${NAME}`, one of `secretVars`, and so do `proxyVars` when a proxy is set,
+  because proxy URLs can carry credentials. The Compose adapter supplies all
+  of them on every call. Every other value is written in literally, quoted
+  by `q` so compose doesn't interpolate it.
+- JAVA_OPTS is `Java(service, default)`: the configured options or AIO's
+  default, then `JVMExtra[service]`, where render puts the proxy properties,
+  psama's `trustJavaOpts` and a dev variant's `debugJavaOpts`.
+- The Flyway services are in the `migrate` profile: `compose up` skips them,
+  `compose run --rm flyway-init` starts what they depend on.
+- Compose creates a declared volume only when a service mounts it, so a
+  helper that creates a stack volume first (certs, truststore, the HPDS key,
+  genomic staging) must give it the stack labels.
+
+`templates_test.go` renders every mode and dev variant and checks the result
+against the catalog (services, images, networks, volumes, labels, profiles),
+checks that the only `${NAME}` references are secrets, and runs
+`docker compose config` over a few renders when the docker CLI is
+installed. `aio_test.go` checks that the README maps every template and that
+each AIO source still exists in the AIO checkout beside this repo (or
+`PICSURE_AIO_DIR`); it skips without one.
+
+_Ticket 021 documents rendering here._
 
 ## internal/catalog
 

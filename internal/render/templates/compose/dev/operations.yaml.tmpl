@@ -1,0 +1,8 @@
+# dev on operations: pic-sure-operations-service from the local pic-sure checkout, with a JDWP debug port on
+# 127.0.0.1. Render adds the JDWP agent (address *:5005) to its JAVA_OPTS.
+
+services:
+  pic-sure-operations-service:
+    image: {{ q (.DevImage "pic-sure-operations-service") }}
+    ports:
+      - "127.0.0.1:{{ .DevPort "operations" }}:5005"

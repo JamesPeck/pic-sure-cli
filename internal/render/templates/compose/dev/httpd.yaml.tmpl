@@ -1,0 +1,5 @@
+# dev on httpd: the frontend image built from the local frontend checkout.
+
+services:
+  httpd:
+    image: {{ q (.DevImage "pic-sure-httpd") }}

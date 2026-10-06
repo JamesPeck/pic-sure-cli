@@ -1,0 +1,14 @@
+# psama's truststore, for a stack with custom CA certs (spec §9.5). The
+# truststore volume holds the psama image's own cacerts plus the operator's
+# certs. Render adds the matching -Djavax.net.ssl.trustStore properties to
+# psama's JAVA_OPTS.
+
+services:
+  psama:
+    volumes:
+      - psama-logs:/var/log
+      - truststore:/truststore:ro
+
+volumes:
+  truststore:
+    labels: {{ flow .Labels }}

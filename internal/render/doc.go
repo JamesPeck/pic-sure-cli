@@ -4,7 +4,7 @@
 // settings.xml), plus the per-call compose environment (spec §6.4). Render
 // is a pure function and golden-tested.
 //
-// Ticket 020 ports the embedded templates from AIO into
-// internal/render/templates/. Ticket 021 implements rendering and the
-// goldens; ticket 051 adds the shared-HPDS fragment.
+// The embedded templates, ported from AIO, are in templates/ (ticket 020; its
+// README maps each one to its AIO source). Ticket 021 implements rendering
+// and the goldens; ticket 051 turns on shared HPDS data.
 package render

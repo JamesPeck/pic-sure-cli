@@ -1,0 +1,505 @@
+# PIC-SURE All-in-One stack, rendered by pic-sure. Do not edit: pic-sure
+# re-renders this file. Put changes in overrides/*.yaml in the stack directory.
+#
+# Values from the stack's config are written in literally. Secrets are
+# ${NAME} references that pic-sure fills in from secrets.yaml on every compose
+# call, so run raw compose commands as `pic-sure compose -- ARGS`.
+name: {{ q .Name }}
+
+services:
+
+  # HTTPD: reverse proxy and frontend, the only public-facing container.
+  httpd:
+    image: {{ q (.Image "pic-sure-httpd") }}
+    restart: always
+    labels: {{ flow .Labels }}
+    ports:
+      - "{{ .HTTPPort }}:80"
+      - "{{ .HTTPSPort }}:443"
+    volumes:
+      # server.crt, server.key and server.chain, owned 2:2 (spec §9.1 step 6).
+      - certs:/usr/local/apache2/cert:ro
+      - type: bind
+        source: {{ q (path .FilesDir "httpd/httpd-vhosts.conf") }}
+        target: /usr/local/apache2/conf/extra/httpd-vhosts.conf
+        read_only: true
+      - httpd-logs:/app/logs
+    environment:
+      GATEWAY_DOCS_ENABLED: {{ q .DocsEnabled }}
+      LOGGING_API_KEY: ${LOGGING_API_KEY}
+      LOGGING_SERVICE_URL: http://pic-sure-logging/
+    networks:
+      - public
+      - app    # reaches gateway and psama for reverse proxying
+    depends_on:
+      gateway:
+        condition: service_started
+      psama:
+        condition: service_started
+    # /picsure/health is answered locally by the vhost (no proxy, no SvelteKit
+    # render), which is what the frontend image's own HEALTHCHECK probes.
+    # 127.0.0.1, not localhost: the vhost only Listens on 0.0.0.0, so busybox
+    # wget's first (IPv6) candidate is refused.
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "--no-check-certificate", "-q", "https://127.0.0.1/picsure/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # Gateway: the PIC-SURE API front door (Spring Cloud Gateway). Routes
+  # /logging, /dictionary, /visualization, /hpds and /operations and runs the
+  # PSAMA introspection auth chain in front of them. The aio Spring profile
+  # supplies the service DNS defaults, so only secrets and toggles are set here.
+  gateway:
+    image: {{ q (.Image "pic-sure-gateway") }}
+    restart: always
+    labels: {{ flow .Labels }}
+    environment:
+      JAVA_OPTS: {{ q (.Java "gateway" "-Xms512m -Xmx2g") }}
+      SPRING_PROFILE: aio
+      TOKEN_INTROSPECTION_TOKEN: ${PICSURE_INTROSPECTION_TOKEN}
+      QUERY_SERVICE_INTERNAL_TOKEN: ${QUERY_SERVICE_INTERNAL_TOKEN}
+      GATEWAY_OPEN_ACCESS_ENABLED: {{ q .Auth.GatewayOpenAccess }}
+      GATEWAY_DOCS_ENABLED: {{ q .DocsEnabled }}
+      # Actuator, gated by X-Application-Token.
+      PICSURE_APPLICATION_TOKEN: ${PICSURE_APPLICATION_TOKEN}
+      PICSURE_ACTUATOR_EXPOSURE: health
+      PICSURE_ACTUATOR_DETAILS: when_authorized
+      LOGGING_API_KEY: ${LOGGING_API_KEY}
+      LOGGING_SERVICE_URL: http://pic-sure-logging/
+    networks:
+      - app
+      - query    # /system/status deep-health probes hpds directly
+    depends_on:
+      psama:
+        condition: service_started
+      pic-sure-operations-service:
+        condition: service_started
+      pic-sure-hpds-query-service:
+        condition: service_started
+    # Liveness, not the deep aggregate: /actuator/health folds in the
+    # downstream contributor, so an empty HPDS or dictionary would mark the
+    # gateway itself unhealthy. Deep, cross-service health is /system/status.
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/actuator/health/liveness"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # Operations service: owns the picsure schema (queries, datasets,
+  # configuration).
+  pic-sure-operations-service:
+    image: {{ q (.Image "pic-sure-operations-service") }}
+    restart: always
+    labels: {{ flow .Labels }}
+    environment:
+      JAVA_OPTS: {{ q (.Java "pic-sure-operations-service" "-Xms512m -Xmx2g") }}
+      SPRING_DATASOURCE_URL: {{ q (printf "jdbc:mysql://%s:%d/picsure?useUnicode=true&characterEncoding=UTF-8&autoReconnect=true&autoReconnectForPools=true&serverTimezone=UTC" .DB.Host .DB.Port) }}
+      SPRING_DATASOURCE_USERNAME: picsure
+      SPRING_DATASOURCE_PASSWORD: ${DB_PICSURE_PASSWORD}
+      # Shared secret checked by InternalTokenFilter on /internal/**.
+      QUERY_SERVICE_INTERNAL_TOKEN: ${QUERY_SERVICE_INTERNAL_TOKEN}
+      PICSURE_APPLICATION_TOKEN: ${PICSURE_APPLICATION_TOKEN}
+      PICSURE_ACTUATOR_EXPOSURE: health
+      PICSURE_ACTUATOR_DETAILS: when_authorized
+      LOGGING_API_KEY: ${LOGGING_API_KEY}
+      LOGGING_SERVICE_URL: http://pic-sure-logging/
+    networks:
+      - app
+    # Deep probe: the shallow aggregate stays open without the application
+    # token and folds in the datasource, so a broken picsure schema turns it
+    # 503. Context path is /operations.
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/operations/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # HPDS query service: the only service allowed to reach HPDS.
+  pic-sure-hpds-query-service:
+    image: {{ q (.Image "pic-sure-hpds-query-service") }}
+    restart: always
+    labels: {{ flow .Labels }}
+    environment:
+      JAVA_OPTS: {{ q (.Java "pic-sure-hpds-query-service" "-Xms512m -Xmx2g") }}
+      # One HPDS instance, so the auth and open backends are the same.
+      HPDS_AUTH_URL: http://hpds:8080/PIC-SURE
+      HPDS_OPEN_URL: http://hpds:8080/PIC-SURE
+      # Query state lives in the operations service; this one owns no database.
+      OPERATIONS_SERVICE_URL: http://pic-sure-operations-service:8080
+      CONSENT_BASED_AUTHORIZATION_ENABLED: {{ q .Auth.ConsentAuthorization }}
+      PSAMA_URL: http://psama:8090
+      QUERY_SERVICE_INTERNAL_TOKEN: ${QUERY_SERVICE_INTERNAL_TOKEN}
+      # Open-path aggregation and obfuscation.
+      VISUALIZATION_URL: http://visualization
+      AGGREGATE_OBFUSCATION_THRESHOLD: "10"
+      AGGREGATE_OBFUSCATION_VARIANCE: "3"
+      AGGREGATE_OBFUSCATION_SALT: ${AGGREGATE_OBFUSCATION_SALT}
+      PICSURE_APPLICATION_TOKEN: ${PICSURE_APPLICATION_TOKEN}
+      PICSURE_ACTUATOR_EXPOSURE: health
+      PICSURE_ACTUATOR_DETAILS: when_authorized
+    networks:
+      - app
+      - query
+    depends_on:
+      hpds:
+        condition: service_started
+    # Liveness: the only deep indicator is HPDS's own, which is DOWN on a
+    # fresh install with no data. Cross-service truth is the gateway's
+    # /system/status.
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/actuator/health/liveness"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+  # PSAMA: the auth micro-app.
+  psama:
+    image: {{ q (.Image "pic-sure-psama") }}
+    restart: always
+    labels: {{ flow .Labels }}
+    volumes:
+      - psama-logs:/var/log
+    environment:
+      JAVA_OPTS: {{ q (.Java "psama" "-Xms2g -Xmx4g -XX:MetaspaceSize=96M -XX:MaxMetaspaceSize=256m -Djava.net.preferIPv4Stack=true") }}
+      DATASOURCE_URL: {{ q (printf "jdbc:mysql://%s:%d/auth?useUnicode=true&characterEncoding=UTF-8&autoReconnect=true&autoReconnectForPools=true&serverTimezone=UTC" .DB.Host .DB.Port) }}
+      DATASOURCE_USERNAME: auth
+      DATASOURCE_PASSWORD: ${DB_AUTH_PASSWORD}
+      APPLICATION_CLIENT_SECRET: ${AUTH0_CLIENT_SECRET}
+      # Must stay false: the introspection token is keyed on the raw secret
+      # (spec §9.4).
+      APPLICATION_CLIENT_SECRET_IS_BASE_64: "false"
+      AUTH0_IDP_PROVIDER_IS_ENABLED: "true"
+      AUTH0_HOST: {{ q (printf "https://%s.auth0.com/" .Auth.Auth0Tenant) }}
+      OPEN_IDP_PROVIDER_IS_ENABLED: {{ q .Auth.OpenIDP }}
+      ENABLE_PUBLIC_ACCESS: {{ q .Auth.PublicAccess }}
+      CONSENT_BASED_AUTHORIZATION_ENABLED: {{ q .Auth.ConsentAuthorization }}
+      STACK_SPECIFIC_APPLICATION_ID: ${PICSURE_APPLICATION_ID}
+      TOKEN_EXPIRATION_TIME: "3600000"
+      LONG_TERM_TOKEN_EXPIRATION_TIME: "2592000000"
+      EMAIL_ADDRESS: {{ q .EmailUser }}
+      EMAIL_PASSWORD: ${EMAIL_PASSWORD}
+      TOS_ENABLED: {{ q .Auth.TOS }}
+      SYSTEM_NAME: PIC-SURE All-in-one
+      AUTH0_DENIED_EMAIL_ENABLED: "false"
+      PICSURE_ACTUATOR_EXPOSURE: health
+      LOGGING_API_KEY: ${LOGGING_API_KEY}
+      LOGGING_SERVICE_URL: http://pic-sure-logging/
+{{- if .Proxy }}
+      # PSAMA calls Auth0. JAVA_OPTS carries the JVM proxy properties; these
+      # are for anything that reads the environment instead.
+      HTTP_PROXY: ${HTTP_PROXY}
+      HTTPS_PROXY: ${HTTPS_PROXY}
+      NO_PROXY: ${NO_PROXY}
+      http_proxy: ${HTTP_PROXY}
+      https_proxy: ${HTTPS_PROXY}
+      no_proxy: ${NO_PROXY}
+{{- end }}
+    networks:
+      - app
+    # Shallow, unauthenticated /auth/actuator/health. Its aggregate includes
+    # the datasource, so a broken DB turns the probe into a 503. 127.0.0.1, not
+    # localhost: JAVA_OPTS sets preferIPv4Stack, so busybox wget's first (IPv6)
+    # candidate for localhost is refused.
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8090/auth/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+  # HPDS: the High Performance Data Store. Its data volumes come from the
+  # local-hpds or shared-hpds fragment.
+  hpds:
+    image: {{ q (.Image "pic-sure-hpds") }}
+    restart: always
+    labels: {{ flow .Labels }}
+    environment:
+      JAVA_OPTS: {{ q (.Java "hpds" "-XX:+UseParallelGC -XX:SurvivorRatio=250 -Xms1g -Xmx16g") }}
+      SPRING_PROFILES_ACTIVE: {{ q .HPDSProfile }}
+      # 0 disables data export; 2000 enables it.
+      ID_BATCH_SIZE: "2000"
+      CACHE_SIZE: "1500"
+      SMALL_TASK_THREADS: "1"
+      LARGE_TASK_THREADS: "1"
+      SMALL_JOB_LIMIT: "100"
+      ALL_IDS_CONCEPT: NONE
+      ID_CUBE_NAME: NONE
+      ENABLE_FILE_SHARING: "true"
+      VCF_EXCERPT_ENABLED: "true"
+      HPDS_GENOMIC_DATA_DIRECTORY: /opt/local/hpds/all/
+      HPDS_GENOMIC_PROCESSOR_IMPL: localPatientDistributed
+      # HPDS defaults this to true, which rejects V3 queries that carry no
+      # authorizationFilters, the normal shape of AIO queries.
+      hpds.requireAuthorizationFilter: "false"
+      PICSURE_ACTUATOR_EXPOSURE: health
+      LOGGING_API_KEY: ${LOGGING_API_KEY}
+      LOGGING_SERVICE_URL: http://pic-sure-logging/
+    networks:
+      - query
+    # Liveness, not the deep aggregate: HPDS reports DOWN whenever no data is
+    # loaded, the normal state of a fresh install. HPDS starts slowly and may
+    # crash-loop without data (especially with the bch-dev profile), hence the
+    # long start_period.
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/actuator/health/liveness"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 300s
+
+  # Visualization: the chart and histogram service.
+  visualization:
+    image: {{ q (.Image "pic-sure-visualization") }}
+    restart: always
+    labels: {{ flow .Labels }}
+    volumes:
+      - visualization-logs:/var/log
+    environment:
+      JAVA_OPTS: {{ q (.Java "visualization" "-Xms512m -Xmx1g") }}
+      SERVER_PORT: "80"
+      # Its only route to HPDS is the query service.
+      HPDS_QUERY_SERVICE_URL: http://pic-sure-hpds-query-service:8080
+      CHART_MAX_CATEGORIES: "7"
+      REST_TEMPLATE_CONNECT_TIMEOUT: "5000"
+      REST_TEMPLATE_READ_TIMEOUT: "30000"
+      PICSURE_ACTUATOR_EXPOSURE: health
+      LOGGING_API_KEY: ${LOGGING_API_KEY}
+      LOGGING_SERVICE_URL: http://pic-sure-logging/
+    networks:
+      - app
+    depends_on:
+      pic-sure-hpds-query-service:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "sh", "-c", "wget -q --spider http://localhost/actuator/health 2>/dev/null"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # Dictionary API.
+  dictionary-api:
+    image: {{ q (.Image "pic-sure-dictionary-api") }}
+    restart: always
+    labels: {{ flow .Labels }}
+    environment:
+      POSTGRES_HOST: dictionary-db
+      POSTGRES_DB: dictionary
+      POSTGRES_USER: picsure
+      POSTGRES_PASSWORD: ${DB_DICTIONARY_PASSWORD}
+      PICSURE_ACTUATOR_EXPOSURE: health
+      LOGGING_API_KEY: ${LOGGING_API_KEY}
+      LOGGING_SERVICE_URL: http://pic-sure-logging/
+    volumes:
+      - dictionary-logs:/var/log
+    networks:
+      - app
+      - data
+    depends_on:
+      dictionary-db:
+        condition: service_healthy
+    # The shallow actuator aggregate, which includes the Postgres datasource.
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Dictionary dump (aggregate).
+  dictionary-dump:
+    image: {{ q (.Image "pic-sure-dictionary-dump") }}
+    restart: always
+    labels: {{ flow .Labels }}
+    environment:
+      POSTGRES_HOST: dictionary-db
+      POSTGRES_DB: dictionary
+      POSTGRES_USER: picsure
+      POSTGRES_PASSWORD: ${DB_DICTIONARY_PASSWORD}
+    volumes:
+      - dictionary-logs:/var/log
+    networks:
+      - data
+    depends_on:
+      dictionary-db:
+        condition: service_healthy
+
+  # PostgreSQL for the dictionary. Always local, even with a remote MySQL.
+  dictionary-db:
+    image: {{ q (.Image "postgres") }}
+    restart: always
+    labels: {{ flow .Labels }}
+    environment:
+      POSTGRES_DB: dictionary
+      POSTGRES_USER: picsure
+      POSTGRES_PASSWORD: ${DB_DICTIONARY_PASSWORD}
+    volumes:
+      - dictionary-db-data:/var/lib/postgresql/data
+      # Baseline DDL; the Flyway migrations build on top of it.
+      - type: bind
+        source: {{ q (path .PicSureSrc "services/picsure-dictionary/db/schema.sql") }}
+        target: /docker-entrypoint-initdb.d/schema.sql
+        read_only: true
+    networks:
+      - data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U picsure -d dictionary"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # Flyway one-shots. pic-sure runs them with `compose run --rm` once the
+  # databases are up and before it starts the services that use the schemas.
+  # The migrate profile keeps a plain `compose up` from starting them.
+  #
+  # flyway-init runs four passes: auth core, picsure core, then the
+  # project-specific picsure and auth migrations.
+  flyway-init:
+    image: {{ q (.Image "flyway") }}
+    profiles: [migrate]
+    labels: {{ flow .Labels }}
+    entrypoint: ["bash", "/scripts/run-migrations.sh"]
+    volumes:
+      - type: bind
+        source: {{ q (path .FilesDir "flyway/run-migrations.sh") }}
+        target: /scripts/run-migrations.sh
+        read_only: true
+      - type: bind
+        source: {{ q (path .PicSureSrc "services/pic-sure-auth-microapp/pic-sure-auth-db/db/sql") }}
+        target: /migrations/auth
+        read_only: true
+      - type: bind
+        source: {{ q (path .PicSureSrc "services/pic-sure-operations-service/db/sql") }}
+        target: /migrations/picsure
+        read_only: true
+      - type: bind
+        source: {{ q (path .MigrationsSrc .MigrationsProject "auth") }}
+        target: /migrations/custom/auth
+        read_only: true
+      - type: bind
+        source: {{ q (path .MigrationsSrc .MigrationsProject "picsure") }}
+        target: /migrations/custom/picsure
+        read_only: true
+    environment:
+      DB_HOST: {{ q .DB.Host }}
+      DB_PORT: {{ q .DB.Port }}
+      DB_ROOT_USER: {{ q .DB.RootUser }}
+      DB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      # `compose run -e FLYWAY_ACTION=repair` (or check) overrides it.
+      FLYWAY_ACTION: migrate
+      PICSURE_APPLICATION_ID: ${PICSURE_APPLICATION_ID}
+      PICSURE_RESOURCE_ID: ${PICSURE_RESOURCE_ID}
+      PICSURE_VIZ_RESOURCE_ID: ${PICSURE_VIZ_RESOURCE_ID}
+      # Covers a remote DB that is slow to accept connections.
+      FLYWAY_CONNECT_RETRIES: "30"
+    networks:
+      - app
+    restart: "no"
+
+  # The dictionary migrations: a separate one-shot because the dictionary
+  # Postgres is on the internal data network, has its own credentials and is
+  # always local.
+  flyway-dictionary-init:
+    image: {{ q (.Image "flyway") }}
+    profiles: [migrate]
+    labels: {{ flow .Labels }}
+    entrypoint: ["bash", "/scripts/run-dictionary-migrations.sh"]
+    volumes:
+      - type: bind
+        source: {{ q (path .FilesDir "flyway/run-dictionary-migrations.sh") }}
+        target: /scripts/run-dictionary-migrations.sh
+        read_only: true
+      - type: bind
+        source: {{ q (path .PicSureSrc "services/picsure-dictionary/db/flyway") }}
+        target: /migrations/dictionary
+        read_only: true
+    environment:
+      POSTGRES_HOST: dictionary-db
+      POSTGRES_DB: dictionary
+      POSTGRES_USER: picsure
+      POSTGRES_PASSWORD: ${DB_DICTIONARY_PASSWORD}
+      FLYWAY_ACTION: migrate
+    networks:
+      - data
+    restart: "no"
+    depends_on:
+      dictionary-db:
+        condition: service_healthy
+
+  # Logging: the audit event collector.
+  pic-sure-logging:
+    image: {{ q (.Image "pic-sure-logging") }}
+    restart: always
+    labels: {{ flow .Labels }}
+    volumes:
+      - logging-logs:/app/logs
+    environment:
+      LOGGING_API_KEY: ${LOGGING_API_KEY}
+      LOGGING_SERVICE_URL: http://pic-sure-logging
+      APP: pic-sure
+      PLATFORM: all-in-one
+      ENVIRONMENT: production
+      PORT: "80"
+      ALLOWED_ORIGIN: "*"
+    networks:
+      - app
+      - query    # hpds is isolated on the query network but still sends audit events
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+networks:
+  # Only httpd joins it.
+  public:
+    driver: bridge
+    labels: {{ flow .Labels }}
+  # The app tier. Not internal: PSAMA must reach Auth0.
+  app:
+    driver: bridge
+    labels: {{ flow .Labels }}
+  # The dictionary tier, with no route off the host.
+  data:
+    driver: bridge
+    internal: true
+    labels: {{ flow .Labels }}
+  # Isolates HPDS from the app tier: only the query service (its query path),
+  # the gateway (/system/status) and logging (audit events) join it.
+  query:
+    driver: bridge
+    internal: true
+    labels: {{ flow .Labels }}
+
+volumes:
+  dictionary-db-data:
+    labels: {{ flow .Labels }}
+  hpds-csv:
+    labels: {{ flow .Labels }}
+  # Query result files for GIC file sharing.
+  hpds-query-results:
+    labels: {{ flow .Labels }}
+  # VCFs and loader output staged by data load-genomic.
+  genomic-staging:
+    labels: {{ flow .Labels }}
+  certs:
+    labels: {{ flow .Labels }}
+  httpd-logs:
+    labels: {{ flow .Labels }}
+  psama-logs:
+    labels: {{ flow .Labels }}
+  hpds-logs:
+    labels: {{ flow .Labels }}
+  visualization-logs:
+    labels: {{ flow .Labels }}
+  dictionary-logs:
+    labels: {{ flow .Labels }}
+  logging-logs:
+    labels: {{ flow .Labels }}

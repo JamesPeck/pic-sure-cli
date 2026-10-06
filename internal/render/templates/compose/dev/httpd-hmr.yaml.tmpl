@@ -1,0 +1,47 @@
+# dev on httpd-hmr: replaces httpd with a Vite dev server running the local
+# frontend checkout, so edits show up without a rebuild. Browse to
+# http://localhost:<port>, not the stack's https URL. Vite proxies /picsure/*
+# to the gateway (prefix stripped) and /psama/* to psama (rewritten to /auth).
+
+services:
+  # HTTPD, replaced by the Vite dev server of dev on httpd-hmr.
+  httpd:
+    image: {{ q (.Image "node") }}
+    working_dir: /app
+    command: sh -c "npm install -g pnpm@10.24.0 && pnpm config set store-dir /pnpm-store && pnpm install && pnpm dev --config vite.config.aio.ts"
+    volumes:
+      - type: bind
+        source: {{ q .FrontendSrc }}
+        target: /app
+      - frontend-node-modules:/app/node_modules
+      - type: bind
+        source: {{ q (path .FilesDir "httpd/vite.config.dev.ts") }}
+        target: /app/vite.config.aio.ts
+        read_only: true
+    ports:
+      - "127.0.0.1:{{ .DevPort "httpd-hmr" }}:3000"
+    environment:
+      NODE_ENV: development
+{{- range $name, $value := .FrontendEnv }}
+      {{ q $name }}: {{ q $value }}
+{{- end }}
+{{- if .Proxy }}
+      # npm and pnpm fetch packages.
+      HTTP_PROXY: ${HTTP_PROXY}
+      HTTPS_PROXY: ${HTTPS_PROXY}
+      NO_PROXY: ${NO_PROXY}
+      http_proxy: ${HTTP_PROXY}
+      https_proxy: ${HTTPS_PROXY}
+      no_proxy: ${NO_PROXY}
+{{- end }}
+    # The Vite server's own page.
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  frontend-node-modules:
+    labels: {{ flow .Labels }}

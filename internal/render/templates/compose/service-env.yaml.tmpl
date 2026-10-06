@@ -1,0 +1,15 @@
+# Per-service environment overrides from services.<name>.env in pic-sure.yaml.
+# Merged last, so an override wins over every other fragment.
+
+{{ if .ServiceEnv -}}
+services:
+{{- range $service, $env := .ServiceEnv }}
+{{- if $env }}
+  {{ q $service }}:
+    environment:
+{{- range $name, $value := $env }}
+      {{ q $name }}: {{ q $value }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{ end -}}

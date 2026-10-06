@@ -1,0 +1,8 @@
+# dev on psama: psama from the local pic-sure checkout, with a JDWP debug port on
+# 127.0.0.1. Render adds the JDWP agent (address *:5005) to its JAVA_OPTS.
+
+services:
+  psama:
+    image: {{ q (.DevImage "pic-sure-psama") }}
+    ports:
+      - "127.0.0.1:{{ .DevPort "psama" }}:5005"

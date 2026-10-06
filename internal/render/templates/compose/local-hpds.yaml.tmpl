@@ -1,0 +1,17 @@
+# HPDS data in this stack's own volumes, for hpds.data: local.
+
+services:
+  hpds:
+    volumes:
+      - hpds-data:/opt/local/hpds
+      - hpds-genomic:/opt/local/hpds/all
+      - hpds-csv:/usr/local/docker-config/hpds_csv
+      - hpds-query-results:/gic_query_results
+      - hpds-logs:/var/log
+
+volumes:
+  # The phenotype store and its encryption key.
+  hpds-data:
+    labels: {{ flow .Labels }}
+  hpds-genomic:
+    labels: {{ flow .Labels }}
