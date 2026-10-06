@@ -12,7 +12,9 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/docker"
+	"github.com/JamesPeck/pic-sure-cli/internal/events"
 	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
+	"github.com/JamesPeck/pic-sure-cli/internal/steps"
 	"github.com/JamesPeck/pic-sure-cli/internal/tui"
 )
 
@@ -239,6 +241,34 @@ func TestSignalDecidesExitCode(t *testing.T) {
 	a, _, _ = testApp(t)
 	if code := a.Run(ctx, []string{"version"}); code != 143 {
 		t.Errorf("clean return: exit = %d, want 143", code)
+	}
+}
+
+func TestSignalKeepsTheStepToResumeFrom(t *testing.T) {
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+	a, _, stderr := testApp(t)
+	root := newRootCmd(a)
+	up, _, err := root.Find([]string{"up"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	up.RunE = func(cmd *cobra.Command, _ []string) error {
+		return steps.Run(cmd.Context(), events.Discard, []steps.Step{{
+			ID: "db-migrate",
+			Apply: func(ctx context.Context, _ events.Sink) error {
+				cancel(exitcode.Signaled(syscall.SIGINT))
+				return ctx.Err()
+			},
+		}}, steps.Options{})
+	}
+	markRunning(a, up)
+
+	if code := a.execute(ctx, root, []string{"up"}); code != exitcode.CodeInterrupted {
+		t.Errorf("exit = %d, want %d", code, exitcode.CodeInterrupted)
+	}
+	if got, want := stderr.String(), "pic-sure: step db-migrate: interrupted (interrupt); re-run the command to resume from it\n"; got != want {
+		t.Errorf("stderr = %q, want %q", got, want)
 	}
 }
 

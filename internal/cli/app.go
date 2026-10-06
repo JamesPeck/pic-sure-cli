@@ -65,7 +65,9 @@ func Execute(ctx context.Context, info BuildInfo, args []string) int {
 // Run runs one command line and returns its exit code. If ctx was cancelled
 // with an *exitcode.Error cause (main does this for SIGINT and SIGTERM), that
 // cause decides the code even when the command returned cleanly: an
-// interrupted command exits 128+N (spec §10.4).
+// interrupted command exits 128+N (spec §10.4). The message is the cause's,
+// unless the command's error wraps the cause and so says more, such as the
+// step to resume from (steps.Error).
 func (a *App) Run(ctx context.Context, args []string) int {
 	return a.execute(ctx, newRootCmd(a), args)
 }
@@ -82,7 +84,11 @@ func (a *App) execute(ctx context.Context, root *cobra.Command, args []string) i
 	var coded *exitcode.Error
 	switch cause := context.Cause(ctx); {
 	case cause != nil && errors.As(cause, &coded):
-		err = cause
+		if !errors.Is(err, cause) {
+			err = cause
+		}
+		a.reportError(cmd, err)
+		return coded.Code
 	case err == nil:
 		err = a.succeed()
 	case !a.running && !errors.As(err, &coded):

@@ -432,8 +432,7 @@ Tickets 016, 017 and 018 filled in `docker.Engine`, `docker.Composer` and
 
 ## internal/steps
 
-Ticket 001 defined `Step` and `Run`'s signature; ticket 011 implemented
-the engine.
+Ticket 011, on the `Step` type and `Run` signature from 001.
 
 A `Step` has a stable kebab-case `ID` (users pass it to `--skip-step`), a
 `Title`, a `Check` that reports whether the step is already done without
@@ -453,7 +452,9 @@ It stops at the first failure and returns a `*steps.Error` with the step's
 resumes there because `Check` skips what is done. The error wraps what
 `Check` or `Apply` returned, so a step that returns
 `exitcode.Precondition(...)` makes the command exit 3. The cli layer
-(ticket 004) gets the step for `ErrorInfo.Step` with `errors.As`.
+(ticket 004) gets the step for `ErrorInfo.Step` with `errors.As`. When the
+run was interrupted between steps, `Step` is the next step, which has no
+events.
 
 - **Validation.** Before running anything, `Run` rejects a `Skip` ID that
   names none of its steps with `exitcode.Usage` (exit 2), listing the
@@ -461,21 +462,28 @@ resumes there because `Check` skips what is done. The error wraps what
   all its steps to one `Run`, concatenating shared lists (`up` reusing
   `init`'s steps 8–12) rather than calling `Run` twice. A malformed list (an
   empty, duplicate or non-kebab-case ID, or a nil `Apply`) is a plain error,
-  because it is a bug.
+  because it is a bug. `steps.Validate(steps, opts)` runs the same checks
+  alone: an operation that prompts, takes a lock or fetches before `Run`
+  calls it first, so a mistyped `--skip-step` fails before that work.
 - **Cancellation.** `Run` checks `ctx` before each step and before `Apply`,
   and starts nothing once it's done. It never abandons a running `Check` or
   `Apply`: it waits for it to return, so the step's deferred cleanups run
-  first. The interrupted step gets `StepDone{failed}`, and the error has
+  first. A step that then fails gets `StepDone{failed}`, and the error has
   `Interrupted` set and wraps `context.Cause(ctx)` instead of the step's
-  own error, so the exit code is 130, or 128+N for a signal. A cleanup that
-  has to run commands after cancellation needs a live context:
+  own error, so the exit code comes from the cause: 130 for a cancellation,
+  128+N for a signal. A step that finishes anyway counts as done, so if it
+  was the last one `Run` returns nil. On a signal, the cli reports the
+  `*steps.Error` (it wraps the signal cause) rather than the bare cause, so
+  the message names the step to resume from. A cleanup that has to run
+  commands after cancellation needs a live context:
   `context.WithTimeout(context.WithoutCancel(ctx), d)`.
 - **Plan mode.** `steps.Plan(ctx, steps, opts)` returns a `[]Planned`
   (`ID`, `Title`, `Status`, `Error`, with JSON tags) without applying
   anything or emitting events. `Status` is `apply`, `done` (`Check` says
   done), `skipped` (`--skip-step`) or `unknown` (`Check` failed; `Error`
-  says why). A failing `Check` doesn't stop the plan. `update --dry-run`
-  (036) uses it.
+  says why). A failing `Check` doesn't stop the plan. Plan's `skipped`
+  means `--skip-step` only; `done` is what `Run` reports as
+  `StepDone{skipped}`. `update --dry-run` (036) uses it.
 
 ## internal/docker
 

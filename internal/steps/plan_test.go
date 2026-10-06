@@ -83,3 +83,22 @@ func TestPlanCancelled(t *testing.T) {
 		t.Errorf("error = %+v, want an interruption at a wrapping context.Canceled", se)
 	}
 }
+
+func TestPlanKeepsTheLastAnswerWhenCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w := newWorld()
+	a := w.step("a")
+	a.Check = func(context.Context) (bool, error) {
+		cancel()
+		return true, nil
+	}
+
+	plan, err := steps.Plan(ctx, []steps.Step{a}, steps.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []steps.Planned{{ID: "a", Title: "Title of a", Status: steps.PlanDone}}; !slices.Equal(plan, want) {
+		t.Errorf("plan = %+v, want %+v", plan, want)
+	}
+}

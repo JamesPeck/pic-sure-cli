@@ -49,7 +49,7 @@ func (w *world) step(id string) steps.Step {
 
 // describe renders events compactly for comparison.
 func describe(evs []events.Event) []string {
-	out := []string{}
+	var out []string
 	for _, e := range evs {
 		switch e := e.(type) {
 		case events.StepStarted:
@@ -76,15 +76,8 @@ func assertEvents(t *testing.T, rec *events.Recorder, want ...string) {
 
 func assertCalls(t *testing.T, w *world, want ...string) {
 	t.Helper()
-	if want == nil {
-		want = []string{}
-	}
-	got := w.calls
-	if got == nil {
-		got = []string{}
-	}
-	if !slices.Equal(got, want) {
-		t.Errorf("calls:\n  got  %q\n  want %q", got, want)
+	if !slices.Equal(w.calls, want) {
+		t.Errorf("calls:\n  got  %q\n  want %q", w.calls, want)
 	}
 }
 
@@ -184,12 +177,15 @@ func TestRunRejectsUnknownSkipStep(t *testing.T) {
 			}
 			var rec events.Recorder
 
+			validateErr := steps.Validate(list, steps.Options{Skip: tt.skip})
 			err := steps.Run(context.Background(), &rec, list, steps.Options{Skip: tt.skip})
-			if code := exitcode.FromError(err); code != exitcode.CodeUsage {
-				t.Errorf("exit code %d, want %d (err %v)", code, exitcode.CodeUsage, err)
-			}
-			if err == nil || err.Error() != tt.want {
-				t.Errorf("error %v, want %q", err, tt.want)
+			for _, err := range []error{validateErr, err} {
+				if code := exitcode.FromError(err); code != exitcode.CodeUsage {
+					t.Errorf("exit code %d, want %d (err %v)", code, exitcode.CodeUsage, err)
+				}
+				if err == nil || err.Error() != tt.want {
+					t.Errorf("error %v, want %q", err, tt.want)
+				}
 			}
 			assertCalls(t, w)
 			assertEvents(t, &rec)
@@ -327,7 +323,7 @@ func TestRunCancelledInsideApply(t *testing.T) {
 	if se.Step != "b" || !se.Interrupted || !errors.Is(err, context.Canceled) {
 		t.Errorf("error = %+v, want step b, interrupted, wrapping context.Canceled", se)
 	}
-	if want := "interrupted at step b: context canceled; re-run the command to resume from it"; err.Error() != want {
+	if want := "step b: context canceled; re-run the command to resume from it"; err.Error() != want {
 		t.Errorf("message:\n  got  %q\n  want %q", err, want)
 	}
 	// The step's own exit code (1) gives way to the interruption's.
@@ -367,6 +363,59 @@ func TestRunCancelledBetweenSteps(t *testing.T) {
 	assertEvents(t, &rec, "started a (Title of a)", "done a ok")
 	if se := stepError(t, err); se.Step != "b" || !se.Interrupted {
 		t.Errorf("error = %+v, want an interruption naming b, the next step", se)
+	}
+}
+
+func TestRunCancelledAsTheLastStepFinishes(t *testing.T) {
+	tests := []struct {
+		name   string
+		step   func(w *world, cancel context.CancelFunc) steps.Step
+		calls  []string
+		status string
+	}{
+		{
+			name: "apply succeeds",
+			step: func(w *world, cancel context.CancelFunc) steps.Step {
+				s := w.step("a")
+				apply := s.Apply
+				s.Apply = func(ctx context.Context, sink events.Sink) error {
+					cancel()
+					return apply(ctx, sink)
+				}
+				return s
+			},
+			calls:  []string{"check a", "apply a"},
+			status: "ok",
+		},
+		{
+			name: "check finds it done",
+			step: func(w *world, cancel context.CancelFunc) steps.Step {
+				s := w.step("a")
+				s.Check = func(context.Context) (bool, error) {
+					w.calls = append(w.calls, "check a")
+					cancel()
+					return true, nil
+				}
+				return s
+			},
+			calls:  []string{"check a"},
+			status: "skipped",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			w := newWorld()
+			var rec events.Recorder
+
+			// Every step is done, so the run succeeded.
+			if err := steps.Run(ctx, &rec, []steps.Step{tt.step(w, cancel)}, steps.Options{}); err != nil {
+				t.Errorf("Run = %v, want nil", err)
+			}
+			assertCalls(t, w, tt.calls...)
+			assertEvents(t, &rec, "started a (Title of a)", "done a "+tt.status)
+		})
 	}
 }
 
@@ -434,12 +483,15 @@ func TestRunRejectsMalformedSteps(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var rec events.Recorder
+			validateErr := steps.Validate(tt.steps, steps.Options{})
 			err := steps.Run(context.Background(), &rec, tt.steps, steps.Options{})
-			if err == nil || !strings.Contains(err.Error(), tt.want) {
-				t.Fatalf("error %v, want one containing %q", err, tt.want)
-			}
-			if code := exitcode.FromError(err); code != exitcode.CodeFailed {
-				t.Errorf("exit code %d, want %d: a malformed list is a bug, not a usage error", code, exitcode.CodeFailed)
+			for _, err := range []error{validateErr, err} {
+				if err == nil || !strings.Contains(err.Error(), tt.want) {
+					t.Fatalf("error %v, want one containing %q", err, tt.want)
+				}
+				if code := exitcode.FromError(err); code != exitcode.CodeFailed {
+					t.Errorf("exit code %d, want %d: a malformed list is a bug, not a usage error", code, exitcode.CodeFailed)
+				}
 			}
 			assertEvents(t, &rec)
 		})
@@ -451,6 +503,9 @@ func TestRunAcceptsKebabCaseIDs(t *testing.T) {
 	var list []steps.Step
 	for _, id := range []string{"db", "db-migrate", "flyway-init-2", "1000genomes"} {
 		list = append(list, steps.Step{ID: id, Apply: apply})
+	}
+	if err := steps.Validate(list, steps.Options{Skip: []string{"db-migrate"}}); err != nil {
+		t.Fatal(err)
 	}
 	if err := steps.Run(context.Background(), events.Discard, list, steps.Options{}); err != nil {
 		t.Fatal(err)

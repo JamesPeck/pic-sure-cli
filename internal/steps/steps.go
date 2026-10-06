@@ -42,14 +42,14 @@ type Options struct {
 // Run stops at the first failure and returns an *Error naming the step. A
 // re-run resumes there, because Check skips the steps already done.
 //
-// Run starts nothing once ctx is done. A Check or Apply that is running
-// when ctx ends is left to return by itself, so its deferred cleanups run
-// before Run returns; that step is reported failed, and the *Error is
-// marked Interrupted and wraps context.Cause(ctx).
+// Run starts nothing once ctx is done, and returns an *Error marked
+// Interrupted. A Check or Apply that is running when ctx ends is left to
+// return by itself, so its deferred cleanups run before Run returns. If it
+// fails, or Check finds the step not done, the step is reported failed. If
+// Apply succeeds or Check finds the step done, the step counts as done, so
+// when it was the last one Run returns nil.
 //
-// Before running anything, Run rejects a malformed step list (an empty,
-// duplicate or non-kebab-case ID, or a nil Apply), and a Skip ID that names
-// no step, which is an exitcode.Usage error.
+// Before running anything, Run rejects what Validate rejects.
 func Run(ctx context.Context, sink events.Sink, steps []Step, opts Options) error {
 	if sink == nil {
 		sink = events.Discard
@@ -106,9 +106,9 @@ type Error struct {
 	// between steps.
 	Step string
 	// Interrupted reports that the run's context ended. Err is then
-	// context.Cause(ctx), so the exit code is the one for the interruption
-	// (130, or 128+N for a signal) rather than for whatever the step
-	// returned as it was cut short.
+	// context.Cause(ctx) rather than whatever the step returned as it was
+	// cut short, so the exit code comes from the cause: 130 for a
+	// cancellation, 128+N for a signal.
 	Interrupted bool
 	// Err is what Check or Apply returned, or the context's cause.
 	Err error
@@ -116,7 +116,7 @@ type Error struct {
 
 func (e *Error) Error() string {
 	if e.Interrupted {
-		return fmt.Sprintf("interrupted at step %s: %v; re-run the command to resume from it", e.Step, e.Err)
+		return fmt.Sprintf("step %s: %v; re-run the command to resume from it", e.Step, e.Err)
 	}
 	return fmt.Sprintf("step %s failed: %v; re-run the command to retry it (steps already done are skipped)", e.Step, e.Err)
 }
@@ -139,8 +139,18 @@ func interrupted(ctx context.Context, id string) error {
 
 var kebabCase = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 
-// prepare checks the step list and opts.Skip, and returns the set of step
-// IDs to skip.
+// Validate reports what Run and Plan would reject before running anything:
+// a malformed step list (an empty, duplicate or non-kebab-case ID, or a nil
+// Apply), which is a bug, and a Skip ID that names none of the steps, which
+// is an exitcode.Usage error. An operation that does work before calling
+// Run, such as prompting or taking a lock, calls it first.
+func Validate(steps []Step, opts Options) error {
+	_, err := prepare(steps, opts)
+	return err
+}
+
+// prepare validates steps and opts, and returns the set of step IDs to
+// skip.
 func prepare(steps []Step, opts Options) (map[string]bool, error) {
 	ids := make([]string, 0, len(steps))
 	known := make(map[string]bool, len(steps))

@@ -3,7 +3,4 @@
 // not, emitting StepStarted and StepDone events, honouring --skip-step, and
 // stopping at the first failure. Plan reports what Run would do without
 // applying anything, for dry runs.
-//
-// Ticket 001 fixed the Step type and Run's signature; ticket 011 implemented
-// the engine.
 package steps
