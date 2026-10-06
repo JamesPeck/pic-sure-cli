@@ -206,8 +206,9 @@ images, services or volumes here rather than in the package that uses them.
   (`ImagesBuiltFrom(catalog.PicSure)`), `pic-sure-httpd` (frontend) and
   `dictionary-etl`, each with its context and Dockerfile; plus the pinned
   third-party images (`mysql`, `postgres`, `flyway`, `alpine`, `maven`,
-  `node`) in `Ref`. A built image's repository is `hms-dbmi/<name>`; its tag
-  is the build's business. `ServicesUsing(image)` goes the other way.
+  `node`) in `Ref`. `node` has no tag there: httpd-hmr takes it from the
+  frontend's `.nvmrc`. A built image's repository is `hms-dbmi/<name>`; its
+  tag is the build's business. `ServicesUsing(image)` goes the other way.
 - **Services** (`services.go`): every compose service with its image,
   networks and volumes, its `Phase` (`PhaseDB`, `PhaseMigrate` one-shots run
   with `compose run --rm`, then `PhaseApp` for `up -d --wait`), `OneShot`, and
@@ -215,22 +216,25 @@ images, services or volumes here rather than in the package that uses them.
 - **Modes.** Some services and volumes exist only in some stacks: no
   `picsure-db` with a remote DB, the shared-HPDS volumes and
   `hpds-genomic-seed` only in shared mode, `truststore` only with custom
-  certs. Each entry's `When` is a `Condition`; build a `Mode` from the config
-  and use `ServicesIn(mode)` and `Service.VolumesIn(mode)`.
+  certs. Each entry's `When` is a `Condition` (`Always`, `LocalDBOnly` and
+  so on); build a `Mode` from the config and use `ServicesIn(mode)` and
+  `Service.VolumesIn(mode)`.
 - **Volumes** (`volumes.go`): logical name (the compose key), `Scope`
   (`StackScoped`; `SharedData`, the external `<set>_hpds-data` and
   `<set>_hpds-genomic`; `HostScoped`, the `pic-sure-m2` Maven volume), `Kind`
   (database, data, TLS, logs, cache) for teardown to select on, and what it
-  holds. `DockerName(owner)` gives the Docker name. Logs go to one volume per
-  service instead of host binds.
+  holds. `DockerName(owner)` gives the Docker name. Logs go to named volumes
+  instead of host binds: one per service that writes logs, except that
+  dictionary-api and dictionary-dump share `dictionary-logs`.
 - **Dev variants** (`dev.go`): what `dev on NAME` takes, using the bash's
   overlay names (`psama`, `hpds`, `gateway`, `operations`, `query`,
   `visualization`, `dictionary`, `httpd`, `httpd-hmr`). Each names the
   component whose local source it needs, every service it replaces (its
   build context is that service's image's), and its port as an offset from
-  `dev_ports.base` (`DevPortSpan` is 7; `NoPort` for none). Debug ports keep
-  the bash's 5005–5010 numbering, so offset 1 is free; httpd-hmr's Vite port
-  is offset 6.
+  `dev_ports.base` (`DevPortSpan` is 7; `NoPort` for none). Debug port
+  offsets follow the order of the bash's ports 5005–5010, so offset 1 is
+  free; httpd-hmr's Vite port is offset 6. Container-side ports are
+  render's choice.
 
 `aio_test.go` compares the reactor images, the base services' images and
 networks, and the dev overlays with the AIO checkout beside this repo (or

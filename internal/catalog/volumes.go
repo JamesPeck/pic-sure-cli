@@ -24,11 +24,11 @@ const (
 type Kind int
 
 const (
-	KindDatabase Kind = iota // the MySQL auth and picsure schemas
-	KindData                 // HPDS and dictionary data, staging, query results
-	KindTLS                  // TLS material the CLI generates and copies in
-	KindLogs                 // service logs
-	KindCache                // rebuildable caches
+	KindDatabase Kind = iota + 1 // the MySQL auth and picsure schemas
+	KindData                     // HPDS and dictionary data, staging, query results
+	KindTLS                      // TLS material the CLI generates and copies in
+	KindLogs                     // service logs
+	KindCache                    // rebuildable caches
 )
 
 // A Volume is a named Docker volume.
@@ -57,18 +57,18 @@ func (v Volume) DockerName(owner string) string {
 // Volumes returns every volume.
 func Volumes() []Volume {
 	return []Volume{
-		{Name: "picsure-db-data", Kind: KindDatabase, When: LocalDB, Holds: "MySQL data: the auth and picsure schemas"},
+		{Name: "picsure-db-data", Kind: KindDatabase, When: LocalDBOnly, Holds: "MySQL data: the auth and picsure schemas"},
 		{Name: "dictionary-db-data", Kind: KindData, Holds: "Postgres data: the dictionary schema"},
-		{Name: "hpds-data", Kind: KindData, When: LocalHPDS, Holds: "the HPDS phenotype store and its encryption key"},
-		{Name: "hpds-genomic", Kind: KindData, When: LocalHPDS, Holds: "the HPDS genomic store"},
+		{Name: "hpds-data", Kind: KindData, When: LocalHPDSOnly, Holds: "the HPDS phenotype store and its encryption key"},
+		{Name: "hpds-genomic", Kind: KindData, When: LocalHPDSOnly, Holds: "the HPDS genomic store"},
 		{Name: "hpds-csv", Kind: KindData, Holds: "HPDS CSV exports"},
 		{Name: "hpds-query-results", Kind: KindData, Holds: "query result files for GIC file sharing"},
 		{Name: "genomic-staging", Kind: KindData, Holds: "VCFs and loader output staged by data load-genomic"},
-		{Name: "shared-hpds-data", Scope: SharedData, Kind: KindData, When: SharedHPDS, Holds: "a published phenotype store, mounted read-only"},
-		{Name: "shared-hpds-genomic", Scope: SharedData, Kind: KindData, When: SharedHPDS, Holds: "a published genomic store, the source of each stack's copy"},
-		{Name: "hpds-genomic-copy", Kind: KindData, When: SharedHPDS, Holds: "this stack's copy of the shared genomic store, where HPDS writes its indexes"},
+		{Name: "shared-hpds-data", Scope: SharedData, Kind: KindData, When: SharedHPDSOnly, Holds: "a published phenotype store, mounted read-only"},
+		{Name: "shared-hpds-genomic", Scope: SharedData, Kind: KindData, When: SharedHPDSOnly, Holds: "a published genomic store, the source of each stack's copy"},
+		{Name: "hpds-genomic-copy", Kind: KindData, When: SharedHPDSOnly, Holds: "this stack's copy of the shared genomic store, where HPDS writes its indexes"},
 		{Name: "certs", Kind: KindTLS, Holds: "httpd's server key, cert and chain, owned 2:2"},
-		{Name: "truststore", Kind: KindTLS, When: CustomTrust, Holds: "psama's cacerts plus the operator's CA certs"},
+		{Name: "truststore", Kind: KindTLS, When: CustomTrustOnly, Holds: "psama's cacerts plus the operator's CA certs"},
 		{Name: "httpd-logs", Kind: KindLogs, Holds: "httpd logs"},
 		{Name: "psama-logs", Kind: KindLogs, Holds: "psama logs"},
 		{Name: "hpds-logs", Kind: KindLogs, Holds: "HPDS logs"},

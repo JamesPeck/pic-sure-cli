@@ -21,9 +21,9 @@ type DevVariant struct {
 	// built from the local source, with the build context and Dockerfile
 	// of its Images entry.
 	Services []string
-	// Port is the offset from network.dev_ports.base of the port the
-	// variant publishes on 127.0.0.1: JDWP for a Java service, the Vite
-	// server for httpd-hmr. NoPort if it publishes none.
+	// Port is the offset from network.dev_ports.base of the host port the
+	// variant publishes: JDWP for a Java service, the Vite server for
+	// httpd-hmr. NoPort if it publishes none.
 	Port int
 	// Image, when set, is the image the variant runs instead of building
 	// its services' own images.
@@ -40,15 +40,14 @@ type DevVariant struct {
 // httpd, so a stack can have at most one of them on.
 func DevVariants() []DevVariant {
 	return []DevVariant{
-		// Ports keep the bash's numbering, offset from 5005, which left 5006
-		// (offset 1) unused.
+		// Offsets keep the order of the bash's debug ports 5005–5010, so
+		// offset 1 (its unused 5006) has no variant.
 		{Name: "psama", Component: PicSure, Services: []string{"psama"}, Port: 0},
 		{Name: "hpds", Component: PicSure, Services: []string{"hpds"}, Port: 2, Networks: []string{"app"}},
 		{Name: "gateway", Component: PicSure, Services: []string{"gateway"}, Port: 3},
 		{Name: "operations", Component: PicSure, Services: []string{"pic-sure-operations-service"}, Port: 4},
 		{Name: "query", Component: PicSure, Services: []string{"pic-sure-hpds-query-service"}, Port: 5},
 		{Name: "visualization", Component: PicSure, Services: []string{"visualization"}, Port: NoPort},
-		// The bash's dictionary overlay rebuilt only dictionary-api (§13).
 		{Name: "dictionary", Component: PicSure, Services: []string{"dictionary-api", "dictionary-dump"}, Port: NoPort},
 		{Name: "httpd", Component: Frontend, Services: []string{"httpd"}, Port: NoPort},
 		{Name: "httpd-hmr", Component: Frontend, Services: []string{"httpd"}, Port: 6, Image: "node", Volumes: []string{"frontend-node-modules"}},

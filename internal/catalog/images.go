@@ -1,5 +1,7 @@
 package catalog
 
+import "strings"
+
 // Namespace is the repository namespace built images are tagged under:
 // hms-dbmi/<image>:<tag>. Pull mode puts a registry in front of it (D33).
 const Namespace = "hms-dbmi"
@@ -21,23 +23,30 @@ type Image struct {
 	// container is enough to build it.
 	Context    string
 	Dockerfile string
-	// Ref is a third-party image's reference, pinned to a tag.
+	// Ref is a third-party image's reference, pinned to a tag, except
+	// node's: httpd-hmr takes its tag from the frontend's .nvmrc.
 	Ref string
 }
 
 // Built reports whether the CLI builds the image from source.
 func (i Image) Built() bool { return i.Component != "" }
 
-// Repository is the repository a built image is tagged in:
-// hms-dbmi/<Name>. Third-party images use Ref instead.
-func (i Image) Repository() string { return Namespace + "/" + i.Name }
+// Repository is the image's repository: hms-dbmi/<Name> for a built image,
+// and Ref without its tag for a third-party one.
+func (i Image) Repository() string {
+	if !i.Built() {
+		repo, _, _ := strings.Cut(i.Ref, ":")
+		return repo
+	}
+	return Namespace + "/" + i.Name
+}
 
 // Images returns every image. The pic-sure images come first, in the order
 // the bash builds them.
 func Images() []Image {
 	return []Image{
-		// The Maven reactor's images (§7.2 step 3), the bash's MONOREPO_IMAGES.
-		// Each Dockerfile copies its module's target/ jar.
+		// The reactor images: AIO's MONOREPO_IMAGES, which aio_test.go checks
+		// this list against.
 		reactor("pic-sure-gateway", "services/pic-sure-gateway", "services/pic-sure-gateway/Dockerfile"),
 		reactor("pic-sure-operations-service", "services/pic-sure-operations-service", "services/pic-sure-operations-service/Dockerfile"),
 		reactor("pic-sure-hpds-query-service", "services/pic-sure-hpds-query-service", "services/pic-sure-hpds-query-service/Dockerfile"),
@@ -52,23 +61,18 @@ func Images() []Image {
 		// The dictionary weights step runs it; no service does.
 		reactor("dictionary-weights", "services/picsure-dictionary/dictionaryweights", "services/picsure-dictionary/dictionaryweights/Dockerfile"),
 
-		// httpd serving the built frontend. It bakes in the stack's VITE_*
-		// config, so its tag carries a config hash (§7.2 step 4).
 		{Name: "pic-sure-httpd", Component: Frontend, Context: ".", Dockerfile: "Dockerfile"},
-		// The dictionary loader that dictionary hydrate and data loads run
-		// (§9.6); no service does.
+		// Dictionary hydrate and data loads run it; no service does.
 		{Name: "dictionary-etl", Component: DictionaryETL, Context: ".", Dockerfile: "Dockerfile"},
 
 		{Name: "mysql", Ref: "mysql:8.0"},
 		{Name: "postgres", Ref: "postgres:16-alpine"},
 		{Name: "flyway", Ref: "flyway/flyway:10"},
-		// Helper containers that work on volumes. The bash used an unpinned
-		// alpine.
+		// Helper containers that work on volumes.
 		{Name: "alpine", Ref: "alpine:3.23"},
 		// The reactor build container (§7.2 step 2).
 		{Name: "maven", Ref: "maven:3-amazoncorretto-25"},
-		// httpd-hmr's Vite server. Its tag comes from the frontend's .nvmrc
-		// (node:<version>-alpine3.23), so Ref holds only the repository.
+		// httpd-hmr's Vite server, tagged <.nvmrc version>-alpine3.23.
 		{Name: "node", Ref: "node"},
 	}
 }

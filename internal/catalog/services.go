@@ -12,23 +12,23 @@ type Mode struct {
 type Condition int
 
 const (
-	Always      Condition = iota
-	LocalDB               // db.mode: local
-	LocalHPDS             // hpds.data: local
-	SharedHPDS            // hpds.data: shared
-	CustomTrust           // the stack has custom CA certs
+	Always          Condition = iota
+	LocalDBOnly               // db.mode: local
+	LocalHPDSOnly             // hpds.data: local
+	SharedHPDSOnly            // hpds.data: shared
+	CustomTrustOnly           // the stack has custom CA certs
 )
 
 // In reports whether a stack in mode m meets the condition.
 func (c Condition) In(m Mode) bool {
 	switch c {
-	case LocalDB:
+	case LocalDBOnly:
 		return !m.RemoteDB
-	case LocalHPDS:
+	case LocalHPDSOnly:
 		return !m.SharedHPDS
-	case SharedHPDS:
+	case SharedHPDSOnly:
 		return m.SharedHPDS
-	case CustomTrust:
+	case CustomTrustOnly:
 		return m.CustomTrust
 	default:
 		return true
@@ -40,7 +40,7 @@ type Phase int
 
 const (
 	// PhaseDB services are the databases, started and probed first.
-	PhaseDB Phase = iota
+	PhaseDB Phase = iota + 1
 	// PhaseMigrate services are the Flyway one-shots, run with
 	// compose run --rm once the databases are up.
 	PhaseMigrate
@@ -57,7 +57,7 @@ type Network struct {
 // Networks returns the stack's networks.
 func Networks() []Network {
 	return []Network{
-		{Name: "public"}, // httpd's published ports, and nothing else
+		{Name: "public"}, // only httpd joins it
 		{Name: "app"},    // the app tier; psama reaches Auth0 through it
 		{Name: "data", Internal: true},
 		{Name: "query", Internal: true}, // isolates HPDS from the app tier
@@ -100,7 +100,7 @@ func (s Service) VolumesIn(m Mode) []string {
 // Services returns every service, by phase.
 func Services() []Service {
 	return []Service{
-		{Name: "picsure-db", Image: "mysql", Networks: []string{"app"}, Volumes: []string{"picsure-db-data"}, Phase: PhaseDB, When: LocalDB},
+		{Name: "picsure-db", Image: "mysql", Networks: []string{"app"}, Volumes: []string{"picsure-db-data"}, Phase: PhaseDB, When: LocalDBOnly},
 		{Name: "dictionary-db", Image: "postgres", Networks: []string{"data"}, Volumes: []string{"dictionary-db-data"}, Phase: PhaseDB},
 
 		{Name: "flyway-init", Image: "flyway", Networks: []string{"app"}, Phase: PhaseMigrate, OneShot: true},
@@ -111,9 +111,9 @@ func Services() []Service {
 		{Name: "pic-sure-operations-service", Image: "pic-sure-operations-service", Networks: []string{"app"}, Phase: PhaseApp},
 		{Name: "pic-sure-hpds-query-service", Image: "pic-sure-hpds-query-service", Networks: []string{"app", "query"}, Phase: PhaseApp},
 		{Name: "psama", Image: "pic-sure-psama", Networks: []string{"app"}, Volumes: []string{"truststore", "psama-logs"}, Phase: PhaseApp, RestartAfterMigrate: true},
-		// Shared mode seeds hpds-genomic-copy from the shared genomic store
-		// before hpds starts, and only when the published set changed.
-		{Name: "hpds-genomic-seed", Image: "alpine", Volumes: []string{"shared-hpds-genomic", "hpds-genomic-copy"}, Phase: PhaseApp, OneShot: true, When: SharedHPDS},
+		// Copies the shared genomic store into hpds-genomic-copy before hpds
+		// starts.
+		{Name: "hpds-genomic-seed", Image: "alpine", Volumes: []string{"shared-hpds-genomic", "hpds-genomic-copy"}, Phase: PhaseApp, OneShot: true, When: SharedHPDSOnly},
 		{Name: "hpds", Image: "pic-sure-hpds", Networks: []string{"query"}, Volumes: []string{
 			"hpds-data", "hpds-genomic", "shared-hpds-data", "hpds-genomic-copy", "hpds-csv", "hpds-query-results", "hpds-logs",
 		}, Phase: PhaseApp},

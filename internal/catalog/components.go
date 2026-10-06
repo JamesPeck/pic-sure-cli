@@ -42,8 +42,6 @@ func Components() []Component {
 		{Name: PicSure, Repo: "hms-dbmi/pic-sure", SpecKey: "PSA"},
 		{Name: Frontend, Repo: "hms-dbmi/PIC-SURE-Frontend", SpecKey: "PSF"},
 		{Name: Migrations, Repo: "hms-dbmi/PIC-SURE-Migrations", SpecKey: "PSM"},
-		// The bash ignores this key and builds the checkout it finds; v2 honours
-		// it (D31).
 		{Name: DictionaryETL, Repo: "hms-dbmi/picsure-dictionary-etl", SpecKey: "DICTIONARY_ETL"},
 	}
 }

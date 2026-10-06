@@ -67,6 +67,19 @@ func TestImagesAreWellFormed(t *testing.T) {
 	}
 }
 
+func TestImageRepositories(t *testing.T) {
+	for name, want := range map[string]string{
+		"pic-sure-psama": "hms-dbmi/pic-sure-psama",
+		"flyway":         "flyway/flyway",
+		"node":           "node",
+	} {
+		i, _ := LookupImage(name)
+		if got := i.Repository(); got != want {
+			t.Errorf("%s.Repository() = %q, want %q", name, got, want)
+		}
+	}
+}
+
 func TestServicesReferToKnownEntries(t *testing.T) {
 	services := Services()
 	if !slices.IsSortedFunc(services, func(a, b Service) int { return int(a.Phase - b.Phase) }) {
@@ -85,6 +98,9 @@ func TestServicesReferToKnownEntries(t *testing.T) {
 			if _, ok := LookupVolume(v); !ok {
 				t.Errorf("service %s: unknown volume %q", s.Name, v)
 			}
+		}
+		if s.Phase == 0 {
+			t.Errorf("service %s: no phase", s.Name)
 		}
 		if s.Phase == PhaseMigrate && !s.OneShot {
 			t.Errorf("service %s: migrations run with compose run --rm, so it must be one-shot", s.Name)
@@ -184,6 +200,9 @@ func TestVolumeDockerNames(t *testing.T) {
 		}
 	}
 	for _, v := range Volumes() {
+		if v.Kind == 0 {
+			t.Errorf("volume %s: no kind", v.Name)
+		}
 		if v.Scope == SharedData && !strings.HasPrefix(v.Name, "shared-") {
 			t.Errorf("shared data volume %s: DockerName needs the shared- prefix", v.Name)
 		}
