@@ -106,6 +106,23 @@ func TestIntrospectionSignature(t *testing.T) {
 	}
 }
 
+func TestIntrospectionMatchesJWTCreator(t *testing.T) {
+	// Printed by jwt-creator v1.0.0's generateJwt.jar, run as
+	// `java -jar generateJwt.jar secret.txt sub "PSAMA_APPLICATION|<appUUID>" 365 day`
+	// with secret.txt holding the input below. Its clock read Unix second
+	// 1791318031.
+	const want = "eyJhbGciOiJIUzI1NiJ9." +
+		"eyJzdWIiOiJQU0FNQV9BUFBMSUNBVElPTnwwZDdmNGM4ZS0zYjJhLTRlNjEtOWYwYS01YzRkM2UyYjFhMDkiLCJpc3MiOiJiYXIiLCJleHAiOjE4MjI4NTQwMzEsImlhdCI6MTc5MTMxODAzMSwianRpIjoiRm9vIn0." +
+		"zq0HiyuwWCrN5HoBDqPetEe4Ih1Z3EXZJcD9Rp2wHEA"
+	got, _, err := jwt.Introspection(secret+"\nsecond-line", appUUID, time.Unix(1791318031, 0), jwt.DefaultTTL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Errorf("token = %s\nwant jwt-creator's %s", got, want)
+	}
+}
+
 func TestIntrospectionKeysOnFirstLine(t *testing.T) {
 	want, _, err := jwt.Introspection(secret, appUUID, t0, jwt.DefaultTTL)
 	if err != nil {

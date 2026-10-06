@@ -19,20 +19,19 @@ const DefaultTTL = 365 * 24 * time.Hour
 // refuses HS256 keys under 256 bits.
 const MinSecretLen = 32
 
-// header is jwt-creator's header. Its jjwt sets no "typ".
 var header = base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256"}`))
 
-// uuidPattern is the form PSAMA's UUID.fromString accepts for the part of
-// the subject after the "|".
 var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
-// claims is jwt-creator's claim set, in the order its jjwt writes it.
+// claims is in the order jwt-creator writes them (its jjwt serialises a Java
+// HashMap), so a token issued in the same second matches the JAR's byte for
+// byte.
 type claims struct {
 	Sub string `json:"sub"`
-	Jti string `json:"jti"`
-	Iat int64  `json:"iat"`
 	Iss string `json:"iss"`
 	Exp int64  `json:"exp"`
+	Iat int64  `json:"iat"`
+	Jti string `json:"jti"`
 }
 
 // Introspection returns the introspection token for the application
@@ -41,8 +40,10 @@ type claims struct {
 // auth.application.token holds it byte for byte.
 //
 // The HMAC key is the first line of secret, as jwt-creator read it from a
-// file. PSAMA verifies with the whole secret, so only a single-line secret
-// (a trailing line break aside) yields a token PSAMA accepts.
+// file. PSAMA verifies with the whole secret it is configured with, line
+// breaks included, so the token works only if that secret is exactly this
+// first line: strip the newline from a secret read from stdin before
+// storing it.
 func Introspection(secret, appUUID string, now time.Time, ttl time.Duration) (string, time.Time, error) {
 	key := secret
 	if i := strings.IndexAny(key, "\r\n"); i >= 0 {
@@ -61,10 +62,10 @@ func Introspection(secret, appUUID string, now time.Time, ttl time.Duration) (st
 	exp := now.Add(ttl).Unix()
 	payload, err := json.Marshal(claims{
 		Sub: "PSAMA_APPLICATION|" + appUUID,
-		Jti: "Foo",
-		Iat: now.Unix(),
 		Iss: "bar",
 		Exp: exp,
+		Iat: now.Unix(),
+		Jti: "Foo",
 	})
 	if err != nil {
 		return "", time.Time{}, err

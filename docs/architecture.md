@@ -275,11 +275,15 @@ v1's jwt-creator container. Pass `ops.Deps.Clock`'s time as `now` and
 `jwt.DefaultTTL` (365 days) as `ttl`.
 
 - The token is HS256 with header `{"alg":"HS256"}` and claims
-  `sub=PSAMA_APPLICATION|<uuid>`, `jti="Foo"`, `iat`, `iss="bar"`, `exp`
-  (Unix seconds). Segments are base64url without padding.
+  `sub=PSAMA_APPLICATION|<uuid>`, `iss="bar"`, `exp`, `iat` (Unix seconds)
+  and `jti="Foo"`, in jwt-creator's order, so for the same issue second it
+  matches the JAR's output byte for byte. Segments are base64url without
+  padding.
 - The HMAC key is the first line of `secret` (split at `\n`, `\r` or `\r\n`),
-  as jwt-creator read it. PSAMA verifies with the whole secret, so only a
-  single-line secret, or one with just a trailing line break, works.
+  as jwt-creator read it. PSAMA verifies with the whole secret it is
+  configured with, line breaks included, so the token works only if that
+  secret is exactly this first line. Strip the newline from a secret read
+  from stdin before storing it.
 - It rejects a key shorter than `jwt.MinSecretLen` (32 bytes, since PSAMA's
   jjwt refuses shorter HS256 keys), an `appUUID` that isn't a UUID, and a
   non-positive `ttl`. Error messages never contain the secret.
