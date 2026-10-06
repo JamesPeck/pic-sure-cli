@@ -25,9 +25,9 @@ type State struct {
 	Images map[string]string `json:"images,omitempty"`
 	// LastOperation is the most recent mutating command.
 	LastOperation *Operation `json:"last_operation,omitempty"`
-	// CreatedAt is when init first saved the state.
+	// CreatedAt is when the first operation started.
 	CreatedAt time.Time `json:"created_at,omitzero"`
-	// UpdatedAt is when the state last changed.
+	// UpdatedAt is when an operation last started or finished.
 	UpdatedAt time.Time `json:"updated_at,omitzero"`
 }
 

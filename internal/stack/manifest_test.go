@@ -197,6 +197,48 @@ func TestRemove(t *testing.T) {
 		}
 	})
 
+	t.Run("refuses a path under a symlinked directory", func(t *testing.T) {
+		if err := s.MkdirAll("gen", 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.WriteFile("gen/config.yaml", nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		// The operator replaced the CLI's directory with a link to theirs.
+		if err := os.MkdirAll(s.Path("overrides"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(s.Path("overrides/config.yaml"), []byte("mine"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.RemoveAll(s.Path("gen")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("overrides", s.Path("gen")); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Remove("gen/config.yaml"); err == nil {
+			t.Error("Remove through a symlinked directory succeeded")
+		}
+		wantContent(t, s.Path("overrides/config.yaml"), "mine")
+	})
+
+	t.Run("refuses a path that changed kind", func(t *testing.T) {
+		if err := s.MkdirAll("was-dir", 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(s.Path("was-dir")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(s.Path("was-dir"), []byte("mine"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Remove("was-dir"); !errors.Is(err, ErrNotCreated) {
+			t.Errorf("err = %v, want ErrNotCreated", err)
+		}
+		wantContent(t, s.Path("was-dir"), "mine")
+	})
+
 	t.Run("removes a symlink, not its target", func(t *testing.T) {
 		if err := s.WriteFile("target", []byte("keep"), 0o644); err != nil {
 			t.Fatal(err)
@@ -231,11 +273,26 @@ func TestManifestReadErrors(t *testing.T) {
 			if _, err := s.Manifest(); err == nil {
 				t.Error("Manifest succeeded")
 			}
-			// Recording must not overwrite what it can't read.
+			// Recording must not overwrite what it can't read, and the
+			// path isn't created unrecorded.
 			if err := s.WriteFile("new", nil, 0o644); err == nil {
 				t.Error("WriteFile recorded into an unreadable manifest")
 			}
 			wantContent(t, s.Path(ManifestFile), content)
+			if _, err := os.Lstat(s.Path("new")); !errors.Is(err, fs.ErrNotExist) {
+				t.Errorf("new was created without being recorded: %v", err)
+			}
+
+			// Once the manifest is readable, a retry records the path.
+			if err := os.Remove(s.Path(ManifestFile)); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.WriteFile("new", nil, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if m, _ := s.Manifest(); !m.Has("new") {
+				t.Error("the retried write isn't recorded")
+			}
 		})
 	}
 }

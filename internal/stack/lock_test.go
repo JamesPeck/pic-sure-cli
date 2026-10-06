@@ -38,7 +38,7 @@ func TestLockHolderProcess(t *testing.T) {
 	os.Exit(0)
 }
 
-// holder is another process holding dir's stack lock.
+// lockHolderProc is another process holding a stack's lock.
 type lockHolderProc struct {
 	cmd   *exec.Cmd
 	stdin io.WriteCloser
@@ -63,6 +63,9 @@ func startHolder(t *testing.T, dir string) *lockHolderProc {
 	h := &lockHolderProc{cmd: cmd, stdin: stdin}
 	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
 
+	// A holder that never says "locked" is killed, ending the read.
+	timer := time.AfterFunc(30*time.Second, func() { _ = cmd.Process.Kill() })
+	defer timer.Stop()
 	line, err := bufio.NewReader(stdout).ReadString('\n')
 	if strings.TrimSpace(line) != "locked" {
 		t.Fatalf("holder said %q, %v", line, err)
@@ -187,4 +190,18 @@ func TestLockInProcess(t *testing.T) {
 	if m, _ := s.Manifest(); !m.Has(LockFile) {
 		t.Error("the lock file isn't recorded in the manifest")
 	}
+}
+
+func TestLockRefusesASymlinkedLockFile(t *testing.T) {
+	s := newStack(t)
+	if err := s.WriteFile(ConfigFile, []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../"+ConfigFile, s.Path(LockFile)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Lock(context.Background(), LockOptions{}); err == nil {
+		t.Error("Lock through a symlink succeeded")
+	}
+	wantContent(t, s.Path(ConfigFile), "keep")
 }

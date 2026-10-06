@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"syscall"
 )
 
 // ErrNotCreated is returned by Remove for a path the manifest doesn't list.
@@ -18,58 +19,62 @@ var ErrNotCreated = errors.New("not created by pic-sure")
 // the stack) with data and mode perm, whatever the umask: it writes a temp
 // file in the same directory, fsyncs it, renames it over rel and fsyncs the
 // directory. Readers see the old content or the new, never a mix. If rel is
-// a symlink, the link is replaced, never written through. The parent
-// directory must exist (see MkdirAll). A file that didn't exist before is
-// recorded in the manifest; overwriting an operator's file doesn't make it
-// the CLI's.
+// a symlink, the link is replaced, never written through; a symlinked
+// directory on the way to rel is refused. The parent directory must exist
+// (see MkdirAll). A file that didn't exist before is recorded in the
+// manifest; overwriting an operator's file doesn't make it the CLI's.
 func (s *Stack) WriteFile(rel string, data []byte, perm fs.FileMode) error {
 	p, err := local(rel)
 	if err != nil {
 		return err
 	}
-	created, err := s.writeAtomic(p, data, perm)
-	if err != nil || !created {
+	if err := s.noSymlinks(filepath.Dir(p)); err != nil {
 		return err
 	}
-	return s.record(Entry{Path: filepath.ToSlash(p), Type: EntryFile})
+	_, err = s.root.Lstat(p)
+	switch {
+	case err == nil:
+		return s.writeAtomic(p, data, perm)
+	case errors.Is(err, fs.ErrNotExist):
+		return s.recordThenCreate(Entry{Path: filepath.ToSlash(p), Type: EntryFile}, func() error {
+			return s.writeAtomic(p, data, perm)
+		})
+	default:
+		return err
+	}
 }
 
 // MkdirAll creates the directory rel and any missing parents inside the
-// stack with mode perm, whatever the umask, and records each one it created.
-// Directories that already exist are left as they are.
-func (s *Stack) MkdirAll(rel string, perm fs.FileMode) (err error) {
+// stack with mode perm, whatever the umask, and records each one it creates.
+// Directories that already exist are left as they are; a symlink on the way
+// is refused.
+func (s *Stack) MkdirAll(rel string, perm fs.FileMode) error {
 	p, err := local(rel)
 	if err != nil {
 		return err
 	}
-	var created []Entry
-	defer func() {
-		// Record what was created even if a later component failed.
-		if len(created) > 0 {
-			if rerr := s.record(created...); err == nil {
-				err = rerr
-			}
-		}
-	}()
 	prefix := ""
 	for _, part := range strings.Split(p, string(filepath.Separator)) {
 		prefix = filepath.Join(prefix, part)
-		err = s.root.Mkdir(prefix, perm)
-		if errors.Is(err, fs.ErrExist) {
-			var fi fs.FileInfo
-			if fi, err = s.root.Stat(prefix); err != nil {
-				return err
-			}
-			if !fi.IsDir() {
-				return fmt.Errorf("%s exists and is not a directory", s.Path(prefix))
-			}
+		fi, err := s.root.Lstat(prefix)
+		switch {
+		case err == nil && fi.Mode()&fs.ModeSymlink != 0:
+			return s.symlinkError(prefix)
+		case err == nil && !fi.IsDir():
+			return fmt.Errorf("%s exists and is not a directory", s.Path(prefix))
+		case err == nil:
 			continue
-		}
-		if err != nil {
+		case !errors.Is(err, fs.ErrNotExist):
 			return err
 		}
-		created = append(created, Entry{Path: filepath.ToSlash(prefix), Type: EntryDir})
-		if err = s.root.Chmod(prefix, perm); err != nil {
+		dir := prefix
+		err = s.recordThenCreate(Entry{Path: filepath.ToSlash(dir), Type: EntryDir}, func() error {
+			if err := s.root.Mkdir(dir, perm); err != nil {
+				return err
+			}
+			return s.root.Chmod(dir, perm)
+		})
+		if err != nil {
 			return err
 		}
 	}
@@ -84,16 +89,26 @@ func (s *Stack) CreateFile(rel string, perm fs.FileMode) (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	f, err := s.root.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
+	if err := s.noSymlinks(filepath.Dir(p)); err != nil {
+		return nil, err
+	}
+	if _, err := s.root.Lstat(p); err == nil {
+		return nil, fmt.Errorf("creating %s: %w", s.Path(p), fs.ErrExist)
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return nil, err
+	}
+	var f *os.File
+	err = s.recordThenCreate(Entry{Path: filepath.ToSlash(p), Type: EntryFile}, func() error {
+		var err error
+		if f, err = s.root.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm); err != nil {
+			return err
+		}
+		if err = f.Chmod(perm); err != nil {
+			_ = f.Close()
+		}
+		return err
+	})
 	if err != nil {
-		return nil, err
-	}
-	if err := f.Chmod(perm); err != nil {
-		_ = f.Close()
-		return nil, err
-	}
-	if err := s.record(Entry{Path: filepath.ToSlash(p), Type: EntryFile}); err != nil {
-		_ = f.Close()
 		return nil, err
 	}
 	return f, nil
@@ -101,27 +116,43 @@ func (s *Stack) CreateFile(rel string, perm fs.FileMode) (*os.File, error) {
 
 // Remove deletes rel, a file or empty directory the CLI created, and drops
 // it from the manifest. A recorded path that is already gone is just
-// dropped. A path the manifest doesn't list is refused with ErrNotCreated.
-// A symlink is removed, not its target.
+// dropped. A path the manifest doesn't list is refused with ErrNotCreated,
+// and so is one that is no longer the kind of thing the CLI created there,
+// or that lies under a symlinked directory. A symlink is removed, not its
+// target.
 func (s *Stack) Remove(rel string) error {
 	p, err := local(rel)
 	if err != nil {
 		return err
 	}
+	path := filepath.ToSlash(p)
 	m, err := s.Manifest()
 	if err != nil {
 		return err
 	}
-	if !m.Has(filepath.ToSlash(p)) {
+	e, ok := m.entry(path)
+	if !ok {
 		if _, err := s.root.Lstat(p); err != nil {
 			return err
 		}
 		return fmt.Errorf("removing %s: %w", s.Path(p), ErrNotCreated)
 	}
-	if err := s.root.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
+	if err := s.noSymlinks(filepath.Dir(p)); err != nil {
 		return err
 	}
-	return s.forget(filepath.ToSlash(p))
+	fi, err := s.root.Lstat(p)
+	switch {
+	case errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR):
+		return s.forget(path)
+	case err != nil:
+		return err
+	case fi.IsDir() != (e.Type == EntryDir):
+		return fmt.Errorf("removing %s: it is no longer the %s pic-sure created: %w", s.Path(p), e.Type, ErrNotCreated)
+	}
+	if err := s.root.Remove(p); err != nil {
+		return err
+	}
+	return s.forget(path)
 }
 
 // ReadFile reads rel, confined to the stack like the writes.
@@ -142,17 +173,8 @@ func (s *Stack) FS() fs.FS { return s.root.FS() }
 // run's file with a reused pid).
 var tempSeq atomic.Uint64
 
-// writeAtomic is WriteFile without the manifest. It reports whether p
-// didn't exist before.
-func (s *Stack) writeAtomic(p string, data []byte, perm fs.FileMode) (created bool, err error) {
-	_, err = s.root.Lstat(p)
-	switch {
-	case errors.Is(err, fs.ErrNotExist):
-		created = true
-	case err != nil:
-		return false, err
-	}
-
+// writeAtomic is WriteFile without the checks and the manifest.
+func (s *Stack) writeAtomic(p string, data []byte, perm fs.FileMode) (err error) {
 	dir, base := filepath.Split(p)
 	var tmp string
 	var f *os.File
@@ -166,7 +188,7 @@ func (s *Stack) writeAtomic(p string, data []byte, perm fs.FileMode) (created bo
 		}
 	}
 	if err != nil {
-		return false, err
+		return err
 	}
 	defer func() {
 		if err != nil {
@@ -175,21 +197,68 @@ func (s *Stack) writeAtomic(p string, data []byte, perm fs.FileMode) (created bo
 		}
 	}()
 	if _, err = f.Write(data); err != nil {
-		return false, err
+		return err
 	}
 	if err = f.Chmod(perm); err != nil {
-		return false, err
+		return err
 	}
 	if err = f.Sync(); err != nil {
-		return false, err
+		return err
 	}
 	if err = f.Close(); err != nil {
-		return false, err
+		return err
 	}
 	if err = s.root.Rename(tmp, p); err != nil {
-		return false, err
+		return err
 	}
-	return created, s.syncDir(dir)
+	return s.syncDir(dir)
+}
+
+// recordThenCreate records e, then calls create to make it. Recording first
+// means neither a failed manifest update nor a crash can leave a path the CLI
+// made that the manifest doesn't list, which destroy would then leave
+// behind. If create fails and the path isn't there, the entry is dropped.
+func (s *Stack) recordThenCreate(e Entry, create func() error) error {
+	if err := s.record(e); err != nil {
+		return err
+	}
+	err := create()
+	if err != nil {
+		if _, lerr := s.root.Lstat(filepath.FromSlash(e.Path)); errors.Is(lerr, fs.ErrNotExist) {
+			_ = s.forget(e.Path)
+		}
+	}
+	return err
+}
+
+// noSymlinks fails if p or any directory on the way to it is a symlink.
+// os.Root follows symlinks that stay inside the stack, so without this a
+// write or removal under a directory an operator replaced with a symlink
+// would reach the operator's files (§9.8). It stops at the first missing
+// component.
+func (s *Stack) noSymlinks(p string) error {
+	if p == "." {
+		return nil
+	}
+	prefix := ""
+	for _, part := range strings.Split(p, string(filepath.Separator)) {
+		prefix = filepath.Join(prefix, part)
+		fi, err := s.root.Lstat(prefix)
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if fi.Mode()&fs.ModeSymlink != 0 {
+			return s.symlinkError(prefix)
+		}
+	}
+	return nil
+}
+
+func (s *Stack) symlinkError(p string) error {
+	return fmt.Errorf("%s is a symlink; pic-sure doesn't write or remove through symlinks in the stack", s.Path(p))
 }
 
 // syncDir fsyncs dir so a rename in it survives a crash.

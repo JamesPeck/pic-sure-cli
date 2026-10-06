@@ -100,21 +100,26 @@ func (l *Lock) Unlock() error {
 }
 
 // openLockFile opens .pic-sure/lock, creating and recording it the first
-// time.
+// time. A symlink there is refused: Lock truncates the file.
 func (s *Stack) openLockFile() (*os.File, error) {
-	f, err := s.root.OpenFile(LockFile, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o644)
-	if errors.Is(err, fs.ErrExist) {
-		return s.root.OpenFile(LockFile, os.O_RDWR, 0)
-	}
-	if err != nil {
+	if err := s.noSymlinks(LockFile); err != nil {
 		return nil, err
 	}
-	err = f.Chmod(0o644)
-	if err == nil {
-		err = s.record(Entry{Path: LockFile, Type: EntryFile})
+	f, err := s.root.OpenFile(LockFile, os.O_RDWR, 0)
+	if !errors.Is(err, fs.ErrNotExist) {
+		return f, err
 	}
+	err = s.recordThenCreate(Entry{Path: LockFile, Type: EntryFile}, func() error {
+		var err error
+		if f, err = s.root.OpenFile(LockFile, os.O_RDWR|os.O_CREATE, 0o644); err != nil {
+			return err
+		}
+		if err = f.Chmod(0o644); err != nil {
+			_ = f.Close()
+		}
+		return err
+	})
 	if err != nil {
-		_ = f.Close()
 		return nil, err
 	}
 	return f, nil

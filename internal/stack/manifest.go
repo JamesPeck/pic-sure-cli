@@ -36,7 +36,16 @@ const (
 
 // Has reports whether the manifest lists path.
 func (m Manifest) Has(path string) bool {
-	return slices.ContainsFunc(m.Entries, func(e Entry) bool { return e.Path == path })
+	_, ok := m.entry(path)
+	return ok
+}
+
+func (m Manifest) entry(path string) (Entry, bool) {
+	i := slices.IndexFunc(m.Entries, func(e Entry) bool { return e.Path == path })
+	if i < 0 {
+		return Entry{}, false
+	}
+	return m.Entries[i], true
 }
 
 // Manifest reads manifest.json. A stack without one has an empty manifest.
@@ -84,6 +93,9 @@ func (s *Stack) updateManifest(change func(*Manifest)) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if err := s.noSymlinks(CLIDir); err != nil {
+		return err
+	}
 	d, err := s.root.Open(CLIDir)
 	if err != nil {
 		return err
@@ -106,6 +118,5 @@ func (s *Stack) updateManifest(change func(*Manifest)) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.writeAtomic(ManifestFile, append(data, '\n'), 0o644)
-	return err
+	return s.writeAtomic(ManifestFile, append(data, '\n'), 0o644)
 }

@@ -204,18 +204,24 @@ A directory is a stack when it holds `pic-sure.yaml` and `.pic-sure/`.
   the manifest. `Dir` is absolute with symlinks resolved; `Path(rel)` gives
   the host path for bind mounts and `-f`. Close the stack when done.
 - **Writes.** Every write goes through an `os.Root` on the stack dir, so
-  nothing escapes it, even through a symlink. Paths are slash-separated and
-  relative. `WriteFile(rel, data, perm)` is atomic (temp file, fsync,
-  rename, fsync dir), sets exactly `perm` whatever the umask, and replaces a
-  symlink rather than writing through it. It needs the parent to exist:
-  `MkdirAll(rel, perm)` first. `CreateFile` is for streamed files such as
-  run logs. `ReadFile` and `FS()` read with the same confinement.
+  nothing escapes it. Paths are slash-separated and relative. Writes and
+  removals refuse to pass through a symlinked directory even inside the
+  stack, so they can't reach an operator's files. `WriteFile(rel, data,
+  perm)` is atomic (temp file, fsync, rename, fsync dir), sets exactly
+  `perm` whatever the umask, and replaces a symlink rather than writing
+  through it. It needs the parent to exist: `MkdirAll(rel, perm)` first.
+  `CreateFile` is for streamed files such as run logs. `ReadFile` and
+  `FS()` read with the same confinement.
 - **Manifest.** `.pic-sure/manifest.json` lists every path the CLI created
   (`{"path", "type": "file"|"dir"}`; `"."` is the stack dir, when init
-  created it), recorded as each is created. It is what `destroy` may
+  created it). A path is recorded just before it is created, and dropped
+  again if creating it fails, so no failure or crash leaves a CLI-made path
+  unrecorded (the stack dir itself is the exception: a crash between
+  creating it and starting the manifest loses it). It is what `destroy` may
   remove (056). Overwriting a file that was already there doesn't record
   it. `Remove(rel)` deletes a recorded file or empty directory and forgets
-  it; a path the manifest doesn't list is refused with `ErrNotCreated`.
+  it. It refuses with `ErrNotCreated` a path the manifest doesn't list, or
+  one that is no longer the kind (file or dir) the CLI created.
   Updates re-read the file under an flock on `.pic-sure/`, so a command
   that doesn't hold the stack lock (a read-only command's debug log) can't
   drop another's entries.

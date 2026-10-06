@@ -16,7 +16,6 @@ import (
 	"github.com/JamesPeck/pic-sure-cli/internal/stack"
 )
 
-// newTestStack creates a stack in a fresh directory and returns its path.
 func newTestStack(t *testing.T) string {
 	t.Helper()
 	s, err := stack.Create(t.TempDir())

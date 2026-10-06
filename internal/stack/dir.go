@@ -37,8 +37,8 @@ type Stack struct {
 	Dir string
 
 	root *os.Root
-	// mu serializes this process's manifest updates; the flock in record
-	// serializes them across processes.
+	// mu serializes this process's manifest updates; the flock in
+	// updateManifest serializes them across processes.
 	mu sync.Mutex
 }
 
@@ -121,6 +121,12 @@ func Create(dir string) (*Stack, error) {
 	}
 	if err := s.create(createdDir); err != nil {
 		_ = s.Close()
+		if createdDir {
+			// Undo, so a retry still finds dir missing and records it.
+			// os.Remove removes only empty directories.
+			_ = os.Remove(filepath.Join(dir, CLIDir))
+			_ = os.Remove(dir)
+		}
 		return nil, err
 	}
 	return s, nil

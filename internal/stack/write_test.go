@@ -100,6 +100,9 @@ func TestWriteFileNeedsItsParent(t *testing.T) {
 	if err := s.WriteFile("missing/file", nil, 0o644); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("err = %v, want ErrNotExist", err)
 	}
+	if m, _ := s.Manifest(); m.Has("missing/file") {
+		t.Error("a failed write is still recorded")
+	}
 }
 
 func TestWriteFileFailureKeepsTheOldFile(t *testing.T) {
@@ -186,6 +189,31 @@ func TestWritesStayInsideTheStack(t *testing.T) {
 	}
 	if _, err := s.ReadFile("out/target"); err == nil {
 		t.Error("ReadFile followed a symlink out of the stack")
+	}
+
+	// Nor through a symlinked directory that stays inside the stack.
+	if err := os.Mkdir(s.Path("op"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(s.Path("op/x"), []byte("operator"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("op", s.Path("inner")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WriteFile("inner/x", []byte("cli"), 0o644); err == nil {
+		t.Error("WriteFile through an inner symlinked directory succeeded")
+	}
+	if err := s.MkdirAll("inner/d", 0o755); err == nil {
+		t.Error("MkdirAll through an inner symlinked directory succeeded")
+	}
+	if f, err := s.CreateFile("inner/new", 0o644); err == nil {
+		_ = f.Close()
+		t.Error("CreateFile through an inner symlinked directory succeeded")
+	}
+	wantContent(t, s.Path("op/x"), "operator")
+	if entries, _ := os.ReadDir(s.Path("op")); len(entries) != 1 {
+		t.Errorf("files appeared in the operator's directory: %v", entries)
 	}
 
 	// Writing to a symlink replaces the link; its target is untouched.
