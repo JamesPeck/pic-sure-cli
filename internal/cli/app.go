@@ -39,6 +39,9 @@ type App struct {
 	// that point came from cobra rejecting the command line, so Run reports
 	// it as a usage error.
 	running bool
+	// out is the run's output mode and event sink (output.go), created on
+	// first use.
+	out *output
 }
 
 // NewApp returns an App wired to the process's streams and terminal.
@@ -69,6 +72,7 @@ func (a *App) Run(ctx context.Context, args []string) int {
 
 func (a *App) execute(ctx context.Context, root *cobra.Command, args []string) int {
 	a.running = false
+	a.out = nil
 	root.SetArgs(args)
 	root.SetIn(a.Stdin)
 	root.SetOut(a.Stdout)

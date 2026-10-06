@@ -57,7 +57,9 @@ Commands are already registered, each returning
 constructor in its group's file, for example `newUpCmd` in
 `internal/cli/up.go`: add its flags, and make `RunE` build the dependencies
 with `a.newDeps()`, call the operation, and hand the result to the output
-layer. Global flags are in `a.Global`. Then turn the command's testscript
+layer: `return a.finish(report)`, or `a.printReport(report, text)` for a
+read-only report (see `output.go` under internal/cli). Global flags are in
+`a.Global`. Then turn the command's testscript
 (`cmd/pic-sure/testdata/script/up.txtar`) into real scenarios.
 
 ## Adding an operation
@@ -154,6 +156,23 @@ it.
 - `helpers.go`: `notImplemented(ticket)`, `newGroup`, and the `help`
   command. A group run without a subcommand, or with an unknown one, is a
   usage error, and so is `help` with an unknown topic.
+- `output.go` (004): output mode selection, the run's sink, and how a
+  command ends. The mode is JSON for `--json`; plain for `--plain`, when
+  stdin or stdout isn't a terminal, or when `CI` is set (`CI=false` and
+  `CI=0` don't count); and TUI otherwise. TUI renders as plain until
+  ticket 038. `newSink` returns the same sink for the whole run. A
+  command ends in one of three ways:
+  - a streaming command returns `a.finish(report)`, which emits the
+    final `Result` (`--json` prints it last, with `report` as `data`);
+  - a read-only command returns `a.printReport(report, text)`, which
+    prints one `schema_version: 2` object with `--json` and calls `text`
+    otherwise;
+  - any command returns an error. `reportError` prints `pic-sure: ERR` on
+    stderr in every mode. Unless `finish` or `printReport` already wrote
+    the command's result, it also emits a failed `Result` with the exit
+    code, the message, and the first step whose `StepDone` was `failed`;
+    with `--json` that is the last line on stdout. So `doctor` can print
+    its report and still exit 1 without a second object.
 - `deps.go`: `newDeps` assembles `ops.Deps`. Each field comes from a
   constructor in its owner's file: `runner.go` (003), `output.go` (004, which
   also reports errors), `logging.go` (005), `engine.go` (016, landed) and
@@ -710,7 +729,26 @@ and NDJSON renderers, and ticket 038 the TUI renderer.
 - `NewLogWriter(sink, id, stream)` is an `io.Writer` that emits one `Log`
   per line; `Close` flushes a final partial line.
 
-_Ticket 004 documents the renderers here._
+Ticket 004 added the plain and NDJSON renderers, both Sinks:
+
+- `NewPlain(w, PlainOptions{Color, Now})` writes one line per event,
+  `15:04:05 [MARK] text`, to stderr. The marks are `[ .. ]` (a step
+  started, or progress without a percentage), `[ 42%]`, `[ OK ]`,
+  `[SKIP]`, `[FAIL]` and `[WARN]`. Log lines are indented under them as
+  `| line`. `StepDone` repeats the step's title, and `Result` prints
+  nothing. `Color` colours only the marks; the cli layer turns it off for
+  `NO_COLOR`, `TERM=dumb` and a stderr that isn't a terminal.
+- `NewNDJSON(w)` writes each event as one JSON object per line, its JSON
+  form with `"type"` first. An event that can't be encoded becomes a
+  `warning` line, so the output stays valid NDJSON. A non-finite `Pct` is
+  dropped by both renderers, and plain clamps it to 0–100.
+- `WriteReport(w, report)` prints a read-only command's report (`status`,
+  `doctor`, `version`) as one object with `"schema_version": 2` first.
+  The report must encode as an object and must not set `schema_version`
+  itself.
+
+Goldens for both renderers are in `testdata/`; `go test -update` rewrites
+them.
 
 ## internal/log
 

@@ -1,0 +1,16 @@
+09:00:01 [36m[ .. ][0m Start the database
+09:00:02        | Container ws-demo-picsure-db-1  Started
+09:00:03        |
+09:00:04 [32m[ OK ][0m Start the database
+09:00:05 [36m[ .. ][0m Seed the database
+09:00:06 [2m[SKIP][0m Seed the database
+09:00:07 [36m[ .. ][0m Build images
+09:00:08 [36m[ 27%][0m 3/11 images
+09:00:09 [36m[ .. ][0m waiting for the reactor lock
+09:00:10 [33m[WARN][0m build-spec has no PSCLI entry
+09:00:10        assuming this CLI is current
+09:00:11 [36m[100%][0m 11/11 images
+09:00:12 [32m[ OK ][0m Build images
+09:00:13 [36m[ .. ][0m Run <flyway> migrations & seed
+09:00:14        | ERROR: Validate failed: "V3" checksum mismatch
+09:00:15 [1;31m[FAIL][0m Run <flyway> migrations & seed

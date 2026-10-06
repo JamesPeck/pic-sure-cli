@@ -1,10 +1,12 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/rogpeppe/go-internal/testscript"
@@ -33,7 +35,8 @@ func TestScripts(t *testing.T) {
 			return nil
 		},
 		Cmds: map[string]func(*testscript.TestScript, bool, []string){
-			"exitcode": cmdExitCode,
+			"exitcode":  cmdExitCode,
+			"jsonlines": cmdJSONLines,
 		},
 	})
 }
@@ -63,5 +66,26 @@ func cmdExitCode(ts *testscript.TestScript, neg bool, args []string) {
 	}
 	if got != want {
 		ts.Fatalf("%s exited %d, want %d", args[1], got, want)
+	}
+}
+
+// cmdJSONLines is `jsonlines FILE`: FILE (usually stdout) must be one JSON
+// object per line and nothing else, as --json promises (spec §10.3).
+func cmdJSONLines(ts *testscript.TestScript, neg bool, args []string) {
+	if neg {
+		ts.Fatalf("unsupported: ! jsonlines")
+	}
+	if len(args) != 1 {
+		ts.Fatalf("usage: jsonlines FILE")
+	}
+	data := ts.ReadFile(args[0])
+	if !strings.HasSuffix(data, "\n") {
+		ts.Fatalf("%s is empty or doesn't end in a newline", args[0])
+	}
+	for i, line := range strings.Split(strings.TrimSuffix(data, "\n"), "\n") {
+		var obj map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(line), &obj); err != nil {
+			ts.Fatalf("%s line %d is not a JSON object: %v\n%s", args[0], i+1, err, line)
+		}
 	}
 }

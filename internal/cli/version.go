@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"io"
 
 	"github.com/spf13/cobra"
 )
@@ -11,11 +12,21 @@ func newVersionCmd(a *App) *cobra.Command {
 		Use:   "version",
 		Short: "Print the CLI version",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			_, err := fmt.Fprintln(cmd.OutOrStdout(), versionString(a.Info))
-			return err
+		RunE: func(*cobra.Command, []string) error {
+			report := versionReport{Version: a.Info.Version, Commit: a.Info.Commit, Date: a.Info.Date}
+			return a.printReport(report, func(w io.Writer) error {
+				_, err := fmt.Fprintln(w, versionString(a.Info))
+				return err
+			})
 		},
 	}
+}
+
+// versionReport is `version --json`.
+type versionReport struct {
+	Version string `json:"version"`
+	Commit  string `json:"commit"`
+	Date    string `json:"date"`
 }
 
 // versionString names the product line ("v2 (native)", which tells it apart

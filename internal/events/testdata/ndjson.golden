@@ -1,0 +1,16 @@
+{"type":"step_started","id":"db","title":"Start the database"}
+{"type":"log","id":"db","stream":"stdout","line":"Container ws-demo-picsure-db-1  Started"}
+{"type":"log","id":"db","stream":"stderr","line":""}
+{"type":"step_done","id":"db","status":"ok"}
+{"type":"step_started","id":"seed","title":"Seed the database"}
+{"type":"step_done","id":"seed","status":"skipped"}
+{"type":"step_started","id":"build","title":"Build images"}
+{"type":"progress","id":"build","text":"3/11 images","pct":27.4}
+{"type":"progress","id":"build","text":"waiting for the reactor lock"}
+{"type":"warning","id":"build","text":"build-spec has no PSCLI entry\nassuming this CLI is current"}
+{"type":"progress","id":"build","text":"11/11 images","pct":100}
+{"type":"step_done","id":"build","status":"ok"}
+{"type":"step_started","id":"migrate","title":"Run <flyway> migrations & seed"}
+{"type":"log","id":"migrate","stream":"stderr","line":"ERROR: Validate failed: \"V3\" checksum mismatch"}
+{"type":"step_done","id":"migrate","status":"failed"}
+{"type":"result","ok":false,"error":{"exit_code":1,"message":"step migrate failed","step":"migrate"}}

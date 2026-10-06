@@ -1,0 +1,35 @@
+# Output modes (spec §10.3). testscript gives the CLI no terminal, so output
+# is plain unless --json is given.
+
+# --json: stdout is only JSON lines, and a failure's last line is a result
+# carrying the exit code and the message. stderr still tells a human.
+exitcode 1 pic-sure up --json
+jsonlines stdout
+stdout -count=1 '^\{'
+stdout '^\{"type":"result","ok":false,"error":\{"exit_code":1,"message":"not implemented \(ticket 035\)"\}\}$'
+stderr '^pic-sure: not implemented \(ticket 035\)$'
+
+# A usage error gets a result too, once --json has been parsed.
+exitcode 2 pic-sure --json up extra-arg
+jsonlines stdout
+stdout '^\{"type":"result","ok":false,"error":\{"exit_code":2,"message":"unknown command \\"extra-arg\\" for \\"pic-sure up\\""\}\}$'
+stderr '^Run ''pic-sure up --help'' for usage.$'
+
+# A read-only report is a single object with schema_version 2.
+exec pic-sure version --json
+jsonlines stdout
+stdout -count=1 '^\{'
+stdout '^\{"schema_version":2,"version":"[^"]+","commit":"[^"]+","date":"[^"]+"\}$'
+! stderr .
+
+# Plain (no terminal, or --plain): nothing on stdout for a failure.
+exitcode 1 pic-sure up
+! stdout .
+stderr '^pic-sure: not implemented \(ticket 035\)$'
+exitcode 1 pic-sure up --plain
+! stdout .
+
+# --json wins over CI, which only rules out the TUI.
+env CI=true
+exitcode 1 pic-sure up --json
+jsonlines stdout
