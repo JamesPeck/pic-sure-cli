@@ -1,7 +1,8 @@
-// Package wizard implements the guided `pic-sure init` setup: a data-driven
-// field table derived from .env.example, rendered as a huh form (TTY) or
-// satisfied by flags (non-interactive). All resulting .env writes go through
-// scripts/env-set.sh — this package never touches .env itself.
+// Package wizard implements the guided setup form: a data-driven field table
+// derived from the v1 .env.example, rendered as a huh form. This package
+// never writes configuration. v1 wrote the answers through the AIO
+// scripts/env-set.sh, which v2 deleted (ticket 001); ticket 039 moves the
+// fields onto the pic-sure.yaml schema (ticket 006) and runs init in-process.
 package wizard
 
 import (
@@ -186,7 +187,7 @@ func FieldByFlag(flag string) (Field, bool) {
 }
 
 // IsSecretKey reports whether a .env key holds a secret (masked in the
-// wizard; written via env-set.sh --stdin so it never appears in argv).
+// wizard).
 func IsSecretKey(key string) bool {
 	for _, f := range Fields {
 		if f.Key == key {

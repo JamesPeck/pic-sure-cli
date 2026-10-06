@@ -1,0 +1,7 @@
+# Not implemented yet: exit 1, naming ticket 036.
+exitcode 1 pic-sure update
+stderr '^pic-sure: not implemented \(ticket 036\)$'
+! stdout .
+exitcode 1 pic-sure update --dry-run --release-commit 0123abc --no-build --self-update --ignore-cli-version
+stderr '^pic-sure: not implemented \(ticket 036\)$'
+! stdout .

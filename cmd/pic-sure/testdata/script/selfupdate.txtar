@@ -1,0 +1,7 @@
+# Not implemented yet: exit 1, naming ticket 060.
+exitcode 1 pic-sure self-update
+stderr '^pic-sure: not implemented \(ticket 060\)$'
+! stdout .
+exitcode 1 pic-sure self-update --to v2.0.1
+stderr '^pic-sure: not implemented \(ticket 060\)$'
+! stdout .

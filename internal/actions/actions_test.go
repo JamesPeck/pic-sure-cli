@@ -41,8 +41,8 @@ func TestResetAllArgs(t *testing.T) {
 		t.Fatalf("ResetAll must be destructive with confirm word %q, got destructive=%v word=%q",
 			"reset", a.Destructive, a.ConfirmWord)
 	}
-	if a.Script != Reset().Script {
-		t.Errorf("ResetAll must run the reset script, got %q", a.Script)
+	if a.Ticket != Reset().Ticket {
+		t.Errorf("ResetAll must map to the reset ticket, got %q", a.Ticket)
 	}
 	want := []string{"--all", "--yes"}
 	if len(a.Args) != len(want) {
@@ -82,8 +82,8 @@ func TestResetWithArgs(t *testing.T) {
 	}
 	for _, c := range cases {
 		a := ResetWith(c.all, c.repos)
-		if a.Script != Reset().Script {
-			t.Errorf("ResetWith(%v,%v) must run the reset script, got %q", c.all, c.repos, a.Script)
+		if a.Ticket != Reset().Ticket {
+			t.Errorf("ResetWith(%v,%v) must map to the reset ticket, got %q", c.all, c.repos, a.Ticket)
 		}
 		if !a.Destructive || a.ConfirmWord != "reset" {
 			t.Errorf("ResetWith(%v,%v) must be destructive with word %q", c.all, c.repos, "reset")
@@ -125,8 +125,9 @@ func TestResetWithArgs(t *testing.T) {
 }
 
 // Spec amendment 3: no abort may leave the user guessing about state. Every
-// action must carry a one-line post-abort re-run-safety note.
-func TestEveryActionHasAbortNote(t *testing.T) {
+// action must carry a one-line post-abort re-run-safety note. Every action
+// also names the v2 ticket that implements it, for the not-implemented error.
+func TestEveryActionHasAbortNoteAndTicket(t *testing.T) {
 	acts := []Action{
 		Init(), Update(), Restart("gateway"), Preflight(), Migrate(), SeedDB(),
 		DemoData("nhanes"), DemoData("all"), DevUp("httpd-hmr"), DevOff("httpd"),
@@ -144,6 +145,12 @@ func TestEveryActionHasAbortNote(t *testing.T) {
 		}
 		if a.Describe == "" {
 			t.Errorf("action %q has no Describe", a.Name)
+		}
+		if len(a.Ticket) != 3 {
+			t.Errorf("action %q has no v2 ticket", a.Name)
+		}
+		if want := "not implemented in v2 yet (ticket " + a.Ticket + ")"; !strings.Contains(NotImplemented(a).Error(), want) {
+			t.Errorf("NotImplemented(%q) = %q, want it to contain %q", a.Name, NotImplemented(a), want)
 		}
 	}
 }
@@ -240,9 +247,6 @@ func TestLoadPhenotypeArgs(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			a := LoadPhenotype(c.opts)
-			if a.Script != Etl("load-phenotype").Script {
-				t.Errorf("Script = %q, want etl script", a.Script)
-			}
 			if !argsEqual(a.Args, c.want) {
 				t.Errorf("Args =\n  %v\nwant\n  %v", a.Args, c.want)
 			}
@@ -310,9 +314,6 @@ func TestLoadGenomicArgs(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			a := LoadGenomic(c.opts)
-			if a.Script != Etl("load-genomic").Script {
-				t.Errorf("Script = %q, want etl script", a.Script)
-			}
 			if !argsEqual(a.Args, c.want) {
 				t.Errorf("Args =\n  %v\nwant\n  %v", a.Args, c.want)
 			}

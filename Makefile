@@ -5,7 +5,7 @@ COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
 DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS := -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(DATE)
 
-.PHONY: build build-release test lint print-lint-version smoke check clean
+.PHONY: build build-release test fmt-check vet lint print-lint-version check clean
 
 build:
 	$(GO) build -ldflags "$(LDFLAGS)" -o $(BIN) ./cmd/pic-sure
@@ -21,6 +21,12 @@ build-release:
 test:
 	$(GO) test ./...
 
+fmt-check:
+	@out="$$(gofmt -l .)"; if [ -n "$$out" ]; then echo "gofmt needed:"; echo "$$out"; exit 1; fi
+
+vet:
+	$(GO) vet ./...
+
 # Pinned lint version — CI installs exactly this and runs the same target,
 # so local and CI lint cannot drift. Never bump it in two places: only here.
 GOLANGCI_LINT_VERSION := v2.12.2
@@ -33,10 +39,8 @@ lint:
 print-lint-version:
 	@echo $(GOLANGCI_LINT_VERSION)
 
-smoke: build
-	./smoke/run.sh
-
-check: test lint smoke
+# What CI runs. The PTY tests in smoke/ run as part of `test`.
+check: fmt-check vet lint test
 
 clean:
 	rm -rf bin dist

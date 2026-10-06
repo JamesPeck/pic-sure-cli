@@ -1,0 +1,290 @@
+package cli
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"slices"
+	"strings"
+	"syscall"
+	"testing"
+
+	"github.com/spf13/cobra"
+
+	"github.com/JamesPeck/pic-sure-cli/internal/docker"
+	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
+	"github.com/JamesPeck/pic-sure-cli/internal/tui"
+)
+
+// testApp returns an App with captured output, no terminal, and a TUI that
+// fails the test if started.
+func testApp(t *testing.T) (*App, *bytes.Buffer, *bytes.Buffer) {
+	t.Helper()
+	var stdout, stderr bytes.Buffer
+	a := &App{
+		Info:       BuildInfo{Version: "v2.0.0-test", Commit: "abc1234", Date: "2026-10-06"},
+		Stdin:      strings.NewReader(""),
+		Stdout:     &stdout,
+		Stderr:     &stderr,
+		IsTerminal: func() bool { return false },
+		StartTUI: func(tui.Options) error {
+			t.Error("the TUI started")
+			return nil
+		},
+	}
+	return a, &stdout, &stderr
+}
+
+// specCommands is every command path in spec §5, with the ticket that
+// implements it ("" for commands that already work).
+var specCommands = map[string]string{
+	"init": "034", "up": "035",
+	"down": "026", "restart": "026", "ps": "026", "logs": "026", "compose": "026",
+	"status": "027", "doctor": "025", "update": "036", "build": "031", "migrate": "032",
+	"config show": "006", "config get": "006", "config set": "006", "config edit": "006",
+	"secrets rotate":      "058",
+	"data demo":           "046",
+	"data load-phenotype": "042",
+	"data load-genomic":   "049",
+	"dictionary hydrate":  "044", "dictionary load-csv": "044", "dictionary load-facets": "044", "dictionary weights": "044",
+	"shared-data publish": "050", "shared-data list": "050", "shared-data remove": "050",
+	"dev list": "052", "dev on": "052", "dev off": "052",
+	"db bootstrap": "054",
+	"reset":        "056", "destroy": "056",
+	"cache list": "057", "cache prune": "057",
+	"self-update":    "060",
+	"support-bundle": "059",
+	"version":        "",
+}
+
+// specFlags is every command flag in spec §5.
+var specFlags = map[string][]string{
+	"logs":                {"follow"},
+	"status":              {"deep"},
+	"doctor":              {"network"},
+	"update":              {"dry-run", "release-commit", "no-build", "self-update", "ignore-cli-version"},
+	"build":               {"force"},
+	"migrate":             {"check", "repair"},
+	"data load-phenotype": {"file", "entry", "input-dir", "heap", "dictionary", "skip-weights"},
+	"data load-genomic":   {"partition", "vcf-index", "vcf-dir", "promote", "enable-profile"},
+	"db bootstrap":        {"check", "sync-passwords"},
+	"reset":               {"keep-db"},
+	"destroy":             {"prune-images"},
+	"self-update":         {"to"},
+	"support-bundle":      {"output"},
+}
+
+// leafCommands returns the runnable commands under root that have no
+// subcommands, keyed by path without the root's name.
+func leafCommands(root *cobra.Command) map[string]*cobra.Command {
+	leaves := map[string]*cobra.Command{}
+	var walk func(*cobra.Command)
+	walk = func(c *cobra.Command) {
+		if !c.HasSubCommands() {
+			leaves[strings.TrimPrefix(c.CommandPath(), "pic-sure ")] = c
+			return
+		}
+		for _, sub := range c.Commands() {
+			walk(sub)
+		}
+	}
+	walk(root)
+	delete(leaves, "help")
+	for path := range leaves {
+		if strings.HasPrefix(path, "completion ") {
+			delete(leaves, path)
+		}
+	}
+	return leaves
+}
+
+func TestCommandTreeMatchesSpec(t *testing.T) {
+	a, _, _ := testApp(t)
+	leaves := leafCommands(newRootCmd(a))
+
+	var got, want []string
+	for path := range leaves {
+		got = append(got, path)
+	}
+	for path := range specCommands {
+		want = append(want, path)
+	}
+	slices.Sort(got)
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Errorf("command tree:\n got  %q\n want %q", got, want)
+	}
+
+	for path, flags := range specFlags {
+		c, ok := leaves[path]
+		if !ok {
+			continue // reported above
+		}
+		for _, name := range flags {
+			if c.Flags().Lookup(name) == nil {
+				t.Errorf("%s has no --%s flag", path, name)
+			}
+		}
+	}
+}
+
+func TestGlobalFlags(t *testing.T) {
+	a, _, _ := testApp(t)
+	root := newRootCmd(a)
+	for _, name := range []string{"stack", "json", "plain", "yes", "non-interactive", "no-animations", "log-level", "skip-step"} {
+		if root.PersistentFlags().Lookup(name) == nil {
+			t.Errorf("missing global flag --%s", name)
+		}
+	}
+
+	code := a.Run(context.Background(), []string{
+		"--stack", "/srv/demo", "--yes", "--non-interactive", "--no-animations",
+		"--log-level", "debug", "--skip-step", "db", "up", "--skip-step", "seed", "--json",
+	})
+	if code != exitcode.CodeFailed {
+		t.Errorf("exit = %d, want %d", code, exitcode.CodeFailed)
+	}
+	want := GlobalOptions{
+		Stack: "/srv/demo", JSON: true, Yes: true, NonInteractive: true, NoAnimations: true,
+		LogLevel: "debug", SkipSteps: []string{"db", "seed"},
+	}
+	if g := a.Global; g.Stack != want.Stack || g.JSON != want.JSON || g.Plain || g.Yes != want.Yes ||
+		g.NonInteractive != want.NonInteractive || g.NoAnimations != want.NoAnimations ||
+		g.LogLevel != want.LogLevel || !slices.Equal(g.SkipSteps, want.SkipSteps) {
+		t.Errorf("Global = %+v, want %+v", g, want)
+	}
+}
+
+func TestEveryStubNamesItsTicket(t *testing.T) {
+	a, _, _ := testApp(t)
+	for path, c := range leafCommands(newRootCmd(a)) {
+		ticket := specCommands[path]
+		if ticket == "" {
+			continue
+		}
+		err := c.RunE(c, nil)
+		if exitcode.FromError(err) != exitcode.CodeFailed || !strings.Contains(err.Error(), "(ticket "+ticket+")") {
+			t.Errorf("%s: RunE = %v, want exit 1 naming ticket %s", path, err, ticket)
+		}
+	}
+}
+
+func TestRunExitCodesAndErrors(t *testing.T) {
+	tests := []struct {
+		args       []string
+		code       int
+		stderr     string
+		usageHint  string
+		wantStdout string
+	}{
+		{args: []string{"version"}, code: 0, wantStdout: "pic-sure v2 (native)\nversion v2.0.0-test, commit abc1234, built 2026-10-06\n"},
+		{args: []string{"up"}, code: 1, stderr: "pic-sure: not implemented (ticket 035)\n"},
+		{args: []string{"frobnicate"}, code: 2, usageHint: "pic-sure"},
+		{args: []string{"up", "--frobnicate"}, code: 2, usageHint: "pic-sure up"},
+		{args: []string{"config"}, code: 2, usageHint: "pic-sure config"},
+		{args: []string{"config", "set", "name"}, code: 2, usageHint: "pic-sure config set"},
+		{args: []string{"data", "load-genomic"}, code: 2, usageHint: "pic-sure data load-genomic"},
+		{args: []string{"migrate", "--check", "--repair"}, code: 2, usageHint: "pic-sure migrate"},
+	}
+	for _, tt := range tests {
+		t.Run(strings.Join(tt.args, " "), func(t *testing.T) {
+			a, stdout, stderr := testApp(t)
+			if code := a.Run(context.Background(), tt.args); code != tt.code {
+				t.Errorf("exit = %d, want %d (stderr %q)", code, tt.code, stderr)
+			}
+			if tt.stderr != "" && stderr.String() != tt.stderr {
+				t.Errorf("stderr = %q, want %q", stderr, tt.stderr)
+			}
+			if tt.usageHint != "" && !strings.HasSuffix(stderr.String(), "Run '"+tt.usageHint+" --help' for usage.\n") {
+				t.Errorf("stderr = %q, want the usage hint for %q", stderr, tt.usageHint)
+			}
+			if tt.wantStdout != "" && stdout.String() != tt.wantStdout {
+				t.Errorf("stdout = %q, want %q", stdout, tt.wantStdout)
+			}
+		})
+	}
+}
+
+func TestPlainErrorFromRunEIsAFailure(t *testing.T) {
+	a, _, stderr := testApp(t)
+	root := newRootCmd(a)
+	up, _, err := root.Find([]string{"up"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	up.RunE = func(*cobra.Command, []string) error { return errors.New("compose up failed") }
+	markRunning(a, up)
+
+	if code := a.execute(context.Background(), root, []string{"up"}); code != exitcode.CodeFailed {
+		t.Errorf("exit = %d, want %d", code, exitcode.CodeFailed)
+	}
+	if got, want := stderr.String(), "pic-sure: compose up failed\n"; got != want {
+		t.Errorf("stderr = %q, want %q", got, want)
+	}
+}
+
+func TestSignalDecidesExitCode(t *testing.T) {
+	a, _, stderr := testApp(t)
+	ctx, cancel := context.WithCancelCause(context.Background())
+	cancel(exitcode.Signaled(syscall.SIGTERM))
+	if code := a.Run(ctx, []string{"up"}); code != 143 {
+		t.Errorf("exit = %d, want 143", code)
+	}
+	if !strings.Contains(stderr.String(), "interrupted") {
+		t.Errorf("stderr = %q, want it to say interrupted", stderr)
+	}
+
+	// A command that succeeds despite the signal still exits 0.
+	a, _, _ = testApp(t)
+	if code := a.Run(ctx, []string{"version"}); code != 0 {
+		t.Errorf("version exit = %d, want 0", code)
+	}
+}
+
+func TestBareInvocation(t *testing.T) {
+	t.Run("no terminal prints help", func(t *testing.T) {
+		a, stdout, _ := testApp(t)
+		if code := a.Run(context.Background(), nil); code != 0 {
+			t.Errorf("exit = %d", code)
+		}
+		if !strings.Contains(stdout.String(), "Usage:") {
+			t.Errorf("stdout = %q, want help", stdout)
+		}
+	})
+	t.Run("terminal starts the TUI on --stack", func(t *testing.T) {
+		a, _, _ := testApp(t)
+		a.IsTerminal = func() bool { return true }
+		var got *tui.Options
+		a.StartTUI = func(o tui.Options) error { got = &o; return nil }
+		if code := a.Run(context.Background(), []string{"--stack", "/srv/demo", "--no-animations"}); code != 0 {
+			t.Errorf("exit = %d", code)
+		}
+		if got == nil || got.Root != "/srv/demo" || got.Start != tui.ScreenLanding || got.Animations {
+			t.Errorf("TUI options = %+v", got)
+		}
+	})
+	for _, flag := range []string{"--json", "--plain", "--yes", "--non-interactive"} {
+		t.Run("terminal with "+flag+" prints help", func(t *testing.T) {
+			a, stdout, _ := testApp(t)
+			a.IsTerminal = func() bool { return true }
+			if code := a.Run(context.Background(), []string{flag}); code != 0 {
+				t.Errorf("exit = %d", code)
+			}
+			if !strings.Contains(stdout.String(), "Usage:") {
+				t.Errorf("stdout = %q, want help", stdout)
+			}
+		})
+	}
+}
+
+func TestNewDeps(t *testing.T) {
+	a, _, _ := testApp(t)
+	d := a.newDeps()
+	if d.Runner == nil || d.Clock == nil || d.Rand == nil || d.Sink == nil || d.Log == nil {
+		t.Fatalf("newDeps left a required field nil: %+v", d)
+	}
+	_, err := d.Runner.Run(context.Background(), docker.Cmd{Argv: []string{"docker", "version"}})
+	if err == nil || !strings.Contains(err.Error(), "ticket 003") {
+		t.Errorf("stub runner err = %v, want it to name ticket 003", err)
+	}
+}

@@ -1,0 +1,7 @@
+# Not implemented yet: exit 1, naming ticket 027.
+exitcode 1 pic-sure status
+stderr '^pic-sure: not implemented \(ticket 027\)$'
+! stdout .
+exitcode 1 pic-sure status --deep
+stderr '^pic-sure: not implemented \(ticket 027\)$'
+! stdout .

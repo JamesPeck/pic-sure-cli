@@ -3,7 +3,6 @@ package tui
 import (
 	"fmt"
 	"os"
-	"sort"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -11,10 +10,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/actions"
-	"github.com/JamesPeck/pic-sure-cli/internal/contract"
 	"github.com/JamesPeck/pic-sure-cli/internal/dialog"
-	picexec "github.com/JamesPeck/pic-sure-cli/internal/exec"
-	"github.com/JamesPeck/pic-sure-cli/internal/scripts"
 	"github.com/JamesPeck/pic-sure-cli/internal/styles"
 )
 
@@ -23,7 +19,7 @@ type openDashboardMsg struct{}
 type runActionMsg struct{ act actions.Action }
 
 // branchPrefillMsg carries the current release-control branch read off the hot
-// path (status.sh --json is slow). seq stamps the branch-input opening it was
+// path. seq stamps the branch-input opening it was
 // fetched for, so a prefill that arrives after the input was closed and another
 // reopened cannot land in the wrong dialog.
 type branchPrefillMsg struct {
@@ -31,8 +27,8 @@ type branchPrefillMsg struct {
 	branch string
 }
 
-// devOverlaysFillMsg carries the overlay list fetched from
-// `scripts/compose.sh dev list` off the update hot-path. seq guards against
+// devOverlaysFillMsg carries the overlay list fetched off the update
+// hot-path. seq guards against
 // a stale fetch landing in a since-closed/reopened picker.
 type devOverlaysFillMsg struct {
 	seq      int
@@ -46,42 +42,17 @@ var (
 )
 
 // fetchReleaseBranch reads the current release-control branch for the
-// switch-branch prefill (read-only; status.sh --json is the contract).
-// NOTE: synchronous and not cheap — status.sh forks git per repo and probes
-// docker, taking seconds on jq-less hosts — so it MUST run inside a tea.Cmd
-// (startBranchInput dispatches it off the update path), never in Update itself.
-var fetchReleaseBranch = func(root string) string {
-	code, out, err := picexec.RunOutput(root, scripts.Status, []string{"--json"})
-	if err != nil || code != 0 {
-		return ""
-	}
-	st, err := contract.ParseStatus([]byte(out))
-	if err != nil {
-		return ""
-	}
-	return st.ReleaseControl.Branch
-}
+// switch-branch prefill. It must run inside a tea.Cmd (startBranchInput
+// dispatches it off the update path), never in Update itself. v1 read it from
+// status.sh --json; until ticket 039 reads the stack config, there is no
+// prefill.
+var fetchReleaseBranch = func(string) string { return "" }
 
-// fetchDevOverlays invokes the documented contract surface
-// `scripts/compose.sh dev list` to get the available overlay names. It must
-// run inside a tea.Cmd (never in Update) because it forks a bash process.
-// Output is one overlay name per line; blank lines and lines that would parse
-// as empty are silently dropped.
-var fetchDevOverlays = func(root string) []string {
-	code, out, err := picexec.RunOutput(root, scripts.Compose, []string{"dev", "list"})
-	if err != nil || code != 0 {
-		return nil
-	}
-	var names []string
-	for _, line := range strings.Split(out, "\n") {
-		name := strings.TrimSpace(line)
-		if name != "" {
-			names = append(names, name)
-		}
-	}
-	sort.Strings(names)
-	return names
-}
+// fetchDevOverlays lists the dev overlay names for the dev pickers, sorted.
+// It must run inside a tea.Cmd, never in Update. v1 ran
+// `scripts/compose.sh dev list`; until `pic-sure dev list` exists (ticket 052)
+// the list is empty and the pickers show their empty state.
+var fetchDevOverlays = func(string) []string { return nil }
 
 // landing is the starfield + logo + menu home screen. Menu growth rule
 // (spec, Constraints): an entry collects at most one input and maps 1:1 to a
@@ -447,7 +418,7 @@ func (l *landing) applyDevOverlaysFill(msg devOverlaysFillMsg) (*landing, tea.Cm
 		// explain, mirroring the "no overlays" path from the old synchronous impl.
 		l.form = nil
 		l.pickerMake = nil
-		l.result = "no dev overlays available (scripts/compose.sh dev list returned nothing)"
+		l.result = "no dev overlays available"
 		return l, nil
 	}
 	// Rebuild the picker with the real overlay list. Pre-select the first

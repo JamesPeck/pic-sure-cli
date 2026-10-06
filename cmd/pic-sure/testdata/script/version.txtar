@@ -1,0 +1,12 @@
+# version names the v2 native line and the ldflags build info.
+exec pic-sure version
+stdout '^pic-sure v2 \(native\)$'
+stdout '^version dev, commit none, built unknown$'
+! stderr .
+cp stdout version.txt
+
+# --version prints the same.
+exec pic-sure --version
+cmp stdout version.txt
+
+exitcode 2 pic-sure version extra-arg

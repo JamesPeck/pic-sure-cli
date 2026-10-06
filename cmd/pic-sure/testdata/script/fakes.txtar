@@ -1,0 +1,29 @@
+# The fake docker and git (internal/fakecmd) replay $HOME/<name>.scenario and
+# log every call to $HOME/<name>.log. HOME is this script's work directory.
+exec docker version --format json
+stdout '"Version":"27.3.1"'
+exitcode 1 docker volume rm demo_hpds-data
+stderr 'volume is in use'
+exitcode 97 docker pull alpine
+stderr 'no rule in .*docker.scenario matches: docker pull alpine'
+cmp docker.log docker.log.want
+
+exec git rev-parse HEAD
+stdout '^0123abc$'
+grep '^git rev-parse HEAD$' git.log
+
+-- docker.scenario --
+docker version --format json => 0 stdout=version.json
+re:^docker volume rm  => 1 stderr=in-use.txt
+-- version.json --
+{"Client":{"Version":"27.3.1"}}
+-- in-use.txt --
+Error response from daemon: volume is in use
+-- docker.log.want --
+docker version --format json
+docker volume rm demo_hpds-data
+docker pull alpine
+-- git.scenario --
+git rev-parse * => 0 stdout=head.txt
+-- head.txt --
+0123abc

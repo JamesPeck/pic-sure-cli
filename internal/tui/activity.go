@@ -1,10 +1,7 @@
 package tui
 
 import (
-	"bytes"
 	"fmt"
-	"regexp"
-	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/viewport"
@@ -13,7 +10,6 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/actions"
-	"github.com/JamesPeck/pic-sure-cli/internal/scripts"
 	"github.com/JamesPeck/pic-sure-cli/internal/styles"
 )
 
@@ -27,68 +23,6 @@ var (
 	activityBadStyle  = lipgloss.NewStyle().Foreground(styles.StatusBad).Bold(true).Padding(0, 1)
 	activityWarnStyle = lipgloss.NewStyle().Foreground(styles.StatusWarn).Bold(true).Padding(0, 1)
 )
-
-// initFooterNote sets first-run expectations on the init screen specifically,
-// where the build/clone/seed pipeline can run 20–30 minutes (the dashboard and
-// other actions finish in seconds-to-minutes, so they get no such note).
-const initFooterNote = "first run takes ~20–30 minutes"
-
-// phaseMarkerPrefixes are the LOG_PREFIX values whose info() markers surface as
-// a phase: the init pipeline's prefixes plus the etl.sh load orchestrators
-// (which emit "[load-phenotype] Step 1/3: …" / "[load-genomic] Step 1: …").
-// Capturing only these keeps unrelated bracketed output (docker/maven "[INFO]"
-// lines) from being mistaken for a phase.
-const phaseMarkerPrefixes = `init|clone|build|seed|migrate|load-phenotype|load-genomic`
-
-// phaseMarkerColored matches scripts/lib/common.sh's info() output BEFORE ANSI
-// stripping: "\x1b[0;32m[$LOG_PREFIX]\x1b[0m $*" — the bracket wrapped in
-// PICSURE_GREEN specifically. warn() and error() emit the identical bracket in
-// yellow/red, so gating on the green SGR is what keeps "AUTH0_CLIENT_ID is not
-// set in .env" or "hpds failed. See …" from masquerading as a phase.
-var phaseMarkerColored = regexp.MustCompile(`^\x1b\[0;32m\[(` + phaseMarkerPrefixes + `)\]\x1b\[0m\s+(.*)$`)
-
-// phaseMarkerPlain is the fallback for lines carrying no SGR at all (NO_COLOR
-// or pre-stripped streams): the bare "[prefix] message" form. Without color the
-// prefix alone cannot distinguish info from warn/error, so detectPhase
-// additionally skips warning-styled messages (⚠ …) — see below.
-var phaseMarkerPlain = regexp.MustCompile(`^\[(` + phaseMarkerPrefixes + `)\]\s+(.*)$`)
-
-// phaseDecoration matches a marker message that is pure decoration (the banner
-// rules like "======") or empty — surfacing those as a phase would be noise.
-var phaseDecoration = regexp.MustCompile(`^[^\p{L}\p{N}]*$`)
-
-// detectPhase extracts a short phase hint from one raw output line, or "" if
-// the line is not a recognized info() step marker (the caller then leaves the
-// phase unchanged). The match runs BEFORE ANSI stripping so the green SGR that
-// only info() emits can gate out warn()/error() lines, which share the same
-// bracket format in yellow/red. Lines with no SGR at all (NO_COLOR-style
-// output) fall back to the bare bracket form, minus ⚠-prefixed warnings. The
-// message is returned lowercased and trimmed — the scripts' own words, not
-// invented phase names. Cheap: at most two regexp matches and one strip per
-// line. Kept as a free function so it is unit-testable against real captured
-// marker strings.
-func detectPhase(line string) string {
-	var msg string
-	if m := phaseMarkerColored.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
-		msg = m[2]
-	} else if !strings.Contains(line, "\x1b[") {
-		m := phaseMarkerPlain.FindStringSubmatch(strings.TrimSpace(line))
-		if m == nil {
-			return ""
-		}
-		msg = m[2]
-	} else {
-		// Colored, but not the green info() wrap: warn/error or unrelated.
-		return ""
-	}
-	msg = strings.TrimSpace(ansi.Strip(msg))
-	// ⚠ marks a warning regardless of path; without color (the fallback) it is
-	// the only signal left, and even a green-wrapped one is not a step.
-	if strings.HasPrefix(msg, "⚠") || phaseDecoration.MatchString(msg) {
-		return ""
-	}
-	return strings.ToLower(msg)
-}
 
 // activityClosedMsg tells the app to leave the activity screen.
 type activityClosedMsg struct{ openDashboard bool }
@@ -112,7 +46,7 @@ type activityKillGraceMsg struct{ seq int }
 // the app's Update), so a plain int is race-free.
 var activitySeq int
 
-// runnerHandle abstracts *actions.PTYRunner for tests.
+// runnerHandle is a running action, so tests can substitute a fake.
 type runnerHandle interface {
 	WaitData() tea.Cmd
 	Resize(rows, cols int)
@@ -120,9 +54,10 @@ type runnerHandle interface {
 	Kill()
 }
 
-// startRunner is a seam: tests replace it to avoid spawning real PTYs.
-var startRunner = func(root string, act actions.Action, rows, cols int) (runnerHandle, error) {
-	return actions.StartPTY(root, act, rows, cols)
+// startRunner is a seam: tests replace it with a fake runner. Until ticket
+// 038 renders in-process operations here, every action fails to start.
+var startRunner = func(_ string, act actions.Action, _, _ int) (runnerHandle, error) {
+	return nil, actions.NotImplemented(act)
 }
 
 // activity is the full-screen runner for one menu-launched action.
@@ -137,14 +72,6 @@ type activity struct {
 	width, height int
 	started       time.Time
 	elapsed       time.Duration
-
-	// phase is the latest step marker matched from the script's output, shown
-	// in the running header so a long run (init) is not just "running 0s" over
-	// raw logs. phaseScan accumulates the trailing partial line across output
-	// chunks so a marker split mid-line is still matched once it completes. Both
-	// are only maintained for actions whose pipeline emits markers (init today).
-	phase     string
-	phaseScan []byte
 
 	confirmingAbort bool
 	aborted         bool
@@ -207,68 +134,10 @@ func (a *activity) paneSize() (rows, cols int) {
 	return max(a.height-6, 5), max(a.width-6, 20)
 }
 
-// tracksPhases reports whether this action's pipeline emits step markers worth
-// surfacing in the header. init.sh's clone/build/seed/migrate pipeline and the
-// etl.sh load orchestrators (load-phenotype/load-genomic) both print top-level
-// "[phase] Step N/M: …" markers; other actions stay on the plain "running 0s"
-// header. The init-specific long-run footer note is gated separately (see
-// footerLine) — load runs are not the 20–30 minute first-run install.
-func (a *activity) tracksPhases() bool {
-	return a.act.Script == scripts.Init || a.isLoadOrchestrator()
-}
-
-// isLoadOrchestrator reports whether this action is one of the etl.sh load
-// orchestrators, identified by its first argv element (load-phenotype /
-// load-genomic) — the orchestrators that emit step markers.
-func (a *activity) isLoadOrchestrator() bool {
-	if a.act.Script != scripts.Etl || len(a.act.Args) == 0 {
-		return false
-	}
-	switch a.act.Args[0] {
-	case "load-phenotype", "load-genomic":
-		return true
-	}
-	return false
-}
-
-// scanPhase updates a.phase from the new raw chunk only (never the whole
-// buffer), so it stays cheap on a chatty stream. It splits the accumulated
-// trailing partial + new bytes on newlines, runs detectPhase on each COMPLETE
-// line, and keeps the last (unterminated) fragment for the next chunk — so a
-// marker split across chunks is matched once it completes. An unrecognized line
-// leaves a.phase unchanged.
-func (a *activity) scanPhase(data []byte) {
-	if !a.tracksPhases() {
-		return
-	}
-	a.phaseScan = append(a.phaseScan, data...)
-	for {
-		i := bytes.IndexByte(a.phaseScan, '\n')
-		if i < 0 {
-			break
-		}
-		line := string(a.phaseScan[:i])
-		a.phaseScan = a.phaseScan[i+1:]
-		if p := detectPhase(line); p != "" {
-			a.phase = p
-		}
-	}
-	// Cap the unterminated fragment so a never-newline stream can't grow it
-	// without bound (matches the output buffer's pathological-line guard).
-	if len(a.phaseScan) > maxPhaseScanLen {
-		a.phaseScan = a.phaseScan[len(a.phaseScan)-maxPhaseScanLen:]
-	}
-}
-
-// maxPhaseScanLen bounds the carried partial line; a marker line is never this
-// long, so truncation only ever discards leading junk on a pathological stream.
-const maxPhaseScanLen = 8 * 1024
-
 func (a *activity) update(msg tea.Msg) (*activity, tea.Cmd) {
 	switch msg := msg.(type) {
 	case actions.OutputMsg:
 		a.out.Feed(msg.Data)
-		a.scanPhase(msg.Data)
 		a.refreshContent()
 		if a.runner != nil {
 			return a, a.runner.WaitData()
@@ -391,25 +260,7 @@ func (a *activity) headerLine() string {
 	if a.done {
 		return fmt.Sprintf("%s — finished", a.act.Name)
 	}
-	base := fmt.Sprintf("%s — running %s", a.act.Name, a.elapsed)
-	if a.phase == "" {
-		return base
-	}
-	// Append the latest matched phase, truncated so the header never exceeds
-	// the screen width and wraps (which would shear the layout). The title
-	// style adds 1 col of padding each side; budget for that plus the " · "
-	// separator. With no known width yet, fall back to a generous default so
-	// the phase still shows in tests that render before the first resize.
-	width := a.width
-	if width <= 0 {
-		width = 80
-	}
-	const sep = " · "
-	avail := width - 2 - lipgloss.Width(base) - lipgloss.Width(sep)
-	if avail < 8 {
-		return base // too narrow to add a phase legibly
-	}
-	return base + sep + ansi.Truncate(a.phase, avail, "…")
+	return fmt.Sprintf("%s — running %s", a.act.Name, a.elapsed)
 }
 
 func (a *activity) footerLine() string {
@@ -424,18 +275,7 @@ func (a *activity) footerLine() string {
 		return activityWarnStyle.Render("aborting — sent ctrl-c, waiting for the child to exit…") +
 			activityHelpStyle.Render("  pgup/pgdn scroll")
 	case !a.done:
-		help := "esc/ctrl+c abort · pgup/pgdn scroll"
-		// Append the first-run note only on the init screen and only when it
-		// fits the width — at narrow widths the longer footer would wrap and
-		// shear the frame (the abort/scroll hint always takes priority). A load
-		// run tracks phases too, but it is not the 20–30 minute first install.
-		if a.act.Script == scripts.Init {
-			withNote := help + " · " + initFooterNote
-			if a.width <= 0 || lipgloss.Width(withNote)+2 <= a.width {
-				help = withNote
-			}
-		}
-		return activityHelpStyle.Render(help)
+		return activityHelpStyle.Render("esc/ctrl+c abort · pgup/pgdn scroll")
 	case a.aborted:
 		// "[icon status] — [next action]" phrasing (U10).
 		return activityWarnStyle.Render("⚠ aborted — "+a.act.AbortNote) +

@@ -1,0 +1,13 @@
+# Not implemented yet: exit 1, naming ticket 032.
+exitcode 1 pic-sure migrate
+stderr '^pic-sure: not implemented \(ticket 032\)$'
+! stdout .
+exitcode 1 pic-sure migrate --check
+stderr '^pic-sure: not implemented \(ticket 032\)$'
+! stdout .
+exitcode 1 pic-sure migrate --repair
+stderr '^pic-sure: not implemented \(ticket 032\)$'
+! stdout .
+
+# --check and --repair are mutually exclusive.
+exitcode 2 pic-sure migrate --check --repair

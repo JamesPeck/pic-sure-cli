@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -10,15 +11,14 @@ import (
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
 
-	picexec "github.com/JamesPeck/pic-sure-cli/internal/exec"
 	"github.com/JamesPeck/pic-sure-cli/internal/styles"
 	"github.com/JamesPeck/pic-sure-cli/internal/wizard"
 )
 
 // The embedded wizard host (spec: Wizard screen, M2). Calm background — no
 // starfield. Phase 1 is the shared field form, phase 2 the confirm-summary;
-// on consent the changed keys are written via scripts/env-set.sh and init.sh
-// runs in the activity screen.
+// on consent the changed keys are written and init runs in the activity
+// screen.
 type wizardPhase int
 
 const (
@@ -28,14 +28,14 @@ const (
 	// screen swallows every further message. Without it, a huh cursor-blink
 	// tick arriving between issuing writeCmd and the app handling
 	// wizardWritesDoneMsg would re-enter the StateCompleted branch and fire
-	// a second write batch (and a second init.sh launch).
+	// a second write batch (and a second init launch).
 	wizardWriting
 )
 
 // wizardClosedMsg tells the app to leave the wizard screen.
 type wizardClosedMsg struct{ aborted bool }
 
-// wizardWritesDoneMsg reports the env-set.sh write batch.
+// wizardWritesDoneMsg reports the write batch.
 type wizardWritesDoneMsg struct{ err error }
 
 // wizardWriteTickMsg drives the animated "writing …" dots during the
@@ -53,10 +53,11 @@ func wizardWriteTick() tea.Cmd {
 	return tea.Tick(wizardWriteTickRate, func(time.Time) tea.Msg { return wizardWriteTickMsg{} })
 }
 
-// runWizardWrites is a seam (tests stub it); production writes through the
-// single wizard write path with quiet runners — the TUI owns the terminal.
-var runWizardWrites = func(root string, current, desired map[string]string) error {
-	return wizard.WriteChanged(picexec.RunQuiet, picexec.RunQuietWithInput, root, current, desired)
+// runWizardWrites is a seam (tests stub it). v1 wrote the changed keys
+// through scripts/env-set.sh; v2 writes pic-sure.yaml once ticket 039 moves
+// the wizard onto the config schema.
+var runWizardWrites = func(string, map[string]string, map[string]string) error {
+	return errors.New("writing the setup: not implemented in v2 yet (ticket 039)")
 }
 
 var (
@@ -96,7 +97,7 @@ type wizardScreen struct {
 func newWizardScreen(root string, reconfigure bool) (*wizardScreen, error) {
 	current, err := wizard.ReadEnvValues(filepath.Join(root, ".env.example"))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("the wizard still reads the v1 .env.example until ticket 039: %w", err)
 	}
 	if reconfigure {
 		env, err := wizard.ReadEnvValues(filepath.Join(root, ".env"))

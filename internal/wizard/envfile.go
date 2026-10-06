@@ -7,8 +7,7 @@ import (
 )
 
 // ReadEnvValues extracts KEY=VALUE pairs for the wizard's field keys from an
-// env file (.env for pre-fill, .env.example for defaults). Read-only: writes
-// always go through scripts/env-set.sh.
+// env file (.env for pre-fill, .env.example for defaults). Read-only.
 //
 // Supported syntax: plain or `export `-prefixed assignments, with optional
 // single or double quotes around the value (env-set.sh writes single-quoted

@@ -42,18 +42,9 @@ jobs:
       - name: Test
         run: make test
 
-      # Same end-to-end smoke the per-PR CI runs (builds the binary, exercises
-      # script dispatch + install.sh against a local build, no docker needed).
-      - name: Smoke
-        run: make smoke
-
       - name: Shellcheck
         run: |
-          shellcheck \
-            install.sh smoke/run.sh \
-            testdata/fixtures/root/status.sh \
-            testdata/fixtures/root/preflight.sh \
-            testdata/fixtures/root/update.sh
+          shellcheck install.sh
 
   build:
     name: Build ${{ matrix.goos }}/${{ matrix.goarch }}

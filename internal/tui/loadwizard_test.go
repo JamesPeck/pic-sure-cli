@@ -9,6 +9,8 @@ import (
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
+
+	"github.com/JamesPeck/pic-sure-cli/internal/actions"
 )
 
 // completeForm forces the active huh form to its completed state and pumps a
@@ -135,8 +137,8 @@ func TestLoadWizardPhenotypeAutoFlow(t *testing.T) {
 	if !ok {
 		t.Fatalf("dispatch = %#v, want runActionMsg", cmd())
 	}
-	if run.act.Script != "etl.sh" {
-		t.Errorf("script = %q, want etl.sh", run.act.Script)
+	if want := actions.LoadPhenotype(actions.PhenotypeOpts{}).Name; run.act.Name != want {
+		t.Errorf("action = %q, want %q", run.act.Name, want)
 	}
 	want := []string{"load-phenotype", "--file", "/data/pheno.csv", "--heap", defaultHeap}
 	if !eq(run.act.Args, want) {
@@ -479,9 +481,6 @@ func TestLoadWizardGenomicFullFlow(t *testing.T) {
 	run, ok := cmd().(runActionMsg)
 	if !ok {
 		t.Fatalf("dispatch = %#v, want runActionMsg", cmd())
-	}
-	if run.act.Script != "etl.sh" {
-		t.Errorf("script = %q, want etl.sh", run.act.Script)
 	}
 	if run.act.Name != "load genomic data" {
 		t.Errorf("action name = %q, want %q", run.act.Name, "load genomic data")

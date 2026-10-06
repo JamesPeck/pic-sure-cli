@@ -1,5 +1,12 @@
 # pic-sure — CLI & TUI for PIC-SURE All-in-One
 
+> **This is the `v2` branch, under construction.** v2 is a native Go rewrite
+> that drives docker directly, with no AIO bash scripts. Most commands
+> return "not implemented (ticket NNN)" until their ticket lands. Apart from
+> the Development section, this README still describes v1; ticket 065
+> rewrites it. For the v2 design, see
+> [docs/architecture.md](docs/architecture.md).
+
 `pic-sure` is a single Go binary that fronts the bash deployment scripts in a
 [`pic-sure-all-in-one`](https://github.com/hms-dbmi/pic-sure-all-in-one/tree/tui-mono)
 checkout. It gives evaluators and developers a guided setup wizard, an
@@ -472,33 +479,19 @@ them first via `scripts/env-set.sh KEY --stdin` and then run
 
 ## Development
 
-```
-cmd/pic-sure/        main: version ldflags, exit-code propagation
-internal/commands/   cobra tree; global-flag scan; verbatim passthrough (DisableFlagParsing)
-internal/exec/       script runners: Run (live stdio, process group, signal fwd),
-                     RunQuiet/RunQuietWithInput/RunOutput (captured, for TUI hosts)
-internal/project/    checkout-root discovery (marker files)
-internal/contract/   JSON contract types + parsers (the ONLY place schemas are known)
-internal/wizard/     data-driven field table, validation, single form definition
-                     (NewForm serves both the CLI runner and the TUI screen), WriteChanged
-internal/actions/    shared action table (Describe + AbortNote per action),
-                     PTY runner, PTY-output sanitizer (OutputBuffer)
-internal/tui/        unified app: landing/wizard/activity screens, starfield, logo
-internal/dashboard/  dashboard screen (panes, pollers, log follower)
-smoke/               standalone end-to-end harness (runs in CI without Docker)
-```
+Package layout, the shared interfaces and how to add a command or an
+operation: [docs/architecture.md](docs/architecture.md).
 
 | Target | Does |
 |---|---|
 | `make build` | build `bin/pic-sure` with version ldflags |
-| `make test` | `go test ./...` (set `PICSURE_PTY_TEST=1` to include the PTY e2e) |
+| `make test` | `go test ./...`, including the testscript scenarios and, outside CI, the PTY smoke tests (set `PICSURE_PTY_TEST=1` to run those in CI) |
 | `make lint` | `golangci-lint run` — version pinned in the Makefile; CI installs exactly that |
-| `make smoke` | build + `smoke/run.sh` against deterministic AIO fixtures |
-| `make check` | test + lint + smoke |
+| `make check` | gofmt check, `go vet`, lint and test: what CI runs |
 | `make build-release GOOS=… GOARCH=…` | the release build (same ldflags as CI) |
 
 Conventions enforced by tests: every wizard key must exist in the checked-in
 AIO `.env.example` contract fixture; every action must carry an `AbortNote`;
-contract fixtures must strict-decode; rendered frames must fit the terminal box; huh selects bind
+rendered frames must fit the terminal box; huh selects bind
 `.Value()` **before** `.Options()`. Releases are tagged `v*`; CI builds the
 `linux/darwin × amd64/arm64` matrix and publishes with checksums.

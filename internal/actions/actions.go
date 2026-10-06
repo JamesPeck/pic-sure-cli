@@ -1,23 +1,27 @@
-// Package actions defines the script-backed operations shared by the TUI
-// surfaces (dashboard pane and activity screen) and the PTY runner that
-// executes them. Every action runs a real script — no Go-side semantics
-// (pic-sure-all-in-one/docs/cli-contract.md). Destructive actions must be confirmed by typing
-// ConfirmWord and clearly state what is destroyed; every action carries an
-// AbortNote so a confirmed abort never leaves the user guessing about state.
+// Package actions describes the operations the TUI surfaces (dashboard pane
+// and activity screen) can launch. Destructive actions must be confirmed by
+// typing ConfirmWord and clearly state what is destroyed; every action
+// carries an AbortNote so a confirmed abort never leaves the user guessing
+// about state.
+//
+// v1 ran each action as an AIO bash script in a PTY. v2 deleted that layer
+// (ticket 001), so starting an action fails with NotImplemented until the TUI
+// tickets (038 renderer, 039 landing, 040 dashboard, 047 load wizard) run the
+// in-process operations instead. Args still holds the v1 script arguments:
+// they record the choices each screen collected, which the TUI tests assert,
+// and they go away with that rewiring.
 package actions
 
 import (
 	"fmt"
 	"strings"
-
-	"github.com/JamesPeck/pic-sure-cli/internal/scripts"
 )
 
 // Action is one runnable operation.
 type Action struct {
 	Name        string
-	Script      string // relative to root
-	Args        []string
+	Ticket      string   // the v2 ticket that implements this operation
+	Args        []string // the v1 script arguments; see the package doc
 	Destructive bool
 	ConfirmWord string
 	Describe    string // shown in the confirm dialog
@@ -30,7 +34,7 @@ type Action struct {
 func Init() Action {
 	return Action{
 		Name:   "setup (init.sh)",
-		Script: scripts.Init,
+		Ticket: "034",
 		Describe: "Generates secrets and config, clones/builds service images,\n" +
 			"starts the stack, and seeds the database. Idempotent.",
 		AbortNote: "init.sh is safe to re-run; it resumes from the current state.",
@@ -40,7 +44,7 @@ func Init() Action {
 func Update() Action {
 	return Action{
 		Name:   "update",
-		Script: scripts.Update,
+		Ticket: "036",
 		Describe: "Safe update: resolves release-control refs, rebuilds images,\n" +
 			"runs migrations, rotates the introspection token, restarts services.\n" +
 			"Data volumes are not deleted.",
@@ -51,7 +55,7 @@ func Update() Action {
 func Restart(service string) Action {
 	return Action{
 		Name:      "restart " + service,
-		Script:    scripts.Compose,
+		Ticket:    "026",
 		Args:      []string{"restart", service},
 		Describe:  fmt.Sprintf("Restarts the %s service via docker compose.", service),
 		AbortNote: "the service may be mid-restart; check its state in the dashboard.",
@@ -61,7 +65,7 @@ func Restart(service string) Action {
 func Preflight() Action {
 	return Action{
 		Name:      "preflight",
-		Script:    scripts.Preflight,
+		Ticket:    "025",
 		Describe:  "Non-mutating host/config validation.",
 		AbortNote: "preflight is read-only; nothing changed.",
 	}
@@ -70,7 +74,7 @@ func Preflight() Action {
 func Migrate() Action {
 	return Action{
 		Name:      "migrate",
-		Script:    scripts.Migrate,
+		Ticket:    "032",
 		Describe:  "Runs Flyway migrations (PIC-SURE + dictionary databases), then\nrestarts psama and dictionary-api if they are running.",
 		AbortNote: "re-run migrate; Flyway resumes pending migrations (pass --repair via `pic-sure migrate --repair` if it reports a failed row).",
 	}
@@ -79,7 +83,7 @@ func Migrate() Action {
 func SeedDB() Action {
 	return Action{
 		Name:      "seed-db",
-		Script:    scripts.SeedDB,
+		Ticket:    "033",
 		Describe:  "Seeds the admin user, the visualization resource, and the\nintrospection token. Requires migrations to be applied first.\nIdempotent — safe to re-run.",
 		AbortNote: "seed-db is idempotent; safe to re-run.",
 	}
@@ -94,7 +98,7 @@ func DemoData(dataset string) Action {
 	}
 	return Action{
 		Name:   "demo-data " + dataset,
-		Script: scripts.DemoData,
+		Ticket: "046",
 		Args:   args,
 		Describe: "REPLACES the phenotype data in the hpds-data volume with the\n" +
 			"selected demo dataset, then re-hydrates the dictionary database.",
@@ -119,10 +123,22 @@ func Etl(sub string) Action {
 	}
 	return Action{
 		Name:      "etl " + sub,
-		Script:    scripts.Etl,
+		Ticket:    etlTicket(sub),
 		Args:      []string{sub},
 		Describe:  describe,
 		AbortNote: abort,
+	}
+}
+
+// etlTicket names the v2 ticket that replaces each etl.sh subcommand.
+func etlTicket(sub string) string {
+	switch sub {
+	case "promote-genomic":
+		return "049"
+	case "public-1000genomes":
+		return "046"
+	default: // hydrate-dictionary, run-weights
+		return "044"
 	}
 }
 
@@ -131,7 +147,7 @@ func Etl(sub string) Action {
 func ReleaseControlApply() Action {
 	return Action{
 		Name:      "release-control apply",
-		Script:    scripts.ReleaseControl,
+		Ticket:    "028",
 		Describe:  "Resolves the current release-control branch's refs and applies\nthem to the sibling checkouts. Run update afterwards to rebuild.",
 		AbortNote: "re-run release-control; resolution and apply are idempotent.",
 	}
@@ -141,7 +157,7 @@ func ReleaseControlApply() Action {
 func ReleaseControlDryRun() Action {
 	return Action{
 		Name:      "release-control dry run",
-		Script:    scripts.ReleaseControl,
+		Ticket:    "028",
 		Args:      []string{"--dry-run"},
 		Describe:  "Resolves the release-control refs and reports what would change\nwithout touching any checkout.",
 		AbortNote: "dry run is read-only; nothing changed.",
@@ -153,7 +169,7 @@ func ReleaseControlDryRun() Action {
 func ReleaseControlBranch(branch string) Action {
 	return Action{
 		Name:      "release-control --branch " + branch,
-		Script:    scripts.ReleaseControl,
+		Ticket:    "028",
 		Args:      []string{"--branch", branch},
 		Describe:  "Switches the release-control branch to '" + branch + "', resolves its\nrefs, and applies them to the sibling checkouts.",
 		AbortNote: "re-run release-control; resolution and apply are idempotent.",
@@ -167,7 +183,7 @@ func ReleaseControlBranch(branch string) Action {
 func DevUp(overlay string) Action {
 	return Action{
 		Name:   "dev overlay " + overlay,
-		Script: scripts.Compose,
+		Ticket: "052",
 		Args:   []string{"dev", "up", overlay},
 		Describe: "Recreates the overlay's service from LOCAL SOURCE\n" +
 			"(docker-compose.dev-" + overlay + ".yml on top of the base files;\n" +
@@ -182,7 +198,7 @@ func DevUp(overlay string) Action {
 func DevOff(name string) Action {
 	return Action{
 		Name:      "revert " + name,
-		Script:    scripts.Compose,
+		Ticket:    "052",
 		Args:      []string{"dev", "off", name},
 		Describe:  fmt.Sprintf("Recreates %s from the release image (base compose files only).", name),
 		AbortNote: "the service may be mid-recreate; re-run the revert.",
@@ -247,7 +263,7 @@ func ResetWith(all, repos bool) Action {
 
 	return Action{
 		Name:        name,
-		Script:      scripts.Reset,
+		Ticket:      "056",
 		Args:        args,
 		Destructive: true,
 		ConfirmWord: "reset",
@@ -262,7 +278,7 @@ func ResetWith(all, repos bool) Action {
 func Uninstall() Action {
 	return Action{
 		Name:        "uninstall",
-		Script:      scripts.Uninstall,
+		Ticket:      "056",
 		Args:        []string{"--yes"},
 		Destructive: true,
 		ConfirmWord: "uninstall",
@@ -388,7 +404,7 @@ func LoadPhenotype(o PhenotypeOpts) Action {
 
 	return Action{
 		Name:   "load phenotype data",
-		Script: scripts.Etl,
+		Ticket: "045",
 		Args:   args,
 		// Destructive/ConfirmWord intentionally unset: the load-your-data
 		// wizard confirm-summary is the consent step, matching the Init and
@@ -432,7 +448,7 @@ func LoadGenomic(o GenomicOpts) Action {
 
 	return Action{
 		Name:      "load genomic data",
-		Script:    scripts.Etl,
+		Ticket:    "049",
 		Args:      args,
 		Describe:  describe,
 		AbortNote: fmt.Sprintf("partial VCF load possible for partition %q; staging is incomplete — re-run LoadGenomic to restart, or `pic-sure etl promote-genomic` if load finished but promote was skipped.", o.Partition),

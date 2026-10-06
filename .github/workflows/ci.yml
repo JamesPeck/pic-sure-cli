@@ -7,7 +7,7 @@ on:
 
 jobs:
   go:
-    name: CLI (test, lint, smoke)
+    name: CLI (test, lint)
     runs-on: ubuntu-latest
     env:
       PICSURE_PTY_TEST: "1"
@@ -40,9 +40,6 @@ jobs:
       - name: Test
         run: make test
 
-      - name: Smoke
-        run: make smoke
-
   shell:
     name: Shell scripts
     runs-on: ubuntu-latest
@@ -52,8 +49,4 @@ jobs:
       - name: Shellcheck
         run: |
           shellcheck --version
-          shellcheck \
-            install.sh smoke/run.sh \
-            testdata/fixtures/root/status.sh \
-            testdata/fixtures/root/preflight.sh \
-            testdata/fixtures/root/update.sh
+          shellcheck install.sh

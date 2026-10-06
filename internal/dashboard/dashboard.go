@@ -1,8 +1,11 @@
 // Package dashboard is the pic-sure dashboard screen: live service/status
-// panes, a log follower, and keybound script actions running in an embedded
-// PTY. All reads go through scripts/compose.sh and status.sh --json; all
-// actions are the real scripts (pic-sure-all-in-one/docs/cli-contract.md). It is embedded as a
-// sibling screen of the unified TUI (internal/tui).
+// panes, a log follower, and keybound actions with an output pane. It is
+// embedded as a sibling screen of the unified TUI (internal/tui).
+//
+// v1 read everything through the AIO scripts and ran actions as scripts in a
+// PTY. That layer is gone in v2, so the polls, the log follower and every
+// action report "not implemented" until ticket 040 rewires them onto the v2
+// operations.
 package dashboard
 
 import (

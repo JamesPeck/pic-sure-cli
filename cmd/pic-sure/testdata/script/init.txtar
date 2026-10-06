@@ -1,0 +1,9 @@
+# Not implemented yet: exit 1, naming ticket 034.
+exitcode 1 pic-sure init
+stderr '^pic-sure: not implemented \(ticket 034\)$'
+! stdout .
+exitcode 1 pic-sure init mystack
+stderr '^pic-sure: not implemented \(ticket 034\)$'
+! stdout .
+
+exitcode 2 pic-sure init one two

@@ -1,0 +1,7 @@
+# Not implemented yet: exit 1, naming ticket 054.
+exitcode 1 pic-sure db bootstrap
+stderr '^pic-sure: not implemented \(ticket 054\)$'
+! stdout .
+exitcode 1 pic-sure db bootstrap --check --sync-passwords
+stderr '^pic-sure: not implemented \(ticket 054\)$'
+! stdout .

@@ -1,0 +1,10 @@
+# Not implemented yet: exit 1, naming ticket 050.
+exitcode 1 pic-sure shared-data publish demo-v1
+stderr '^pic-sure: not implemented \(ticket 050\)$'
+! stdout .
+exitcode 1 pic-sure shared-data list
+stderr '^pic-sure: not implemented \(ticket 050\)$'
+! stdout .
+exitcode 1 pic-sure shared-data remove demo-v1
+stderr '^pic-sure: not implemented \(ticket 050\)$'
+! stdout .

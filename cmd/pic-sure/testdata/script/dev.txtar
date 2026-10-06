@@ -1,0 +1,10 @@
+# Not implemented yet: exit 1, naming ticket 052.
+exitcode 1 pic-sure dev list
+stderr '^pic-sure: not implemented \(ticket 052\)$'
+! stdout .
+exitcode 1 pic-sure dev on psama
+stderr '^pic-sure: not implemented \(ticket 052\)$'
+! stdout .
+exitcode 1 pic-sure dev off psama
+stderr '^pic-sure: not implemented \(ticket 052\)$'
+! stdout .

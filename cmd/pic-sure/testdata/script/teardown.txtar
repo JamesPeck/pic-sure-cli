@@ -1,0 +1,13 @@
+# Not implemented yet: exit 1, naming ticket 056.
+exitcode 1 pic-sure reset
+stderr '^pic-sure: not implemented \(ticket 056\)$'
+! stdout .
+exitcode 1 pic-sure reset --keep-db
+stderr '^pic-sure: not implemented \(ticket 056\)$'
+! stdout .
+exitcode 1 pic-sure destroy
+stderr '^pic-sure: not implemented \(ticket 056\)$'
+! stdout .
+exitcode 1 pic-sure destroy --prune-images
+stderr '^pic-sure: not implemented \(ticket 056\)$'
+! stdout .

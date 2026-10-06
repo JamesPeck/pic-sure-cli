@@ -1,0 +1,51 @@
+# Without a terminal, bare pic-sure prints help (never the TUI) and exits 0.
+exec pic-sure
+stdout '^Usage:'
+! stderr .
+
+# The help lists every top-level command from spec §5.
+exec pic-sure --help
+stdout '^  init '
+stdout '^  up '
+stdout '^  down '
+stdout '^  restart '
+stdout '^  ps '
+stdout '^  logs '
+stdout '^  compose '
+stdout '^  status '
+stdout '^  doctor '
+stdout '^  update '
+stdout '^  build '
+stdout '^  migrate '
+stdout '^  config '
+stdout '^  secrets '
+stdout '^  data '
+stdout '^  dictionary '
+stdout '^  shared-data '
+stdout '^  dev '
+stdout '^  db '
+stdout '^  reset '
+stdout '^  destroy '
+stdout '^  cache '
+stdout '^  self-update '
+stdout '^  support-bundle '
+stdout '^  version '
+
+# Unknown commands, unknown flags and bad arguments are usage errors (exit 2).
+exitcode 2 pic-sure frobnicate
+stderr '^pic-sure: unknown command "frobnicate" for "pic-sure"$'
+stderr '^Run ''pic-sure --help'' for usage.$'
+exitcode 2 pic-sure up --frobnicate
+stderr 'unknown flag: --frobnicate'
+stderr '^Run ''pic-sure up --help'' for usage.$'
+exitcode 2 pic-sure up extra-arg
+
+# The global flags parse anywhere on the command line.
+exitcode 1 pic-sure --stack /nowhere --yes --non-interactive --no-animations --log-level debug --skip-step db up --skip-step seed
+stderr 'not implemented \(ticket 035\)'
+exitcode 1 pic-sure up --json
+exitcode 1 pic-sure up --plain
+
+# --json and --plain are mutually exclusive.
+exitcode 2 pic-sure --json --plain up
+stderr 'json plain'

@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -15,7 +16,7 @@ import (
 	"github.com/JamesPeck/pic-sure-cli/internal/contract"
 )
 
-// fakeRunner stands in for *actions.PTYRunner so abort/escalation tests can
+// fakeRunner stands in for a running action so abort/escalation tests can
 // observe Interrupt/Kill without spawning a real PTY (mirrors the tui pkg).
 type fakeRunner struct {
 	interrupted bool
@@ -64,6 +65,11 @@ func keyMsg(s string) tea.KeyMsg {
 // process fails fast and harmlessly there).
 func testModel(t *testing.T) *model {
 	t.Helper()
+	orig := startRunner
+	startRunner = func(string, actions.Action, int, int) (runnerHandle, error) {
+		return &fakeRunner{}, nil
+	}
+	t.Cleanup(func() { startRunner = orig })
 	m := newModel(t.TempDir())
 	m.width, m.height = 120, 40
 	m.layout()
@@ -121,22 +127,11 @@ func TestPickerKeyOpensPicker(t *testing.T) {
 	}
 }
 
-// reapRunner interrupts and reaps a runner a dispatch may have spawned so the
-// test does not leak a short-lived bash child (the script is missing in the
-// temp root, so it exits immediately, but reap it deterministically anyway).
-func reapRunner(m *model) {
-	if m.runner != nil {
-		m.runner.Interrupt()
-		m.runner = nil
-	}
-}
-
 // TestPreflightDispatchesImmediately: p is read-only, so the dashboard runs it
 // at once (no confirm) — mirroring the landing's Preflight-check entry.
 func TestPreflightDispatchesImmediately(t *testing.T) {
 	m := testModel(t)
 	m, _ = update(t, m, keyMsg("p"))
-	defer reapRunner(m)
 	if m.mode != modeActing {
 		t.Fatalf("mode = %v, want modeActing (p should dispatch without a confirm)", m.mode)
 	}
@@ -158,7 +153,6 @@ func TestDemoPickerDispatchesWithoutConfirm(t *testing.T) {
 	m.form.State = huh.StateCompleted
 
 	m, _ = update(t, m, struct{}{}) // any msg drives the completed form
-	defer reapRunner(m)
 	if m.mode != modeActing {
 		t.Fatalf("mode = %v, want modeActing (picker should dispatch, not confirm)", m.mode)
 	}
@@ -214,7 +208,6 @@ func TestDashboardResetCombinedDialog(t *testing.T) {
 			m.form.State = huh.StateCompleted
 
 			m, _ = update(t, m, struct{}{})
-			defer reapRunner(m)
 			if m.mode != modeActing {
 				t.Fatalf("mode = %v, want modeActing (reset should dispatch)", m.mode)
 			}
@@ -230,7 +223,6 @@ func TestDashboardResetCombinedDialog(t *testing.T) {
 		m.resetScope, m.resetRepos, m.confirmText = "all", true, "nope"
 		m.form.State = huh.StateCompleted
 		m, _ = update(t, m, struct{}{})
-		defer reapRunner(m)
 		if m.mode != modeNormal || m.runner != nil {
 			t.Errorf("wrong word dispatched: mode=%v runner=%v", m.mode, m.runner)
 		}
@@ -350,7 +342,7 @@ func TestActionDoneFormatsResultAndRefreshes(t *testing.T) {
 			m := testModel(t)
 			m.mode = modeActing
 			m.actionName = "update"
-			m.runner = &actions.PTYRunner{}
+			m.runner = &fakeRunner{}
 
 			m, cmd := update(t, m, tt.msg)
 			if m.lastResult != tt.want {
@@ -382,7 +374,7 @@ func TestEscClosesFinishedActionPane(t *testing.T) {
 
 	// While still running, esc must NOT close the pane.
 	m.mode = modeActing
-	m.runner = &actions.PTYRunner{}
+	m.runner = &fakeRunner{}
 	m, _ = update(t, m, keyMsg("esc"))
 	if m.mode != modeActing {
 		t.Error("esc must not close a pane with a live runner")
@@ -509,11 +501,11 @@ func TestDashboardDoneCancelsKillOffer(t *testing.T) {
 // otherwise B's 10s grace would be cut short and the force-kill offered
 // prematurely. B's own timer, at its proper time, still escalates.
 func TestDashboardStaleGraceTimerIgnored(t *testing.T) {
-	origStart := startPTY
-	startPTY = func(root string, act actions.Action, rows, cols int) (runnerHandle, error) {
+	origStart := startRunner
+	startRunner = func(root string, act actions.Action, rows, cols int) (runnerHandle, error) {
 		return &fakeRunner{}, nil
 	}
-	t.Cleanup(func() { startPTY = origStart })
+	t.Cleanup(func() { startRunner = origStart })
 
 	m := testModel(t)
 
@@ -748,7 +740,7 @@ func TestDoneMsgRespectsPollLatches(t *testing.T) {
 	m := testModel(t)
 	m.mode = modeActing
 	m.actionName = "update"
-	m.runner = &actions.PTYRunner{}
+	m.runner = &fakeRunner{}
 	m.pollingServices, m.pollingStatus = true, true
 
 	m, cmd := update(t, m, actions.DoneMsg{Code: 0})
@@ -763,7 +755,7 @@ func TestDoneMsgRespectsPollLatches(t *testing.T) {
 	m = testModel(t)
 	m.mode = modeActing
 	m.actionName = "update"
-	m.runner = &actions.PTYRunner{}
+	m.runner = &fakeRunner{}
 	m.pollingServices, m.pollingStatus = false, false
 
 	m, cmd = update(t, m, actions.DoneMsg{Code: 0})
@@ -780,7 +772,7 @@ func TestDoneMsgRespectsPollLatches(t *testing.T) {
 	m = testModel(t)
 	m.mode = modeActing
 	m.actionName = "update"
-	m.runner = &actions.PTYRunner{}
+	m.runner = &fakeRunner{}
 	m.pollingServices, m.pollingStatus = true, false
 
 	m, cmd = update(t, m, actions.DoneMsg{Code: 0})
@@ -870,7 +862,7 @@ func TestActionPanePreservesManualScroll(t *testing.T) {
 	m = mm.(*model)
 	m.mode = modeActing
 	m.actionName = "update"
-	m.runner = &actions.PTYRunner{} // live run: help line advertises scrolling
+	m.runner = &fakeRunner{} // live run: help line advertises scrolling
 	m.actionOut = actions.NewOutputBuffer()
 
 	// Enough output to overflow the pane so the viewport is scrollable.
@@ -1283,5 +1275,25 @@ func TestDialogFitsNarrowPane(t *testing.T) {
 			// And the whole rendered frame must stay inside the terminal box.
 			frameFits(t, m.View(), w, h)
 		})
+	}
+}
+
+// Until ticket 040, every dashboard read reports that it isn't implemented.
+func TestStubbedReadsReportNotImplemented(t *testing.T) {
+	if msg := pollServices("")().(servicesMsg); !errors.Is(msg.err, errNotImplemented) {
+		t.Errorf("pollServices err = %v", msg.err)
+	}
+	if msg := pollStatus("")().(statusMsg); !errors.Is(msg.err, errNotImplemented) {
+		t.Errorf("pollStatus err = %v", msg.err)
+	}
+	s := startLogSession("", "hpds", 7)
+	if !s.failed {
+		t.Error("the stub log session should be marked failed")
+	}
+	if msg := s.waitLines()().(logLinesMsg); len(msg.lines) != 1 || !strings.Contains(msg.lines[0], "ticket 040") {
+		t.Errorf("log lines = %q", msg.lines)
+	}
+	if _, err := startRunner("", actions.Update(), 10, 80); err == nil || !strings.Contains(err.Error(), "ticket 036") {
+		t.Errorf("startRunner err = %v", err)
 	}
 }

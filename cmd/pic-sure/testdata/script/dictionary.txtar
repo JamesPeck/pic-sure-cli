@@ -1,0 +1,13 @@
+# Not implemented yet: exit 1, naming ticket 044.
+exitcode 1 pic-sure dictionary hydrate
+stderr '^pic-sure: not implemented \(ticket 044\)$'
+! stdout .
+exitcode 1 pic-sure dictionary load-csv
+stderr '^pic-sure: not implemented \(ticket 044\)$'
+! stdout .
+exitcode 1 pic-sure dictionary load-facets
+stderr '^pic-sure: not implemented \(ticket 044\)$'
+! stdout .
+exitcode 1 pic-sure dictionary weights
+stderr '^pic-sure: not implemented \(ticket 044\)$'
+! stdout .

@@ -1,0 +1,7 @@
+# Not implemented yet: exit 1, naming ticket 025.
+exitcode 1 pic-sure doctor
+stderr '^pic-sure: not implemented \(ticket 025\)$'
+! stdout .
+exitcode 1 pic-sure doctor --network
+stderr '^pic-sure: not implemented \(ticket 025\)$'
+! stdout .

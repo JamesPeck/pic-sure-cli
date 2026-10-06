@@ -227,7 +227,7 @@ func (m *model) summaryPane() string {
 
 	switch {
 	case m.statusErr != nil:
-		b.WriteString(badStyle.Render(fmt.Sprintf("status.sh --json failed: %v", m.statusErr)))
+		b.WriteString(badStyle.Render(fmt.Sprintf("status failed: %v", m.statusErr)))
 	case m.status == nil:
 		b.WriteString(helpStyle.Render("loading status..."))
 	default:

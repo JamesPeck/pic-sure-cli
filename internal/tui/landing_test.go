@@ -10,6 +10,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/JamesPeck/pic-sure-cli/internal/actions"
 )
 
 func keyEnter() tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyEnter} }
@@ -420,8 +422,8 @@ func TestLandingEtlPicker(t *testing.T) {
 	l.form.State = huh.StateCompleted
 	_, cmd := l.update(struct{}{})
 	run, ok := cmd().(runActionMsg)
-	if !ok || run.act.Script != "etl.sh" {
-		t.Fatalf("got %#v, want runActionMsg{etl.sh}", cmd())
+	if !ok || run.act.Ticket != actions.Etl("run-weights").Ticket {
+		t.Fatalf("got %#v, want runActionMsg{etl run-weights}", cmd())
 	}
 	if want := []string{"run-weights"}; !eq(run.act.Args, want) {
 		t.Errorf("args = %v, want %v", run.act.Args, want)
@@ -511,8 +513,8 @@ func TestLandingResetCombinedScreen(t *testing.T) {
 	l.form.State = huh.StateCompleted
 	_, cmd := l.update(struct{}{})
 	run, ok := cmd().(runActionMsg)
-	if !ok || run.act.Script != "reset.sh" {
-		t.Fatalf("keep: got %#v, want runActionMsg{reset.sh}", cmd())
+	if !ok || run.act.Ticket != actions.Reset().Ticket {
+		t.Fatalf("keep: got %#v, want runActionMsg{reset}", cmd())
 	}
 	if want := []string{"--yes"}; !eq(run.act.Args, want) {
 		t.Errorf("keep args = %v, want %v", run.act.Args, want)
@@ -524,8 +526,8 @@ func TestLandingResetCombinedScreen(t *testing.T) {
 	l.form.State = huh.StateCompleted
 	_, cmd = l.update(struct{}{})
 	run, ok = cmd().(runActionMsg)
-	if !ok || run.act.Script != "reset.sh" {
-		t.Fatalf("full wipe: got %#v, want runActionMsg{reset.sh}", cmd())
+	if !ok || run.act.Ticket != actions.Reset().Ticket {
+		t.Fatalf("full wipe: got %#v, want runActionMsg{reset}", cmd())
 	}
 	if want := []string{"--all", "--yes"}; !eq(run.act.Args, want) {
 		t.Errorf("full-wipe args = %v, want %v", run.act.Args, want)
@@ -537,8 +539,8 @@ func TestLandingResetCombinedScreen(t *testing.T) {
 	l.form.State = huh.StateCompleted
 	_, cmd = l.update(struct{}{})
 	run, ok = cmd().(runActionMsg)
-	if !ok || run.act.Script != "reset.sh" {
-		t.Fatalf("keep+repos: got %#v, want runActionMsg{reset.sh}", cmd())
+	if !ok || run.act.Ticket != actions.Reset().Ticket {
+		t.Fatalf("keep+repos: got %#v, want runActionMsg{reset}", cmd())
 	}
 	if want := []string{"--repos", "--yes"}; !eq(run.act.Args, want) {
 		t.Errorf("keep+repos args = %v, want %v", run.act.Args, want)
@@ -550,8 +552,8 @@ func TestLandingResetCombinedScreen(t *testing.T) {
 	l.form.State = huh.StateCompleted
 	_, cmd = l.update(struct{}{})
 	run, ok = cmd().(runActionMsg)
-	if !ok || run.act.Script != "reset.sh" {
-		t.Fatalf("all+repos: got %#v, want runActionMsg{reset.sh}", cmd())
+	if !ok || run.act.Ticket != actions.Reset().Ticket {
+		t.Fatalf("all+repos: got %#v, want runActionMsg{reset}", cmd())
 	}
 	if want := []string{"--all", "--repos", "--yes"}; !eq(run.act.Args, want) {
 		t.Errorf("all+repos args = %v, want %v", run.act.Args, want)

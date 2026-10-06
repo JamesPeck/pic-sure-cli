@@ -80,12 +80,12 @@ func TestWizardFlowResultMessages(t *testing.T) {
 	t.Run("write failure returns to landing with error", func(t *testing.T) {
 		a := testApp(ScreenLanding)
 		a.screen = ScreenWizard
-		a.Update(wizardWritesDoneMsg{err: errors.New("scripts/env-set.sh ADMIN_EMAIL exited 2")})
+		a.Update(wizardWritesDoneMsg{err: errors.New("writing ADMIN_EMAIL failed")})
 		if a.screen != ScreenLanding || !strings.Contains(a.landing.result, "failed") {
 			t.Fatalf("screen=%v result=%q, want landing with failure", a.screen, a.landing.result)
 		}
 	})
-	t.Run("write success launches init.sh in the activity screen", func(t *testing.T) {
+	t.Run("write success launches init in the activity screen", func(t *testing.T) {
 		orig := startRunner
 		startRunner = func(string, actions.Action, int, int) (runnerHandle, error) {
 			return &fakeRunner{}, nil
@@ -98,8 +98,8 @@ func TestWizardFlowResultMessages(t *testing.T) {
 		if a.screen != ScreenActivity || a.activity == nil {
 			t.Fatal("successful writes must open the activity screen")
 		}
-		if a.activity.act.Script != "init.sh" {
-			t.Errorf("activity script = %q, want init.sh", a.activity.act.Script)
+		if want := actions.Init().Name; a.activity.act.Name != want {
+			t.Errorf("activity action = %q, want %q", a.activity.act.Name, want)
 		}
 	})
 }
@@ -144,8 +144,8 @@ func TestAppLoadDataDispatchOpensActivity(t *testing.T) {
 	if a.load != nil {
 		t.Error("load screen not dropped after dispatch")
 	}
-	if a.activity.act.Script != "etl.sh" {
-		t.Errorf("activity script = %q, want etl.sh", a.activity.act.Script)
+	if want := actions.LoadPhenotype(actions.PhenotypeOpts{}).Name; a.activity.act.Name != want {
+		t.Errorf("activity action = %q, want %q", a.activity.act.Name, want)
 	}
 }
 

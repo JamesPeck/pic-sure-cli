@@ -154,7 +154,7 @@ func (m *model) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *model) startAction(act actions.Action) (tea.Model, tea.Cmd) {
 	rows, cols := m.actionPaneSize()
-	runner, err := startPTY(m.root, act, rows, cols)
+	runner, err := startRunner(m.root, act, rows, cols)
 	if err != nil {
 		m.lastResult = fmt.Sprintf("%s failed to start: %v", act.Name, err)
 		m.mode = modeNormal

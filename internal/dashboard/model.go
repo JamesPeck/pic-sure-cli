@@ -30,8 +30,8 @@ func killGrace(seq int) tea.Cmd {
 	return tea.Tick(abortGracePeriod, func(time.Time) tea.Msg { return killGraceMsg{seq: seq} })
 }
 
-// runnerHandle abstracts *actions.PTYRunner so tests can substitute a fake
-// (mirrors the activity screen's seam).
+// runnerHandle is a running action, so tests can substitute a fake (mirrors
+// the activity screen's seam).
 type runnerHandle interface {
 	WaitData() tea.Cmd
 	Resize(rows, cols int)
@@ -39,9 +39,11 @@ type runnerHandle interface {
 	Kill()
 }
 
-// startPTY is a seam: tests replace it to avoid spawning real PTYs.
-var startPTY = func(root string, act actions.Action, rows, cols int) (runnerHandle, error) {
-	return actions.StartPTY(root, act, rows, cols)
+// startRunner is a seam: tests replace it with a fake runner. Until the
+// dashboard runs v2 operations in-process (ticket 040), every action fails
+// to start.
+var startRunner = func(_ string, act actions.Action, _, _ int) (runnerHandle, error) {
+	return nil, actions.NotImplemented(act)
 }
 
 type mode int

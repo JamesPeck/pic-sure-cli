@@ -1,0 +1,7 @@
+# Not implemented yet: exit 1, naming ticket 059.
+exitcode 1 pic-sure support-bundle
+stderr '^pic-sure: not implemented \(ticket 059\)$'
+! stdout .
+exitcode 1 pic-sure support-bundle -o bundle.tar.gz
+stderr '^pic-sure: not implemented \(ticket 059\)$'
+! stdout .

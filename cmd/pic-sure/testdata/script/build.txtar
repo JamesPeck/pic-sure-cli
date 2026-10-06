@@ -1,0 +1,7 @@
+# Not implemented yet: exit 1, naming ticket 031.
+exitcode 1 pic-sure build
+stderr '^pic-sure: not implemented \(ticket 031\)$'
+! stdout .
+exitcode 1 pic-sure build --force pic-sure frontend
+stderr '^pic-sure: not implemented \(ticket 031\)$'
+! stdout .

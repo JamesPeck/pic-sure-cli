@@ -1,0 +1,22 @@
+# Not implemented yet: exit 1, naming ticket 026.
+exitcode 1 pic-sure down
+stderr '^pic-sure: not implemented \(ticket 026\)$'
+! stdout .
+exitcode 1 pic-sure restart
+stderr '^pic-sure: not implemented \(ticket 026\)$'
+! stdout .
+exitcode 1 pic-sure restart hpds psama
+stderr '^pic-sure: not implemented \(ticket 026\)$'
+! stdout .
+exitcode 1 pic-sure ps
+stderr '^pic-sure: not implemented \(ticket 026\)$'
+! stdout .
+exitcode 1 pic-sure logs
+stderr '^pic-sure: not implemented \(ticket 026\)$'
+! stdout .
+exitcode 1 pic-sure logs -f hpds
+stderr '^pic-sure: not implemented \(ticket 026\)$'
+! stdout .
+exitcode 1 pic-sure compose -- ps -a
+stderr '^pic-sure: not implemented \(ticket 026\)$'
+! stdout .

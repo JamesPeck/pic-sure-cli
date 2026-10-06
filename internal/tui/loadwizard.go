@@ -11,9 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/actions"
-	picexec "github.com/JamesPeck/pic-sure-cli/internal/exec"
 	"github.com/JamesPeck/pic-sure-cli/internal/filebrowser"
-	"github.com/JamesPeck/pic-sure-cli/internal/scripts"
 	"github.com/JamesPeck/pic-sure-cli/internal/styles"
 )
 
@@ -92,34 +90,16 @@ const defaultHeap = "4096"
 const defaultGenomicHeap = "16000"
 
 // fetchArchiveCSVs lists the *.csv entries of a compressed/archived phenotype
-// file via the read-only `etl.sh archive-csvs <file>` lister (LD-7a contract):
-// it prints the tar entries one per line (LC_ALL=C sorted), prints nothing for
-// a raw .csv or a plain .gz, and exits non-zero on a missing/unreadable file.
-// A package var so tests inject entries without forking etl.sh, mirroring
-// landing.go's fetchDevOverlays. It MUST run inside a tea.Cmd (never in Update)
-// because it forks a bash process.
-var fetchArchiveCSVs = func(root, file string) ([]string, error) {
-	code, out, err := picexec.RunOutput(root, scripts.Etl, []string{"archive-csvs", file})
-	if err != nil {
-		return nil, err
-	}
-	if code != 0 {
-		return nil, fmt.Errorf("archive-csvs exited %d", code)
-	}
-	var entries []string
-	for _, line := range strings.Split(out, "\n") {
-		// archive-csvs already sorts and emits exact entry paths; trim only the
-		// trailing newline framing, never the entry text (a subdir prefix is
-		// significant and must be passed to --entry verbatim).
-		if line = strings.TrimRight(line, "\r"); line != "" {
-			entries = append(entries, line)
-		}
-	}
-	return entries, nil
+// file, exact entry paths sorted, and nothing for a raw .csv or a plain .gz.
+// A package var so tests inject entries. It must run inside a tea.Cmd, never
+// in Update. v1 ran `etl.sh archive-csvs`; ticket 041 replaces it with an
+// in-process lister (ListCSVEntries), and ticket 047 wires that in here.
+var fetchArchiveCSVs = func(_, _ string) ([]string, error) {
+	return nil, errors.New("listing archive entries: not implemented in v2 yet (ticket 041)")
 }
 
-// archiveCSVsFillMsg carries the result of the async `etl.sh archive-csvs` call
-// off the update hot-path. seq stamps the loadPhenoFile selection it was fetched
+// archiveCSVsFillMsg carries the result of the async archive listing off the
+// update hot-path. seq stamps the loadPhenoFile selection it was fetched
 // for, so a result that arrives after the file step was re-entered or the screen
 // closed cannot land in the wrong place (mirrors devOverlaysFillMsg).
 type archiveCSVsFillMsg struct {
@@ -180,7 +160,7 @@ type loadScreen struct {
 	discarding bool
 
 	// Archive-inspection state for the phenotype file step. When a non-plain-.csv
-	// file is chosen, the screen runs `etl.sh archive-csvs` asynchronously to
+	// file is chosen, the screen lists the archive's entries asynchronously to
 	// learn whether the archive holds multiple CSVs (≥2 → entry picker). While the
 	// call is in flight inspecting is true (the view shows a placeholder and the
 	// filebrowser is parked); archiveSeq stamps each inspection so a stale result
@@ -443,8 +423,8 @@ func isPlainCSV(path string) bool {
 }
 
 // startArchiveInspection parks the file step behind an "(inspecting archive…)"
-// placeholder and schedules the read-only `etl.sh archive-csvs` lister in a
-// tea.Cmd (it forks bash, so it must never run in Update). archiveSeq stamps the
+// placeholder and schedules the read-only archive lister in a tea.Cmd (it
+// reads the file, so it must never run in Update). archiveSeq stamps the
 // dispatch so a result for a since-re-entered/closed file step is dropped. The
 // step stays loadPhenoFile while inspecting (the view keys off s.inspecting); the
 // fill handler advances it. Mirrors landing.startDevPicker's async pattern.

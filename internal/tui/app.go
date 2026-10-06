@@ -143,7 +143,7 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.landing.result = "setup failed: " + msg.err.Error()
 			return a, a.openLandingCmd()
 		}
-		// Consent already given at the wizard's confirm-summary: run init.sh
+		// Consent already given at the wizard's confirm-summary: run init
 		// in the activity screen with no further dialog.
 		return a.Update(runActionMsg{act: actions.Init()})
 

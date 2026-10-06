@@ -1,0 +1,7 @@
+# Not implemented yet: exit 1, naming ticket 057.
+exitcode 1 pic-sure cache list
+stderr '^pic-sure: not implemented \(ticket 057\)$'
+! stdout .
+exitcode 1 pic-sure cache prune
+stderr '^pic-sure: not implemented \(ticket 057\)$'
+! stdout .

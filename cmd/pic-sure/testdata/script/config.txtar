@@ -1,0 +1,22 @@
+# Not implemented yet: exit 1, naming ticket 006.
+exitcode 1 pic-sure config show
+stderr '^pic-sure: not implemented \(ticket 006\)$'
+! stdout .
+exitcode 1 pic-sure config get name
+stderr '^pic-sure: not implemented \(ticket 006\)$'
+! stdout .
+exitcode 1 pic-sure config set name demo
+stderr '^pic-sure: not implemented \(ticket 006\)$'
+! stdout .
+exitcode 1 pic-sure config edit
+stderr '^pic-sure: not implemented \(ticket 006\)$'
+! stdout .
+
+# A group without a subcommand, an unknown subcommand, or the wrong number of
+# arguments is a usage error.
+exitcode 2 pic-sure config
+stderr '^pic-sure: pic-sure config needs a subcommand$'
+exitcode 2 pic-sure config frobnicate
+stderr 'unknown command "frobnicate" for "pic-sure config"'
+exitcode 2 pic-sure config get
+exitcode 2 pic-sure config set name

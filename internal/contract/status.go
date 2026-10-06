@@ -1,15 +1,4 @@
-// Package contract holds the Go view of the script JSON contract
-// (pic-sure-all-in-one/docs/cli-contract.md). It is the only package that knows the JSON
-// shapes; everything else consumes these types.
 package contract
-
-import (
-	"encoding/json"
-	"fmt"
-)
-
-// SchemaVersion is the contract major version this binary understands.
-const SchemaVersion = 1
 
 // Status mirrors `status.sh --json` (schema_version 1).
 type Status struct {
@@ -87,28 +76,4 @@ type Migrations struct {
 	Checked bool   `json:"checked"`
 	Ready   *bool  `json:"ready"`
 	Message string `json:"message"`
-}
-
-// ParseStatus decodes `status.sh --json` output. Unknown fields are ignored
-// (the contract allows additive changes); a schema_version other than
-// SchemaVersion is an error.
-func ParseStatus(data []byte) (*Status, error) {
-	var s Status
-	if err := json.Unmarshal(data, &s); err != nil {
-		return nil, fmt.Errorf("parsing status JSON: %w", err)
-	}
-	if err := checkHeader(s.SchemaVersion, s.Command, "status"); err != nil {
-		return nil, err
-	}
-	return &s, nil
-}
-
-func checkHeader(version int, command, want string) error {
-	if version != SchemaVersion {
-		return fmt.Errorf("unsupported schema_version %d (this binary speaks %d); upgrade pic-sure or the scripts so they match", version, SchemaVersion)
-	}
-	if command != want {
-		return fmt.Errorf("unexpected command %q in JSON document (want %q)", command, want)
-	}
-	return nil
 }

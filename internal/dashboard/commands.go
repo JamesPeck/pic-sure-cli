@@ -1,8 +1,8 @@
 package dashboard
 
 import (
-	"bytes"
 	"context"
+	"errors"
 	"os/exec"
 	"path/filepath"
 	"syscall"
@@ -11,12 +11,13 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/contract"
-	"github.com/JamesPeck/pic-sure-cli/internal/scripts"
 )
 
-// Poll intervals. Services are cheap (compose ps through the wrapper);
-// status.sh --json embeds the migration check, which is local-only by
-// contract (pic-sure-all-in-one/docs/cli-contract.md), so 15s is safe.
+// errNotImplemented is what every dashboard read reports until ticket 040
+// polls the compose adapter (017) and the v2 status report (027) in-process.
+var errNotImplemented = errors.New("not implemented in v2 yet (ticket 040)")
+
+// Poll intervals: services every 2s, the status report every 15s.
 const (
 	servicesInterval = 2 * time.Second
 	statusInterval   = 15 * time.Second
@@ -86,56 +87,33 @@ func statusTick() tea.Cmd {
 	return tea.Tick(statusInterval, func(time.Time) tea.Msg { return statusTickMsg{} })
 }
 
-// pollCmd builds a context-bound `bash <script> <args>` poll. The script's
-// own context kill only reaches bash, but compose/status.sh run `docker
-// compose` as a non-exec'd child, so the grandchild inherits the stdout pipe.
-// On a context timeout CommandContext would kill bash alone; the orphaned
-// docker process keeps the write end open and Wait blocks on the I/O-copy
-// goroutine until EOF — forever if the daemon is hung (the exact case the
-// timeout guards against), silently wedging the poll. So, borrowing logs.go's
-// group-kill idea, run the poll in its own process group and bring the whole
-// group down on cancel; WaitDelay is a backstop in case a process escapes
-// the group.
+// pollCmd builds a context-bound `bash <script> <args>` poll. No v2 code
+// calls it: it stays so TestPollCmdNotWedgedByOrphanGrandchild keeps
+// compiling as the model for the exec runner's grandchild handling (ticket
+// 003). Ticket 040 deletes both.
+//
+// The script's own context kill only reaches bash, but a script that runs
+// `docker compose` as a non-exec'd child hands the grandchild the stdout
+// pipe. On a context timeout CommandContext would kill bash alone; the
+// orphaned docker process keeps the write end open and Wait blocks on the
+// I/O-copy goroutine until EOF — forever if the daemon is hung, silently
+// wedging the poll. So run the poll in its own process group and bring the
+// whole group down on cancel; WaitDelay is a backstop in case a process
+// escapes the group.
 func pollCmd(ctx context.Context, root, script string, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, "bash", append([]string{filepath.Join(root, script)}, args...)...)
 	cmd.Dir = root
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	// SIGKILL, not logs.go's SIGTERM: a hung-daemon grandchild may ignore TERM, and polls have nothing to drain.
+	// SIGKILL, not SIGTERM: a hung-daemon grandchild may ignore TERM, and polls have nothing to drain.
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 	cmd.WaitDelay = 2 * time.Second
 	return cmd
 }
 
-// pollServices reads service state through the compose wrapper — never
-// docker compose directly, so file/project selection stays in bash. Parsed
-// in Go (never run_jq here: its dockerized fallback would spawn a container
-// every tick).
-func pollServices(root string) tea.Cmd {
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		cmd := pollCmd(ctx, root, scripts.Compose, "ps", "--format", "json")
-		var out bytes.Buffer
-		cmd.Stdout = &out
-		if err := cmd.Run(); err != nil {
-			return servicesMsg{err: err}
-		}
-		services, err := contract.ParseComposePS(out.Bytes())
-		return servicesMsg{services: services, err: err}
-	}
+func pollServices(string) tea.Cmd {
+	return func() tea.Msg { return servicesMsg{err: errNotImplemented} }
 }
 
-func pollStatus(root string) tea.Cmd {
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		defer cancel()
-		cmd := pollCmd(ctx, root, scripts.Status, "--json")
-		var out bytes.Buffer
-		cmd.Stdout = &out
-		if err := cmd.Run(); err != nil {
-			return statusMsg{err: err}
-		}
-		status, err := contract.ParseStatus(out.Bytes())
-		return statusMsg{status: status, err: err}
-	}
+func pollStatus(string) tea.Cmd {
+	return func() tea.Msg { return statusMsg{err: errNotImplemented} }
 }
