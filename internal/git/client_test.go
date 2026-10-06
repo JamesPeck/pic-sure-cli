@@ -15,6 +15,7 @@ import (
 )
 
 func TestEveryCallDisablesPromptsAndCarriesCallerEnv(t *testing.T) {
+	t.Setenv("SSH_ASKPASS", "")
 	f := fakerunner.New(t)
 	f.On(fakerunner.Glob("git ls-remote *"))
 	base := git.New(f)
@@ -29,11 +30,24 @@ func TestEveryCallDisablesPromptsAndCarriesCallerEnv(t *testing.T) {
 	}
 
 	calls := f.Calls()
-	if want := []string{"GIT_TERMINAL_PROMPT", "HTTPS_PROXY", "NO_PROXY"}; !slices.Equal(calls[0].Env, want) {
+	noPrompts := []string{"GIT_TERMINAL_PROMPT", "SSH_ASKPASS_REQUIRE", "SSH_ASKPASS"}
+	if want := append(noPrompts, "HTTPS_PROXY", "NO_PROXY"); !slices.Equal(calls[0].Env, want) {
 		t.Errorf("proxied client env = %v, want %v", calls[0].Env, want)
 	}
-	if want := []string{"GIT_TERMINAL_PROMPT"}; !slices.Equal(calls[1].Env, want) {
-		t.Errorf("WithEnv changed the original client: env = %v, want %v", calls[1].Env, want)
+	if !slices.Equal(calls[1].Env, noPrompts) {
+		t.Errorf("WithEnv changed the original client: env = %v, want %v", calls[1].Env, noPrompts)
+	}
+}
+
+func TestTheUsersOwnAskpassIsKept(t *testing.T) {
+	t.Setenv("SSH_ASKPASS", "/usr/local/bin/my-askpass")
+	f := fakerunner.New(t)
+	f.On(fakerunner.Glob("git ls-remote *"))
+	if _, err := git.New(f).LsRemote(context.Background(), "https://example.com/r.git"); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"GIT_TERMINAL_PROMPT", "SSH_ASKPASS_REQUIRE"}; !slices.Equal(f.Calls()[0].Env, want) {
+		t.Errorf("env = %v, want %v", f.Calls()[0].Env, want)
 	}
 }
 

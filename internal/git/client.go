@@ -55,17 +55,23 @@ type Ref struct {
 }
 
 // ErrUnknownRef is wrapped by ResolveRef's error when the repository has no
-// commit by that name. Fetching may fix it; any other error from ResolveRef
-// means the repository itself is unusable.
+// commit by that name, which a Fetch may fix.
 var ErrUnknownRef = errors.New("unknown git ref")
 
 // New returns a Client that runs the user's git through r, so their
 // credential helpers, SSH setup and URL rewrites apply.
 func New(r docker.Runner) Client {
-	// git must never wait for a typed username or password: the TUI owns
-	// the terminal, and a child outside the foreground process group would
-	// be stopped when it read from it. Credential helpers still work.
-	return &client{runner: r, env: []string{"GIT_TERMINAL_PROMPT=0"}}
+	// Neither git nor ssh may wait for typed input: the TUI owns the
+	// terminal, and a child outside the foreground process group is stopped
+	// when it reads from it. GIT_TERMINAL_PROMPT=0 makes git fail instead.
+	// SSH_ASKPASS_REQUIRE=force sends ssh's passphrase and host-key prompts
+	// to the askpass program, which fails unless the user has their own.
+	// Credential helpers and ssh-agent keys still work.
+	env := []string{"GIT_TERMINAL_PROMPT=0", "SSH_ASKPASS_REQUIRE=force"}
+	if os.Getenv("SSH_ASKPASS") == "" {
+		env = append(env, "SSH_ASKPASS=false")
+	}
+	return &client{runner: r, env: env}
 }
 
 type client struct {
@@ -81,8 +87,6 @@ func (c *client) cmd(args ...string) docker.Cmd {
 	return docker.Cmd{Argv: append([]string{"git"}, args...), Env: c.env}
 }
 
-// run runs git with args and returns its stdout. A non-zero exit is an
-// *docker.ExitError.
 func (c *client) run(ctx context.Context, args ...string) ([]byte, error) {
 	res, err := docker.RunChecked(ctx, c.runner, c.cmd(args...))
 	return res.Stdout, err
@@ -109,7 +113,7 @@ func (c *client) EnsureBare(ctx context.Context, url, dir string) error {
 		return err
 	}
 	defer func() { _ = os.RemoveAll(tmp) }() // a no-op once renamed
-	if _, err := c.run(ctx, "clone", "--bare", "--quiet", url, tmp); err != nil {
+	if _, err := c.run(ctx, "clone", "--bare", "--quiet", "--origin=origin", url, tmp); err != nil {
 		return err
 	}
 	if err := os.Rename(tmp, dir); err != nil {
@@ -201,9 +205,11 @@ func (c *client) Archive(ctx context.Context, dir, sha string) (io.ReadCloser, e
 	if err := checkArgs(dir, sha); err != nil {
 		return nil, err
 	}
-	// tar.umask fixes the modes at 0644 and 0755 whatever the user's git
-	// config says (git's default gives 0664 and 0775).
-	cmd := c.cmd("-c", "tar.umask=022", "--git-dir="+dir, "archive", "--format=tar", sha)
+	// The tree must not depend on the user's git config: tar.umask would
+	// change the modes (git's default gives 0664 and 0775), and core.autocrlf
+	// or core.eol would give text files CRLF line endings.
+	cmd := c.cmd("-c", "tar.umask=022", "-c", "core.autocrlf=false", "-c", "core.eol=lf",
+		"--git-dir="+dir, "archive", "--format=tar", sha)
 	ctx, cancel := context.WithCancel(ctx)
 	pr, pw := io.Pipe()
 	done := make(chan struct{})

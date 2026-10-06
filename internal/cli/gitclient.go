@@ -5,6 +5,6 @@ import (
 	"github.com/JamesPeck/pic-sure-cli/internal/git"
 )
 
-// newGitClient returns the git Client. A command that has loaded its stack
-// adds the proxy variables with WithEnv.
+// Commands add the stack's proxy variables to this client with WithEnv once
+// they have loaded the stack.
 func (a *App) newGitClient(r docker.Runner) git.Client { return git.New(r) }

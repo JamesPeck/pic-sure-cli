@@ -16,8 +16,6 @@ import (
 	"github.com/JamesPeck/pic-sure-cli/internal/git"
 )
 
-// These tests run the real git against repositories in temp dirs.
-
 // execRunner is a bare-bones docker.Runner for these tests.
 type execRunner struct{}
 
@@ -43,13 +41,20 @@ func (execRunner) Stream(ctx context.Context, c docker.Cmd, stdout, stderr io.Wr
 }
 
 // isolateGit skips the test without git, and keeps the user's git config
-// and any enclosing repository out of it.
+// and any enclosing repository out of it. In their place it puts a global
+// config with settings that would change the client's results if it didn't
+// override them.
 func isolateGit(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not found")
 	}
-	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	config := filepath.Join(t.TempDir(), "gitconfig")
+	hostile := "[core]\n\tautocrlf = true\n[tar]\n\tumask = 0\n[clone]\n\tdefaultRemoteName = upstream\n"
+	if err := os.WriteFile(config, []byte(hostile), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", config)
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	for _, k := range []string{"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"} {
 		t.Setenv(k, "")
@@ -122,6 +127,7 @@ func TestBareCloneResolveAndFetch(t *testing.T) {
 	up.write("feature.txt", "f\n", 0o644)
 	featureHead := up.commit("feature")
 	up.git("switch", "--quiet", "main")
+	up.git("branch", "light", featureHead) // same name as a tag
 
 	c := git.New(execRunner{})
 	cache := t.TempDir()
@@ -142,8 +148,8 @@ func TestBareCloneResolveAndFetch(t *testing.T) {
 			t.Errorf("ResolveRef(%q) = %s, want %s", ref, got, want)
 		}
 	}
-	resolve("v1.0", first) // annotated tag, peeled to its commit
-	resolve("light", first)
+	resolve("v1.0", first)  // annotated tag, peeled to its commit
+	resolve("light", first) // the tag, not the branch
 	resolve("main", first)
 	resolve("feature", featureHead)
 	resolve(first, first)

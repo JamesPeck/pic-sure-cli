@@ -15,9 +15,10 @@ import (
 
 // Unpack writes the tar archive r into dest, an existing directory that is
 // normally new and empty: Unpack never replaces a file. Files keep their
-// modes, directories get 0755, whatever the umask, and symlinks are kept.
-// It refuses an entry whose path leaves dest, a symlink that points outside
-// dest, and any entry that is not a directory, regular file or symlink.
+// modes, directory entries get 0755, whatever the umask, and symlinks are
+// kept. It refuses an entry whose path leaves dest, a symlink that points
+// outside dest or loops, and any entry that is not a directory, regular file
+// or symlink.
 // After the archive ends it reads r to EOF, so an error from whatever
 // produced r (such as git exiting non-zero after Archive) is returned too.
 //
@@ -80,9 +81,10 @@ func Unpack(r io.Reader, dest string) error {
 		return fmt.Errorf("reading archive: %w", err)
 	}
 
-	// The lexical check in symlinkStaysInside can't see through other
-	// symlinks: with self -> ".", a link to "self/.." looks local but isn't.
-	// Resolving each link through root, which refuses to leave dest, can.
+	// The lexical check in symlinkStaysInside can't see through the link's
+	// own directory: with self -> ".", a link at "self/x" to ".." looks local
+	// but isn't. Resolving each link through root, which refuses to leave
+	// dest, can.
 	for _, name := range links {
 		_, err := root.Stat(name)
 		if err == nil || errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
@@ -104,10 +106,24 @@ func entryName(name string) (string, error) {
 	return clean, nil
 }
 
-// symlinkStaysInside refuses an absolute target, or one that climbs out of
-// the destination from the link's own directory.
+// symlinkStaysInside refuses a target that is absolute, climbs above the
+// destination from the link's directory, or has ".." after a name. "a/.."
+// is only lexically a no-op: a may be a symlink, or missing until something
+// creates it.
 func symlinkStaysInside(name, target string) error {
-	if target == "" || path.IsAbs(target) || !filepath.IsLocal(filepath.FromSlash(path.Join(path.Dir(name), target))) {
+	ok := target != "" && !path.IsAbs(target)
+	up, named := 0, false
+	for part := range strings.SplitSeq(target, "/") {
+		switch part {
+		case "", ".":
+		case "..":
+			ok = ok && !named
+			up++
+		default:
+			named = true
+		}
+	}
+	if !ok || up > strings.Count(name, "/") {
 		return fmt.Errorf("archive symlink %q -> %q points outside the destination", name, target)
 	}
 	return nil
