@@ -301,8 +301,37 @@ _Tickets 003, 016 and 017 document their parts here._
 
 ## internal/git
 
-_Ticket 018 fills this in. `git.Client` is the placeholder interface in
-`ops.Deps`._
+Ticket 018. `git.New(runner)` returns the `Client` in `ops.Deps.Git`. It
+runs the user's `git` through the Runner, so their credential helpers, SSH
+setup and `insteadOf` rewrites apply (D24). Every call sets
+`GIT_TERMINAL_PROMPT=0`: git fails instead of waiting for a typed password.
+`WithEnv(...)` returns a client that adds variables to every call; commands
+use it for the proxy variables (§9.10) once they've loaded the stack's
+config.
+
+- `EnsureBare(url, dir)`: a missing `dir` is `git clone --bare`d into a
+  temporary sibling and renamed into place. An existing one only has its
+  origin URL set.
+- `Fetch(dir, refspecs, tags)`: nil refspecs means every branch. `tags` adds
+  `+refs/tags/*:refs/tags/*`, so a tag moved upstream moves here too.
+  Deleted refs are pruned.
+- `ResolveRef(dir, ref)`: a tag (peeled), branch, or full or short sha to
+  the full commit sha. A tag beats a branch of the same name. A missing
+  ref wraps `ErrUnknownRef`, so a caller can fetch and retry.
+- `LsRemote(url)`: branches and tags at `url` as `[]Ref{Name, SHA}`, with
+  annotated tags peeled to their commit.
+- `Archive(dir, sha)`: `git archive --format=tar` as an `io.ReadCloser`,
+  with files at 0644 or 0755. A git failure is the error from `Read`;
+  `Close` stops git.
+- `Unpack(r, dest)`: writes a tar into `dest` through `os.Root`. Files keep
+  their mode, directories get 0755, and symlinks are kept if they resolve
+  inside `dest` (or dangle). It refuses entries that leave `dest`, links
+  that point out (including through other links), duplicates, and anything
+  but files, directories and symlinks.
+
+Arguments that start with `-` are refused, so a URL or ref can't become a
+git option. The cache (019) owns locking and the `src/<repo>/<sha>`
+layout.
 
 ## internal/cache
 
