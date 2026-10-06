@@ -6,8 +6,11 @@ import "github.com/spf13/cobra"
 // persistent flags on the root, so they go anywhere on the command line.
 type GlobalOptions struct {
 	// Stack is --stack DIR: the stack to act on. Empty means the stack
-	// containing the current directory (ticket 007).
+	// containing the current directory (see stack.go).
 	Stack string
+	// WaitLock is --wait-lock: when another command holds the stack lock,
+	// wait for it instead of failing.
+	WaitLock bool
 	// JSON is --json: NDJSON events on stdout, or one JSON object for
 	// read-only reports (ticket 004). It implies NonInteractive.
 	JSON bool
@@ -32,6 +35,7 @@ type GlobalOptions struct {
 func (g *GlobalOptions) register(cmd *cobra.Command) {
 	f := cmd.PersistentFlags()
 	f.StringVar(&g.Stack, "stack", "", "act on the stack in `DIR` (default: the stack containing the current directory)")
+	f.BoolVar(&g.WaitLock, "wait-lock", false, "if another pic-sure command is changing the stack, wait for it instead of failing")
 	f.BoolVar(&g.JSON, "json", false, "machine-readable JSON on stdout; implies --non-interactive")
 	f.BoolVar(&g.Plain, "plain", false, "plain timestamped output instead of the TUI")
 	f.BoolVar(&g.Yes, "yes", false, "answer yes to every confirmation, including destructive ones")

@@ -140,6 +140,13 @@ it.
   confirmation. `--non-interactive` only forbids prompting, so a
   destructive command still needs `--yes`. `--json` implies
   `--non-interactive`, and `--json` and `--plain` are mutually exclusive.
+  `--wait-lock` (007) makes a mutating command wait for the stack lock
+  instead of failing.
+- `stack.go` (007): `a.openStack()` finds and opens the stack the command
+  acts on (exit 3 when there is none), `a.initDir(args)` resolves init's
+  directory, and `a.lockStack(ctx, cmd, st, sink)` takes the stack lock
+  for a mutating command: exit 1 if it is held, or a wait with
+  `--wait-lock`.
 - `root.go`: registers every command. It wraps each `RunE` so that any
   error raised before a `RunE` starts is reported as a usage error. A
   `PreRunE` that fails for any other reason must return an
@@ -182,6 +189,51 @@ _Tickets 006 (config schema), 007 (stack directory, state, manifest, lock),
 008 (secrets) and 009 (version gate, config migrations) fill this in. File
 ownership is in the package doc._ `ops` imports `stack`, so `stack` must not
 import `ops`: secret generation takes the `io.Reader` as an argument.
+
+### Stack directory (007)
+
+A directory is a stack when it holds `pic-sure.yaml` and `.pic-sure/`.
+`*stack.Stack` is one open stack; operations take it as an argument.
+
+- **Finding it.** `Find(stackFlag, cwd)` returns `--stack DIR` if set,
+  otherwise the nearest stack at or above cwd. `InitDir(arg, stackFlag,
+  cwd)` resolves `init [DIR]` (D14): DIR wins, and a `--stack` naming a
+  different directory is exit 2. No stack is exit 3, wrapping
+  `ErrNotFound`. `Open(dir)` opens an existing stack; `Create(dir)` is
+  init's: it makes the directory if needed, then `.pic-sure/`, and starts
+  the manifest. `Dir` is absolute with symlinks resolved; `Path(rel)` gives
+  the host path for bind mounts and `-f`. Close the stack when done.
+- **Writes.** Every write goes through an `os.Root` on the stack dir, so
+  nothing escapes it, even through a symlink. Paths are slash-separated and
+  relative. `WriteFile(rel, data, perm)` is atomic (temp file, fsync,
+  rename, fsync dir), sets exactly `perm` whatever the umask, and replaces a
+  symlink rather than writing through it. It needs the parent to exist:
+  `MkdirAll(rel, perm)` first. `CreateFile` is for streamed files such as
+  run logs. `ReadFile` and `FS()` read with the same confinement.
+- **Manifest.** `.pic-sure/manifest.json` lists every path the CLI created
+  (`{"path", "type": "file"|"dir"}`; `"."` is the stack dir, when init
+  created it), recorded as each is created. It is what `destroy` may
+  remove (056). Overwriting a file that was already there doesn't record
+  it. `Remove(rel)` deletes a recorded file or empty directory and forgets
+  it; a path the manifest doesn't list is refused with `ErrNotCreated`.
+  Updates re-read the file under an flock on `.pic-sure/`, so a command
+  that doesn't hold the stack lock (a read-only command's debug log) can't
+  drop another's entries.
+- **State.** `LoadState`/`SaveState` for `.pic-sure/state.json`:
+  `cli_version`, `schema_version` (the pic-sure.yaml schema it was
+  rendered with), the release commit, component commits, image tags, the
+  last operation and timestamps. No secrets. `StartOperation` and
+  `FinishOperation` take the time from the caller (`Deps.Clock`).
+  `LoadState` wraps `fs.ErrNotExist` before init saves it.
+- **Lock.** `Lock(ctx, LockOptions{Wait, Command, OnWait})` takes an flock
+  on `.pic-sure/lock` for a mutating command's whole run. If another
+  process holds it, Lock fails with `ErrLocked` naming the holder (command
+  and pid, from the lock file), or with `Wait` polls until it is free or
+  ctx ends. The kernel drops the lock when the holder exits, so it never
+  goes stale. The cli layer wraps this as `a.lockStack` (`--wait-lock`).
+- **Labels.** `st.Labels(name)` returns `org.hms-dbmi.picsure.stack=<name>`
+  and `org.hms-dbmi.picsure.stack-dir=<Dir>` (`LabelStack`,
+  `LabelStackDir`).
 
 ## internal/render
 

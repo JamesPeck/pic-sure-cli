@@ -12,6 +12,8 @@
 //   - logging.go (005): the slog logger.
 //   - engine.go (016): the docker Engine.
 //   - gitclient.go (018): the git Client.
+//   - stack.go (007): finding, opening and locking the stack a command acts
+//     on.
 //
 // deps.go assembles those into an ops.Deps for a command run.
 package cli
