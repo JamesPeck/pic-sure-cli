@@ -144,18 +144,6 @@ func TestConfigEditKeepsNameWhenTheFileWasInvalid(t *testing.T) {
 	}
 }
 
-func TestConfigEditStripsAChangedHeader(t *testing.T) {
-	// The second edit fixes the port and deletes a line of the header.
-	dir := editStack(t, replace("8080", "0"), `sed -e '/must be a port/d' -e 's/http_port: 0/http_port: 8081/' "$2" > "$2.new" && mv "$2.new" "$2"`)
-	if code, stderr := runEdit(t, dir); code != 0 {
-		t.Fatalf("exit %d: %s", code, stderr)
-	}
-	want := strings.Replace(editStartYAML, "8080", "8081", 1)
-	if got := readFile(t, filepath.Join(dir, "pic-sure.yaml")); got != want {
-		t.Errorf("saved:\n%s\nwant:\n%s", got, want)
-	}
-}
-
 func TestConfigEditGivesUpOnAnUnchangedRetry(t *testing.T) {
 	for name, edit := range map[string]string{
 		"invalid value": replace("8080", "0"),

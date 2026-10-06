@@ -17,8 +17,7 @@ import (
 
 // ConfigDoc is pic-sure.yaml as a YAML document. Edits go through Set and
 // SetValue, which change only the key they name, so Bytes keeps the user's
-// comments and key order. Aliases are expanded when the file is parsed, so
-// Bytes writes their values in full.
+// comments and key order.
 type ConfigDoc struct {
 	root *yaml.Node // a DocumentNode holding one MappingNode
 }
@@ -75,7 +74,11 @@ func ParseConfigDoc(data []byte) (*ConfigDoc, error) {
 		return nil, &ConfigError{Problems: []Problem{syntaxProblem(err)}}
 	}
 	var extra yaml.Node
-	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
+	switch err := dec.Decode(&extra); {
+	case errors.Is(err, io.EOF):
+	case err != nil:
+		return nil, &ConfigError{Problems: []Problem{syntaxProblem(err)}}
+	default:
 		return nil, &ConfigError{Problems: []Problem{{Line: extra.Line, Msg: "only one YAML document is allowed"}}}
 	}
 	if len(root.Content) == 0 { // only comments
@@ -84,22 +87,23 @@ func ParseConfigDoc(data []byte) (*ConfigDoc, error) {
 	if top := root.Content[0]; top.Kind != yaml.MappingNode {
 		return nil, &ConfigError{Problems: []Problem{{Line: top.Line, Msg: "want a mapping of keys at the top level"}}}
 	}
-	expandAliases(&root)
+	if problems := findAnchors(&root, nil); len(problems) > 0 {
+		return nil, &ConfigError{Problems: problems}
+	}
 	return &ConfigDoc{root: &root}, nil
 }
 
-// expandAliases replaces every alias under n with a copy of its anchor's
-// value and drops the anchors, so editing one key never changes another and
-// never leaves an alias without its anchor.
-func expandAliases(n *yaml.Node) {
-	n.Anchor = ""
-	for i, c := range n.Content {
-		if c.Kind == yaml.AliasNode {
-			c = deepCopy(c.Alias)
-			n.Content[i] = c
-		}
-		expandAliases(c)
+// findAnchors reports every anchor and alias under n. They aren't
+// supported: an alias can refer to itself, and editing an anchored value
+// would change, or orphan, its aliases.
+func findAnchors(n *yaml.Node, problems []Problem) []Problem {
+	if (n.Anchor != "" || n.Kind == yaml.AliasNode) && (len(problems) == 0 || problems[len(problems)-1].Line != n.Line) {
+		problems = append(problems, Problem{Line: n.Line, Msg: "YAML anchors and aliases (&name, *name) aren't supported"})
 	}
+	for _, c := range n.Content {
+		problems = findAnchors(c, problems)
+	}
+	return problems
 }
 
 var yamlLineRE = regexp.MustCompile(`^yaml: line (\d+): (.*)$`)
@@ -203,27 +207,46 @@ func checkSchema(top *yaml.Node) error {
 
 // ReadOnlyChanges returns a *ConfigError naming each read-only key whose
 // value in d differs from its value in before, or nil. It compares the
-// documents, so it works even when before is invalid; a key before lacks
-// may take any value.
+// documents, so it works even when before is invalid.
 func (d *ConfigDoc) ReadOnlyChanges(before *ConfigDoc) error {
 	var problems []Problem
 	for _, f := range Fields {
 		if !f.ReadOnly {
 			continue
 		}
-		segs := splitKey(f.Key)
-		was := lookupNode(before.root.Content[0], segs)
-		if was == nil || was.Kind != yaml.ScalarNode {
+		was, ok := before.readOnlyValue(f)
+		if !ok {
 			continue
 		}
-		if now := lookupNode(d.root.Content[0], segs); now == nil || now.Kind != yaml.ScalarNode || now.Value != was.Value {
-			problems = append(problems, Problem{Path: f.Key, Msg: fmt.Sprintf("is read-only; it was %s", was.Value)})
+		if now, _ := d.readOnlyValue(f); now != was {
+			problems = append(problems, Problem{Path: f.Key, Msg: fmt.Sprintf("is read-only; it was %v", was)})
 		}
 	}
 	if len(problems) > 0 {
 		return &ConfigError{Problems: problems}
 	}
 	return nil
+}
+
+// readOnlyValue decodes read-only field f in d. ok is false when the value
+// is missing, empty, or one no stack could have been created with, since
+// then there's nothing to protect.
+func (d *ConfigDoc) readOnlyValue(f Field) (v any, ok bool) {
+	n := lookupNode(d.root.Content[0], splitKey(f.Key))
+	if n == nil || n.Kind != yaml.ScalarNode {
+		return nil, false
+	}
+	if f.Kind == KindInt {
+		var i int
+		if !scalarFits(n, reflect.Int) || n.Decode(&i) != nil {
+			return nil, false
+		}
+		return i, true
+	}
+	if n.Value == "" || (f.Key == "name" && !nameRE.MatchString(n.Value)) {
+		return nil, false
+	}
+	return n.Value, true
 }
 
 // Set parses value for the field at key and stores it, like
@@ -329,15 +352,6 @@ func replaceNode(old, new *yaml.Node) {
 	}
 }
 
-func deepCopy(n *yaml.Node) *yaml.Node {
-	cp := *n
-	cp.Content = make([]*yaml.Node, len(n.Content))
-	for i, c := range n.Content {
-		cp.Content[i] = deepCopy(c)
-	}
-	return &cp
-}
-
 // lookupNode follows segs through mappings, returning nil if a key is
 // missing.
 func lookupNode(n *yaml.Node, segs []string) *yaml.Node {
@@ -383,7 +397,7 @@ func (d *decoder) decode(n *yaml.Node, v reflect.Value, path string) {
 		if v.Kind() == reflect.Map && v.IsNil() {
 			v.Set(reflect.MakeMap(v.Type()))
 		}
-		seen := map[string]int{}
+		seen := map[string]bool{}
 		for i := 0; i+1 < len(n.Content); i += 2 {
 			k, val := n.Content[i], n.Content[i+1]
 			if k.Kind != yaml.ScalarNode {
@@ -391,11 +405,11 @@ func (d *decoder) decode(n *yaml.Node, v reflect.Value, path string) {
 				continue
 			}
 			p := joinKey(path, k.Value)
-			if first, dup := seen[k.Value]; dup {
-				d.fail(p, k.Line, "duplicate key (first on line %d)", first)
+			if seen[k.Value] {
+				d.fail(p, k.Line, "duplicate key")
 				continue
 			}
-			seen[k.Value] = k.Line
+			seen[k.Value] = true
 			d.lines[p] = k.Line
 			if v.Kind() == reflect.Map {
 				d.decodeMapEntry(val, v, k.Value, p)

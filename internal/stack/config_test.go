@@ -111,10 +111,11 @@ func TestParseConfigIsStrict(t *testing.T) {
 		{"scalar for a section", head + "tls: generated\n", []string{`tls (line 4): want a mapping of keys, got "generated"`}},
 		{"list for a string", head + "name2: x\nhpds:\n  profile: [a]\n", []string{"hpds.profile (line 6): want a string, got a list"}},
 		{"scalar for a list", head + "dev:\n  services: hpds\n", []string{`dev.services (line 5): want a list of strings, got "hpds"`}},
-		{"duplicate key", head + "network:\n  http_port: 80\n  http_port: 81\n", []string{"network.http_port (line 6): duplicate key (first on line 5)"}},
+		{"duplicate key", head + "network:\n  http_port: 80\n  http_port: 81\n", []string{"network.http_port (line 6): duplicate key"}},
 		{"several problems", head + "a: 1\nb: 2\n", []string{"a (line 4)", "b (line 5)"}},
 		{"syntax error", "schema: 1\nname: [\n", []string{"invalid pic-sure.yaml: line 2: did not find expected node content"}},
 		{"two documents", head + "---\nname: other\n", []string{"line 4: only one YAML document is allowed"}},
+		{"syntax error in a second document", head + "---\nname: [\n", []string{"invalid pic-sure.yaml: line 5: did not find expected node content"}},
 		{"top level not a mapping", "- a\n- b\n", []string{"line 1: want a mapping of keys at the top level"}},
 		{"complex key", head + "? [a]\n: b\n", []string{"keys must be plain names"}},
 		{"missing schema", "name: demo\n", []string{"schema: required; this pic-sure writes schema 1"}},
@@ -152,19 +153,14 @@ func TestParseConfigOtherSchema(t *testing.T) {
 	}
 }
 
-func TestParseConfigFollowsAliases(t *testing.T) {
-	got, err := ParseConfig([]byte(`schema: 1
-name: demo
-auth: {admin_email: a@example.org, auth0: {client_id: x}}
-services:
-  hpds: &jvm {java_opts: -Xmx2g}
-  psama: *jvm
-`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Services["psama"].JavaOpts != "-Xmx2g" {
-		t.Errorf("services = %+v", got.Services)
+func TestParseConfigRejectsAnchors(t *testing.T) {
+	for yaml, want := range map[string]string{
+		"schema: 1\nname: demo\nservices:\n  hpds: &jvm {java_opts: -Xmx2g}\n  psama: *jvm\n": "invalid pic-sure.yaml:\n  line 4: YAML anchors and aliases (&name, *name) aren't supported\n  line 5: YAML anchors",
+		"schema: 1\nname: demo\nx: &a [*a]\n":                                                 "invalid pic-sure.yaml: line 3: YAML anchors and aliases (&name, *name) aren't supported", // refers to itself
+	} {
+		if _, err := ParseConfigDoc([]byte(yaml)); err == nil || !strings.HasPrefix(err.Error(), want) {
+			t.Errorf("%q:\n%v\nwant %q", yaml, err, want)
+		}
 	}
 }
 
@@ -249,39 +245,6 @@ func TestSetReplacesNullSections(t *testing.T) {
 	}
 }
 
-// Aliases are expanded on parse, so a set changes only its own key and the
-// saved file never refers to an anchor it no longer has.
-func TestSetWithAnchors(t *testing.T) {
-	doc, err := ParseConfigDoc([]byte(`schema: 1
-name: demo
-auth: {admin_email: a@example.org, auth0: {client_id: x}}
-hpds:
-  java_opts: &opts -Xmx4g
-services:
-  hpds: &svc {java_opts: *opts}
-  psama: *svc
-`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, kv := range [][2]string{{"hpds.java_opts", "-Xmx8g"}, {"services.hpds.java_opts", "-Xmx2g"}} {
-		if err := doc.Set(kv[0], kv[1]); err != nil {
-			t.Fatal(err)
-		}
-	}
-	data, err := doc.Bytes()
-	if err != nil {
-		t.Fatal(err)
-	}
-	c, err := ParseConfig(data)
-	if err != nil {
-		t.Fatalf("saved file doesn't parse: %v\n%s", err, data)
-	}
-	if c.HPDS.JavaOpts != "-Xmx8g" || c.Services["hpds"].JavaOpts != "-Xmx2g" || c.Services["psama"].JavaOpts != "-Xmx4g" {
-		t.Errorf("hpds %q, services %+v\n%s", c.HPDS.JavaOpts, c.Services, data)
-	}
-}
-
 func TestReadOnlyChanges(t *testing.T) {
 	parse := func(yaml string) *ConfigDoc {
 		t.Helper()
@@ -292,7 +255,7 @@ func TestReadOnlyChanges(t *testing.T) {
 		return d
 	}
 	// before is invalid (port 0), which doesn't stop the check.
-	before := parse("schema: 1\nname: demo\nnetwork: {http_port: 0}\n")
+	before := parse("schema: 0x1\nname: demo\nnetwork: {http_port: 0}\n")
 	for yaml, want := range map[string]string{
 		"schema: 1\nname: demo\nnetwork: {http_port: 8080}\n": "",
 		"schema: 1\nname: \"demo\"\n":                         "",
@@ -305,9 +268,15 @@ func TestReadOnlyChanges(t *testing.T) {
 			t.Errorf("%q: %v, want %q", yaml, err, want)
 		}
 	}
-	// A key the old file lacked may be added.
-	if err := parse("schema: 1\nname: demo\n").ReadOnlyChanges(parse("schema: 1\n")); err != nil {
-		t.Errorf("adding name: %v", err)
+	// A missing, empty or unusable old value has nothing to protect.
+	for _, old := range []string{"schema: 1\n", "schema: 1\nname:\n", "schema: 1\nname: Demo\n", "schema: one\nname: x y\n"} {
+		if err := parse("schema: 1\nname: demo\n").ReadOnlyChanges(parse(old)); err != nil {
+			t.Errorf("from %q: %v", old, err)
+		}
+	}
+	// A newer stack's schema stays.
+	if err := parse("schema: 1\nname: demo\n").ReadOnlyChanges(parse("schema: 2\nname: demo\n")); err == nil {
+		t.Error("schema 2 to 1: no error")
 	}
 }
 

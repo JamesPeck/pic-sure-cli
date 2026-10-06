@@ -166,10 +166,7 @@ func (a *App) configEdit(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	before, err := stack.ParseConfigDoc(orig)
-	if err != nil {
-		before = nil // a file with a syntax error has nothing to protect yet
-	}
+	before, _ := stack.ParseConfigDoc(orig) // nil if it doesn't parse
 
 	tmp, err := os.CreateTemp("", "pic-sure-*.yaml")
 	if err != nil {
@@ -193,7 +190,7 @@ func (a *App) configEdit(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		edited = stripEditHeader(edited)
+		edited = bytes.TrimPrefix(edited, header)
 		if bytes.Equal(edited, content) {
 			if problem != nil {
 				return exitcode.Usage("%w\n%s is unchanged", problem, stack.ConfigFile)
@@ -220,20 +217,6 @@ func (a *App) configEdit(ctx context.Context) error {
 	}
 }
 
-const editHeaderFirst = "# pic-sure: this config is invalid, so it wasn't saved:\n"
-
-// stripEditHeader removes an edit header from the top of b, even one the
-// user has changed, as long as its first and last lines are intact.
-func stripEditHeader(b []byte) []byte {
-	if !bytes.HasPrefix(b, []byte(editHeaderFirst)) {
-		return b
-	}
-	if _, rest, ok := bytes.Cut(b, []byte("\n#\n")); ok {
-		return rest
-	}
-	return b
-}
-
 // editHeader lists err's problems as comments to put above the config in
 // the editor, with line numbers shifted past the header itself.
 func editHeader(err error) []byte {
@@ -246,7 +229,7 @@ func editHeader(err error) []byte {
 	}
 	shift := len(problems) + 3
 	var b strings.Builder
-	b.WriteString(editHeaderFirst)
+	b.WriteString("# pic-sure: this config is invalid, so it wasn't saved:\n")
 	for _, p := range problems {
 		if p.Line > 0 {
 			p.Line += shift
