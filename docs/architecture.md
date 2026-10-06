@@ -505,8 +505,9 @@ command holds a lock.
   not created: the build makes and removes it under the reactor lock).
 - `TempDir(pattern)` makes a fresh 0700 directory under `tmp/` for one run's
   temporary files, such as an extracted phenotype CSV, that a container may
-  need to mount. The caller removes it. A directory there more than a week
-  old was left by a run that died, and the next `TempDir` removes it.
+  need to mount. The caller removes it. Anything in `tmp/` unmodified for a
+  week is taken to be a dead run's and removed by the next `TempDir`, so
+  don't keep using one longer than that after last changing its entries.
 - **Locks** are flocks on files in `locks/`, so they exclude goroutines and
   processes alike, and die with their holder. `LockRepo(ctx, repo)`,
   `LockReactor(ctx)` (any Maven run) and `LockImage(ctx, tag)` wait up to

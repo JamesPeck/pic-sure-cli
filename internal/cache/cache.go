@@ -15,13 +15,13 @@ import (
 
 // The layout under the cache root (§7.1).
 const (
-	gitDir            = "git"       // git/<repo>.git: bare clones
-	srcDir            = "src"       // src/<repo>/<sha>/: source trees
-	downloadsDir      = "downloads" // demo datasets
-	buildDir          = "build"     // build/<sha12>/: image build contexts
-	tmpDir            = "tmp"       // per-run temporary directories
-	locksDir          = "locks"     // lock files, which are never removed
-	releaseControlDir = "release-control"
+	gitDir            = "git"             // git/<repo>.git: bare clones
+	srcDir            = "src"             // src/<repo>/<sha>/: source trees
+	releaseControlDir = "release-control" // not made by Open: it's cloned into place
+	downloadsDir      = "downloads"       // demo datasets
+	buildDir          = "build"           // build/<sha12>/: image build contexts
+	tmpDir            = "tmp"             // per-run temporary directories
+	locksDir          = "locks"           // lock files, which are never removed
 )
 
 // Cache is the host cache at one root. It is safe for concurrent use, and
@@ -157,15 +157,16 @@ func (c *Cache) BuildDir(sha string) (string, error) {
 	return filepath.Join(c.root, buildDir, sha[:12]), nil
 }
 
-// staleTempAge is how old a directory in tmp/ must be for TempDir to treat
-// it as left behind by a run that died. No run lasts this long.
+// staleTempAge is how long an entry in tmp/ must go unmodified before
+// TempDir treats it as left behind by a run that died.
 const staleTempAge = 7 * 24 * time.Hour
 
 // TempDir creates a new directory under the cache's tmp/ for one run's
 // temporary files, named pattern as in os.MkdirTemp, at mode 0700. Unlike
 // $TMPDIR it can be bind-mounted into containers. The caller removes it
-// when done. TempDir first removes any directory there older than a week,
-// which a run that was killed left behind.
+// when done, and must not use it for more than a week after last adding or
+// removing an entry in it: TempDir first removes anything in tmp/ that has
+// gone unmodified that long, which a run that was killed left behind.
 func (c *Cache) TempDir(pattern string) (string, error) {
 	dir := filepath.Join(c.root, tmpDir)
 	cutoff := time.Now().Add(-staleTempAge)

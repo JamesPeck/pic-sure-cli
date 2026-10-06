@@ -12,7 +12,6 @@ import (
 
 	"github.com/JamesPeck/pic-sure-cli/internal/cache"
 	"github.com/JamesPeck/pic-sure-cli/internal/catalog"
-	"github.com/JamesPeck/pic-sure-cli/internal/docker"
 )
 
 // fakeHome points HOME and TMPDIR at separate new directories and unsets
@@ -152,8 +151,6 @@ func TestTempDirRemovesOnlyTheLeftoversOfDeadRuns(t *testing.T) {
 		t.Errorf("removed a live run's temporary directory: %v", err)
 	}
 }
-
-var _ cache.VolumeCreator = docker.Engine(nil)
 
 type volumeRecorder []string
 
