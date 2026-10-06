@@ -759,7 +759,43 @@ _Ticket 014 fills this in._
 
 ## internal/netproxy
 
-_Ticket 015 fills this in._
+Ticket 015. `netproxy.New(cfg, services)` resolves the config's `proxy`
+block (`netproxy.Config` has the fields of `stack.Proxy`) into a `*Proxy`
+with an output for each egress path (§9.10). `services` are the compose
+service names in the rendered stack; callers without one pass
+`netproxy.CatalogServices()`. With neither `proxy.http` nor `proxy.https`
+set, every output is empty. Each proxy covers only its own scheme, so with
+just `proxy.http` set, https traffic goes direct.
+
+- **No-proxy list.** The user's entries, then the service names (sorted),
+  `localhost` and `127.0.0.1`, lower case and without duplicates. An entry
+  is `*`, a host or domain name (it and its subdomains), `.example.com` or
+  `*.example.com` (subdomains only, written `.example.com`), an IP address
+  or a CIDR range; a name or address may end in `:port`.
+- `ProxyURL` is an `http.Transport.Proxy` for the CLI's own HTTP, with
+  Go's NO_PROXY rules: localhost and loopback addresses always go direct.
+- `Env()`: `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY`, each also in lower
+  case, for git (`git.Client.WithEnv`), node and runtime containers.
+  `BuildArgs()` are the same `NAME=value` entries for
+  `docker.BuildOpts.BuildArgs`. The proxy URLs keep their user and password,
+  so treat the values as secrets: `Cmd.Env`, or `${VAR}` in the rendered
+  compose file, never argv or a rendered file.
+- `JVMOpts()`: `-Dhttp.proxyHost/Port`, `-Dhttps.proxyHost/Port` and
+  `-Dhttp.nonProxyHosts` for `JAVA_OPTS`, without white space or
+  credentials (the JVM has no property for them).
+- `MavenSettings()`: a `settings.xml` with a `<proxy>` per scheme, for the
+  reactor container's `/root/.m2`. It holds the credentials: write it 0600.
+- The JVM and Maven get the no-proxy list as `|`-separated patterns whose
+  only wildcard is a leading or trailing `*`: `example.com` becomes
+  `example.com|*.example.com`, IPv6 addresses are bracketed, ports are
+  dropped, `10.0.0.0/8` becomes `10.*`, and ranges that aren't on an octet
+  boundary, and IPv6 ranges, are left out.
+- `String()` and `LogValue()` redact the passwords, so a `*Proxy` can be
+  logged.
+
+`ParseURL` and `ParseNoProxy` are the parsers `New` uses. `stack.Validate`
+calls them too, so a config that validates always resolves. The package
+imports only the catalog.
 
 ## internal/selfupdate
 

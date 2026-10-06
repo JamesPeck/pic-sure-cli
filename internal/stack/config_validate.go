@@ -7,13 +7,14 @@ import (
 	"maps"
 	"net"
 	"net/mail"
-	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/JamesPeck/pic-sure-cli/internal/netproxy"
 )
 
 // Problem is one thing wrong with a config, at a key path.
@@ -108,8 +109,15 @@ func (c *Config) Validate() error {
 	}
 
 	v.serviceNames()
-	v.proxyURL("proxy.http", c.Proxy.HTTP)
-	v.proxyURL("proxy.https", c.Proxy.HTTPS)
+	if _, err := netproxy.ParseURL(c.Proxy.HTTP); err != nil {
+		v.add("proxy.http", "%v", err)
+	}
+	if _, err := netproxy.ParseURL(c.Proxy.HTTPS); err != nil {
+		v.add("proxy.https", "%v", err)
+	}
+	if _, err := netproxy.ParseNoProxy(c.Proxy.NoProxy); err != nil {
+		v.add("proxy.no_proxy", "%v", err)
+	}
 
 	return v.err()
 }
@@ -281,25 +289,6 @@ func (v *validator) serviceNames() {
 				v.add("services."+name+".env."+env, "%q is not an environment variable name", env)
 			}
 		}
-	}
-}
-
-// proxyURL checks that a non-empty s is an http or https URL with a host.
-// Messages show it redacted, because it may hold credentials.
-func (v *validator) proxyURL(path, s string) {
-	if s == "" {
-		return
-	}
-	u, err := url.Parse(s)
-	switch {
-	case err != nil:
-		v.add(path, "is not a valid URL")
-	case u.Scheme != "http" && u.Scheme != "https":
-		v.add(path, "want an http:// or https:// URL, got %q", u.Redacted())
-	case u.Hostname() == "":
-		v.add(path, "has no host: %q", u.Redacted())
-	case (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "":
-		v.add(path, "want only a scheme, host and port, got %q", u.Redacted())
 	}
 }
 
