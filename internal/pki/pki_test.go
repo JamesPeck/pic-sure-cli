@@ -194,6 +194,9 @@ func TestGenerateRejectsHostnamesACertificateCannotName(t *testing.T) {
 		"[::1]",
 		"fe80::1%en0",
 		"bücher.example",
+		"10.1.2.300",
+		"10.0.0",
+		"1234",
 		strings.Repeat("a", 64) + ".example.org",
 	} {
 		if _, err := pki.Generate(rand.Reader, hostname, t0); err == nil || !strings.Contains(err.Error(), "hostname") {
@@ -239,7 +242,7 @@ func TestValidateWarnsWhenTheCertificateDoesNotNameTheHostname(t *testing.T) {
 	if len(r.Warnings) != 1 {
 		t.Fatalf("warnings = %q, want one", r.Warnings)
 	}
-	for _, want := range []string{"other.example.org", "localhost, picsure.example.org, 127.0.0.1"} {
+	for _, want := range []string{`"other.example.org"`, "localhost, picsure.example.org, 127.0.0.1"} {
 		if !strings.Contains(r.Warnings[0], want) {
 			t.Errorf("warning %q doesn't mention %q", r.Warnings[0], want)
 		}
@@ -252,7 +255,7 @@ func TestValidateRejectsAnExpiredOrNotYetValidCertificate(t *testing.T) {
 	_, err := pki.Validate(f, "localhost", t0.Add(pki.Validity+time.Second))
 	if !errors.Is(err, pki.ErrExpired) {
 		t.Errorf("after NotAfter: error = %v, want ErrExpired", err)
-	} else if !strings.Contains(err.Error(), t0.Add(pki.Validity).Format(time.DateOnly)) {
+	} else if !strings.Contains(err.Error(), t0.Add(pki.Validity).Format(time.RFC3339)) {
 		t.Errorf("error %q doesn't give the expiry date", err)
 	}
 	if _, err := pki.Validate(f, "localhost", t0.Add(-time.Second)); !errors.Is(err, pki.ErrNotYetValid) {
@@ -275,7 +278,6 @@ func TestValidateRejectsAKeyThatIsNotTheCertificates(t *testing.T) {
 		}
 	}
 
-	// Problems found together are reported together.
 	_, err := pki.Validate(pki.Files{Cert: other, Key: pkcs8PEM(t, ecKey)}, "localhost", t0.Add(2*time.Hour))
 	if !errors.Is(err, pki.ErrKeyMismatch) || !errors.Is(err, pki.ErrExpired) {
 		t.Errorf("error = %v, want both ErrKeyMismatch and ErrExpired", err)
@@ -314,6 +316,8 @@ func TestValidateAcceptsCommonKeyAndCertificateLayouts(t *testing.T) {
 		"certificate then an intermediate":  {Cert: append(slices.Clone(ecCert), generated.Cert...), Key: sec1},
 		"separate chain file":               {Cert: ecCert, Key: sec1, Chain: generated.Cert},
 		"blank chain file":                  {Cert: ecCert, Key: sec1, Chain: []byte("\n")},
+		"CRLF line endings":                 {Cert: bytes.ReplaceAll(ecCert, []byte("\n"), []byte("\r\n")), Key: bytes.ReplaceAll(sec1, []byte("\n"), []byte("\r\n"))},
+		"text before the certificate":       {Cert: append([]byte("subject=CN=localhost\nissuer=CN=localhost\n"), ecCert...), Key: sec1},
 	} {
 		if _, err := pki.Validate(f, "localhost", t0); err != nil {
 			t.Errorf("%s: %v", name, err)
@@ -327,6 +331,8 @@ func TestValidateRejectsUnusableFiles(t *testing.T) {
 	cert := selfSigned(t, ecKey, t0, t0.Add(time.Hour))
 	key := pkcs8PEM(t, ecKey)
 	junkCert := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("junk")})
+	badBase64 := []byte("-----BEGIN CERTIFICATE-----\n!!!!\n-----END CERTIFICATE-----\n")
+	then := func(parts ...[]byte) []byte { return bytes.Join(parts, nil) }
 	x25519, err := ecdh.X25519().GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -342,9 +348,11 @@ func TestValidateRejectsUnusableFiles(t *testing.T) {
 		{"certificate isn't PEM", pki.Files{Cert: []byte("not a certificate"), Key: key}, "certificate file: no PEM CERTIFICATE block", nil},
 		{"certificate file holds only a key", pki.Files{Cert: key, Key: key}, "certificate file: no PEM CERTIFICATE block", nil},
 		{"certificate is junk", pki.Files{Cert: junkCert, Key: key}, "certificate file: parse certificate 1", nil},
+		{"certificate then a block that doesn't decode", pki.Files{Cert: then(cert, badBase64), Key: key}, "certificate file: malformed PEM block", nil},
 		{"empty key", pki.Files{Cert: cert}, "key file: no PEM private key block", nil},
 		{"key file holds only a certificate", pki.Files{Cert: cert, Key: cert}, "key file: no PEM private key block", nil},
 		{"key is junk", pki.Files{Cert: cert, Key: pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: []byte("junk")})}, "key file: parse PRIVATE KEY", nil},
+		{"key then a block that doesn't decode", pki.Files{Cert: cert, Key: then(key, badBase64)}, "key file: malformed PEM block", nil},
 		{"key can't sign", pki.Files{Cert: cert, Key: pkcs8PEM(t, x25519)}, "key file: unsupported private key type", nil},
 		{"PKCS #8 encrypted key", pki.Files{Cert: cert, Key: pem.EncodeToMemory(&pem.Block{Type: "ENCRYPTED PRIVATE KEY", Bytes: []byte("x")})}, "key file:", pki.ErrEncryptedKey},
 		{"legacy encrypted key", pki.Files{Cert: cert, Key: pem.EncodeToMemory(&pem.Block{
@@ -354,6 +362,8 @@ func TestValidateRejectsUnusableFiles(t *testing.T) {
 		})}, "key file:", pki.ErrEncryptedKey},
 		{"chain isn't PEM", pki.Files{Cert: cert, Key: key, Chain: []byte("not a chain")}, "chain file: no PEM CERTIFICATE block", nil},
 		{"chain is junk", pki.Files{Cert: cert, Key: key, Chain: junkCert}, "chain file: parse certificate 1", nil},
+		{"chain with a block that doesn't decode", pki.Files{Cert: cert, Key: key, Chain: then(cert, badBase64, cert)}, "chain file: malformed PEM block", nil},
+		{"chain with a mismatched END line", pki.Files{Cert: cert, Key: key, Chain: then(cert, bytes.Replace(cert, []byte("END CERTIFICATE"), []byte("END X509 CRL"), 1))}, "chain file: malformed PEM block", nil},
 	}
 	for _, tt := range tests {
 		_, err := pki.Validate(tt.f, "localhost", t0)

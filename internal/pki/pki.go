@@ -19,9 +19,6 @@ import (
 // Validity is how long a generated certificate is valid.
 const Validity = 365 * 24 * time.Hour
 
-// keyBits is the RSA modulus size of a generated key.
-const keyBits = 2048
-
 // maxCommonName is the RFC 5280 upper bound on a subject common name.
 const maxCommonName = 64
 
@@ -46,8 +43,10 @@ type Files struct {
 
 // Generate creates an RSA-2048 key and a self-signed TLS server certificate
 // for hostname, valid for Validity from now. The certificate names
-// localhost, 127.0.0.1 and hostname, and the chain is the certificate
-// itself. rand is the randomness source: crypto/rand.Reader in production.
+// localhost, 127.0.0.1 and hostname, its CN is hostname when that fits in
+// a CN, and the chain is the certificate itself. rand is the randomness
+// source: crypto/rand.Reader in production.
+// A fixed rand doesn't make the key deterministic.
 func Generate(rand io.Reader, hostname string, now time.Time) (Files, error) {
 	dnsNames, ips, err := subjectAltNames(hostname)
 	if err != nil {
@@ -57,7 +56,7 @@ func Generate(rand io.Reader, hostname string, now time.Time) (Files, error) {
 	if err != nil {
 		return Files{}, err
 	}
-	key, err := rsa.GenerateKey(rand, keyBits)
+	key, err := rsa.GenerateKey(rand, 2048)
 	if err != nil {
 		return Files{}, fmt.Errorf("generate the TLS key: %w", err)
 	}
@@ -95,8 +94,6 @@ func Generate(rand io.Reader, hostname string, now time.Time) (Files, error) {
 	}, nil
 }
 
-// subjectAltNames returns the SANs for a certificate serving hostname:
-// localhost and 127.0.0.1, plus hostname as a DNS name or an IP address.
 func subjectAltNames(hostname string) ([]string, []net.IP, error) {
 	dnsNames := []string{"localhost"}
 	loopback := net.IPv4(127, 0, 0, 1)
@@ -119,12 +116,17 @@ func subjectAltNames(hostname string) ([]string, []net.IP, error) {
 
 // validDNSName reports whether name is a lowercase host name: dot-separated
 // labels of letters, digits, hyphens and underscores, no label starting or
-// ending with a hyphen.
+// ending with a hyphen, and a last label that isn't all digits, because
+// browsers parse such a name (10.1.2.300, say) as an IPv4 address.
 func validDNSName(name string) bool {
 	if name == "" || len(name) > 253 {
 		return false
 	}
-	for label := range strings.SplitSeq(name, ".") {
+	labels := strings.Split(name, ".")
+	if strings.Trim(labels[len(labels)-1], "0123456789") == "" {
+		return false
+	}
+	for _, label := range labels {
 		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
 			return false
 		}
@@ -137,7 +139,6 @@ func validDNSName(name string) bool {
 	return true
 }
 
-// serialNumber reads a random positive serial of up to 128 bits.
 func serialNumber(rand io.Reader) (*big.Int, error) {
 	b := make([]byte, 16)
 	if _, err := io.ReadFull(rand, b); err != nil {
@@ -162,7 +163,8 @@ type Report struct {
 // Validate checks operator-provided files for tls.mode provided: the
 // private key must be the certificate's, and the certificate must be valid
 // at now. In f.Cert the first certificate is the server's; any after it are
-// intermediates. A non-empty f.Chain must hold at least one certificate.
+// intermediates. A non-empty f.Chain must hold at least one certificate,
+// and a PEM block that doesn't decode is an error in any of the files.
 // A certificate that doesn't name hostname is a warning, not an error,
 // because a client may reach the stack by another name. Problems found
 // after parsing are joined, so one error can wrap ErrKeyMismatch and
@@ -189,9 +191,9 @@ func Validate(f Files, hostname string, now time.Time) (Report, error) {
 	}
 	switch {
 	case now.After(leaf.NotAfter):
-		errs = append(errs, fmt.Errorf("%w (on %s)", ErrExpired, leaf.NotAfter.UTC().Format(time.DateOnly)))
+		errs = append(errs, fmt.Errorf("%w (not after %s)", ErrExpired, leaf.NotAfter.UTC().Format(time.RFC3339)))
 	case now.Before(leaf.NotBefore):
-		errs = append(errs, fmt.Errorf("%w (from %s)", ErrNotYetValid, leaf.NotBefore.UTC().Format(time.RFC3339)))
+		errs = append(errs, fmt.Errorf("%w (not before %s)", ErrNotYetValid, leaf.NotBefore.UTC().Format(time.RFC3339)))
 	}
 	if err := errors.Join(errs...); err != nil {
 		return Report{}, err
@@ -200,22 +202,44 @@ func Validate(f Files, hostname string, now time.Time) (Report, error) {
 	r := Report{NotAfter: leaf.NotAfter}
 	if err := leaf.VerifyHostname(hostname); err != nil {
 		r.Warnings = append(r.Warnings, fmt.Sprintf(
-			"the certificate doesn't name network.hostname %q (it names %s); browsers will reject it for that name",
+			"the certificate doesn't name %q (it names %s); browsers will reject it for that name",
 			hostname, describeNames(leaf)))
 	}
 	return r, nil
 }
 
-// parseCertificates parses every CERTIFICATE block in data, skipping other
-// blocks, and fails if there are none.
-func parseCertificates(data []byte) ([]*x509.Certificate, error) {
-	var certs []*x509.Certificate
+// pemBlocks decodes every PEM block in data. pem.Decode silently skips a
+// block it can't decode, but httpd refuses the file, so a BEGIN line that
+// yields no block is an error.
+func pemBlocks(data []byte) ([]*pem.Block, error) {
+	var blocks []*pem.Block
 	for rest := data; ; {
 		var block *pem.Block
 		block, rest = pem.Decode(rest)
 		if block == nil {
 			break
 		}
+		blocks = append(blocks, block)
+	}
+	begins := bytes.Count(data, []byte("\n-----BEGIN "))
+	if bytes.HasPrefix(data, []byte("-----BEGIN ")) {
+		begins++
+	}
+	if len(blocks) != begins {
+		return nil, errors.New("malformed PEM block")
+	}
+	return blocks, nil
+}
+
+// parseCertificates parses every CERTIFICATE block in data, skipping other
+// blocks, and fails if there are none.
+func parseCertificates(data []byte) ([]*x509.Certificate, error) {
+	blocks, err := pemBlocks(data)
+	if err != nil {
+		return nil, err
+	}
+	var certs []*x509.Certificate
+	for _, block := range blocks {
 		if block.Type != "CERTIFICATE" {
 			continue
 		}
@@ -234,20 +258,16 @@ func parseCertificates(data []byte) ([]*x509.Certificate, error) {
 // parsePrivateKey returns the first private key in data, in PKCS #8,
 // PKCS #1 or SEC 1 form.
 func parsePrivateKey(data []byte) (crypto.Signer, error) {
-	for rest := data; ; {
-		var block *pem.Block
-		block, rest = pem.Decode(rest)
-		if block == nil {
-			break
-		}
+	blocks, err := pemBlocks(data)
+	if err != nil {
+		return nil, err
+	}
+	for _, block := range blocks {
 		if block.Type == "ENCRYPTED PRIVATE KEY" ||
 			(strings.HasSuffix(block.Type, "PRIVATE KEY") && strings.Contains(block.Headers["Proc-Type"], "ENCRYPTED")) {
 			return nil, ErrEncryptedKey
 		}
-		var (
-			key any
-			err error
-		)
+		var key any
 		switch block.Type {
 		case "PRIVATE KEY":
 			key, err = x509.ParsePKCS8PrivateKey(block.Bytes)
@@ -270,7 +290,6 @@ func parsePrivateKey(data []byte) (crypto.Signer, error) {
 	return nil, errors.New("no PEM private key block found")
 }
 
-// describeNames lists a certificate's SANs for a message.
 func describeNames(c *x509.Certificate) string {
 	names := append([]string(nil), c.DNSNames...)
 	for _, ip := range c.IPAddresses {
