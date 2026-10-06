@@ -61,7 +61,9 @@ type Composer interface {
 	Config(ctx context.Context, quiet bool) ([]byte, error)
 	// Passthrough runs `docker compose ARGS...` with the stack's files and
 	// environment, for `pic-sure compose -- ARGS`. Nothing is added after
-	// the global flags, not even --progress.
+	// the global flags, not even --progress. The writers go to the Runner
+	// unwrapped, so a terminal passed in reaches compose; don't pass one
+	// writer that isn't safe for concurrent use as both.
 	Passthrough(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) (int, error)
 }
 
@@ -343,8 +345,7 @@ func (c *Compose) Passthrough(ctx context.Context, args []string, stdin io.Reade
 		return 0, err
 	}
 	cmd.Stdin = stdin
-	code, _, err := streamCmd(ctx, c.Runner, cmd, stdout, stderr)
-	return code, err
+	return c.Runner.Stream(ctx, cmd, stdout, stderr)
 }
 
 // cmd builds `docker compose` with the stack's global flags, then args.
@@ -365,11 +366,7 @@ func (c *Compose) cmd(progress bool, args []string) (Cmd, error) {
 	// runner keeps the user's COMPOSE_* variables out for the same reason.
 	argv = append(argv, "--env-file", os.DevNull)
 	if progress {
-		p := c.Progress
-		if p == "" {
-			p = ProgressPlain
-		}
-		argv = append(argv, "--progress", string(p))
+		argv = append(argv, "--progress", string(c.progress()))
 	}
 	var env []string
 	if c.Env != nil {
@@ -381,15 +378,23 @@ func (c *Compose) cmd(progress bool, args []string) (Cmd, error) {
 	return Cmd{Argv: append(argv, args...), Env: env, Dir: c.ProjectDir}, nil
 }
 
+func (c *Compose) progress() Progress {
+	if c.Progress == "" {
+		return ProgressPlain
+	}
+	return c.Progress
+}
+
 // checkComposeEnv refuses entries that aren't NAME=value, and names docker
 // or compose read for themselves, which would change the daemon, project or
 // files compose uses.
 func checkComposeEnv(env []string) error {
-	if _, _, err := splitEnv(env); err != nil {
+	names, _, err := splitEnv(env)
+	if err != nil {
 		return err
 	}
-	for _, kv := range env {
-		if name, _, _ := strings.Cut(kv, "="); strings.HasPrefix(name, "COMPOSE_") {
+	for _, name := range names {
+		if strings.HasPrefix(name, "COMPOSE_") {
 			return fmt.Errorf("%s: compose reads it for itself", name)
 		}
 	}
@@ -408,8 +413,7 @@ func (c *Compose) stream(ctx context.Context, out io.Writer, progress bool, args
 		return err
 	}
 	if code != 0 {
-		tail, _ = unwrapComposeError(tail)
-		return exitError(cmd.Argv, code, tail)
+		return exitError(cmd.Argv, code, c.composeStderr(progress, tail))
 	}
 	return nil
 }
@@ -426,8 +430,8 @@ func (c *Compose) workload(ctx context.Context, progress bool, args []string, st
 	if err != nil || code == 0 {
 		return code, err
 	}
-	tail, composeFailed := unwrapComposeError(tail)
-	if composeFailed || composeFailedRE.MatchString(lastLine(trimUsageHint(tail))) {
+	tail = c.composeStderr(progress, tail)
+	if composeFailedRE.MatchString(lastLine(trimUsageHint(tail))) {
 		return code, exitError(cmd.Argv, code, tail)
 	}
 	return workloadResult(cmd.Argv, code, tail)
@@ -435,20 +439,29 @@ func (c *Compose) workload(ctx context.Context, progress bool, args []string, st
 
 // composeFailedRE matches a last stderr line in compose's own words when a
 // run or exec never started its command. workloadResult covers docker's.
-var composeFailedRE = regexp.MustCompile(`^(no such service: |service "[^"]*" is not running|error while interpolating |dependency failed to start: )`)
+var composeFailedRE = regexp.MustCompile(`(?i)^(no such service: |service "[^"]*" is not running|service "[^"]*" didn't complete successfully|error while interpolating |dependency failed to start: )`)
 
-// unwrapComposeError replaces a final {"error":true,"message":...} line,
-// which is how compose reports its own failure under --progress json, with
-// the message, and reports whether there was one.
-func unwrapComposeError(stderr []byte) ([]byte, bool) {
+// composeStderr undoes --progress json's last line for a call that used it.
+// After any failure, compose ends stderr with {"error":true}, adding a
+// "message" when the failure was its own. The line is replaced by the
+// message, or dropped when there is none, so that the last line is what it
+// would be in plain mode.
+func (c *Compose) composeStderr(progress bool, stderr []byte) []byte {
+	if !progress || c.progress() != ProgressJSON {
+		return stderr
+	}
 	trimmed := bytes.TrimRight(stderr, "\n")
 	start := bytes.LastIndexByte(trimmed, '\n') + 1
+	line := trimmed[start:]
 	var e struct {
-		Error   bool   `json:"error"`
 		Message string `json:"message"`
 	}
-	if json.Unmarshal(trimmed[start:], &e) != nil || !e.Error {
-		return stderr, false
+	if !bytes.HasPrefix(line, []byte(`{"error":true`)) || json.Unmarshal(line, &e) != nil {
+		return stderr
 	}
-	return append(trimmed[:start:start], e.Message+"\n"...), true
+	out := trimmed[:start:start]
+	if e.Message != "" {
+		out = append(out, e.Message+"\n"...)
+	}
+	return out
 }

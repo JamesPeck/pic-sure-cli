@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -259,43 +260,89 @@ func TestComposeRunReportsDockerFailures(t *testing.T) {
 
 func TestComposeOwnFailuresAreErrors(t *testing.T) {
 	failures := []struct {
-		name     string
-		progress docker.Progress
-		stderr   string
-		message  string
+		name    string
+		stderr  string
+		message string
 	}{
-		{"no such service", docker.ProgressPlain, "no such service: nosuch\n", "no such service: nosuch"},
-		{"service not running", docker.ProgressPlain, "service \"flyway-init\" is not running\n", "service \"flyway-init\" is not running"},
-		{"interpolation", docker.ProgressPlain,
+		{"no such service", "no such service: nosuch\n", "no such service: nosuch"},
+		{"service not running", "service \"flyway-init\" is not running\n", "service \"flyway-init\" is not running"},
+		{"interpolation",
 			"error while interpolating services.hpds.image: required variable HPDS_TAG is missing a value\n",
 			"error while interpolating services.hpds.image: required variable HPDS_TAG is missing a value"},
-		{"dependency", docker.ProgressPlain,
+		{"unhealthy dependency",
 			" Container demo-picsure-db-1  Error\ndependency failed to start: container demo-picsure-db-1 is unhealthy\n",
 			"dependency failed to start: container demo-picsure-db-1 is unhealthy"},
-		{"json progress", docker.ProgressJSON,
-			`{"id":"Container demo-picsure-db-1","status":"Error"}` + "\n" + `{"error":true,"message":"no such service: nosuch"}` + "\n",
-			"no such service: nosuch"},
+		{"failed one-shot dependency",
+			"service \"flyway-init\" didn't complete successfully: exit 3\n",
+			"service \"flyway-init\" didn't complete successfully: exit 3"},
 	}
 	for _, tt := range failures {
 		t.Run(tt.name, func(t *testing.T) {
 			f := fakerunner.New(t)
 			f.On(fakerunner.Glob("docker compose *")).Stderr(tt.stderr).Exit(1)
 			c := newTestCompose(f)
-			c.Progress = tt.progress
 			ctx := context.Background()
 
-			_, runErr := c.Run(ctx, docker.ComposeRunOpts{Service: "flyway-init", Rm: true})
-			_, execErr := c.Exec(ctx, docker.ComposeExecOpts{Service: "flyway-init", Args: []string{"true"}})
+			_, runErr := c.Run(ctx, docker.ComposeRunOpts{Service: "hpds", Rm: true})
+			_, execErr := c.Exec(ctx, docker.ComposeExecOpts{Service: "hpds", Args: []string{"true"}})
 			upErr := c.Up(ctx, docker.ComposeUpOpts{})
-			for verb, err := range map[string]error{"run": runErr, "exec": execErr, "up": upErr} {
-				var exitErr *docker.ExitError
-				if !errors.As(err, &exitErr) {
-					t.Errorf("%s: err = %v, want an *ExitError", verb, err)
-				} else if !strings.HasSuffix(err.Error(), "exited 1: "+tt.message) {
-					t.Errorf("%s: message %q, want it to end with %q", verb, err, tt.message)
-				}
-			}
+			assertComposeError(t, map[string]error{"run": runErr, "exec": execErr, "up": upErr}, tt.message)
 		})
+	}
+}
+
+func assertComposeError(t *testing.T, errs map[string]error, message string) {
+	t.Helper()
+	for verb, err := range errs {
+		var exitErr *docker.ExitError
+		if !errors.As(err, &exitErr) {
+			t.Errorf("%s: err = %v, want an *ExitError", verb, err)
+		} else if !strings.HasSuffix(err.Error(), "exited "+strconv.Itoa(exitErr.ExitCode)+": "+message) {
+			t.Errorf("%s: message %q, want it to end with %q", verb, err, message)
+		}
+	}
+}
+
+// Under --progress json compose ends stderr with {"error":true} after any
+// failure, and adds a message when the failure was its own.
+func TestComposeJSONProgressErrors(t *testing.T) {
+	f := fakerunner.New(t)
+	f.On(fakerunner.Glob("* run --rm -T flyway-init")).
+		Stderr(`{"id":"Container demo-picsure-db-1","status":"Error"}` + "\n" + `{"error":true,"message":"no such service: flyway-init"}` + "\n").Exit(1)
+	f.On(fakerunner.Glob("* run --rm -T hpds-etl")).Stderr("ERROR: input file missing\n{\"error\":true}\n").Exit(3)
+	f.On(fakerunner.Glob("* up -d")).Stderr("{\"error\":true,\"message\":\"dependency failed to start: container demo-picsure-db-1 is unhealthy\"}\n").Exit(1)
+	c := newTestCompose(f)
+	c.Progress = docker.ProgressJSON
+	ctx := context.Background()
+
+	_, runErr := c.Run(ctx, docker.ComposeRunOpts{Service: "flyway-init", Rm: true})
+	assertComposeError(t, map[string]error{"run": runErr}, "no such service: flyway-init")
+	upErr := c.Up(ctx, docker.ComposeUpOpts{})
+	assertComposeError(t, map[string]error{"up": upErr}, "dependency failed to start: container demo-picsure-db-1 is unhealthy")
+
+	var stderr bytes.Buffer
+	code, err := c.Run(ctx, docker.ComposeRunOpts{Service: "hpds-etl", Rm: true, Stderr: &stderr})
+	if code != 3 || err != nil {
+		t.Errorf("workload failure: code %d, err %v; want 3 and no error", code, err)
+	}
+	if !strings.Contains(stderr.String(), "ERROR: input file missing") {
+		t.Errorf("stderr writer got %q", stderr.String())
+	}
+}
+
+func TestComposeWorkloadJSONIsTheWorkloadsOwn(t *testing.T) {
+	f := fakerunner.New(t)
+	f.On(fakerunner.Glob("docker compose *")).Stderr(`{"error":true,"message":"no such service: x"}` + "\n").Exit(2)
+	c := newTestCompose(f)
+	c.Progress = docker.ProgressJSON // exec never passes --progress
+	code, err := c.Exec(context.Background(), docker.ComposeExecOpts{Service: "api", Args: []string{"validate"}})
+	if code != 2 || err != nil {
+		t.Errorf("exec: code %d, err %v; want 2 and no error", code, err)
+	}
+	c.Progress = docker.ProgressPlain
+	code, err = c.Run(context.Background(), docker.ComposeRunOpts{Service: "api"})
+	if code != 2 || err != nil {
+		t.Errorf("run in plain mode: code %d, err %v; want 2 and no error", code, err)
 	}
 }
 
@@ -313,18 +360,6 @@ func TestComposeRefusesEnvDockerReadsItself(t *testing.T) {
 		if n := len(f.Calls()); n != 0 {
 			t.Errorf("%s: %d calls reached the runner", entry, n)
 		}
-	}
-}
-
-func TestComposePassthroughSerializesOneWriter(t *testing.T) {
-	c := newTestCompose(nil)
-	c.Runner = concurrentRunner{}
-	var w overlapWriter
-	if _, err := c.Passthrough(context.Background(), []string{"logs"}, nil, &w, &w); err != nil {
-		t.Fatal(err)
-	}
-	if w.overlapped.Load() {
-		t.Error("stdout and stderr were written at the same time")
 	}
 }
 

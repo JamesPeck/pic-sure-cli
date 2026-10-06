@@ -461,11 +461,14 @@ argv. `Compose` implements it over a `Runner`.
   separately and return the command's exit code, plus an `*ExitError` only
   when docker or compose itself failed (no such service, service not
   running, a dependency that failed to start), as `Engine.Run` does.
-  `Passthrough` adds nothing after the global flags and returns compose's
-  exit code.
-- Under `--progress json` compose reports its own failure as a
-  `{"error":true,"message":...}` line; the adapter unwraps it, so error
-  messages read the same in every output mode.
+  `Passthrough` adds nothing after the global flags, hands its writers to
+  the runner unwrapped (so a terminal reaches compose), and returns
+  compose's exit code.
+- Under `--progress json` compose ends stderr with `{"error":true}` after
+  any failure, adding a `message` when the failure was its own. For calls
+  that passed `--progress json`, the adapter swaps that line for the
+  message, or drops it, so errors read and classify the same in every
+  output mode.
 - `Env()` entries naming a variable docker or compose reads for itself
   (`DOCKER_*`, `COMPOSE_*`, `HOME`, `PATH`, ...) fail the call, as in the
   Engine.
