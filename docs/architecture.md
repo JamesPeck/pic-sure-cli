@@ -190,7 +190,52 @@ _Tickets 020 (templates) and 021 (render and goldens) fill this in._
 
 ## internal/catalog
 
-_Ticket 010 fills this in._
+Ticket 010. One table per concept, so nothing else keeps its own list of
+repos, images or services. It imports nothing from this module. Each table
+is a function that returns a fresh copy (`Components()`, `Images()`,
+`Services()`, `Networks()`, `Volumes()`, `DevVariants()`), with a
+`Lookup<Thing>(name)` beside it. Refer to entries by name, and add new
+images, services or volumes here rather than in the package that uses them.
+
+- **Components** (`components.go`): `pic-sure`, `frontend`, `migrations` and
+  `dictionary-etl` (constants `PicSure` and so on), each with its GitHub repo
+  and build-spec key. `ComponentBySpecKey` maps PSA, PSF, PSM and
+  DICTIONARY_ETL back to components; `CLISpecKey` (PSCLI) names the CLI and
+  isn't a component. `RepoName()` is the name the host cache keys by.
+- **Images** (`images.go`): the 11 reactor images in the bash's build order
+  (`ImagesBuiltFrom(catalog.PicSure)`), `pic-sure-httpd` (frontend) and
+  `dictionary-etl`, each with its context and Dockerfile; plus the pinned
+  third-party images (`mysql`, `postgres`, `flyway`, `alpine`, `maven`,
+  `node`) in `Ref`. A built image's repository is `hms-dbmi/<name>`; its tag
+  is the build's business. `ServicesUsing(image)` goes the other way.
+- **Services** (`services.go`): every compose service with its image,
+  networks and volumes, its `Phase` (`PhaseDB`, `PhaseMigrate` one-shots run
+  with `compose run --rm`, then `PhaseApp` for `up -d --wait`), `OneShot`, and
+  `RestartAfterMigrate` (psama, dictionary-api).
+- **Modes.** Some services and volumes exist only in some stacks: no
+  `picsure-db` with a remote DB, the shared-HPDS volumes and
+  `hpds-genomic-seed` only in shared mode, `truststore` only with custom
+  certs. Each entry's `When` is a `Condition`; build a `Mode` from the config
+  and use `ServicesIn(mode)` and `Service.VolumesIn(mode)`.
+- **Volumes** (`volumes.go`): logical name (the compose key), `Scope`
+  (`StackScoped`; `SharedData`, the external `<set>_hpds-data` and
+  `<set>_hpds-genomic`; `HostScoped`, the `pic-sure-m2` Maven volume), `Kind`
+  (database, data, TLS, logs, cache) for teardown to select on, and what it
+  holds. `DockerName(owner)` gives the Docker name. Logs go to one volume per
+  service instead of host binds.
+- **Dev variants** (`dev.go`): what `dev on NAME` takes, using the bash's
+  overlay names (`psama`, `hpds`, `gateway`, `operations`, `query`,
+  `visualization`, `dictionary`, `httpd`, `httpd-hmr`). Each names the
+  component whose local source it needs, every service it replaces (its
+  build context is that service's image's), and its port as an offset from
+  `dev_ports.base` (`DevPortSpan` is 7; `NoPort` for none). Debug ports keep
+  the bash's 5005–5010 numbering, so offset 1 is free; httpd-hmr's Vite port
+  is offset 6.
+
+`aio_test.go` compares the reactor images, the base services' images and
+networks, and the dev overlays with the AIO checkout beside this repo (or
+`PICSURE_AIO_DIR`), and skips without one. A failure there means AIO has
+changed: update the catalog or note the deliberate difference.
 
 ## internal/ops
 
