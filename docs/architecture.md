@@ -580,7 +580,26 @@ _Ticket 028 fills this in; 060 adds the gate's self-update action._
 
 ## internal/pki
 
-_Ticket 012 fills this in._
+Ticket 012. Pure functions over PEM bytes; the caller does the file I/O and
+fills the certs volume (024).
+
+- `Generate(rand, hostname, now) (Files, error)` makes an RSA-2048 key
+  (PKCS #8) and a self-signed server certificate valid for `Validity`
+  (365 days) from `now`. SANs are `localhost`, `127.0.0.1` and the
+  hostname (an IP SAN when it parses as an IP), CN is the hostname, the
+  serial is a random 128-bit number, and the certificate is a non-CA with
+  server-auth key usage. `Files.Chain` is the certificate itself, as the
+  bash does. A hostname that isn't an IP or a valid DNS name is an error.
+  Pass `Deps.Rand` and `Deps.Clock.Now()`.
+- `Validate(files, hostname, now) (Report, error)` checks
+  `tls.mode: provided` files: the key (PKCS #8, PKCS #1 or SEC 1,
+  unencrypted) must be the certificate's, and the certificate must be valid
+  at `now`. The first certificate in `Files.Cert` is the server's; any
+  after it are intermediates. A non-empty `Files.Chain` must parse. Errors
+  wrap `ErrKeyMismatch`, `ErrExpired`, `ErrNotYetValid` or
+  `ErrEncryptedKey`, and a mismatch and an expiry are reported together. A
+  certificate that doesn't name the hostname passes with a
+  `Report.Warnings` entry, which the caller emits as a `Warning` event.
 
 ## internal/jwt
 
