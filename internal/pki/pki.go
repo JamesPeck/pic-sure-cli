@@ -116,14 +116,15 @@ func subjectAltNames(hostname string) ([]string, []net.IP, error) {
 
 // validDNSName reports whether name is a lowercase host name: dot-separated
 // labels of letters, digits, hyphens and underscores, no label starting or
-// ending with a hyphen, and a last label that isn't all digits, because
+// ending with a hyphen, and a last label that isn't a number, because
 // browsers parse such a name (10.1.2.300, say) as an IPv4 address.
 func validDNSName(name string) bool {
 	if name == "" || len(name) > 253 {
 		return false
 	}
 	labels := strings.Split(name, ".")
-	if strings.Trim(labels[len(labels)-1], "0123456789") == "" {
+	if last := labels[len(labels)-1]; strings.Trim(last, "0123456789") == "" ||
+		(strings.HasPrefix(last, "0x") && strings.Trim(last[2:], "0123456789abcdef") == "") {
 		return false
 	}
 	for _, label := range labels {
@@ -164,7 +165,7 @@ type Report struct {
 // private key must be the certificate's, and the certificate must be valid
 // at now. In f.Cert the first certificate is the server's; any after it are
 // intermediates. A non-empty f.Chain must hold at least one certificate,
-// and a PEM block that doesn't decode is an error in any of the files.
+// and a PEM block that doesn't decode is an error in f.Cert or f.Chain.
 // A certificate that doesn't name hostname is a warning, not an error,
 // because a client may reach the stack by another name. Problems found
 // after parsing are joined, so one error can wrap ErrKeyMismatch and
@@ -209,8 +210,8 @@ func Validate(f Files, hostname string, now time.Time) (Report, error) {
 }
 
 // pemBlocks decodes every PEM block in data. pem.Decode silently skips a
-// block it can't decode, but httpd refuses the file, so a BEGIN line that
-// yields no block is an error.
+// block it can't decode, but httpd refuses a certificate or chain file
+// with one, so a BEGIN line that yields no block is an error.
 func pemBlocks(data []byte) ([]*pem.Block, error) {
 	var blocks []*pem.Block
 	for rest := data; ; {
@@ -256,18 +257,23 @@ func parseCertificates(data []byte) ([]*x509.Certificate, error) {
 }
 
 // parsePrivateKey returns the first private key in data, in PKCS #8,
-// PKCS #1 or SEC 1 form.
+// PKCS #1 or SEC 1 form. Like OpenSSL's key reader, which httpd uses, it
+// ignores blocks that don't decode.
 func parsePrivateKey(data []byte) (crypto.Signer, error) {
-	blocks, err := pemBlocks(data)
-	if err != nil {
-		return nil, err
-	}
-	for _, block := range blocks {
+	for rest := data; ; {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			break
+		}
 		if block.Type == "ENCRYPTED PRIVATE KEY" ||
 			(strings.HasSuffix(block.Type, "PRIVATE KEY") && strings.Contains(block.Headers["Proc-Type"], "ENCRYPTED")) {
 			return nil, ErrEncryptedKey
 		}
-		var key any
+		var (
+			key any
+			err error
+		)
 		switch block.Type {
 		case "PRIVATE KEY":
 			key, err = x509.ParsePKCS8PrivateKey(block.Bytes)
