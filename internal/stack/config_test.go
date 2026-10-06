@@ -2,6 +2,7 @@ package stack
 
 import (
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -61,7 +62,6 @@ func TestNewConfigDocRoundTrip(t *testing.T) {
 		t.Errorf("round trip:\n got  %+v\n want %+v", *got, c)
 	}
 
-	// Parsing and re-encoding without changes is stable.
 	doc2, err := ParseConfigDoc(data)
 	if err != nil {
 		t.Fatal(err)
@@ -107,7 +107,6 @@ func TestParseConfigIsStrict(t *testing.T) {
 		{"unknown key next to an inline field", head + "components:\n  pic-sure: {project: x}\n", []string{"components.pic-sure.project (line 5): unknown key"}},
 		{"int as text", head + "network:\n  http_port: eighty\n", []string{`network.http_port (line 5): want a whole number, got "eighty"`}},
 		{"quoted int", head + "network:\n  http_port: \"80\"\n", []string{`network.http_port (line 5): want a whole number, got "80"`}},
-		{"bool as text", head + "auth2: x\n", []string{"auth2 (line 4): unknown key"}},
 		{"bad bool", head + "frontend:\n  docs_enabled: maybe\n", []string{`frontend.docs_enabled (line 5): want true or false, got "maybe"`}},
 		{"scalar for a section", head + "tls: generated\n", []string{`tls (line 4): want a mapping of keys, got "generated"`}},
 		{"list for a string", head + "name2: x\nhpds:\n  profile: [a]\n", []string{"hpds.profile (line 6): want a string, got a list"}},
@@ -123,6 +122,9 @@ func TestParseConfigIsStrict(t *testing.T) {
 		{"empty file", "", []string{"schema: required"}},
 		{"only comments", "# nothing yet\n", []string{"schema: required"}},
 		{"invalid value", head + "network:\n  http_port: 0\n", []string{"network.http_port (line 5): must be a port from 1 to 65535, got 0"}},
+		{"float for an int", head + "network:\n  http_port: 8080.5\n", []string{`network.http_port (line 5): want a whole number, got "8080.5"`}},
+		{"float schema", "schema: 1.5\n", []string{`schema (line 1): want a whole number, got "1.5"`}},
+		{"on for a bool", head + "frontend:\n  docs_enabled: on\n", []string{`frontend.docs_enabled (line 5): want true or false, got "on"`}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -230,22 +232,12 @@ proxy:
 	}
 }
 
-func TestSetReplacesNullSectionsAndUnsharesAliases(t *testing.T) {
-	doc, err := ParseConfigDoc([]byte(`schema: 1
-name: demo
-auth: {admin_email: a@example.org, auth0: {client_id: x}}
-tls: ~
-services:
-  hpds: &jvm {java_opts: -Xmx2g}
-  psama: *jvm
-`))
+func TestSetReplacesNullSections(t *testing.T) {
+	doc, err := ParseConfigDoc([]byte("schema: 1\nname: demo\nauth: {admin_email: a@example.org, auth0: {client_id: x}}\ntls: ~\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := doc.Set("tls.chain_file", "certs/chain.pem"); err != nil {
-		t.Fatal(err)
-	}
-	if err := doc.Set("services.psama.java_opts", "-Xmx4g"); err != nil {
 		t.Fatal(err)
 	}
 	c, err := doc.Config()
@@ -255,8 +247,67 @@ services:
 	if c.TLS.ChainFile != "certs/chain.pem" || c.TLS.Mode != TLSGenerated {
 		t.Errorf("tls = %+v", c.TLS)
 	}
-	if c.Services["hpds"].JavaOpts != "-Xmx2g" || c.Services["psama"].JavaOpts != "-Xmx4g" {
-		t.Errorf("services = %+v", c.Services)
+}
+
+// Aliases are expanded on parse, so a set changes only its own key and the
+// saved file never refers to an anchor it no longer has.
+func TestSetWithAnchors(t *testing.T) {
+	doc, err := ParseConfigDoc([]byte(`schema: 1
+name: demo
+auth: {admin_email: a@example.org, auth0: {client_id: x}}
+hpds:
+  java_opts: &opts -Xmx4g
+services:
+  hpds: &svc {java_opts: *opts}
+  psama: *svc
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, kv := range [][2]string{{"hpds.java_opts", "-Xmx8g"}, {"services.hpds.java_opts", "-Xmx2g"}} {
+		if err := doc.Set(kv[0], kv[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	data, err := doc.Bytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := ParseConfig(data)
+	if err != nil {
+		t.Fatalf("saved file doesn't parse: %v\n%s", err, data)
+	}
+	if c.HPDS.JavaOpts != "-Xmx8g" || c.Services["hpds"].JavaOpts != "-Xmx2g" || c.Services["psama"].JavaOpts != "-Xmx4g" {
+		t.Errorf("hpds %q, services %+v\n%s", c.HPDS.JavaOpts, c.Services, data)
+	}
+}
+
+func TestReadOnlyChanges(t *testing.T) {
+	parse := func(yaml string) *ConfigDoc {
+		t.Helper()
+		d, err := ParseConfigDoc([]byte(yaml))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+	// before is invalid (port 0), which doesn't stop the check.
+	before := parse("schema: 1\nname: demo\nnetwork: {http_port: 0}\n")
+	for yaml, want := range map[string]string{
+		"schema: 1\nname: demo\nnetwork: {http_port: 8080}\n": "",
+		"schema: 1\nname: \"demo\"\n":                         "",
+		"schema: 1\nname: other\n":                            "invalid pic-sure.yaml: name: is read-only; it was demo",
+		"schema: 1\n":                                         "invalid pic-sure.yaml: name: is read-only; it was demo",
+		"schema: 2\nname: demo\n":                             "invalid pic-sure.yaml: schema: is read-only; it was 1",
+	} {
+		err := parse(yaml).ReadOnlyChanges(before)
+		if got := fmt.Sprint(err); (want == "" && err != nil) || (want != "" && got != want) {
+			t.Errorf("%q: %v, want %q", yaml, err, want)
+		}
+	}
+	// A key the old file lacked may be added.
+	if err := parse("schema: 1\nname: demo\n").ReadOnlyChanges(parse("schema: 1\n")); err != nil {
+		t.Errorf("adding name: %v", err)
 	}
 }
 

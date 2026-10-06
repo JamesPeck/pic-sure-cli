@@ -199,16 +199,19 @@ it for every YAML file so `yaml.Node`s are interchangeable.
   `ReadConfigDoc(dir)` and `NewConfigDoc(*Config)` make one. `Set(key,
   value)` parses a command-line value and `SetValue(key, v)` takes a typed
   one; both change only that key, so `Bytes` keeps the user's comments
-  (yaml.v3 drops blank lines and normalizes indentation). `Node` is the
-  root for migrations (009).
+  (yaml.v3 drops blank lines and normalizes indentation). Aliases are
+  expanded on parse, so a saved file has no anchors. `Node` is the root for
+  migrations (009).
 - `doc.Config()`, `ParseConfig` and `LoadConfig(dir)` decode strictly over
   the defaults: an unknown or duplicate key or a wrong type is a problem, a
   missing or null key keeps its default. They then `Validate`. Problems come
   back together in one `*ConfigError` (`Problems{Path, Line, Msg}`); a
-  schema other than 1 is a `*SchemaVersionError` instead.
+  schema other than 1 is a `*SchemaVersionError` instead. Ints and bools
+  must be YAML ints and bools: no 8080.5, no yes or on.
 - `Validate` is pure. `CheckFiles(dir)` checks the files and directories
   the config names (provided TLS files, component sources).
-  `ReadOnlyChanges` refuses edits to `name` and `schema`.
+  `doc.ReadOnlyChanges(before)` refuses edits to `name` and `schema`, even
+  when `before` is invalid.
 - `Fields` is the field table for the wizard (039), init's flags (034) and
   the docs (065): key path (`*` matches a map key), kind, init flag, help,
   secret, read-only, enum options and `RequiredWhen`. Secrets are in it

@@ -54,8 +54,7 @@ func (e *ConfigError) Error() string {
 }
 
 var (
-	// Compose project names: lowercase letters, digits, - and _, starting
-	// with a letter or digit.
+	// Compose project names, also used for service names.
 	nameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 	// Docker volume names, which shared data set names become part of.
 	sharedNameRE  = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
@@ -129,23 +128,6 @@ func (c *Config) CheckFiles(dir string) error {
 	v.exists("components.frontend.source", dir, c.Components.Frontend.Source, true)
 	v.exists("components.migrations.source", dir, c.Components.Migrations.Source, true)
 	v.exists("components.dictionary-etl.source", dir, c.Components.DictionaryETL.Source, true)
-	return v.err()
-}
-
-// ReadOnlyChanges returns a *ConfigError naming each read-only field whose
-// value differs between before and after, or nil.
-func ReadOnlyChanges(before, after *Config) error {
-	v := &validator{c: after}
-	for _, f := range Fields {
-		if !f.ReadOnly {
-			continue
-		}
-		was, _ := before.Get(f.Key)
-		now, _ := after.Get(f.Key)
-		if !reflect.DeepEqual(was, now) {
-			v.add(f.Key, "is read-only; it was %v", was)
-		}
-	}
 	return v.err()
 }
 

@@ -16,7 +16,6 @@ func TestValidate(t *testing.T) {
 	}{
 		{"valid", func(*Config) {}, nil},
 
-		// name
 		{"name required", func(c *Config) { c.Name = "" }, []string{"name: required"}},
 		{"name uppercase", func(c *Config) { c.Name = "Demo" }, []string{`name: must be lowercase letters, digits, - and _, starting with a letter or digit; got "Demo"`}},
 		{"name leading dash", func(c *Config) { c.Name = "-demo" }, []string{"name: must be lowercase"}},
@@ -24,7 +23,6 @@ func TestValidate(t *testing.T) {
 		{"name with digits, _ and -", func(c *Config) { c.Name = "0ws-v2_006" }, nil},
 		{"schema", func(c *Config) { c.Schema = 2 }, []string{"schema: must be 1, got 2"}},
 
-		// network
 		{"hostname required", func(c *Config) { c.Network.Hostname = "" }, []string{"network.hostname: required"}},
 		{"hostname IP", func(c *Config) { c.Network.Hostname = "10.0.0.5" }, nil},
 		{"hostname IPv6", func(c *Config) { c.Network.Hostname = "::1" }, nil},
@@ -41,7 +39,6 @@ func TestValidate(t *testing.T) {
 		{"dev block at the top", func(c *Config) { c.Network.DevPorts.Base = 65529 }, nil},
 		{"dev block holds https", func(c *Config) { c.Network.HTTPSPort = 15006 }, []string{"network.dev_ports.base: the dev ports 15000-15006 include network.https_port (15006)"}},
 
-		// enums
 		{"tls mode", func(c *Config) { c.TLS.Mode = "selfsigned" }, []string{`tls.mode: must be one of generated, provided; got "selfsigned"`}},
 		{"auth mode", func(c *Config) { c.Auth.Mode = "" }, []string{`auth.mode: must be one of required, open, explore; got ""`}},
 		{"db mode", func(c *Config) { c.DB.Mode = "Remote" }, []string{"db.mode: must be one of local, remote"}},
@@ -52,7 +49,6 @@ func TestValidate(t *testing.T) {
 		{"images mode", func(c *Config) { c.Images.Mode = "pull" }, nil},
 		{"images mode bad", func(c *Config) { c.Images.Mode = "fetch" }, []string{"images.mode: must be one of build, pull"}},
 
-		// auth
 		{"auth0 fields required", func(c *Config) { c.Auth.Auth0 = Auth0{} }, []string{
 			"auth.auth0.client_id: required when auth.mode is not open",
 			"auth.auth0.tenant: required when auth.mode is not open",
@@ -66,7 +62,6 @@ func TestValidate(t *testing.T) {
 		{"admin email invalid", func(c *Config) { c.Auth.AdminEmail = "admin" }, []string{`auth.admin_email: want an email address like admin@example.org, got "admin"`}},
 		{"admin email with a display name", func(c *Config) { c.Auth.AdminEmail = "Admin <admin@example.org>" }, []string{"auth.admin_email: want an email address"}},
 
-		// db
 		{"remote db fields required", func(c *Config) { c.DB.Mode, c.DB.Remote = DBRemote, RemoteDB{Port: 3306} }, []string{
 			"db.remote.host: required when db.mode is remote",
 			"db.remote.root_user: required when db.mode is remote",
@@ -79,20 +74,17 @@ func TestValidate(t *testing.T) {
 		}, []string{"db.remote.host: want a host name", "db.remote.port: must be a port from 1 to 65535, got 70000"}},
 		{"remote fields ignored when local", func(c *Config) { c.DB.Remote = RemoteDB{Host: "db example", Port: 0} }, nil},
 
-		// hpds
 		{"shared name required", func(c *Config) { c.HPDS.Data = HPDSShared }, []string{"hpds.shared_name: required when hpds.data is shared"}},
 		{"shared name set", func(c *Config) { c.HPDS.Data, c.HPDS.SharedName = HPDSShared, "nhanes-2026.1" }, nil},
 		{"shared name bad", func(c *Config) { c.HPDS.Data, c.HPDS.SharedName = HPDSShared, "../x" }, []string{`hpds.shared_name: must be letters, digits, '.', - and _, starting with a letter or digit; got "../x"`}},
 		{"java opts with a newline", func(c *Config) { c.HPDS.JavaOpts = "-Xmx1g\n-Xms1g" }, []string{"hpds.java_opts: must not contain control characters"}},
 
-		// tls
 		{"provided tls needs files", func(c *Config) { c.TLS = TLS{Mode: TLSProvided} }, []string{
 			"tls.cert_file: required when tls.mode is provided",
 			"tls.key_file: required when tls.mode is provided",
 		}},
 		{"generated tls ignores files", func(c *Config) { c.TLS = TLS{Mode: TLSGenerated} }, nil},
 
-		// release and components
 		{"release repo required", func(c *Config) { c.Release.Repo = "" }, []string{"release.repo: required"}},
 		{"release branch option", func(c *Config) { c.Release.Branch = "--upload-pack=x" }, []string{`release.branch: must not start with -, got "--upload-pack=x"`}},
 		{"component ref option", func(c *Config) { c.Components.Frontend.Ref = "-x" }, []string{"components.frontend.ref: must not start with -"}},
@@ -100,7 +92,6 @@ func TestValidate(t *testing.T) {
 		{"migrations project path", func(c *Config) { c.Components.Migrations.Project = "a/b" }, []string{`components.migrations.project: must be one directory name, got "a/b"`}},
 		{"migrations project dotdot", func(c *Config) { c.Components.Migrations.Project = ".." }, []string{"components.migrations.project: must be one directory name"}},
 
-		// dev and services
 		{"dev services", func(c *Config) { c.Dev.Services = []string{"hpds", "httpd-hmr"} }, nil},
 		{"dev service twice", func(c *Config) { c.Dev.Services = []string{"hpds", "hpds"} }, []string{`dev.services: "hpds" is listed twice`}},
 		{"dev service bad", func(c *Config) { c.Dev.Services = []string{""} }, []string{`dev.services: want service names, got ""`}},
@@ -112,7 +103,6 @@ func TestValidate(t *testing.T) {
 			c.Services = map[string]ServiceOverride{"hpds": {Env: map[string]string{"X": "a\nb"}}}
 		}, []string{"services.hpds.env.X: must not contain control characters"}},
 
-		// proxy
 		{"proxies", func(c *Config) {
 			c.Proxy = Proxy{HTTP: "http://proxy.example.org:3128", HTTPS: "https://user:pw@[2001:db8::1]:8443/", NoProxy: ".internal,10.0.0.0/8"}
 		}, nil},
@@ -205,24 +195,9 @@ func TestCheckFiles(t *testing.T) {
 		t.Errorf("problems at %q, want %q (%v)", got, want, c.CheckFiles(dir))
 	}
 
-	// Generated TLS doesn't look at the files.
 	c = validConfig()
 	c.TLS.CertFile = "missing.crt"
 	if err := c.CheckFiles(dir); err != nil {
 		t.Errorf("generated mode: %v", err)
-	}
-}
-
-func TestReadOnlyChanges(t *testing.T) {
-	before := validConfig()
-	after := validConfig()
-	after.Network.HTTPPort = 8080
-	if err := ReadOnlyChanges(&before, &after); err != nil {
-		t.Errorf("a settable change: %v", err)
-	}
-	after.Name = "renamed"
-	err := ReadOnlyChanges(&before, &after)
-	if err == nil || err.Error() != "invalid pic-sure.yaml: name: is read-only; it was demo" {
-		t.Errorf("rename: %v", err)
 	}
 }

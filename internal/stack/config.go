@@ -6,10 +6,8 @@ const ConfigFile = "pic-sure.yaml"
 // ConfigSchema is the pic-sure.yaml schema this CLI reads and writes.
 const ConfigSchema = 1
 
-// Config is pic-sure.yaml, schema 1 (spec §6.2). It is the one definition of
-// a stack's configuration: validation, defaults, `pic-sure config`, the
-// field table (and through it the wizard, init's flags and the docs) all
-// derive from it. Secrets are not part of it; they live in secrets.yaml.
+// Config is pic-sure.yaml, schema 1 (spec §6.2). Secrets are not part of
+// it; they live in secrets.yaml.
 //
 // The yaml tags are the file's keys, and the json tags mirror them for
 // `config show --json`.

@@ -2,12 +2,15 @@ package cli
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
+	"github.com/JamesPeck/pic-sure-cli/internal/stack"
 )
 
 const editStartYAML = `# Demo stack.
@@ -104,6 +107,48 @@ func TestConfigEditReopensUntilValid(t *testing.T) {
 	}
 	if line := strings.Split(shown, "\n")[8]; line != "  http_port: 0 # off 80" {
 		t.Errorf("line 9 of the second edit is %q, not the bad port", line)
+	}
+	want := strings.Replace(editStartYAML, "8080", "8081", 1)
+	if got := readFile(t, filepath.Join(dir, "pic-sure.yaml")); got != want {
+		t.Errorf("saved:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestConfigEditHeaderShiftsSyntaxErrorLines(t *testing.T) {
+	dir := editStack(t, replace("name: demo", "name: [demo"), replace("name: \\[demo", "name: demo"))
+	if code, stderr := runEdit(t, dir); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	_, err := stack.ParseConfigDoc([]byte(strings.Replace(editStartYAML, "name: demo", "name: [demo", 1)))
+	var ce *stack.ConfigError
+	if !errors.As(err, &ce) || ce.Problems[0].Line == 0 {
+		t.Fatalf("parse error %v has no line", err)
+	}
+	// One problem line plus three more header lines.
+	want := fmt.Sprintf("#   line %d: %s", ce.Problems[0].Line+4, ce.Problems[0].Msg)
+	shown := strings.Split(readFile(t, filepath.Join(os.Getenv("EDIT_BIN"), "shown-2.yaml")), "\n")
+	if shown[1] != want {
+		t.Errorf("header line = %q, want %q", shown[1], want)
+	}
+}
+
+func TestConfigEditKeepsNameWhenTheFileWasInvalid(t *testing.T) {
+	dir := editStack(t, replace("name: demo", "name: other"), "true")
+	invalid := strings.Replace(editStartYAML, "8080", "0", 1)
+	if err := os.WriteFile(filepath.Join(dir, "pic-sure.yaml"), []byte(invalid), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	code, stderr := runEdit(t, dir)
+	if code != exitcode.CodeUsage || !strings.Contains(stderr, "name: is read-only; it was demo") {
+		t.Errorf("exit %d, stderr %q", code, stderr)
+	}
+}
+
+func TestConfigEditStripsAChangedHeader(t *testing.T) {
+	// The second edit fixes the port and deletes a line of the header.
+	dir := editStack(t, replace("8080", "0"), `sed -e '/must be a port/d' -e 's/http_port: 0/http_port: 8081/' "$2" > "$2.new" && mv "$2.new" "$2"`)
+	if code, stderr := runEdit(t, dir); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
 	}
 	want := strings.Replace(editStartYAML, "8080", "8081", 1)
 	if got := readFile(t, filepath.Join(dir, "pic-sure.yaml")); got != want {

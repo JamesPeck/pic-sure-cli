@@ -126,7 +126,7 @@ func (a *App) configSet(key, value string) error {
 	if err := doc.Set(key, value); err != nil {
 		return configError(err)
 	}
-	cfg, err := checkConfigDoc(doc, nil, dir)
+	cfg, err := checkConfigDoc(doc, dir)
 	if err != nil {
 		return configError(err)
 	}
@@ -142,20 +142,14 @@ func (a *App) configSet(key, value string) error {
 	return nil
 }
 
-// checkConfigDoc decodes and validates doc, including the files it names
-// and, when before is set, its read-only fields.
-func checkConfigDoc(doc *stack.ConfigDoc, before *stack.Config, dir string) (*stack.Config, error) {
+// checkConfigDoc decodes and validates doc, including the files it names.
+func checkConfigDoc(doc *stack.ConfigDoc, dir string) (*stack.Config, error) {
 	cfg, err := doc.Config()
 	if err != nil {
 		return nil, err
 	}
 	if err := cfg.CheckFiles(dir); err != nil {
 		return nil, err
-	}
-	if before != nil {
-		if err := stack.ReadOnlyChanges(before, cfg); err != nil {
-			return nil, err
-		}
 	}
 	return cfg, nil
 }
@@ -172,9 +166,10 @@ func (a *App) configEdit(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	// An invalid file can still be edited, to fix it; only a valid one has
-	// read-only values to protect.
-	before, _ := stack.ParseConfig(orig)
+	before, err := stack.ParseConfigDoc(orig)
+	if err != nil {
+		before = nil // a file with a syntax error has nothing to protect yet
+	}
 
 	tmp, err := os.CreateTemp("", "pic-sure-*.yaml")
 	if err != nil {
@@ -198,7 +193,7 @@ func (a *App) configEdit(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		edited = bytes.TrimPrefix(edited, header)
+		edited = stripEditHeader(edited)
 		if bytes.Equal(edited, content) {
 			if problem != nil {
 				return exitcode.Usage("%w\n%s is unchanged", problem, stack.ConfigFile)
@@ -209,17 +204,34 @@ func (a *App) configEdit(ctx context.Context) error {
 		content = edited
 
 		doc, err := stack.ParseConfigDoc(content)
+		if err == nil && before != nil {
+			err = doc.ReadOnlyChanges(before)
+		}
 		if err == nil {
-			_, err = checkConfigDoc(doc, before, dir)
+			_, err = checkConfigDoc(doc, dir)
 		}
 		if err == nil {
 			return writeConfigFile(dir, content)
 		}
-		if exitcode.FromError(configError(err)) == exitcode.CodeFailed {
+		if !isConfigProblem(err) {
 			return err
 		}
 		problem, header = err, editHeader(err)
 	}
+}
+
+const editHeaderFirst = "# pic-sure: this config is invalid, so it wasn't saved:\n"
+
+// stripEditHeader removes an edit header from the top of b, even one the
+// user has changed, as long as its first and last lines are intact.
+func stripEditHeader(b []byte) []byte {
+	if !bytes.HasPrefix(b, []byte(editHeaderFirst)) {
+		return b
+	}
+	if _, rest, ok := bytes.Cut(b, []byte("\n#\n")); ok {
+		return rest
+	}
+	return b
 }
 
 // editHeader lists err's problems as comments to put above the config in
@@ -234,7 +246,7 @@ func editHeader(err error) []byte {
 	}
 	shift := len(problems) + 3
 	var b strings.Builder
-	b.WriteString("# pic-sure: this config is invalid, so it wasn't saved:\n")
+	b.WriteString(editHeaderFirst)
 	for _, p := range problems {
 		if p.Line > 0 {
 			p.Line += shift
@@ -266,16 +278,23 @@ func (a *App) runEditor(ctx context.Context, path string) error {
 // configError gives a config problem its exit code: a bad key or value is
 // a usage error, and a file in another schema is incompatible.
 func configError(err error) error {
+	var se *stack.SchemaVersionError
+	switch {
+	case errors.As(err, &se):
+		return exitcode.Incompatible("%w", err)
+	case isConfigProblem(err):
+		return exitcode.Usage("%w", err)
+	}
+	return err
+}
+
+// isConfigProblem reports whether err is about the config's content: a bad
+// key, a bad value or another schema.
+func isConfigProblem(err error) bool {
 	var ce *stack.ConfigError
 	var ke *stack.KeyError
 	var se *stack.SchemaVersionError
-	switch {
-	case errors.As(err, &ce), errors.As(err, &ke):
-		return exitcode.Usage("%w", err)
-	case errors.As(err, &se):
-		return exitcode.Incompatible("%w", err)
-	}
-	return err
+	return errors.As(err, &ce) || errors.As(err, &ke) || errors.As(err, &se)
 }
 
 func writeYAML(w io.Writer, v any) error {

@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"go.yaml.in/yaml/v3"
@@ -15,7 +17,8 @@ import (
 
 // ConfigDoc is pic-sure.yaml as a YAML document. Edits go through Set and
 // SetValue, which change only the key they name, so Bytes keeps the user's
-// comments, key order and formatting everywhere else.
+// comments and key order. Aliases are expanded when the file is parsed, so
+// Bytes writes their values in full.
 type ConfigDoc struct {
 	root *yaml.Node // a DocumentNode holding one MappingNode
 }
@@ -69,7 +72,7 @@ func ParseConfigDoc(data []byte) (*ConfigDoc, error) {
 	case errors.Is(err, io.EOF):
 		root = yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{{Kind: yaml.MappingNode, Tag: "!!map"}}}
 	case err != nil:
-		return nil, &ConfigError{Problems: []Problem{{Msg: strings.TrimPrefix(err.Error(), "yaml: ")}}}
+		return nil, &ConfigError{Problems: []Problem{syntaxProblem(err)}}
 	}
 	var extra yaml.Node
 	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
@@ -81,7 +84,35 @@ func ParseConfigDoc(data []byte) (*ConfigDoc, error) {
 	if top := root.Content[0]; top.Kind != yaml.MappingNode {
 		return nil, &ConfigError{Problems: []Problem{{Line: top.Line, Msg: "want a mapping of keys at the top level"}}}
 	}
+	expandAliases(&root)
 	return &ConfigDoc{root: &root}, nil
+}
+
+// expandAliases replaces every alias under n with a copy of its anchor's
+// value and drops the anchors, so editing one key never changes another and
+// never leaves an alias without its anchor.
+func expandAliases(n *yaml.Node) {
+	n.Anchor = ""
+	for i, c := range n.Content {
+		if c.Kind == yaml.AliasNode {
+			c = deepCopy(c.Alias)
+			n.Content[i] = c
+		}
+		expandAliases(c)
+	}
+}
+
+var yamlLineRE = regexp.MustCompile(`^yaml: line (\d+): (.*)$`)
+
+// syntaxProblem turns a yaml.v3 syntax error into a Problem, moving its
+// line number into Problem.Line.
+func syntaxProblem(err error) Problem {
+	m := yamlLineRE.FindStringSubmatch(err.Error())
+	if m == nil {
+		return Problem{Msg: strings.TrimPrefix(err.Error(), "yaml: ")}
+	}
+	line, _ := strconv.Atoi(m[1])
+	return Problem{Line: line, Msg: m[2]}
 }
 
 // NewConfigDoc returns a new pic-sure.yaml holding c, with a header, the
@@ -161,11 +192,36 @@ func checkSchema(top *yaml.Node) error {
 		return &ConfigError{Problems: []Problem{{Path: "schema", Msg: fmt.Sprintf("required; this pic-sure writes schema %d", ConfigSchema)}}}
 	}
 	var v int
-	if err := n.Decode(&v); err != nil {
+	if !scalarFits(n, reflect.Int) || n.Decode(&v) != nil {
 		return &ConfigError{Problems: []Problem{{Path: "schema", Line: n.Line, Msg: "want a whole number, got " + describeNode(n)}}}
 	}
 	if v != ConfigSchema {
 		return &SchemaVersionError{Found: v}
+	}
+	return nil
+}
+
+// ReadOnlyChanges returns a *ConfigError naming each read-only key whose
+// value in d differs from its value in before, or nil. It compares the
+// documents, so it works even when before is invalid; a key before lacks
+// may take any value.
+func (d *ConfigDoc) ReadOnlyChanges(before *ConfigDoc) error {
+	var problems []Problem
+	for _, f := range Fields {
+		if !f.ReadOnly {
+			continue
+		}
+		segs := splitKey(f.Key)
+		was := lookupNode(before.root.Content[0], segs)
+		if was == nil || was.Kind != yaml.ScalarNode {
+			continue
+		}
+		if now := lookupNode(d.root.Content[0], segs); now == nil || now.Kind != yaml.ScalarNode || now.Value != was.Value {
+			problems = append(problems, Problem{Path: f.Key, Msg: fmt.Sprintf("is read-only; it was %s", was.Value)})
+		}
+	}
+	if len(problems) > 0 {
+		return &ConfigError{Problems: problems}
 	}
 	return nil
 }
@@ -236,15 +292,7 @@ func (d *ConfigDoc) put(key string, v any) error {
 	segs := splitKey(key)
 	for i, seg := range segs {
 		last := i == len(segs)-1
-		var child *yaml.Node
-		if j := mappingIndex(n, seg); j >= 0 {
-			if child = n.Content[j]; child.Kind == yaml.AliasNode {
-				// Edit a copy, so the anchor's other users don't change.
-				child = deepCopy(child.Alias)
-				child.Anchor = ""
-				n.Content[j] = child
-			}
-		}
+		child := lookupNode(n, []string{seg})
 		if child == nil {
 			child = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
 			if last {
@@ -290,31 +338,23 @@ func deepCopy(n *yaml.Node) *yaml.Node {
 	return &cp
 }
 
-// mappingIndex returns the index in n.Content of the value under key in
-// mapping n, or -1.
-func mappingIndex(n *yaml.Node, key string) int {
-	if n.Kind != yaml.MappingNode {
-		return -1
-	}
-	for i := 0; i+1 < len(n.Content); i += 2 {
-		if n.Content[i].Value == key {
-			return i + 1
-		}
-	}
-	return -1
-}
-
-// lookupNode follows segs through mappings and aliases, returning nil if
-// a key is missing.
+// lookupNode follows segs through mappings, returning nil if a key is
+// missing.
 func lookupNode(n *yaml.Node, segs []string) *yaml.Node {
 	for _, seg := range segs {
-		i := mappingIndex(n, seg)
-		if i < 0 {
+		var next *yaml.Node
+		if n.Kind == yaml.MappingNode {
+			for i := 0; i+1 < len(n.Content); i += 2 {
+				if n.Content[i].Value == seg {
+					next = n.Content[i+1]
+					break
+				}
+			}
+		}
+		if next == nil {
 			return nil
 		}
-		if n = n.Content[i]; n.Kind == yaml.AliasNode {
-			n = n.Alias
-		}
+		n = next
 	}
 	return n
 }
@@ -331,10 +371,7 @@ func (d *decoder) fail(path string, line int, format string, args ...any) {
 }
 
 func (d *decoder) decode(n *yaml.Node, v reflect.Value, path string) {
-	if n.Kind == yaml.AliasNode {
-		n = n.Alias
-	}
-	if n.Kind == yaml.ScalarNode && n.Tag == "!!null" {
+	if n.Kind == yaml.ScalarNode && n.ShortTag() == "!!null" {
 		return // keep the default
 	}
 	switch v.Kind() {
@@ -372,10 +409,22 @@ func (d *decoder) decode(n *yaml.Node, v reflect.Value, path string) {
 			d.decode(val, f, p)
 		}
 	default:
-		if err := n.Decode(v.Addr().Interface()); err != nil {
+		if !scalarFits(n, v.Kind()) || n.Decode(v.Addr().Interface()) != nil {
 			d.fail(path, n.Line, "want %s, got %s", describeType(v.Type()), describeNode(n))
 		}
 	}
+}
+
+// scalarFits reports whether n's tag suits a field of kind k. yaml.v3 alone
+// would truncate 8080.5 into an int, and take yes or on as a bool.
+func scalarFits(n *yaml.Node, k reflect.Kind) bool {
+	switch k {
+	case reflect.Int:
+		return n.ShortTag() == "!!int"
+	case reflect.Bool:
+		return n.ShortTag() == "!!bool"
+	}
+	return true
 }
 
 func (d *decoder) decodeMapEntry(n *yaml.Node, m reflect.Value, key, path string) {
