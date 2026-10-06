@@ -2,5 +2,5 @@ package cli
 
 import "github.com/JamesPeck/pic-sure-cli/internal/docker"
 
-// newEngine returns the docker Engine. Ticket 016 replaces the stub.
-func (a *App) newEngine(docker.Runner) docker.Engine { return nil }
+// newEngine returns the docker Engine, which runs the docker CLI through r.
+func (a *App) newEngine(r docker.Runner) docker.Engine { return docker.NewEngine(r) }

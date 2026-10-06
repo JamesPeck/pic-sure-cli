@@ -1,0 +1,42 @@
+{
+  "ID": "",
+  "Containers": 0,
+  "Driver": "",
+  "MemTotal": 0,
+  "NCPU": 0,
+  "OperatingSystem": "",
+  "OSType": "",
+  "Architecture": "",
+  "ServerVersion": "",
+  "DockerRootDir": "",
+  "ClientInfo": {
+    "Debug": false,
+    "Version": "29.6.2",
+    "DefaultAPIVersion": "1.55",
+    "GitCommit": "dfc4efb",
+    "GoVersion": "go1.26.5",
+    "Os": "darwin",
+    "Arch": "arm64",
+    "BuildTime": "Thu Jul 16 16:11:17 2026",
+    "Context": "default",
+    "Plugins": [
+      {
+        "SchemaVersion": "0.1.0",
+        "Vendor": "Docker Inc.",
+        "Version": "v0.35.0-desktop.2",
+        "ShortDescription": "Docker Buildx",
+        "Name": "buildx",
+        "Path": "/Users/someone/.docker/cli-plugins/docker-buildx"
+      },
+      {
+        "SchemaVersion": "0.1.0",
+        "Vendor": "Docker Inc.",
+        "Version": "v5.3.1",
+        "ShortDescription": "Docker Compose",
+        "Name": "compose",
+        "Path": "/Users/someone/.docker/cli-plugins/docker-compose"
+      }
+    ],
+    "Warnings": null
+  }
+}

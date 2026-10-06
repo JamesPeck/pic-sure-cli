@@ -298,7 +298,46 @@ tried in order, and a call that none matches fails the test. Recorded
 `Call`s hold argv, env names (never values), stdin and dir. Assertions:
 `AssertCalled`, `AssertNotCalled`, and `AssertOrder` (a subsequence check).
 
-_Tickets 003, 016 and 017 document their parts here._
+**Engine** (016, `engine*.go`). `docker.NewEngine(runner)` returns the
+`Engine` that `ops.Deps.Docker` holds; tests build one over the fakerunner.
+
+- **System.** `Version` and `Info` parse `docker version|info --format json`.
+  When the CLI works but the daemon doesn't answer, they return what the
+  client knows (`Client`, `ClientInfo` with the context and plugin versions)
+  and an error matching `ErrDaemonUnreachable`.
+- **Images.** `ImageExists`, `ImageID`, `ImageLabels`, `Build(BuildOpts)`
+  (streams output), `Pull`, `RemoveImage`.
+- **Volumes.** `VolumeCreate(name, labels)` (a no-op if the volume exists,
+  whatever its labels), `VolumeInspect`, `VolumeList(labelFilters...)`,
+  `VolumeRemove`, and `ContainersUsingVolume`, which includes stopped
+  containers.
+- **Containers.** `Run(RunOpts)` returns the workload's exit code;
+  exit 125 (docker itself failed) also returns an `*ExitError` with
+  docker's message. `Create` takes the same `RunOpts` minus the run-only
+  fields, `Start` attaches and returns the exit code, and there are `Exec`,
+  `CpFrom`, `Rm` and `ContainerInspect` (compare `Health` exactly).
+  `UniqueName(prefix, d.Rand)` names a one-off container.
+- **Logs.** `Logs(container, follow)` is a reader over stdout and stderr
+  merged; always `Close` it. `WaitForLogLine(container, substr, timeout)`
+  follows the logs from the start and matches in Go.
+
+Rules every method follows:
+- **Errors.** A failed query or change returns an `*ExitError` whose message
+  is docker's own (its "Run 'docker … --help'" hint is dropped). If docker
+  says the object doesn't exist, the error also matches `ErrNotFound`.
+  Removals (`Rm`, `VolumeRemove`, `RemoveImage`) treat a missing object as
+  removed.
+- **Env.** `RunOpts.Env`, `ExecOpts.Env` and `BuildOpts.BuildArgs` are
+  `NAME=value`. Docker gets a bare `-e NAME` (or `--build-arg NAME`) and the
+  value through `Cmd.Env`, so no value, secret or not, reaches argv. Names
+  the docker CLI reads for itself (`HOME`, `PATH`, `XDG_RUNTIME_DIR`,
+  `SSH_AUTH_SOCK`, `DOCKER_*`) are refused.
+- **Mounts.** `Mount{Source, Target, ReadOnly}` becomes
+  `-v SOURCE:TARGET[:ro]`. A source is an absolute host path or a volume
+  name. A host path must exist, since docker would create a missing one as
+  a root-owned directory, and must not contain `:`.
+
+_Tickets 003 and 017 document their parts here._
 
 ## internal/git
 

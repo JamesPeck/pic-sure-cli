@@ -1,0 +1,14 @@
+{
+  "Client": {
+    "Version": "29.6.2",
+    "ApiVersion": "1.55",
+    "DefaultAPIVersion": "1.55",
+    "GitCommit": "dfc4efb",
+    "GoVersion": "go1.26.5",
+    "Os": "darwin",
+    "Arch": "arm64",
+    "BuildTime": "Thu Jul 16 16:11:17 2026",
+    "Context": "default"
+  },
+  "Server": null
+}
