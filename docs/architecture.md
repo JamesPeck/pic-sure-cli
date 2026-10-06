@@ -1442,6 +1442,37 @@ constructors `Failed`, `Usage`, `Precondition`, `ConfirmRequired`,
 `Incompatible` and `Signaled`, and `FromError`, which maps any error to its
 code. The constructors take `fmt.Errorf` arguments, so `%w` wraps a cause.
 
+## internal/phenoinput
+
+Ticket 041. Turns the file given to `data load-phenotype --file` into a CSV
+the loader can mount (§9.6), using only Go's archive libraries.
+
+- **Formats**, detected by content, never by name: a plain CSV, a gzip of
+  one CSV, a tar (gzipped or not) and a zip. An empty file, binary data
+  (a NUL byte in the first 8 KiB, or the magic of bzip2, xz, zstd, lz4 or
+  7-Zip), and an archive without `.csv` entries are rejected.
+- **Entries** are an archive's regular files whose names end in `.csv` (any
+  case), cleaned with `path.Clean`, so `./a.csv` is listed and matched as
+  `a.csv`. macOS metadata (`._*`, `__MACOSX/`) doesn't count. An archive
+  with a CSV entry outside its own directory (`../x.csv`, `/x.csv`) or two
+  CSV entries of the same name is rejected outright.
+- `Resolve(ctx, file, Options{Entry, TempDir})` returns an `Input` (`CSV`,
+  the absolute path to mount; `Format`; `Entry`; `Warnings`) and a cleanup
+  func. A plain CSV is used in place, with no temp dir. Otherwise Resolve
+  makes a per-run `phenotype-*` directory under `TempDir` and writes the
+  gzip's content to `allConcepts.csv` there, or the archive entry to its
+  own path there through an `os.Root`. The cleanup func removes that
+  directory; on error Resolve removes it itself. `TempDir` is required, so
+  extraction can't fall back to `$TMPDIR`: pass a directory under the host
+  cache. One CSV entry is selected automatically. Several need `--entry`,
+  and a missing or unknown `--entry` is an `*EntryError` listing the
+  entries. `--entry` for a non-archive becomes a warning in
+  `Input.Warnings` for the caller to emit. Reads stop when `ctx` ends, with
+  its cause as the error.
+- `ListCSVEntries(ctx, file)` is the read-only lister for the TUI load
+  wizard: the sorted entries of an archive, nil for a plain CSV or gzip,
+  and an error for any input Resolve would reject before extracting.
+
 ## internal/fakecmd
 
 Ticket 001. The fake `docker` and `git` the testscript harness puts on
