@@ -3,6 +3,7 @@ package stack
 import (
 	"errors"
 	"fmt"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -68,6 +69,50 @@ func TestNewConfigDocRoundTrip(t *testing.T) {
 	}
 	if again, _ := doc2.Bytes(); string(again) != string(data) {
 		t.Errorf("re-encoding changed the file:\n%s\nwas\n%s", again, data)
+	}
+}
+
+func TestStackConfigFile(t *testing.T) {
+	st, err := Create(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	c := validConfig()
+	doc, err := NewConfigDoc(&c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := doc.Bytes()
+	if err := st.WriteConfig(data); err != nil {
+		t.Fatal(err)
+	}
+	m, err := st.Manifest()
+	if err != nil || !m.Has(ConfigFile) {
+		t.Errorf("manifest doesn't list %s: %v", ConfigFile, err)
+	}
+	mode := func() os.FileMode {
+		fi, err := os.Stat(st.Path(ConfigFile))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return fi.Mode().Perm()
+	}
+	if got := mode(); got != 0o644 {
+		t.Errorf("new file mode %v, want 0644", got)
+	}
+	if err := os.Chmod(st.Path(ConfigFile), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.WriteConfig(data); err != nil {
+		t.Fatal(err)
+	}
+	if got := mode(); got != 0o600 {
+		t.Errorf("rewritten file mode %v, want 0600 kept", got)
+	}
+	got, err := st.LoadConfig()
+	if err != nil || !reflect.DeepEqual(*got, c) {
+		t.Errorf("LoadConfig = %+v, %v", got, err)
 	}
 }
 

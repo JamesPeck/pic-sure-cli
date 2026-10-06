@@ -5,8 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
+	"io/fs"
 	"reflect"
 	"regexp"
 	"strconv"
@@ -33,23 +32,32 @@ func (e *SchemaVersionError) Error() string {
 	return fmt.Sprintf("%s is schema %d, but this pic-sure reads schema %d", ConfigFile, e.Found, ConfigSchema)
 }
 
-// ReadConfigDoc reads the pic-sure.yaml in the stack directory dir.
-func ReadConfigDoc(dir string) (*ConfigDoc, error) {
-	data, err := os.ReadFile(filepath.Join(dir, ConfigFile))
+// ReadConfigDoc reads the stack's pic-sure.yaml.
+func (s *Stack) ReadConfigDoc() (*ConfigDoc, error) {
+	data, err := s.ReadFile(ConfigFile)
 	if err != nil {
 		return nil, err
 	}
 	return ParseConfigDoc(data)
 }
 
-// LoadConfig reads, decodes and validates the pic-sure.yaml in the stack
-// directory dir.
-func LoadConfig(dir string) (*Config, error) {
-	doc, err := ReadConfigDoc(dir)
+// LoadConfig reads, decodes and validates the stack's pic-sure.yaml.
+func (s *Stack) LoadConfig() (*Config, error) {
+	doc, err := s.ReadConfigDoc()
 	if err != nil {
 		return nil, err
 	}
 	return doc.Config()
+}
+
+// WriteConfig atomically replaces the stack's pic-sure.yaml with data,
+// keeping the file's mode, or 0644 for a new file. It doesn't validate.
+func (s *Stack) WriteConfig(data []byte) error {
+	perm := fs.FileMode(0o644)
+	if fi, err := s.root.Stat(ConfigFile); err == nil {
+		perm = fi.Mode().Perm()
+	}
+	return s.WriteFile(ConfigFile, data, perm)
 }
 
 // ParseConfig decodes and validates pic-sure.yaml content.

@@ -196,12 +196,13 @@ argument.
 it for every YAML file so `yaml.Node`s are interchangeable.
 
 - `ConfigDoc` is the file as a YAML document. `ParseConfigDoc`,
-  `ReadConfigDoc(dir)` and `NewConfigDoc(*Config)` make one. `Set(key,
+  `Stack.ReadConfigDoc` and `NewConfigDoc(*Config)` make one, and
+  `Stack.WriteConfig(data)` saves it (keeping the file's mode, 0644 if new). `Set(key,
   value)` parses a command-line value and `SetValue(key, v)` takes a typed
   one; both change only that key, so `Bytes` keeps the user's comments
   (yaml.v3 drops blank lines and normalizes indentation). YAML anchors and
   aliases are rejected. `Node` is the root for migrations (009).
-- `doc.Config()`, `ParseConfig` and `LoadConfig(dir)` decode strictly over
+- `doc.Config()`, `ParseConfig` and `Stack.LoadConfig` decode strictly over
   the defaults: an unknown or duplicate key or a wrong type is a problem, a
   missing or null key keeps its default. They then `Validate`. Problems come
   back together in one `*ConfigError` (`Problems{Path, Line, Msg}`); a
@@ -222,7 +223,8 @@ it for every YAML file so `yaml.Node`s are interchangeable.
   `picsure_configure_auth`; `Env()` gives it as `NAME=true|false`.
 
 The `config` commands map `*ConfigError` and `*KeyError` to exit 2 and
-`*SchemaVersionError` to exit 5.
+`*SchemaVersionError` to exit 5. `set` and `edit` take the stack lock;
+`edit` holds it while the editor is open.
 
 ### Stack directory (007)
 

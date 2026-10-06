@@ -1,8 +1,5 @@
 package stack
 
-// ConfigFile is the name of the config file in the stack directory.
-const ConfigFile = "pic-sure.yaml"
-
 // ConfigSchema is the pic-sure.yaml schema this CLI reads and writes.
 const ConfigSchema = 1
 
@@ -20,7 +17,7 @@ type Config struct {
 	DB         DB                         `yaml:"db" json:"db"`
 	HPDS       HPDS                       `yaml:"hpds" json:"hpds"`
 	Frontend   Frontend                   `yaml:"frontend" json:"frontend"`
-	Release    Release                    `yaml:"release" json:"release"`
+	Release    ReleaseControl             `yaml:"release" json:"release"`
 	Components Components                 `yaml:"components" json:"components"`
 	Images     Images                     `yaml:"images" json:"images"`
 	Dev        Dev                        `yaml:"dev" json:"dev"`
@@ -159,9 +156,9 @@ const (
 	CompatStrict CLICompat = "strict" // refuse instead
 )
 
-// Release is the release-control repo whose build-spec pins the component
-// versions.
-type Release struct {
+// ReleaseControl is the release-control repo whose build-spec pins the
+// component versions.
+type ReleaseControl struct {
 	Repo      string    `yaml:"repo" json:"repo"`
 	Branch    string    `yaml:"branch" json:"branch"`
 	CLICompat CLICompat `yaml:"cli_compat" json:"cli_compat"`
@@ -170,25 +167,25 @@ type Release struct {
 // Components are the source repos the images are built from, keyed in the
 // file by component name.
 type Components struct {
-	PicSure       Component           `yaml:"pic-sure" json:"pic-sure"`
-	Frontend      Component           `yaml:"frontend" json:"frontend"`
-	Migrations    MigrationsComponent `yaml:"migrations" json:"migrations"`
-	DictionaryETL Component           `yaml:"dictionary-etl" json:"dictionary-etl"`
+	PicSure       ComponentSource  `yaml:"pic-sure" json:"pic-sure"`
+	Frontend      ComponentSource  `yaml:"frontend" json:"frontend"`
+	Migrations    MigrationsSource `yaml:"migrations" json:"migrations"`
+	DictionaryETL ComponentSource  `yaml:"dictionary-etl" json:"dictionary-etl"`
 }
 
-// Component pins one source repo. An empty Ref means the release's
+// ComponentSource pins one source repo. An empty Ref means the release's
 // build-spec decides; a non-empty Source is a local checkout that replaces
 // the cached source tree (§7.3).
-type Component struct {
+type ComponentSource struct {
 	Ref    string `yaml:"ref" json:"ref"`
 	Source string `yaml:"source" json:"source"`
 }
 
-// MigrationsComponent is the migrations repo, plus the project directory in
+// MigrationsSource is the migrations repo, plus the project directory in
 // it whose migrations run.
-type MigrationsComponent struct {
-	Component `yaml:",inline"`
-	Project   string `yaml:"project" json:"project"`
+type MigrationsSource struct {
+	ComponentSource `yaml:",inline"`
+	Project         string `yaml:"project" json:"project"`
 }
 
 // ImagesMode says how the stack gets its images.
@@ -267,13 +264,13 @@ func DefaultConfig() Config {
 			JavaOpts: "-XX:+UseParallelGC -XX:SurvivorRatio=250 -Xms1g -Xmx16g",
 		},
 		Frontend: Frontend{Theme: "picsure", DocsEnabled: true},
-		Release: Release{
+		Release: ReleaseControl{
 			Repo:      "https://github.com/hms-dbmi/pic-sure-baseline-release-control",
 			Branch:    "main",
 			CLICompat: CompatWarn,
 		},
 		Components: Components{
-			Migrations: MigrationsComponent{Project: "Baseline"},
+			Migrations: MigrationsSource{Project: "Baseline"},
 		},
 		Images:   Images{Mode: ImagesBuild},
 		Dev:      Dev{Services: []string{}},

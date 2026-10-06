@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"reflect"
 	"strings"
 
@@ -51,7 +50,7 @@ If it's invalid, the editor reopens with the problems listed at the top;
 exit without saving to give up. Needs a terminal.`,
 			Args: cobra.NoArgs,
 			RunE: func(cmd *cobra.Command, _ []string) error {
-				return a.configEdit(cmd.Context())
+				return a.configEdit(cmd)
 			},
 		},
 	)
@@ -66,8 +65,8 @@ whole config is validated first, and nothing is written if it's invalid.
 A list takes comma-separated values or [a, b]; an empty VALUE clears it.
 Flags go before KEY, so a VALUE such as -Xmx4g needs no quoting.`,
 		Args: cobra.ExactArgs(2),
-		RunE: func(_ *cobra.Command, args []string) error {
-			return a.configSet(args[0], args[1])
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return a.configSet(cmd, args[0], args[1])
 		},
 	}
 	cmd.Flags().SetInterspersed(false)
@@ -75,13 +74,9 @@ Flags go before KEY, so a VALUE such as -Xmx4g needs no quoting.`,
 }
 
 func (a *App) configShow(w io.Writer) error {
-	dir, err := a.configStackDir()
+	cfg, err := a.loadConfig()
 	if err != nil {
 		return err
-	}
-	cfg, err := stack.LoadConfig(dir)
-	if err != nil {
-		return configError(err)
 	}
 	if a.Global.JSON {
 		return json.NewEncoder(w).Encode(cfg)
@@ -90,13 +85,9 @@ func (a *App) configShow(w io.Writer) error {
 }
 
 func (a *App) configGet(w io.Writer, key string) error {
-	dir, err := a.configStackDir()
+	cfg, err := a.loadConfig()
 	if err != nil {
 		return err
-	}
-	cfg, err := stack.LoadConfig(dir)
-	if err != nil {
-		return configError(err)
 	}
 	v, err := cfg.Get(key)
 	if err != nil {
@@ -114,19 +105,40 @@ func (a *App) configGet(w io.Writer, key string) error {
 	}
 }
 
-func (a *App) configSet(key, value string) error {
-	dir, err := a.configStackDir()
+func (a *App) loadConfig() (*stack.Config, error) {
+	st, err := a.openStack()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = st.Close() }()
+	cfg, err := st.LoadConfig()
+	if err != nil {
+		return nil, configError(err)
+	}
+	return cfg, nil
+}
+
+func (a *App) configSet(cmd *cobra.Command, key, value string) error {
+	st, err := a.openStack()
 	if err != nil {
 		return err
 	}
-	doc, err := stack.ReadConfigDoc(dir)
+	defer func() { _ = st.Close() }()
+	sink := a.newSink()
+	lock, err := a.lockStack(cmd.Context(), cmd, st, sink)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = lock.Unlock() }()
+
+	doc, err := st.ReadConfigDoc()
 	if err != nil {
 		return configError(err)
 	}
 	if err := doc.Set(key, value); err != nil {
 		return configError(err)
 	}
-	cfg, err := checkConfigDoc(doc, dir)
+	cfg, err := checkConfigDoc(doc, st.Dir)
 	if err != nil {
 		return configError(err)
 	}
@@ -134,11 +146,11 @@ func (a *App) configSet(key, value string) error {
 	if err != nil {
 		return err
 	}
-	if err := writeConfigFile(dir, data); err != nil {
+	if err := st.WriteConfig(data); err != nil {
 		return err
 	}
 	saved, _ := cfg.Get(key)
-	a.newSink().Emit(events.Result{OK: true, Data: map[string]any{"key": key, "value": saved}})
+	sink.Emit(events.Result{OK: true, Data: map[string]any{"key": key, "value": saved}})
 	return nil
 }
 
@@ -154,15 +166,24 @@ func checkConfigDoc(doc *stack.ConfigDoc, dir string) (*stack.Config, error) {
 	return cfg, nil
 }
 
-func (a *App) configEdit(ctx context.Context) error {
+func (a *App) configEdit(cmd *cobra.Command) error {
 	if a.Global.JSON || a.Global.NonInteractive || !a.IsTerminal() {
 		return exitcode.Usage("config edit needs a terminal; use pic-sure config set KEY VALUE instead")
 	}
-	dir, err := a.configStackDir()
+	st, err := a.openStack()
 	if err != nil {
 		return err
 	}
-	orig, err := os.ReadFile(filepath.Join(dir, stack.ConfigFile))
+	defer func() { _ = st.Close() }()
+	// Held while the editor is open, so no other command's change is lost
+	// when the edit is saved over the file.
+	lock, err := a.lockStack(cmd.Context(), cmd, st, a.newSink())
+	if err != nil {
+		return err
+	}
+	defer func() { _ = lock.Unlock() }()
+
+	orig, err := st.ReadFile(stack.ConfigFile)
 	if err != nil {
 		return err
 	}
@@ -183,7 +204,7 @@ func (a *App) configEdit(ctx context.Context) error {
 		if err := os.WriteFile(tmp.Name(), append(header, content...), 0o600); err != nil {
 			return err
 		}
-		if err := a.runEditor(ctx, tmp.Name()); err != nil {
+		if err := a.runEditor(cmd.Context(), tmp.Name()); err != nil {
 			return err
 		}
 		edited, err := os.ReadFile(tmp.Name())
@@ -205,10 +226,10 @@ func (a *App) configEdit(ctx context.Context) error {
 			err = doc.ReadOnlyChanges(before)
 		}
 		if err == nil {
-			_, err = checkConfigDoc(doc, dir)
+			_, err = checkConfigDoc(doc, st.Dir)
 		}
 		if err == nil {
-			return writeConfigFile(dir, content)
+			return st.WriteConfig(content)
 		}
 		if !isConfigProblem(err) {
 			return err
@@ -287,67 +308,4 @@ func writeYAML(w io.Writer, v any) error {
 		return err
 	}
 	return enc.Close()
-}
-
-// configStackDir returns the stack the config commands act on: --stack DIR,
-// or the nearest directory at or above the cwd that holds pic-sure.yaml and
-// .pic-sure/. Ticket 007's stack.Find replaces it.
-func (a *App) configStackDir() (string, error) {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return "", err
-	}
-	isStack := func(d string) bool {
-		f, err1 := os.Stat(filepath.Join(d, stack.ConfigFile))
-		c, err2 := os.Stat(filepath.Join(d, ".pic-sure"))
-		return err1 == nil && err2 == nil && f.Mode().IsRegular() && c.IsDir()
-	}
-	if dir := a.Global.Stack; dir != "" {
-		if !filepath.IsAbs(dir) {
-			dir = filepath.Join(cwd, dir)
-		}
-		if !isStack(dir) {
-			return "", exitcode.Precondition("no pic-sure stack found in %s", dir)
-		}
-		return dir, nil
-	}
-	for d := cwd; ; d = filepath.Dir(d) {
-		if isStack(d) {
-			return d, nil
-		}
-		if filepath.Dir(d) == d {
-			return "", exitcode.Precondition("no pic-sure stack found in %s or any directory above it; pass --stack DIR, or create one with pic-sure init", cwd)
-		}
-	}
-}
-
-// writeConfigFile atomically replaces dir's pic-sure.yaml with data, keeping
-// its mode. Ticket 007's Stack.WriteFile replaces it.
-func writeConfigFile(dir string, data []byte) error {
-	path := filepath.Join(dir, stack.ConfigFile)
-	fi, err := os.Stat(path)
-	if err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(dir, ".pic-sure.yaml-*")
-	if err != nil {
-		return err
-	}
-	defer func() { _ = os.Remove(tmp.Name()) }()
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Chmod(fi.Mode().Perm()); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmp.Name(), path)
 }
