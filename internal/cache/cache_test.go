@@ -2,14 +2,17 @@ package cache_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/cache"
 	"github.com/JamesPeck/pic-sure-cli/internal/catalog"
+	"github.com/JamesPeck/pic-sure-cli/internal/docker"
 )
 
 // fakeHome points HOME and TMPDIR at separate new directories and unsets
@@ -121,6 +124,37 @@ func TestTempDirIsAFreshPrivateDirectoryInTheCache(t *testing.T) {
 	}
 }
 
+func TestTempDirRemovesOnlyTheLeftoversOfDeadRuns(t *testing.T) {
+	c := open(t, cache.Options{})
+	live, err := c.TempDir("live-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dead, err := c.TempDir("dead-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dead, "allConcepts.csv"), []byte("x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-8 * 24 * time.Hour)
+	if err := os.Chtimes(dead, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := c.TempDir("next-"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(dead); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a week-old temporary directory is still there (%v)", err)
+	}
+	if _, err := os.Stat(live); err != nil {
+		t.Errorf("removed a live run's temporary directory: %v", err)
+	}
+}
+
+var _ cache.VolumeCreator = docker.Engine(nil)
+
 type volumeRecorder []string
 
 func (v *volumeRecorder) VolumeCreate(_ context.Context, name string, _ map[string]string) error {
@@ -130,9 +164,9 @@ func (v *volumeRecorder) VolumeCreate(_ context.Context, name string, _ map[stri
 
 func TestEnsureMavenVolumeCreatesTheCatalogsHostVolume(t *testing.T) {
 	var created volumeRecorder
-	name, err := cache.EnsureMavenVolume(context.Background(), &created)
-	if err != nil || name != cache.MavenVolume || !slices.Equal(created, volumeRecorder{cache.MavenVolume}) {
-		t.Fatalf("EnsureMavenVolume = %q, %v; created %q", name, err, created)
+	err := cache.EnsureMavenVolume(context.Background(), &created)
+	if err != nil || !slices.Equal(created, volumeRecorder{cache.MavenVolume}) {
+		t.Fatalf("EnsureMavenVolume: %v; created %q", err, created)
 	}
 	v, ok := catalog.LookupVolume(cache.MavenVolume)
 	if !ok || v.Scope != catalog.HostScoped || v.DockerName("any-stack") != cache.MavenVolume {

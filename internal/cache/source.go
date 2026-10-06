@@ -48,11 +48,11 @@ func (c *Cache) EnsureSource(ctx context.Context, component, sha string) (string
 	// Only a lock holder makes temporary directories here, so any left
 	// over belong to a run that died.
 	bare := filepath.Join(c.root, gitDir, repo+".git")
-	removeStale(filepath.Dir(bare), func(name string) bool {
-		return strings.HasPrefix(name, repo+".git.tmp-")
+	removeStale(filepath.Dir(bare), func(e fs.DirEntry) bool {
+		return strings.HasPrefix(e.Name(), repo+".git.tmp-")
 	})
-	removeStale(filepath.Dir(dest), func(name string) bool {
-		return strings.Contains(name, ".tmp-")
+	removeStale(filepath.Dir(dest), func(e fs.DirEntry) bool {
+		return strings.Contains(e.Name(), ".tmp-")
 	})
 
 	if err := c.ensureCommit(ctx, comp, bare, sha); err != nil {
@@ -138,10 +138,10 @@ func isDir(path string) (bool, error) {
 
 // removeStale removes the entries in dir that stale picks, ignoring errors:
 // a leftover that can't be removed only wastes space.
-func removeStale(dir string, stale func(name string) bool) {
+func removeStale(dir string, stale func(fs.DirEntry) bool) {
 	entries, _ := os.ReadDir(dir)
 	for _, e := range entries {
-		if stale(e.Name()) {
+		if stale(e) {
 			_ = os.RemoveAll(filepath.Join(dir, e.Name()))
 		}
 	}

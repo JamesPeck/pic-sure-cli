@@ -2,6 +2,7 @@ package cache
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -14,13 +15,13 @@ import (
 
 // The layout under the cache root (§7.1).
 const (
-	gitDir            = "git"             // git/<repo>.git: bare clones
-	srcDir            = "src"             // src/<repo>/<sha>/: source trees
-	releaseControlDir = "release-control" // the release-control clone
-	downloadsDir      = "downloads"       // demo datasets
-	buildDir          = "build"           // build/<sha12>/: image build contexts
-	tmpDir            = "tmp"             // per-run temporary directories
-	locksDir          = "locks"           // lock files, which are never removed
+	gitDir            = "git"       // git/<repo>.git: bare clones
+	srcDir            = "src"       // src/<repo>/<sha>/: source trees
+	downloadsDir      = "downloads" // demo datasets
+	buildDir          = "build"     // build/<sha12>/: image build contexts
+	tmpDir            = "tmp"       // per-run temporary directories
+	locksDir          = "locks"     // lock files, which are never removed
+	releaseControlDir = "release-control"
 )
 
 // Cache is the host cache at one root. It is safe for concurrent use, and
@@ -156,20 +157,31 @@ func (c *Cache) BuildDir(sha string) (string, error) {
 	return filepath.Join(c.root, buildDir, sha[:12]), nil
 }
 
+// staleTempAge is how old a directory in tmp/ must be for TempDir to treat
+// it as left behind by a run that died. No run lasts this long.
+const staleTempAge = 7 * 24 * time.Hour
+
 // TempDir creates a new directory under the cache's tmp/ for one run's
 // temporary files, named pattern as in os.MkdirTemp, at mode 0700. Unlike
 // $TMPDIR it can be bind-mounted into containers. The caller removes it
-// when done.
+// when done. TempDir first removes any directory there older than a week,
+// which a run that was killed left behind.
 func (c *Cache) TempDir(pattern string) (string, error) {
-	return os.MkdirTemp(filepath.Join(c.root, tmpDir), pattern)
+	dir := filepath.Join(c.root, tmpDir)
+	cutoff := time.Now().Add(-staleTempAge)
+	removeStale(dir, func(e fs.DirEntry) bool {
+		info, err := e.Info()
+		return err == nil && info.ModTime().Before(cutoff)
+	})
+	return os.MkdirTemp(dir, pattern)
 }
 
-// name is what a repository or other single path element in the cache may
-// be called.
-var name = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+// validName is what a repository or other single path element in the cache
+// may be called.
+var validName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
 func checkName(kind, s string) error {
-	if !name.MatchString(s) {
+	if !validName.MatchString(s) {
 		return fmt.Errorf("cache: invalid %s name %q", kind, s)
 	}
 	return nil

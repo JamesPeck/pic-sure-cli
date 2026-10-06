@@ -497,13 +497,16 @@ command holds a lock.
   the clone lacks the commit, then `git archive` unpacked into a temporary
   sibling and renamed into place. A tree that exists is complete and is
   never rewritten; mount it read-only. Leftover `*.tmp-*` directories of a
-  dead run are removed under the lock.
+  dead run are removed under the lock. Nothing fsyncs the tree, so after a
+  power loss a tree may be incomplete; deleting its directory makes the next
+  `EnsureSource` rebuild it.
 - `ReleaseControlDir()` (028 clones into it under `LockRepo(ctx,
   "release-control")`), `DownloadsDir()`, `BuildDir(sha)` (`build/<sha12>`,
   not created: the build makes and removes it under the reactor lock).
 - `TempDir(pattern)` makes a fresh 0700 directory under `tmp/` for one run's
   temporary files, such as an extracted phenotype CSV, that a container may
-  need to mount. The caller removes it.
+  need to mount. The caller removes it. A directory there more than a week
+  old was left by a run that died, and the next `TempDir` removes it.
 - **Locks** are flocks on files in `locks/`, so they exclude goroutines and
   processes alike, and die with their holder. `LockRepo(ctx, repo)`,
   `LockReactor(ctx)` (any Maven run) and `LockImage(ctx, tag)` wait up to
@@ -511,10 +514,11 @@ command holds a lock.
   `ImageLockTimeout` (30 min), or `Options.LockTimeout`, and then fail with
   an error wrapping `ErrLockTimeout` that names the holder. A cancelled ctx
   stops the wait. Lock files are never deleted: removing one while someone
-  waits on it would let two holders in.
-- `EnsureMavenVolume(ctx, docker)` creates `MavenVolume` (`pic-sure-m2`)
-  through anything with 016's `VolumeCreate`. Use it only under the reactor
-  lock.
+  waits on it would let two holders in. The locks cover one cache root, but
+  images and `pic-sure-m2` belong to the Docker daemon, so two users with
+  their own caches on one daemon don't exclude each other.
+- `EnsureMavenVolume(ctx, d.Docker)` creates `MavenVolume` (`pic-sure-m2`).
+  Mount the volume only under the reactor lock.
 
 ## internal/release
 

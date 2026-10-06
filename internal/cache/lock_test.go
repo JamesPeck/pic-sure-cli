@@ -129,8 +129,6 @@ func TestLocksOnDifferentThingsDontContend(t *testing.T) {
 		func(c *cache.Cache) (*cache.Lock, error) { return c.LockImage(ctx, "hms-dbmi/psama:0123456789ab") },
 		func(c *cache.Cache) (*cache.Lock, error) { return c.LockImage(ctx, "hms-dbmi/psama:ba9876543210") },
 	}
-	// Each lock is taken alongside every other: first holds one while
-	// second takes another.
 	for i, take := range takes {
 		held, err := take(first)
 		if err != nil {

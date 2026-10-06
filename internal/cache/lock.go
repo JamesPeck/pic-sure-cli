@@ -28,7 +28,7 @@ var ErrLockTimeout = errors.New("timed out")
 
 // lockPoll is how often a waiting lock retries. flock can't wait on a
 // context, so locking polls with LOCK_NB instead of blocking.
-var lockPoll = 100 * time.Millisecond
+const lockPoll = 100 * time.Millisecond
 
 // Lock is a held cache lock.
 type Lock struct {
@@ -51,7 +51,9 @@ func (c *Cache) LockRepo(ctx context.Context, repo string) (*Lock, error) {
 }
 
 // LockReactor takes the global reactor lock, which every Maven run holds so
-// that two builds never use the pic-sure-m2 volume at once.
+// that two builds never use the pic-sure-m2 volume at once. It is global to
+// this cache, not to the Docker daemon: a command using another cache root,
+// such as another user's on the same daemon, doesn't see it.
 func (c *Cache) LockReactor(ctx context.Context) (*Lock, error) {
 	return c.lock(ctx, "reactor.lock", "reactor build lock", ReactorLockTimeout)
 }

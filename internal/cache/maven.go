@@ -7,13 +7,12 @@ import "context"
 const MavenVolume = "pic-sure-m2"
 
 // VolumeCreator creates a named Docker volume, succeeding if it exists.
-// docker.Engine (ticket 016) is one.
+// docker.Engine is one.
 type VolumeCreator interface {
 	VolumeCreate(ctx context.Context, name string, labels map[string]string) error
 }
 
-// EnsureMavenVolume creates MavenVolume if it doesn't exist and returns its
-// name.
-func EnsureMavenVolume(ctx context.Context, d VolumeCreator) (string, error) {
-	return MavenVolume, d.VolumeCreate(ctx, MavenVolume, nil)
+// EnsureMavenVolume creates MavenVolume if it doesn't exist.
+func EnsureMavenVolume(ctx context.Context, d VolumeCreator) error {
+	return d.VolumeCreate(ctx, MavenVolume, nil)
 }
