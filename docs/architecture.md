@@ -149,10 +149,9 @@ it.
   usage error, and so is `help` with an unknown topic.
 - `deps.go`: `newDeps` assembles `ops.Deps`. Each field comes from a
   constructor in its owner's file: `runner.go` (003), `output.go` (004, which
-  also reports errors), `logging.go` (005), `engine.go` (016) and
+  also reports errors), `logging.go` (005), `engine.go` (016, landed) and
   `gitclient.go` (018, landed). Until the others land, the runner fails
-  every call, the sink discards events, the logger discards logs, and
-  Docker is nil.
+  every call, the sink discards events and the logger discards logs.
 
 | File | Commands | Ticket |
 |---|---|---|
@@ -251,10 +250,9 @@ for the stack being acted on (`Compose`, nil until the command has a
 rendered stack), the git `Client` (`Git`), a `Clock`, `Rand` (an
 `io.Reader`; `crypto/rand.Reader` in production), the event `Sink` and the
 `*slog.Logger`. `SystemClock` is the real clock; `FixedClock` is for tests.
-`docker.Engine` and `docker.Composer` are empty placeholder interfaces
-until tickets 016 and 017 add their methods, in their own packages, so that
-neither ticket has to edit `Deps`. Ticket 018 filled in `git.Client` the
-same way.
+`docker.Composer` is an empty placeholder interface until ticket 017 adds
+its methods, in its own package, so that it doesn't have to edit `Deps`.
+Tickets 016 and 018 filled in `docker.Engine` and `git.Client` the same way.
 
 ## internal/steps
 
@@ -311,11 +309,12 @@ tried in order, and a call that none matches fails the test. Recorded
   whatever its labels), `VolumeInspect`, `VolumeList(labelFilters...)`,
   `VolumeRemove`, and `ContainersUsingVolume`, which includes stopped
   containers.
-- **Containers.** `Run(RunOpts)` returns the workload's exit code;
-  exit 125 (docker itself failed) also returns an `*ExitError` with
-  docker's message. `Create` takes the same `RunOpts` minus the run-only
-  fields, `Start` attaches and returns the exit code, and there are `Exec`,
-  `CpFrom`, `Rm` and `ContainerInspect` (compare `Health` exactly).
+- **Containers.** `Run(RunOpts)`, `Start` (attached) and `Exec` return the
+  workload's exit code. When docker itself failed instead (exit 125, or
+  docker's own message ending stderr, as for a missing container or
+  command), they also return an `*ExitError`. `Create` takes the same
+  `RunOpts` minus the run-only fields. There are also `CpFrom` (docker cp's
+  layout rules), `Rm` and `ContainerInspect` (compare `Health` exactly).
   `UniqueName(prefix, d.Rand)` names a one-off container.
 - **Logs.** `Logs(container, follow)` is a reader over stdout and stderr
   merged; always `Close` it. `WaitForLogLine(container, substr, timeout)`

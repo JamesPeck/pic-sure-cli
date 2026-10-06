@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"maps"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"testing/iotest"
 
@@ -115,6 +117,76 @@ func TestRunExitCodes(t *testing.T) {
 	}
 }
 
+func TestDockerFailuresAreErrors(t *testing.T) {
+	// Real messages from docker 29.6.2; docker reuses the workload's exit
+	// codes for them.
+	const (
+		missingCmd = "docker: Error response from daemon: failed to create task for container: failed to create shim task: OCI runtime create failed: runc create failed: unable to start container process: error during container init: exec: \"nosuchbinary\": executable file not found in $PATH\n\nRun 'docker run --help' for more information\n"
+		execNoCmd  = "OCI runtime exec failed: exec failed: unable to start container process: exec: \"nosuchbinary\": executable file not found in $PATH\n"
+		stopped    = "Error response from daemon: container 0c9addfeb280 is not running\n"
+		gone       = "Error response from daemon: No such container: gone\n"
+	)
+	f, e := newEngine(t)
+	f.On(fakerunner.Exact("docker", "run", "alpine", "nosuchbinary")).Stderr(missingCmd).Exit(127)
+	f.On(fakerunner.Exact("docker", "exec", "c", "nosuchbinary")).Stderr(execNoCmd).Exit(127)
+	f.On(fakerunner.Exact("docker", "exec", "stopped", "true")).Stderr(stopped).Exit(1)
+	f.On(fakerunner.Exact("docker", "start", "-a", "gone")).Stderr(gone).Exit(1)
+	f.On(fakerunner.Exact("docker", "exec", "c", "sh")).Stderr("Error response from workload\n").Exit(1)
+	ctx := context.Background()
+
+	check := func(name string, code int, err error, wantCode int, wantMsg string) {
+		t.Helper()
+		var exitErr *docker.ExitError
+		if code != wantCode || !errors.As(err, &exitErr) || !strings.Contains(err.Error(), wantMsg) {
+			t.Errorf("%s = %d, %v; want %d and an *ExitError mentioning %q", name, code, err, wantCode, wantMsg)
+		}
+	}
+	code, err := e.Run(ctx, docker.RunOpts{Image: "alpine", Args: []string{"nosuchbinary"}})
+	check("Run, missing command", code, err, 127, "executable file not found")
+	code, err = e.Exec(ctx, docker.ExecOpts{Container: "c", Args: []string{"nosuchbinary"}})
+	check("Exec, missing command", code, err, 127, "executable file not found")
+	code, err = e.Exec(ctx, docker.ExecOpts{Container: "stopped", Args: []string{"true"}})
+	check("Exec, stopped container", code, err, 1, "is not running")
+	code, err = e.Start(ctx, "gone", nil, nil)
+	check("Start, missing container", code, err, 1, "No such container")
+	if !errors.Is(err, docker.ErrNotFound) {
+		t.Errorf("Start, missing container: %v, want ErrNotFound", err)
+	}
+
+	// The workload's own stderr doesn't count, even if it looks similar.
+	if code, err := e.Exec(ctx, docker.ExecOpts{Container: "c", Args: []string{"sh"}}); code != 1 || err != nil {
+		t.Errorf("workload failure = %d, %v, want 1, nil", code, err)
+	}
+}
+
+// concurrentRunner writes stdout and stderr from separate goroutines, as a
+// real runner may.
+type concurrentRunner struct{ docker.Runner }
+
+func (concurrentRunner) Stream(_ context.Context, _ docker.Cmd, stdout, stderr io.Writer) (int, error) {
+	var wg sync.WaitGroup
+	for _, w := range []io.Writer{stdout, stderr} {
+		wg.Go(func() {
+			for range 100 {
+				_, _ = w.Write([]byte("line\n"))
+			}
+		})
+	}
+	wg.Wait()
+	return 0, nil
+}
+
+func TestOneWriterForBothStreams(t *testing.T) {
+	e := docker.NewEngine(concurrentRunner{})
+	var out bytes.Buffer
+	if _, err := e.Run(context.Background(), docker.RunOpts{Image: "alpine", Stdout: &out, Stderr: &out}); err != nil {
+		t.Fatal(err)
+	}
+	if out.Len() != 200*len("line\n") {
+		t.Errorf("got %d bytes, want every write", out.Len())
+	}
+}
+
 func TestRunRunnerError(t *testing.T) {
 	f, e := newEngine(t)
 	f.On(fakerunner.Glob("docker run *")).Err(context.Canceled)
@@ -179,7 +251,7 @@ func TestEnvValidation(t *testing.T) {
 	_, e := newEngine(t)
 	ctx := context.Background()
 	for _, env := range []string{
-		"MYSQL_PWD", "=s3cret-value", "1ABC=s3cret-value", "A B=s3cret-value",
+		"MYSQL_PWD", "s3cret-value", "=s3cret-value", "1ABC=s3cret-value", "A B=s3cret-value",
 		"HOME=/root", "PATH=/bin", "DOCKER_HOST=tcp://x", "XDG_RUNTIME_DIR=/run", "SSH_AUTH_SOCK=/s",
 	} {
 		_, err := e.Run(ctx, docker.RunOpts{Image: "alpine", Env: []string{env}})

@@ -24,10 +24,8 @@ type RunOpts struct {
 	Name string
 	// Remove deletes the container, and its anonymous volumes, when it
 	// exits (--rm).
-	Remove bool
-	// User is --user, e.g. "0:0".
-	User string
-	// Workdir is the working directory in the container.
+	Remove     bool
+	User       string
 	Workdir    string
 	Entrypoint string
 	Network    string
@@ -63,10 +61,9 @@ type Mount struct {
 // ExecOpts is a command for Exec.
 type ExecOpts struct {
 	Container string
-	// Args are the command and its arguments.
-	Args    []string
-	User    string
-	Workdir string
+	Args      []string
+	User      string
+	Workdir   string
 	// Env holds NAME=value entries, passed as for RunOpts.Env.
 	Env []string
 	// Stdin, when set, is attached to the command's stdin (-i).
@@ -125,10 +122,7 @@ func (e *cliEngine) Run(ctx context.Context, opts RunOpts) (int, error) {
 	if err != nil {
 		return code, err
 	}
-	if code == 125 {
-		return code, exitError(argv, code, stderr)
-	}
-	return code, nil
+	return workloadResult(argv, code, stderr)
 }
 
 func (e *cliEngine) Create(ctx context.Context, opts RunOpts) (string, error) {
@@ -228,11 +222,11 @@ var envNameRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // splitEnv splits NAME=value entries into the bare names for argv and the
 // entries for Cmd.Env.
 func splitEnv(entries []string) (names, env []string, err error) {
-	for _, kv := range entries {
+	for i, kv := range entries {
 		name, _, ok := strings.Cut(kv, "=")
 		if !ok || !envNameRE.MatchString(name) {
-			// kv may hold a secret, so only the name goes in the error.
-			return nil, nil, fmt.Errorf("entry %q is not NAME=value", name)
+			// A malformed entry may be a bare secret, so none of it goes in the error.
+			return nil, nil, fmt.Errorf("entry %d is not NAME=value", i)
 		}
 		if dockerOwnsEnv(name) {
 			return nil, nil, fmt.Errorf("%s: the docker CLI reads it for itself, so it can't be passed through docker's environment", name)
@@ -253,7 +247,12 @@ func dockerOwnsEnv(name string) bool {
 }
 
 func (e *cliEngine) Start(ctx context.Context, container string, stdout, stderr io.Writer) (int, error) {
-	return e.r.Stream(ctx, Cmd{Argv: []string{"docker", "start", "-a", container}}, stdout, stderr)
+	argv := []string{"docker", "start", "-a", container}
+	code, tail, err := e.stream(ctx, Cmd{Argv: argv}, stdout, stderr)
+	if err != nil {
+		return code, err
+	}
+	return workloadResult(argv, code, tail)
 }
 
 func (e *cliEngine) Exec(ctx context.Context, opts ExecOpts) (int, error) {
@@ -278,17 +277,21 @@ func (e *cliEngine) Exec(ctx context.Context, opts ExecOpts) (int, error) {
 		argv = append(argv, "-e", n)
 	}
 	argv = append(append(argv, opts.Container), opts.Args...)
-	return e.r.Stream(ctx, Cmd{Argv: argv, Env: env, Stdin: opts.Stdin}, opts.Stdout, opts.Stderr)
+	code, tail, err := e.stream(ctx, Cmd{Argv: argv, Env: env, Stdin: opts.Stdin}, opts.Stdout, opts.Stderr)
+	if err != nil {
+		return code, err
+	}
+	return workloadResult(argv, code, tail)
 }
 
-func (e *cliEngine) CpFrom(ctx context.Context, container, ctrPath, hostDir string) error {
+func (e *cliEngine) CpFrom(ctx context.Context, container, ctrPath, dest string) error {
 	if !path.IsAbs(ctrPath) {
 		return fmt.Errorf("docker cp: container path %q is not absolute", ctrPath)
 	}
-	if !filepath.IsAbs(hostDir) {
-		return fmt.Errorf("docker cp: host path %q is not absolute", hostDir)
+	if !filepath.IsAbs(dest) {
+		return fmt.Errorf("docker cp: host path %q is not absolute", dest)
 	}
-	_, err := e.run(ctx, Cmd{Argv: []string{"docker", "cp", container + ":" + ctrPath, hostDir}})
+	_, err := e.run(ctx, Cmd{Argv: []string{"docker", "cp", container + ":" + ctrPath, dest}})
 	return err
 }
 

@@ -71,13 +71,13 @@ type Info struct {
 	NoProxy         string
 	Warnings        []string
 	ClientInfo      ClientInfo
-	// ServerErrors is how older docker CLIs report an unreachable daemon.
+	// ServerErrors, when not empty, says the daemon couldn't be reached,
+	// for a CLI that reports that here and exits 0.
 	ServerErrors []string
 }
 
 // ClientInfo is the CLI's part of Info.
 type ClientInfo struct {
-	// Context is the active docker context.
 	Context string
 	// Plugins are the CLI plugins, such as compose and buildx.
 	Plugins  []Plugin
@@ -137,7 +137,7 @@ func (e *cliEngine) Info(ctx context.Context) (Info, error) {
 	return info, nil
 }
 
-// decodeJSON parses docker's JSON output, ignoring fields v doesn't name.
+// decodeJSON is json.Unmarshal that also fails on empty output.
 func decodeJSON(out []byte, v any) error {
 	if len(bytes.TrimSpace(out)) == 0 {
 		return errors.New("no output")

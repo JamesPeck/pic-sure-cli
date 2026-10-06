@@ -7,6 +7,7 @@ import (
 	"io"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -19,7 +20,8 @@ import (
 // docker exits non-zero, and one that also matches ErrNotFound (errors.Is)
 // when docker says the object doesn't exist. Removals treat a missing object
 // as already removed. Methods that run a workload (Run, Start, Exec) return
-// its exit code instead.
+// its exit code, and an *ExitError as well only when docker itself failed
+// (see workloadResult).
 //
 // Environment values never go in argv: Env and BuildArgs entries are
 // NAME=value, docker gets a bare NAME in its argv, and the value travels in
@@ -69,25 +71,29 @@ type Engine interface {
 	ContainersUsingVolume(ctx context.Context, name string) ([]Container, error)
 
 	// Run runs a container and returns its exit code; with Detach, the exit
-	// code of starting it. Exit code 125 means docker itself failed (bad
-	// mount, missing image, name in use), so Run also returns an *ExitError
-	// carrying docker's message.
+	// code of starting it. If docker itself failed (bad mount, missing
+	// image or command, name in use) it also returns an *ExitError carrying
+	// docker's message.
 	Run(ctx context.Context, opts RunOpts) (int, error)
 	// Create creates a container from opts without starting it and returns
 	// its ID. Detach, Stdin, Stdout and Stderr are Run-only and must be
 	// unset.
 	Create(ctx context.Context, opts RunOpts) (string, error)
 	// Start starts a created container, streams its output, waits for it to
-	// exit and returns its exit code.
+	// exit and returns its exit code. Like Run, it also returns an
+	// *ExitError if docker itself failed.
 	Start(ctx context.Context, container string, stdout, stderr io.Writer) (int, error)
 	// Exec runs a command in a running container and returns its exit code.
+	// Like Run, it also returns an *ExitError if docker itself failed, for
+	// example because the container is missing or stopped.
 	Exec(ctx context.Context, opts ExecOpts) (int, error)
-	// CpFrom copies path out of a container, running or stopped, into
-	// hostDir with `docker cp`. The copies belong to the invoking user. As
-	// with docker cp, a path ending in "/." copies a directory's contents
-	// rather than the directory, and hostDir is created if its parent
-	// exists.
-	CpFrom(ctx context.Context, container, path, hostDir string) error
+	// CpFrom copies path out of a container, running or stopped, to dest on
+	// the host with `docker cp`; the copies belong to the invoking user.
+	// Docker cp's rules decide the layout: a directory path ending in "/."
+	// copies its contents into dest, creating dest if needed. Without it,
+	// a directory or file goes inside dest if dest is an existing directory,
+	// and becomes dest otherwise.
+	CpFrom(ctx context.Context, container, path, dest string) error
 	// Rm removes a container and its anonymous volumes; force also stops a
 	// running one.
 	Rm(ctx context.Context, container string, force bool) error
@@ -186,15 +192,48 @@ func trimUsageHint(stderr []byte) []byte {
 }
 
 // stream runs a docker command with its output copied to the writers and
-// keeps the end of stderr for the error message.
+// keeps the end of stderr for the error message. Writes to the two writers
+// are serialized, because the runner may copy the streams concurrently and
+// a caller may pass one writer for both.
 func (e *cliEngine) stream(ctx context.Context, c Cmd, stdout, stderr io.Writer) (int, []byte, error) {
 	tail := &tailBuffer{max: maxTail}
 	errW := io.Writer(tail)
 	if stderr != nil {
 		errW = io.MultiWriter(stderr, tail)
 	}
+	if stdout != nil {
+		mu := new(sync.Mutex)
+		stdout, errW = &lockedWriter{mu, stdout}, &lockedWriter{mu, errW}
+	}
 	code, err := e.r.Stream(ctx, c, stdout, errW)
 	return code, tail.Bytes(), err
+}
+
+type lockedWriter struct {
+	mu *sync.Mutex
+	w  io.Writer
+}
+
+func (l *lockedWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(p)
+}
+
+// dockerFailedRE matches a last stderr line in docker's own words, as
+// opposed to the workload's: an API error, a failure to reach the daemon, or
+// the runtime failing to start the command.
+var dockerFailedRE = regexp.MustCompile(`^(docker: )?(Error response from daemon: |Cannot connect to the Docker daemon|failed to connect to the docker API|OCI runtime \w+ failed)`)
+
+// workloadResult interprets the exit of a docker command that ran a
+// workload. Docker reuses the workload's exit codes for its own failures
+// (exit 1 for a missing container, 127 for a missing command), so its
+// failure shows only as exit 125 or as its message ending stderr.
+func workloadResult(argv []string, code int, stderr []byte) (int, error) {
+	if code != 0 && (code == 125 || dockerFailedRE.MatchString(lastLine(trimUsageHint(stderr)))) {
+		return code, exitError(argv, code, stderr)
+	}
+	return code, nil
 }
 
 // maxTail bounds how much of a streamed command's stderr is kept for its

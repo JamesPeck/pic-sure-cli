@@ -103,6 +103,18 @@ func (e *cliEngine) ContainersUsingVolume(ctx context.Context, name string) ([]C
 	return parsePs(res.Stdout)
 }
 
+// ownName picks the container's own name from ps's comma-separated Names,
+// which with --no-trunc also lists legacy link aliases ("other/alias").
+func ownName(names string) string {
+	all := strings.Split(names, ",")
+	for _, n := range all {
+		if !strings.Contains(n, "/") {
+			return n
+		}
+	}
+	return all[0]
+}
+
 // parsePs parses `docker ps --format '{{json .}}'`: one object per line.
 func parsePs(out []byte) ([]Container, error) {
 	var cs []Container
@@ -117,10 +129,7 @@ func parsePs(out []byte) ([]Container, error) {
 		if err := json.Unmarshal(line, &row); err != nil {
 			return nil, fmt.Errorf("parsing docker ps: %w", err)
 		}
-		// Names lists every name, comma-separated; the first is the
-		// container's own.
-		name, _, _ := strings.Cut(row.Names, ",")
-		cs = append(cs, Container{ID: row.ID, Name: name, Image: row.Image, State: row.State})
+		cs = append(cs, Container{ID: row.ID, Name: ownName(row.Names), Image: row.Image, State: row.State})
 	}
 	if err := sc.Err(); err != nil {
 		return nil, fmt.Errorf("parsing docker ps: %w", err)

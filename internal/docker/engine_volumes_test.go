@@ -152,7 +152,7 @@ func TestContainersUsingVolume(t *testing.T) {
 	// Real `docker ps --format '{{json .}}'` rows, trimmed.
 	f.On(fakerunner.Exact("docker", "ps", "-a", "--no-trunc", "--filter", "volume=demo_hpds-data", "--format", "{{json .}}")).
 		Stdout(`{"Command":"\"sh -c 'exit 3'\"","ID":"c167f0dc2ebc","Image":"alpine","Labels":"desktop.docker.io/ports.scheme=v2","LocalVolumes":"1","Mounts":"demo_hpds-data","Names":"demo-hpds-load-1a2b3c4d","State":"exited","Status":"Exited (3) 2 minutes ago"}
-{"ID":"9a8b7c6d5e4f","Image":"hms-dbmi/pic-sure-hpds:0123456789ab","Names":"demo-hpds-1,demo-other/hpds","State":"running","Status":"Up 2 hours (healthy)"}
+{"ID":"9a8b7c6d5e4f","Image":"hms-dbmi/pic-sure-hpds:0123456789ab","Names":"demo-other/hpds,demo-hpds-1","State":"running","Status":"Up 2 hours (healthy)"}
 `)
 	f.On(fakerunner.Glob("docker ps * volume=unused *"))
 	ctx := context.Background()

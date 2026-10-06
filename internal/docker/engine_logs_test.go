@@ -81,10 +81,9 @@ func TestWaitForLogLine(t *testing.T) {
 	}
 }
 
-func TestWaitForLogLineFindsAMatchSplitAcrossReads(t *testing.T) {
+func TestWaitForLogLineOnAVeryLongLine(t *testing.T) {
 	f, e := newEngine(t)
-	// Longer than one read, so the match straddles a read boundary
-	// wherever it falls, and longer than bufio.Scanner's default line.
+	// One line longer than bufio.Scanner's limit.
 	long := strings.Repeat("x", 100<<10)
 	f.On(fakerunner.Glob("docker logs -f *")).Stdout(long + strings.TrimSuffix(etlStarted, "\n"))
 
