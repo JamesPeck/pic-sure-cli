@@ -95,7 +95,7 @@ Test it with the fake runner and a recording sink:
 func TestUpStartsTheDatabaseBeforeMigrating(t *testing.T) {
 	f := fakerunner.New(t)
 	f.On(fakerunner.Glob("docker compose * up -d --wait picsure-db"))
-	f.On(fakerunner.Glob("docker compose * run --rm flyway-init"))
+	f.On(fakerunner.Glob("docker compose * run --rm -T flyway-init"))
 	var rec events.Recorder
 	d := &ops.Deps{Runner: f, Sink: &rec, Clock: ops.FixedClock(t0), /* ... */}
 
@@ -104,7 +104,7 @@ func TestUpStartsTheDatabaseBeforeMigrating(t *testing.T) {
 	}
 	f.AssertOrder(
 		fakerunner.Glob("docker compose * up -d --wait picsure-db"),
-		fakerunner.Glob("docker compose * run --rm flyway-init"),
+		fakerunner.Glob("docker compose * run --rm -T flyway-init"),
 	)
 }
 ```
@@ -347,9 +347,8 @@ for the stack being acted on (`Compose`, nil until the command has a
 rendered stack), the git `Client` (`Git`), a `Clock`, `Rand` (an
 `io.Reader`; `crypto/rand.Reader` in production), the event `Sink` and the
 `*slog.Logger`. `SystemClock` is the real clock; `FixedClock` is for tests.
-`docker.Composer` is an empty placeholder interface until ticket 017 adds
-its methods, in its own package, so that it doesn't have to edit `Deps`.
-Tickets 016 and 018 filled in `docker.Engine` and `git.Client` the same way.
+Tickets 016, 017 and 018 filled in `docker.Engine`, `docker.Composer` and
+`git.Client` in their own packages, without editing `Deps`.
 
 ## internal/steps
 
@@ -434,7 +433,50 @@ Rules every method follows:
   name. A host path must exist, since docker would create a missing one as
   a root-owned directory, and must not contain `:`.
 
-_Tickets 003 and 017 document their parts here._
+_Ticket 003 documents its part here._
+
+### Compose (ticket 017)
+
+`Composer` (`Deps.Compose`) is the only code that builds `docker compose`
+argv. `Compose` implements it over a `Runner`.
+
+- `NewCompose(runner, stackDir, env)` builds one for a stack: `-f` for
+  `.pic-sure/render/compose.yaml`, then for each `overrides/*.yaml` in
+  lexical order (dotfiles skipped), all absolute. If the stack hasn't been
+  rendered, the error wraps `ErrNotRendered`, which a command reports as
+  "run `pic-sure up`".
+- Every call adds `--project-directory <stack> --env-file /dev/null` after
+  the `-f` list, runs in the stack directory, and gets `Env()`'s entries in
+  `Cmd.Env`. `--env-file /dev/null` stops a stray `.env` in the stack
+  directory from renaming the project or supplying values. The adapter also
+  relies on the runner not passing the user's `COMPOSE_*` variables through.
+- `Progress` sets `--progress` on up, down, stop, restart, pull and run. The
+  command picks it by output mode: `ProgressJSON` under `--json`, otherwise
+  `ProgressPlain` (the zero value).
+- `Up`, `Down`, `Stop`, `Restart`, `Pull` and `Logs` copy compose's
+  output, both streams, to one writer (wrap the sink in
+  `events.NewLogWriter`) and return an `*ExitError` carrying compose's
+  message when it fails. `Down` always passes `--remove-orphans`.
+- `Run` (`run [--rm] -T`) and `Exec` (`exec -T`) stream stdout and stderr
+  separately and return the command's exit code, plus an `*ExitError` only
+  when docker itself failed, as `Engine.Run` does. `Passthrough` adds
+  nothing after the global flags and returns compose's exit code.
+- Option types are `ComposeUpOpts`, `ComposeDownOpts`, `ComposeRunOpts`,
+  `ComposeExecOpts` and `ComposeLogsOpts`; the `Compose` prefix keeps them
+  apart from the Engine's `RunOpts` and `ExecOpts`. Compose shares the
+  Engine's `runCmd`, `streamCmd`, `exitError` and `workloadResult`.
+- `Ps` runs `ps --all --format json` with a 10 s timeout. `ParseComposePs`
+  accepts the JSON-lines form (compose 2.21 and later), the older array
+  form, nulls and unknown fields. `Health` is empty for a container without
+  a healthcheck; compare it exactly.
+- `Config(quiet)`: `config --quiet` validates. Without quiet,
+  `config --no-interpolate` returns the merged YAML, with no secret values
+  in it.
+- Compose versions these flags need: `--wait-timeout` 2.17, `--progress`
+  2.19, JSON-lines `ps` 2.21, `--progress json` 2.29.
+
+In tests, let a glob skip the global flags:
+`fakerunner.Glob("docker compose * up -d --wait picsure-db")`.
 
 ## internal/git
 

@@ -140,10 +140,12 @@ func (e daemonError) Unwrap() error        { return e.err }
 
 var notFoundRE = regexp.MustCompile(`(?i)no such (image|volume|container|object)`)
 
-// run runs a docker command that queries or changes an object and turns a
+func (e *cliEngine) run(ctx context.Context, c Cmd) (Result, error) { return runCmd(ctx, e.r, c) }
+
+// runCmd runs a docker command that queries or changes an object and turns a
 // non-zero exit into an *ExitError, marked not-found when docker says so.
-func (e *cliEngine) run(ctx context.Context, c Cmd) (Result, error) {
-	res, err := e.r.Run(ctx, c)
+func runCmd(ctx context.Context, r Runner, c Cmd) (Result, error) {
+	res, err := r.Run(ctx, c)
 	if err != nil {
 		return res, err
 	}
@@ -191,11 +193,15 @@ func trimUsageHint(stderr []byte) []byte {
 	return []byte(strings.Join(lines, "\n") + "\n")
 }
 
-// stream runs a docker command with its output copied to the writers and
+func (e *cliEngine) stream(ctx context.Context, c Cmd, stdout, stderr io.Writer) (int, []byte, error) {
+	return streamCmd(ctx, e.r, c, stdout, stderr)
+}
+
+// streamCmd runs a docker command with its output copied to the writers and
 // keeps the end of stderr for the error message. Writes to the two writers
 // are serialized, because the runner may copy the streams concurrently and
 // a caller may pass one writer for both.
-func (e *cliEngine) stream(ctx context.Context, c Cmd, stdout, stderr io.Writer) (int, []byte, error) {
+func streamCmd(ctx context.Context, r Runner, c Cmd, stdout, stderr io.Writer) (int, []byte, error) {
 	tail := &tailBuffer{max: maxTail}
 	errW := io.Writer(tail)
 	if stderr != nil {
@@ -205,7 +211,7 @@ func (e *cliEngine) stream(ctx context.Context, c Cmd, stdout, stderr io.Writer)
 		mu := new(sync.Mutex)
 		stdout, errW = &lockedWriter{mu, stdout}, &lockedWriter{mu, errW}
 	}
-	code, err := e.r.Stream(ctx, c, stdout, errW)
+	code, err := r.Stream(ctx, c, stdout, errW)
 	return code, tail.Bytes(), err
 }
 
