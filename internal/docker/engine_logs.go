@@ -21,7 +21,6 @@ func (e *cliEngine) Logs(ctx context.Context, container string, follow bool) io.
 	s := &logStream{pr: pr, cancel: cancel, done: make(chan struct{})}
 	go func() {
 		defer close(s.done)
-		// An io.Pipe serializes the two streams' writes.
 		code, stderr, err := e.stream(ctx, Cmd{Argv: argv}, pw, pw)
 		if err == nil && code != 0 {
 			err = exitError(argv, code, stderr)

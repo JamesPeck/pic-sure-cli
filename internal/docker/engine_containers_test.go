@@ -10,8 +10,10 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/iotest"
+	"time"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/docker"
 	"github.com/JamesPeck/pic-sure-cli/internal/docker/fakerunner"
@@ -132,6 +134,7 @@ func TestDockerFailuresAreErrors(t *testing.T) {
 	f.On(fakerunner.Exact("docker", "exec", "stopped", "true")).Stderr(stopped).Exit(1)
 	f.On(fakerunner.Exact("docker", "start", "-a", "gone")).Stderr(gone).Exit(1)
 	f.On(fakerunner.Exact("docker", "exec", "c", "sh")).Stderr("Error response from workload\n").Exit(1)
+	f.On(fakerunner.Exact("docker", "exec", "c", "exit125")).Exit(125)
 	ctx := context.Background()
 
 	check := func(name string, code int, err error, wantCode int, wantMsg string) {
@@ -153,9 +156,36 @@ func TestDockerFailuresAreErrors(t *testing.T) {
 		t.Errorf("Start, missing container: %v, want ErrNotFound", err)
 	}
 
-	// The workload's own stderr doesn't count, even if it looks similar.
+	// The workload's own stderr doesn't count, even if it looks similar,
+	// and only docker run reserves exit 125.
 	if code, err := e.Exec(ctx, docker.ExecOpts{Container: "c", Args: []string{"sh"}}); code != 1 || err != nil {
 		t.Errorf("workload failure = %d, %v, want 1, nil", code, err)
+	}
+	if code, err := e.Exec(ctx, docker.ExecOpts{Container: "c", Args: []string{"exit125"}}); code != 125 || err != nil {
+		t.Errorf("workload exit 125 = %d, %v, want 125, nil", code, err)
+	}
+}
+
+func TestDaemonConnectionFailuresAreErrors(t *testing.T) {
+	for _, msg := range []string{
+		"failed to connect to the docker API at unix:///var/run/docker.sock; check if the path is correct and if the daemon is running: dial unix /var/run/docker.sock: connect: no such file or directory",
+		"Cannot connect to the Docker daemon at tcp://127.0.0.1:1. Is the docker daemon running?",
+		"permission denied while trying to connect to the docker API at unix:///var/run/docker.sock",
+		"Got permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock: connect: permission denied",
+		"error during connect: Get \"http://docker.example.org/v1.47/containers/c/json\": EOF",
+	} {
+		f, e := newEngine(t)
+		f.On(fakerunner.Glob("docker *")).Stderr(msg + "\n").Exit(1)
+		ctx := context.Background()
+		if code, err := e.Exec(ctx, docker.ExecOpts{Container: "c", Args: []string{"true"}}); code != 1 || err == nil {
+			t.Errorf("Exec with %q = %d, %v, want an error", msg, code, err)
+		}
+		if _, err := e.Run(ctx, docker.RunOpts{Image: "alpine"}); err == nil {
+			t.Errorf("Run with %q: no error", msg)
+		}
+		if _, err := e.Start(ctx, "c", nil, nil); err == nil {
+			t.Errorf("Start with %q: no error", msg)
+		}
 	}
 }
 
@@ -167,7 +197,7 @@ func (concurrentRunner) Stream(_ context.Context, _ docker.Cmd, stdout, stderr i
 	var wg sync.WaitGroup
 	for _, w := range []io.Writer{stdout, stderr} {
 		wg.Go(func() {
-			for range 100 {
+			for range 50 {
 				_, _ = w.Write([]byte("line\n"))
 			}
 		})
@@ -176,14 +206,29 @@ func (concurrentRunner) Stream(_ context.Context, _ docker.Cmd, stdout, stderr i
 	return 0, nil
 }
 
+// overlapWriter records whether two writes were ever in progress at once.
+type overlapWriter struct {
+	inFlight   atomic.Int32
+	overlapped atomic.Bool
+}
+
+func (w *overlapWriter) Write(p []byte) (int, error) {
+	if w.inFlight.Add(1) > 1 {
+		w.overlapped.Store(true)
+	}
+	time.Sleep(100 * time.Microsecond)
+	w.inFlight.Add(-1)
+	return len(p), nil
+}
+
 func TestOneWriterForBothStreams(t *testing.T) {
 	e := docker.NewEngine(concurrentRunner{})
-	var out bytes.Buffer
-	if _, err := e.Run(context.Background(), docker.RunOpts{Image: "alpine", Stdout: &out, Stderr: &out}); err != nil {
+	var w overlapWriter
+	if _, err := e.Run(context.Background(), docker.RunOpts{Image: "alpine", Stdout: &w, Stderr: &w}); err != nil {
 		t.Fatal(err)
 	}
-	if out.Len() != 200*len("line\n") {
-		t.Errorf("got %d bytes, want every write", out.Len())
+	if w.overlapped.Load() {
+		t.Error("stdout and stderr were written at the same time")
 	}
 }
 

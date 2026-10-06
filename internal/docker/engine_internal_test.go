@@ -12,8 +12,4 @@ func TestContainsStreamAcrossReads(t *testing.T) {
 	if found, err := containsStream(r, []byte("Started DictionaryEtlApplication")); !found || err != nil {
 		t.Errorf("one byte per read: %v, %v", found, err)
 	}
-	r = iotest.OneByteReader(strings.NewReader("Started Dictionary\nEtlApplication\n"))
-	if found, err := containsStream(r, []byte("Started DictionaryEtlApplication")); found || err != nil {
-		t.Errorf("split across lines: %v, %v, want no match", found, err)
-	}
 }

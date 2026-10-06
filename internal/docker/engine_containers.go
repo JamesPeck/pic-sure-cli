@@ -122,6 +122,9 @@ func (e *cliEngine) Run(ctx context.Context, opts RunOpts) (int, error) {
 	if err != nil {
 		return code, err
 	}
+	if code == 125 { // docker run's code for its own failure
+		return code, exitError(argv, code, stderr)
+	}
 	return workloadResult(argv, code, stderr)
 }
 

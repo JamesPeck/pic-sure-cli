@@ -221,16 +221,16 @@ func (l *lockedWriter) Write(p []byte) (int, error) {
 }
 
 // dockerFailedRE matches a last stderr line in docker's own words, as
-// opposed to the workload's: an API error, a failure to reach the daemon, or
-// the runtime failing to start the command.
-var dockerFailedRE = regexp.MustCompile(`^(docker: )?(Error response from daemon: |Cannot connect to the Docker daemon|failed to connect to the docker API|OCI runtime \w+ failed)`)
+// opposed to the workload's: an API error, a failure to reach or open the
+// daemon's socket, or the runtime failing to start the command.
+var dockerFailedRE = regexp.MustCompile(`(?i)^(docker: )?(error response from daemon: |cannot connect to the docker daemon|failed to connect to the docker api|(got )?permission denied while trying to connect to the docker|error during connect: |oci runtime \w+ failed)`)
 
-// workloadResult interprets the exit of a docker command that ran a
+// workloadResult interprets a non-125 exit of a docker command that ran a
 // workload. Docker reuses the workload's exit codes for its own failures
-// (exit 1 for a missing container, 127 for a missing command), so its
-// failure shows only as exit 125 or as its message ending stderr.
+// (exit 1 for a missing container or an unreachable daemon, 127 for a
+// missing command), so its failure shows only as its message ending stderr.
 func workloadResult(argv []string, code int, stderr []byte) (int, error) {
-	if code != 0 && (code == 125 || dockerFailedRE.MatchString(lastLine(trimUsageHint(stderr)))) {
+	if code != 0 && dockerFailedRE.MatchString(lastLine(trimUsageHint(stderr))) {
 		return code, exitError(argv, code, stderr)
 	}
 	return code, nil

@@ -310,9 +310,10 @@ tried in order, and a call that none matches fails the test. Recorded
   `VolumeRemove`, and `ContainersUsingVolume`, which includes stopped
   containers.
 - **Containers.** `Run(RunOpts)`, `Start` (attached) and `Exec` return the
-  workload's exit code. When docker itself failed instead (exit 125, or
-  docker's own message ending stderr, as for a missing container or
-  command), they also return an `*ExitError`. `Create` takes the same
+  workload's exit code. When docker itself failed instead (`docker run`'s
+  exit 125, or docker's own message ending stderr, as for a missing
+  container or command or an unreachable daemon), they also return an
+  `*ExitError`. `Create` takes the same
   `RunOpts` minus the run-only fields. There are also `CpFrom` (docker cp's
   layout rules), `Rm` and `ContainerInspect` (compare `Health` exactly).
   `UniqueName(prefix, d.Rand)` names a one-off container.
