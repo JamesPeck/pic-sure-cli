@@ -1,16 +1,8 @@
-# Not implemented yet: exit 1, naming ticket 006.
-exitcode 1 pic-sure config show
-stderr '^pic-sure: not implemented \(ticket 006\)$'
-! stdout .
-exitcode 1 pic-sure config get name
-stderr '^pic-sure: not implemented \(ticket 006\)$'
-! stdout .
-exitcode 1 pic-sure config set name demo
-stderr '^pic-sure: not implemented \(ticket 006\)$'
-! stdout .
-exitcode 1 pic-sure config edit
-stderr '^pic-sure: not implemented \(ticket 006\)$'
-! stdout .
+# No stack here or above: exit 3.
+exitcode 3 pic-sure config show
+stderr 'no pic-sure stack found'
+exitcode 3 pic-sure --stack nowhere config get name
+stderr 'no pic-sure stack found in .*nowhere'
 
 # A group without a subcommand, an unknown subcommand, or the wrong number of
 # arguments is a usage error.
@@ -20,3 +12,124 @@ exitcode 2 pic-sure config frobnicate
 stderr 'unknown command "frobnicate" for "pic-sure config"'
 exitcode 2 pic-sure config get
 exitcode 2 pic-sure config set name
+
+# show prints the whole config, defaults included.
+cd stack/sub
+exec pic-sure config show
+stdout '^name: demo$'
+stdout '^  http_port: 8080$'
+stdout '^  hostname: localhost$'
+stdout '^  java_opts: -XX:\+UseParallelGC'
+exec pic-sure --json config show
+stdout '^\{"schema":1,"name":"demo","network":\{"hostname":"localhost","http_port":8080,'
+cd $WORK
+
+# get prints a value, or a section as YAML.
+exec pic-sure --stack stack config get network.http_port
+stdout '^8080$'
+exec pic-sure --stack stack config get auth.mode
+stdout '^required$'
+exec pic-sure --stack stack config get network
+cmp stdout network.yaml
+exec pic-sure --stack stack --json config get dev.services
+stdout '^\{"key":"dev.services","value":\[\]\}$'
+exitcode 2 pic-sure --stack stack config get network.htp_port
+stderr '^pic-sure: network.htp_port: unknown config key$'
+exitcode 2 pic-sure --stack stack config get auth.auth0.client_secret
+stderr 'is a secret'
+
+# set validates, then writes, keeping comments.
+exec pic-sure --stack stack config set network.https_port 9443
+! stdout .
+exec pic-sure --stack stack config set dev.services hpds,psama
+exec pic-sure --stack stack config set services.hpds.java_opts -Xmx2g
+cmp stack/pic-sure.yaml want.yaml
+
+# Invalid values are usage errors, and the file is left alone.
+exitcode 2 pic-sure --stack stack config set network.http_port eighty
+stderr '^pic-sure: invalid pic-sure.yaml: network.http_port: want a whole number, got "eighty"$'
+exitcode 2 pic-sure --stack stack config set network.http_port 70000
+stderr '^pic-sure: invalid pic-sure.yaml: network.http_port \(line 6\): must be a port from 1 to 65535, got 70000$'
+exitcode 2 pic-sure --stack stack config set network.http_port 9443
+stderr 'network.https_port \(line 7\): must differ from network.http_port \(both are 9443\)'
+exitcode 2 pic-sure --stack stack config set auth.mode sideways
+stderr 'auth.mode: must be one of required, open, explore; got "sideways"'
+exitcode 2 pic-sure --stack stack config set db.mode remote
+stderr 'db.remote.host: required when db.mode is remote'
+exitcode 2 pic-sure --stack stack config set proxy.http proxy:3128
+stderr 'proxy.http: want an http:// or https:// URL'
+exitcode 2 pic-sure --stack stack config set tls.mode provided
+stderr 'tls.cert_file: .*certs/tls/server.crt does not exist'
+exitcode 2 pic-sure --stack stack config set name other
+stderr '^pic-sure: name: is read-only$'
+exitcode 2 pic-sure --stack stack config set auth.auth0.client_secret s3cret
+stderr 'is a secret'
+exitcode 2 pic-sure --stack stack config set nope 1
+stderr '^pic-sure: nope: unknown config key$'
+stderr 'Run ''pic-sure config set --help'' for usage.'
+cmp stack/pic-sure.yaml want.yaml
+
+# A valid set fixes a file that was invalid.
+cp bad.yaml stack/pic-sure.yaml
+exitcode 2 pic-sure --stack stack config show
+stderr 'network.http_port \(line 4\): must be a port from 1 to 65535, got 0'
+exec pic-sure --stack stack config set network.http_port 80
+exec pic-sure --stack stack config get network.http_port
+stdout '^80$'
+
+# A file in another schema is incompatible.
+cp schema2.yaml stack/pic-sure.yaml
+exitcode 5 pic-sure --stack stack config get name
+stderr 'pic-sure.yaml is schema 2, but this pic-sure reads schema 1'
+
+# edit needs a terminal.
+exitcode 2 pic-sure --stack stack config edit
+stderr 'config edit needs a terminal'
+
+-- stack/.pic-sure/.keep --
+-- stack/sub/.keep --
+-- stack/pic-sure.yaml --
+# Demo stack.
+schema: 1
+name: demo # the compose project
+network:
+  # Off the default ports.
+  http_port: 8080
+  https_port: 8443
+auth:
+  auth0: { client_id: abc }
+  admin_email: admin@example.org
+dev:
+  services: []
+services: {}
+-- want.yaml --
+# Demo stack.
+schema: 1
+name: demo # the compose project
+network:
+  # Off the default ports.
+  http_port: 8080
+  https_port: 9443
+auth:
+  auth0: {client_id: abc}
+  admin_email: admin@example.org
+dev:
+  services: [hpds, psama]
+services:
+  hpds:
+    java_opts: -Xmx2g
+-- network.yaml --
+hostname: localhost
+http_port: 8080
+https_port: 8443
+dev_ports:
+  base: 15000
+-- bad.yaml --
+schema: 1
+name: demo
+network:
+  http_port: 0
+auth: {admin_email: admin@example.org, auth0: {client_id: abc}}
+-- schema2.yaml --
+schema: 2
+name: demo

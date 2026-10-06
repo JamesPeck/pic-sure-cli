@@ -185,10 +185,42 @@ it.
 
 ## internal/stack
 
-_Tickets 006 (config schema), 007 (stack directory, state, manifest, lock),
-008 (secrets) and 009 (version gate, config migrations) fill this in. File
-ownership is in the package doc._ `ops` imports `stack`, so `stack` must not
-import `ops`: secret generation takes the `io.Reader` as an argument.
+_Tickets 007 (stack directory, state, manifest, lock), 008 (secrets) and
+009 (version gate, config migrations) fill in the rest of this section.
+File ownership is in the package doc._ `ops` imports `stack`, so `stack`
+must not import `ops`: secret generation takes the `io.Reader` as an
+argument.
+
+**Config (ticket 006, `config*.go`).** `Config` is pic-sure.yaml schema 1
+(§6.2); `DefaultConfig` has its defaults. YAML is `go.yaml.in/yaml/v3`; use
+it for every YAML file so `yaml.Node`s are interchangeable.
+
+- `ConfigDoc` is the file as a YAML document. `ParseConfigDoc`,
+  `ReadConfigDoc(dir)` and `NewConfigDoc(*Config)` make one. `Set(key,
+  value)` parses a command-line value and `SetValue(key, v)` takes a typed
+  one; both change only that key, so `Bytes` keeps the user's comments
+  (yaml.v3 drops blank lines and normalizes indentation). `Node` is the
+  root for migrations (009).
+- `doc.Config()`, `ParseConfig` and `LoadConfig(dir)` decode strictly over
+  the defaults: an unknown or duplicate key or a wrong type is a problem, a
+  missing or null key keeps its default. They then `Validate`. Problems come
+  back together in one `*ConfigError` (`Problems{Path, Line, Msg}`); a
+  schema other than 1 is a `*SchemaVersionError` instead.
+- `Validate` is pure. `CheckFiles(dir)` checks the files and directories
+  the config names (provided TLS files, component sources).
+  `ReadOnlyChanges` refuses edits to `name` and `schema`.
+- `Fields` is the field table for the wizard (039), init's flags (034) and
+  the docs (065): key path (`*` matches a map key), kind, init flag, help,
+  secret, read-only, enum options and `RequiredWhen`. Secrets are in it
+  (with `-stdin` flags) but not in `Config`. `Validate` takes required
+  fields and enums from it, and a test keeps it in step with `Config`.
+- `Config.Get(key)` returns a value or section; a `*KeyError` is an unknown,
+  secret or read-only key.
+- `DeriveAuthFlags(mode)` is the auth-mode switch table from the bash
+  `picsure_configure_auth`; `Env()` gives it as `NAME=true|false`.
+
+The `config` commands map `*ConfigError` and `*KeyError` to exit 2 and
+`*SchemaVersionError` to exit 5.
 
 ### Stack directory (007)
 
