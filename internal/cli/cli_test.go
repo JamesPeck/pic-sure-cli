@@ -368,8 +368,7 @@ func TestNewDeps(t *testing.T) {
 	if d.Runner == nil || d.Clock == nil || d.Rand == nil || d.Sink == nil || d.Log == nil {
 		t.Fatalf("newDeps left a required field nil: %+v", d)
 	}
-	_, err := d.Runner.Run(context.Background(), docker.Cmd{Argv: []string{"docker", "version"}})
-	if err == nil || !strings.Contains(err.Error(), "ticket 003") {
-		t.Errorf("stub runner err = %v, want it to name ticket 003", err)
+	if r, ok := d.Runner.(*docker.ExecRunner); !ok || r.Log != d.Log {
+		t.Errorf("Runner = %#v, want an ExecRunner logging to Deps.Log", d.Runner)
 	}
 }

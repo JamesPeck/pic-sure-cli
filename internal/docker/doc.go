@@ -5,8 +5,9 @@
 // Files and owners:
 //   - runner.go (001): Cmd, Result, the Runner interface, ExitError and
 //     RunChecked.
-//   - The exec Runner (003): process groups, cancellation, timeouts and the
-//     base environment, in its own file.
+//   - exec.go (003): ExecRunner, the production Runner (process groups,
+//     cancellation, the base environment).
+//   - timeout.go (003): WithTimeout, per-call timeouts for any Runner.
 //   - engine*.go (016): the Engine interface and its implementation over
 //     the docker CLI. engine.go holds the interface and the shared error
 //     handling; engine_system.go (version, info), engine_images.go,

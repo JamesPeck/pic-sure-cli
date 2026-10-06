@@ -198,8 +198,9 @@ it.
 - `deps.go`: `newDeps` assembles `ops.Deps`. Each field comes from a
   constructor in its owner's file: `runner.go` (003), `output.go` (004, which
   also reports errors), `logging.go` (005), `engine.go` (016, landed) and
-  `gitclient.go` (018, landed). Until the others land, the runner fails
-  every call, the sink discards events and the logger discards logs.
+  `gitclient.go` (018, landed). The runner is built with the logger, so it
+  can log argv. Until the others land, the sink discards events and the
+  logger discards logs.
 
 | File | Commands | Ticket |
 |---|---|---|
@@ -802,7 +803,46 @@ Rules every method follows:
   name. A host path must exist, since docker would create a missing one as
   a root-owned directory, and must not contain `:`.
 
-_Ticket 003 documents its part here._
+**ExecRunner** (ticket 003, `exec.go`) is the production `Runner`;
+`cli.newRunner` builds it with the command's logger. `&docker.ExecRunner{}`
+is ready to use.
+
+- **Process group.** Each child runs in its own process group. When ctx
+  ends, the group gets SIGTERM, and whatever is still in it `WaitDelay`
+  (default 5 s) later gets SIGKILL. The call returns once the group is
+  empty or killed, so a grandchild (the compose plugin under `docker`, a
+  backgrounded process in a script) can't outlive a cancelled command or
+  hold its pipes open. If a command exits on its own but leaves a background
+  process holding stdout or stderr, the runner stops reading `WaitDelay`
+  after the exit and returns the command's result, leaving that process
+  alone.
+- **No terminal.** Because the group is in the background, a child that
+  opens `/dev/tty` to prompt (ssh passphrase, git credentials) stops on
+  SIGTTIN until ctx ends. Callers turn prompts off (`GIT_TERMINAL_PROMPT=0`,
+  ssh `BatchMode`). An interactive passthrough would need a foreground mode
+  the runner doesn't have yet.
+- **Environment.** A child gets only `PATH`, `HOME`, `TERM`,
+  `SSH_AUTH_SOCK`, every `DOCKER_*` and `XDG_*` variable, and
+  `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`/`ALL_PROXY` in either case from the
+  CLI's environment, then `Cmd.Env`, where a later entry wins. Anything else
+  (`COMPOSE_PROJECT_NAME`, `LANG`, a token in the user's shell) has to be
+  put in `Cmd.Env`.
+- **Results.** Death by signal N is exit code 128+N. An error from a ctx
+  that ended wraps `ctx.Err()` and the context's cause, so a signal's
+  `exitcode.Signaled` survives. A program that can't start gives exit code
+  -1 and an error.
+- **Stream** writes whole lines (a line over 64 KiB arrives in pieces), and
+  never calls its two writers at once, so they can be the same writer. A
+  writer error ends the copy and is returned.
+- **Logging.** Argv, dir and env names at debug level, then the exit code
+  and duration. Never env values or stdin.
+
+**WithTimeout** (`timeout.go`) wraps any `Runner` so each call gets at most
+d: `docker.WithTimeout(d.Runner, 10*time.Second)` for `compose ps`, 5–10 s
+for probes (§10.2). Long operations take no timeout and end only with their
+context. A call that runs out of time returns a `*TimeoutError`
+(`"ARGV timed out after 10s"`), which matches `context.DeadlineExceeded`; a
+caller's own cancellation stays a plain context error.
 
 ### Compose (ticket 017)
 

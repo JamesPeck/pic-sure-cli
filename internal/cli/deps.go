@@ -14,7 +14,8 @@ import (
 func (a *App) newDeps() *ops.Deps {
 	// TODO(005): stack.SetSecretRegistrar(log.RegisterSecrets), so the log
 	// handler redacts every secret the stack loads or generates (§6.3).
-	runner := a.newRunner()
+	log := a.newLogger()
+	runner := a.newRunner(log)
 	return &ops.Deps{
 		Runner: runner,
 		Docker: a.newEngine(runner),
@@ -22,6 +23,6 @@ func (a *App) newDeps() *ops.Deps {
 		Clock:  ops.SystemClock{},
 		Rand:   rand.Reader,
 		Sink:   a.newSink(),
-		Log:    a.newLogger(),
+		Log:    log,
 	}
 }
