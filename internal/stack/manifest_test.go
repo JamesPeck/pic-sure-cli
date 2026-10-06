@@ -296,3 +296,20 @@ func TestManifestReadErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestRecordThenCreateDropsAPathSomeoneElseMade(t *testing.T) {
+	s := newStack(t)
+	err := s.recordThenCreate(Entry{Path: "x", Type: EntryFile}, func() error {
+		// Another process created x between the record and the create.
+		if err := os.WriteFile(s.Path("x"), nil, 0o644); err != nil {
+			return err
+		}
+		return fs.ErrExist
+	})
+	if !errors.Is(err, fs.ErrExist) {
+		t.Errorf("err = %v, want ErrExist", err)
+	}
+	if m, _ := s.Manifest(); m.Has("x") {
+		t.Error("x is recorded as the CLI's")
+	}
+}

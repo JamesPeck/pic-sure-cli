@@ -168,6 +168,32 @@ func (s *Stack) ReadFile(rel string) ([]byte, error) {
 // writes.
 func (s *Stack) FS() fs.FS { return s.root.FS() }
 
+// tempMarker separates the target's name from the pid and sequence number
+// in a temp file's name: .<name>.tmp-<pid>-<seq>.
+const tempMarker = ".tmp-"
+
+// IsTempName reports whether name, a base name, is one of WriteFile's temp
+// files. One outlives the write only if pic-sure died mid-write, and it is
+// never in the manifest, so destroy should remove those it finds beside
+// recorded paths.
+func IsTempName(name string) bool {
+	i := strings.LastIndex(name, tempMarker)
+	if i < 2 || name[0] != '.' {
+		return false
+	}
+	pid, seq, ok := strings.Cut(name[i+len(tempMarker):], "-")
+	return ok && isDigits(pid) && isDigits(seq)
+}
+
+// tempName returns a new temp file name for the target base.
+func tempName(base string) string {
+	return "." + base + tempMarker + strconv.Itoa(os.Getpid()) + "-" + strconv.FormatUint(tempSeq.Add(1), 10)
+}
+
+func isDigits(s string) bool {
+	return s != "" && strings.Trim(s, "0123456789") == ""
+}
+
 // tempSeq makes temp file names unique within the process; the pid makes
 // them unique across processes, and O_EXCL catches what's left (a crashed
 // run's file with a reused pid).
@@ -179,7 +205,7 @@ func (s *Stack) writeAtomic(p string, data []byte, perm fs.FileMode) (err error)
 	var tmp string
 	var f *os.File
 	for range 10 {
-		tmp = filepath.Join(dir, "."+base+".tmp-"+strconv.Itoa(os.Getpid())+"-"+strconv.FormatUint(tempSeq.Add(1), 10))
+		tmp = filepath.Join(dir, tempName(base))
 		// 0600 until the Chmod below, so a secret is never readable by
 		// others, even briefly.
 		f, err = s.root.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
@@ -217,14 +243,16 @@ func (s *Stack) writeAtomic(p string, data []byte, perm fs.FileMode) (err error)
 // recordThenCreate records e, then calls create to make it. Recording first
 // means neither a failed manifest update nor a crash can leave a path the CLI
 // made that the manifest doesn't list, which destroy would then leave
-// behind. If create fails and the path isn't there, the entry is dropped.
+// behind. If create fails, the entry is dropped unless the path exists
+// because create made it: an ErrExist failure means someone else did.
 func (s *Stack) recordThenCreate(e Entry, create func() error) error {
 	if err := s.record(e); err != nil {
 		return err
 	}
 	err := create()
 	if err != nil {
-		if _, lerr := s.root.Lstat(filepath.FromSlash(e.Path)); errors.Is(lerr, fs.ErrNotExist) {
+		_, lerr := s.root.Lstat(filepath.FromSlash(e.Path))
+		if errors.Is(err, fs.ErrExist) || errors.Is(lerr, fs.ErrNotExist) {
 			_ = s.forget(e.Path)
 		}
 	}

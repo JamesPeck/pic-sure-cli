@@ -38,7 +38,7 @@ func wantContent(t *testing.T, path, want string) {
 func wantNoTempFiles(t *testing.T, dir string) {
 	t.Helper()
 	_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
-		if err == nil && strings.Contains(d.Name(), ".tmp-") {
+		if err == nil && strings.Contains(d.Name(), tempMarker) {
 			t.Errorf("temp file left behind: %s", p)
 		}
 		return nil
@@ -247,5 +247,27 @@ func TestMkdirAll(t *testing.T) {
 	}
 	if err := s.MkdirAll("file/sub", 0o755); err == nil {
 		t.Error("MkdirAll through a file succeeded")
+	}
+}
+
+func TestIsTempName(t *testing.T) {
+	for name, want := range map[string]bool{
+		".pic-sure.yaml.tmp-4242-7": true,
+		".x.tmp-1-1":                true,
+		"pic-sure.yaml":             false,
+		".pic-sure.yaml":            false,
+		"pic-sure.yaml.tmp-4242-7":  false, // no leading dot
+		".x.tmp-4242":               false,
+		".x.tmp-abc-1":              false,
+		".x.tmp-1-":                 false,
+		".tmp-1-1":                  false, // no target name
+	} {
+		if got := IsTempName(name); got != want {
+			t.Errorf("IsTempName(%q) = %v, want %v", name, got, want)
+		}
+	}
+
+	if name := tempName("pic-sure.yaml"); !IsTempName(name) {
+		t.Errorf("IsTempName(%q) = false for a WriteFile temp name", name)
 	}
 }

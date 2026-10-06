@@ -209,7 +209,10 @@ A directory is a stack when it holds `pic-sure.yaml` and `.pic-sure/`.
   stack, so they can't reach an operator's files. `WriteFile(rel, data,
   perm)` is atomic (temp file, fsync, rename, fsync dir), sets exactly
   `perm` whatever the umask, and replaces a symlink rather than writing
-  through it. It needs the parent to exist: `MkdirAll(rel, perm)` first.
+  through it. Its temp files are named `.<name>.tmp-<pid>-<seq>`
+  (`IsTempName`); one survives only if pic-sure died mid-write, and isn't in
+  the manifest, so destroy should remove those beside recorded paths. It
+  needs the parent to exist: `MkdirAll(rel, perm)` first.
   `CreateFile` is for streamed files such as run logs. `ReadFile` and
   `FS()` read with the same confinement.
 - **Manifest.** `.pic-sure/manifest.json` lists every path the CLI created
