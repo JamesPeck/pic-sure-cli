@@ -257,6 +257,77 @@ func TestComposeRunReportsDockerFailures(t *testing.T) {
 	}
 }
 
+func TestComposeOwnFailuresAreErrors(t *testing.T) {
+	failures := []struct {
+		name     string
+		progress docker.Progress
+		stderr   string
+		message  string
+	}{
+		{"no such service", docker.ProgressPlain, "no such service: nosuch\n", "no such service: nosuch"},
+		{"service not running", docker.ProgressPlain, "service \"flyway-init\" is not running\n", "service \"flyway-init\" is not running"},
+		{"interpolation", docker.ProgressPlain,
+			"error while interpolating services.hpds.image: required variable HPDS_TAG is missing a value\n",
+			"error while interpolating services.hpds.image: required variable HPDS_TAG is missing a value"},
+		{"dependency", docker.ProgressPlain,
+			" Container demo-picsure-db-1  Error\ndependency failed to start: container demo-picsure-db-1 is unhealthy\n",
+			"dependency failed to start: container demo-picsure-db-1 is unhealthy"},
+		{"json progress", docker.ProgressJSON,
+			`{"id":"Container demo-picsure-db-1","status":"Error"}` + "\n" + `{"error":true,"message":"no such service: nosuch"}` + "\n",
+			"no such service: nosuch"},
+	}
+	for _, tt := range failures {
+		t.Run(tt.name, func(t *testing.T) {
+			f := fakerunner.New(t)
+			f.On(fakerunner.Glob("docker compose *")).Stderr(tt.stderr).Exit(1)
+			c := newTestCompose(f)
+			c.Progress = tt.progress
+			ctx := context.Background()
+
+			_, runErr := c.Run(ctx, docker.ComposeRunOpts{Service: "flyway-init", Rm: true})
+			_, execErr := c.Exec(ctx, docker.ComposeExecOpts{Service: "flyway-init", Args: []string{"true"}})
+			upErr := c.Up(ctx, docker.ComposeUpOpts{})
+			for verb, err := range map[string]error{"run": runErr, "exec": execErr, "up": upErr} {
+				var exitErr *docker.ExitError
+				if !errors.As(err, &exitErr) {
+					t.Errorf("%s: err = %v, want an *ExitError", verb, err)
+				} else if !strings.HasSuffix(err.Error(), "exited 1: "+tt.message) {
+					t.Errorf("%s: message %q, want it to end with %q", verb, err, tt.message)
+				}
+			}
+		})
+	}
+}
+
+func TestComposeRefusesEnvDockerReadsItself(t *testing.T) {
+	for _, entry := range []string{"DOCKER_HOST=tcp://elsewhere:2375", "COMPOSE_PROJECT_NAME=other", "HOME=/tmp", secretValue} {
+		f := fakerunner.New(t)
+		c := newTestCompose(f)
+		c.Env = func() []string { return []string{"HPDS_TAG=abc123", entry} }
+		err := c.Stop(context.Background(), nil)
+		if err == nil {
+			t.Errorf("%s: no error", entry)
+		} else if strings.Contains(err.Error(), secretValue) {
+			t.Errorf("error leaks the entry's value: %v", err)
+		}
+		if n := len(f.Calls()); n != 0 {
+			t.Errorf("%s: %d calls reached the runner", entry, n)
+		}
+	}
+}
+
+func TestComposePassthroughSerializesOneWriter(t *testing.T) {
+	c := newTestCompose(nil)
+	c.Runner = concurrentRunner{}
+	var w overlapWriter
+	if _, err := c.Passthrough(context.Background(), []string{"logs"}, nil, &w, &w); err != nil {
+		t.Fatal(err)
+	}
+	if w.overlapped.Load() {
+		t.Error("stdout and stderr were written at the same time")
+	}
+}
+
 func TestComposeExec(t *testing.T) {
 	f := fakerunner.New(t)
 	f.On(fakerunner.Glob("docker compose * exec -T picsure-db mysql")).Stdout("1\n").Stderr("warning\n").Exit(2)
@@ -568,8 +639,9 @@ services:
 	}
 }
 
-// execRunner is a minimal real Runner for TestComposeAgainstRealCompose. Like
-// the production runner, it does not pass COMPOSE_* variables through.
+// execRunner is a minimal real Runner for TestComposeAgainstRealCompose. It
+// drops the user's COMPOSE_* variables, as Compose relies on the production
+// runner to do.
 type execRunner struct{}
 
 func (execRunner) Run(ctx context.Context, c docker.Cmd) (docker.Result, error) {

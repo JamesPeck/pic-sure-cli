@@ -459,8 +459,16 @@ argv. `Compose` implements it over a `Runner`.
   message when it fails. `Down` always passes `--remove-orphans`.
 - `Run` (`run [--rm] -T`) and `Exec` (`exec -T`) stream stdout and stderr
   separately and return the command's exit code, plus an `*ExitError` only
-  when docker itself failed, as `Engine.Run` does. `Passthrough` adds
-  nothing after the global flags and returns compose's exit code.
+  when docker or compose itself failed (no such service, service not
+  running, a dependency that failed to start), as `Engine.Run` does.
+  `Passthrough` adds nothing after the global flags and returns compose's
+  exit code.
+- Under `--progress json` compose reports its own failure as a
+  `{"error":true,"message":...}` line; the adapter unwraps it, so error
+  messages read the same in every output mode.
+- `Env()` entries naming a variable docker or compose reads for itself
+  (`DOCKER_*`, `COMPOSE_*`, `HOME`, `PATH`, ...) fail the call, as in the
+  Engine.
 - Option types are `ComposeUpOpts`, `ComposeDownOpts`, `ComposeRunOpts`,
   `ComposeExecOpts` and `ComposeLogsOpts`; the `Compose` prefix keeps them
   apart from the Engine's `RunOpts` and `ExecOpts`. Compose shares the

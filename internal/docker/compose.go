@@ -1,13 +1,16 @@
 package docker
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -22,9 +25,10 @@ import (
 // Up, Down, Stop, Restart, Pull and Logs copy compose's output to a writer
 // as it arrives (nil discards it) and return an *ExitError carrying
 // compose's message when it exits non-zero. Run and Exec return the exit
-// code of the command they run, plus an *ExitError when docker itself failed,
-// as Engine.Run does. Passthrough returns compose's exit code. Every method
-// returns an error when docker could not be started or ctx ended first.
+// code of the command they run, plus an *ExitError when docker or compose
+// itself failed, as Engine.Run does. Passthrough returns compose's exit
+// code. Every method returns an error when docker could not be started or
+// ctx ended first.
 type Composer interface {
 	// Up creates and starts containers in the background (`up -d`).
 	Up(ctx context.Context, opts ComposeUpOpts) error
@@ -50,10 +54,10 @@ type Composer interface {
 	// Ps lists the services' containers, stopped ones included. No
 	// services means all of them. It gives up after PsTimeout.
 	Ps(ctx context.Context, services ...string) ([]ComposeService, error)
-	// Config validates the compose files, failing with compose's message if
-	// they are invalid. Unless quiet, it also returns the merged model as
-	// YAML, with ${VAR} references left as they are so that no secret value
-	// appears in it.
+	// Config with quiet validates the compose files, interpolation
+	// included, and fails with compose's message if they are invalid.
+	// Without quiet it returns the merged model as YAML, with ${VAR}
+	// references left uninterpolated so that no secret value appears in it.
 	Config(ctx context.Context, quiet bool) ([]byte, error)
 	// Passthrough runs `docker compose ARGS...` with the stack's files and
 	// environment, for `pic-sure compose -- ARGS`. Nothing is added after
@@ -149,7 +153,6 @@ const (
 
 // Compose is the Composer, built on a Runner.
 type Compose struct {
-	// Runner runs docker.
 	Runner Runner
 	// Files are passed as -f, in order: the rendered compose file, then
 	// the stack's overrides. A Compose with no Files refuses to run, so
@@ -162,11 +165,9 @@ type Compose struct {
 	ProjectDir string
 	// Env returns the NAME=value entries each call gets in Cmd.Env: every
 	// value the compose files' ${VAR} references need, secrets included.
-	// It is called once per call; nil means none. There is never a .env
-	// file: compose gets --env-file /dev/null, so a stray .env in the
-	// project directory can't change the project name or any value.
-	// Compose therefore relies on the Runner's base environment not
-	// passing the user's COMPOSE_* variables through.
+	// It is called once per call; nil means none. A call fails if an entry
+	// names a variable docker or compose reads for itself (DOCKER_*,
+	// COMPOSE_*, HOME, PATH and so on).
 	Env func() []string
 	// Progress is the --progress format for the verbs that report
 	// progress: Up, Down, Stop, Restart, Pull and Run. Empty means
@@ -289,7 +290,7 @@ func (c *Compose) Run(ctx context.Context, opts ComposeRunOpts) (int, error) {
 	return c.workload(ctx, true, append(args, opts.Args...), nil, opts.Stdout, opts.Stderr)
 }
 
-// Exec implements Composer. The command gets no TTY (-T).
+// Exec implements Composer.
 func (c *Compose) Exec(ctx context.Context, opts ComposeExecOpts) (int, error) {
 	if opts.Service == "" || len(opts.Args) == 0 {
 		return 0, errors.New("docker compose exec: needs a service and a command")
@@ -342,7 +343,8 @@ func (c *Compose) Passthrough(ctx context.Context, args []string, stdin io.Reade
 		return 0, err
 	}
 	cmd.Stdin = stdin
-	return c.Runner.Stream(ctx, cmd, stdout, stderr)
+	code, _, err := streamCmd(ctx, c.Runner, cmd, stdout, stderr)
+	return code, err
 }
 
 // cmd builds `docker compose` with the stack's global flags, then args.
@@ -358,6 +360,9 @@ func (c *Compose) cmd(progress bool, args []string) (Cmd, error) {
 	if c.ProjectDir != "" {
 		argv = append(argv, "--project-directory", c.ProjectDir)
 	}
+	// Without --env-file, compose reads .env from the project directory, so
+	// a stray one there could rename the project or supply values. The
+	// runner keeps the user's COMPOSE_* variables out for the same reason.
 	argv = append(argv, "--env-file", os.DevNull)
 	if progress {
 		p := c.Progress
@@ -369,8 +374,26 @@ func (c *Compose) cmd(progress bool, args []string) (Cmd, error) {
 	var env []string
 	if c.Env != nil {
 		env = slices.Clone(c.Env())
+		if err := checkComposeEnv(env); err != nil {
+			return Cmd{}, fmt.Errorf("docker compose: env %w", err)
+		}
 	}
 	return Cmd{Argv: append(argv, args...), Env: env, Dir: c.ProjectDir}, nil
+}
+
+// checkComposeEnv refuses entries that aren't NAME=value, and names docker
+// or compose read for themselves, which would change the daemon, project or
+// files compose uses.
+func checkComposeEnv(env []string) error {
+	if _, _, err := splitEnv(env); err != nil {
+		return err
+	}
+	for _, kv := range env {
+		if name, _, _ := strings.Cut(kv, "="); strings.HasPrefix(name, "COMPOSE_") {
+			return fmt.Errorf("%s: compose reads it for itself", name)
+		}
+	}
+	return nil
 }
 
 // stream runs a verb with its output copied to out and turns a non-zero exit
@@ -385,13 +408,14 @@ func (c *Compose) stream(ctx context.Context, out io.Writer, progress bool, args
 		return err
 	}
 	if code != 0 {
+		tail, _ = unwrapComposeError(tail)
 		return exitError(cmd.Argv, code, tail)
 	}
 	return nil
 }
 
 // workload runs a verb that runs a command in a container and returns that
-// command's exit code, with an error only if docker itself failed.
+// command's exit code, with an error only if docker or compose itself failed.
 func (c *Compose) workload(ctx context.Context, progress bool, args []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
 	cmd, err := c.cmd(progress, args)
 	if err != nil {
@@ -399,8 +423,32 @@ func (c *Compose) workload(ctx context.Context, progress bool, args []string, st
 	}
 	cmd.Stdin = stdin
 	code, tail, err := streamCmd(ctx, c.Runner, cmd, stdout, stderr)
-	if err != nil {
+	if err != nil || code == 0 {
 		return code, err
 	}
+	tail, composeFailed := unwrapComposeError(tail)
+	if composeFailed || composeFailedRE.MatchString(lastLine(trimUsageHint(tail))) {
+		return code, exitError(cmd.Argv, code, tail)
+	}
 	return workloadResult(cmd.Argv, code, tail)
+}
+
+// composeFailedRE matches a last stderr line in compose's own words when a
+// run or exec never started its command. workloadResult covers docker's.
+var composeFailedRE = regexp.MustCompile(`^(no such service: |service "[^"]*" is not running|error while interpolating |dependency failed to start: )`)
+
+// unwrapComposeError replaces a final {"error":true,"message":...} line,
+// which is how compose reports its own failure under --progress json, with
+// the message, and reports whether there was one.
+func unwrapComposeError(stderr []byte) ([]byte, bool) {
+	trimmed := bytes.TrimRight(stderr, "\n")
+	start := bytes.LastIndexByte(trimmed, '\n') + 1
+	var e struct {
+		Error   bool   `json:"error"`
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(trimmed[start:], &e) != nil || !e.Error {
+		return stderr, false
+	}
+	return append(trimmed[:start:start], e.Message+"\n"...), true
 }
