@@ -479,7 +479,42 @@ layout.
 
 ## internal/cache
 
-_Ticket 019 fills this in; 057 adds `cache list/prune`._
+Ticket 019; 057 adds `cache list/prune`. `cache.DefaultRoot()` is
+`$XDG_CACHE_HOME/pic-sure`, or `~/.cache/pic-sure` when that is unset or
+relative. It refuses a root inside `$TMPDIR` (symlinks resolved), which
+Colima and Lima don't share with their VMs. `cache.Open(root, Options{Git,
+Holder, LockTimeout})` creates the layout. It takes any absolute root, so
+tests open one under `t.TempDir()`. `WithEvents(sink, stepID)` returns a
+copy that reports to a step's sink: `Progress` while cloning, fetching
+and unpacking, and "waiting for the … lock held by …" when another
+command holds a lock.
+
+- `git/<repo>.git`: bare clones. `src/<repo>/<sha>/`: source trees. `<repo>`
+  is the catalog's `RepoName()`.
+- `EnsureSource(ctx, component, sha)` takes a catalog component name and a
+  full lowercase commit sha, and returns the tree's path. A missing tree is
+  made under the repo's fetch lock: clone, or fetch every branch and tag if
+  the clone lacks the commit, then `git archive` unpacked into a temporary
+  sibling and renamed into place. A tree that exists is complete and is
+  never rewritten; mount it read-only. Leftover `*.tmp-*` directories of a
+  dead run are removed under the lock.
+- `ReleaseControlDir()` (028 clones into it under `LockRepo(ctx,
+  "release-control")`), `DownloadsDir()`, `BuildDir(sha)` (`build/<sha12>`,
+  not created: the build makes and removes it under the reactor lock).
+- `TempDir(pattern)` makes a fresh 0700 directory under `tmp/` for one run's
+  temporary files, such as an extracted phenotype CSV, that a container may
+  need to mount. The caller removes it.
+- **Locks** are flocks on files in `locks/`, so they exclude goroutines and
+  processes alike, and die with their holder. `LockRepo(ctx, repo)`,
+  `LockReactor(ctx)` (any Maven run) and `LockImage(ctx, tag)` wait up to
+  `RepoLockTimeout` (15 min), `ReactorLockTimeout` (1 h) and
+  `ImageLockTimeout` (30 min), or `Options.LockTimeout`, and then fail with
+  an error wrapping `ErrLockTimeout` that names the holder. A cancelled ctx
+  stops the wait. Lock files are never deleted: removing one while someone
+  waits on it would let two holders in.
+- `EnsureMavenVolume(ctx, docker)` creates `MavenVolume` (`pic-sure-m2`)
+  through anything with 016's `VolumeCreate`. Use it only under the reactor
+  lock.
 
 ## internal/release
 
