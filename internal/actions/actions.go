@@ -4,12 +4,11 @@
 // carries an AbortNote so a confirmed abort never leaves the user guessing
 // about state.
 //
-// v1 ran each action as an AIO bash script in a PTY. v2 deleted that layer
-// (ticket 001), so starting an action fails with NotImplemented until the TUI
-// tickets (038 renderer, 039 landing, 040 dashboard, 047 load wizard) run the
-// in-process operations instead. Args still holds the v1 script arguments:
-// they record the choices each screen collected, which the TUI tests assert,
-// and they go away with that rewiring.
+// Starting an action fails with NotImplemented until the TUI tickets (038
+// renderer, 039 landing, 040 dashboard, 047 load wizard) run in-process
+// operations. Args holds the v1 script arguments: they record the choices
+// each screen collected, which the TUI tests assert, and they go away with
+// that rewiring.
 package actions
 
 import (

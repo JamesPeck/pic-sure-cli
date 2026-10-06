@@ -19,16 +19,13 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
-      # Same pinned version and same `make lint` entry point as local
-      # development. The version lives only in the Makefile.
+      # Same pinned version as local development. The version lives only in
+      # the Makefile.
       - name: Install golangci-lint
         run: |
           version="$(make -s print-lint-version)"
           curl -sSfL "https://raw.githubusercontent.com/golangci/golangci-lint/$version/install.sh" \
             | sh -s -- -b "$(go env GOPATH)/bin" "$version"
-
-      - name: Lint
-        run: make lint
 
       # go.mod/go.sum must match the import graph; catches missing
       # `go mod tidy` (e.g. direct deps mislabeled // indirect).
@@ -37,8 +34,8 @@ jobs:
           go mod tidy
           git diff --exit-code go.mod go.sum
 
-      - name: Test
-        run: make test
+      - name: Check (gofmt, vet, lint, test)
+        run: make check
 
   shell:
     name: Shell scripts

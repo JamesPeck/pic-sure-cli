@@ -29,9 +29,6 @@ jobs:
           curl -sSfL "https://raw.githubusercontent.com/golangci/golangci-lint/$version/install.sh" \
             | sh -s -- -b "$(go env GOPATH)/bin" "$version"
 
-      - name: Lint
-        run: make lint
-
       # go.mod/go.sum must match the import graph; catches missing
       # `go mod tidy` (e.g. direct deps mislabeled // indirect).
       - name: Tidy check
@@ -39,8 +36,8 @@ jobs:
           go mod tidy
           git diff --exit-code go.mod go.sum
 
-      - name: Test
-        run: make test
+      - name: Check (gofmt, vet, lint, test)
+        run: make check
 
       - name: Shellcheck
         run: |

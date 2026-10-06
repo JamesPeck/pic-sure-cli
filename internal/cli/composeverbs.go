@@ -2,8 +2,6 @@ package cli
 
 import "github.com/spf13/cobra"
 
-// The thin compose verbs (ticket 026).
-
 func newDownCmd(a *App) *cobra.Command {
 	return &cobra.Command{
 		Use:   "down",

@@ -9,8 +9,11 @@
 //     friends): discovery from --stack or the cwd, confined atomic writes
 //     through os.Root, state.json, manifest.json, the per-stack lock, and
 //     the stack labels.
-//   - 008: secrets (secrets*.go): generation through ops.Deps.Rand,
-//     secrets.yaml, the HPDS key file, and redaction registration.
+//   - 008: secrets (secrets*.go): generation from an io.Reader the caller
+//     passes in (ops.Deps.Rand), secrets.yaml, the HPDS key file, and
+//     redaction registration.
 //   - 009: the version gate by command class and the config migration
 //     framework (gate*.go, migrate*.go).
+//
+// ops imports stack, so stack must not import ops.
 package stack

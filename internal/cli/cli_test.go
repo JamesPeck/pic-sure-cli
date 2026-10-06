@@ -224,20 +224,57 @@ func TestPlainErrorFromRunEIsAFailure(t *testing.T) {
 }
 
 func TestSignalDecidesExitCode(t *testing.T) {
-	a, _, stderr := testApp(t)
 	ctx, cancel := context.WithCancelCause(context.Background())
 	cancel(exitcode.Signaled(syscall.SIGTERM))
+
+	a, _, stderr := testApp(t)
 	if code := a.Run(ctx, []string{"up"}); code != 143 {
-		t.Errorf("exit = %d, want 143", code)
+		t.Errorf("failed command: exit = %d, want 143", code)
 	}
 	if !strings.Contains(stderr.String(), "interrupted") {
 		t.Errorf("stderr = %q, want it to say interrupted", stderr)
 	}
 
-	// A command that succeeds despite the signal still exits 0.
+	// The TUI returns cleanly when Bubble Tea turns SIGTERM into a quit; the
+	// signal still decides the exit code.
 	a, _, _ = testApp(t)
-	if code := a.Run(ctx, []string{"version"}); code != 0 {
-		t.Errorf("version exit = %d, want 0", code)
+	a.IsTerminal = func() bool { return true }
+	a.StartTUI = func(tui.Options) error { return nil }
+	if code := a.Run(ctx, nil); code != 143 {
+		t.Errorf("TUI: exit = %d, want 143", code)
+	}
+}
+
+func TestRunIsRepeatable(t *testing.T) {
+	a, _, _ := testApp(t)
+	if code := a.Run(context.Background(), []string{"up"}); code != exitcode.CodeFailed {
+		t.Fatalf("up: exit = %d", code)
+	}
+	// The first run reached RunE; the second must still classify cobra's
+	// rejection of its command line as a usage error.
+	if code := a.Run(context.Background(), []string{"up", "--frobnicate"}); code != exitcode.CodeUsage {
+		t.Errorf("second run: exit = %d, want %d", code, exitcode.CodeUsage)
+	}
+}
+
+func TestHelpCommand(t *testing.T) {
+	for _, tt := range []struct {
+		args []string
+		code int
+		want string
+	}{
+		{[]string{"help"}, 0, "Usage:\n  pic-sure [flags]"},
+		{[]string{"help", "config", "set"}, 0, "Usage:\n  pic-sure config set KEY VALUE"},
+		{[]string{"help", "frobnicate"}, 2, ""},
+		{[]string{"help", "config", "frobnicate"}, 2, ""},
+	} {
+		a, stdout, stderr := testApp(t)
+		if code := a.Run(context.Background(), tt.args); code != tt.code {
+			t.Errorf("%v: exit = %d, want %d (stderr %q)", tt.args, code, tt.code, stderr)
+		}
+		if !strings.Contains(stdout.String(), tt.want) {
+			t.Errorf("%v: stdout = %q, want it to contain %q", tt.args, stdout, tt.want)
+		}
 	}
 }
 

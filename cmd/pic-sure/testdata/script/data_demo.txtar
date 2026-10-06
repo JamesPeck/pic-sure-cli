@@ -1,0 +1,13 @@
+# Not implemented yet: exit 1, naming ticket 046.
+exitcode 1 pic-sure data demo
+stderr '^pic-sure: not implemented \(ticket 046\)$'
+! stdout .
+exitcode 1 pic-sure data demo all
+stderr '^pic-sure: not implemented \(ticket 046\)$'
+
+# An unknown dataset is a usage error.
+exitcode 2 pic-sure data demo frobnicate
+
+# data without a subcommand is a usage error.
+exitcode 2 pic-sure data
+stderr '^pic-sure: pic-sure data needs a subcommand$'

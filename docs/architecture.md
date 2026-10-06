@@ -14,7 +14,10 @@ section. Edit only your own.
 
 - **One owner per file.** Each command group has its own file in
   `internal/cli`, each operation its own file in `internal/ops`, and each
-  command its own testscript under `cmd/pic-sure/testdata/script/`.
+  command group its own testscript under `cmd/pic-sure/testdata/script/`.
+  `data` is split further (`data_demo.txtar` and so on, with a constructor
+  per subcommand in `data.go`) because different tickets implement its
+  subcommands.
   `internal/cli/root.go` already registers every command, so you shouldn't
   need to edit it.
 - **Shared code goes down, not sideways.** A helper that several operations
@@ -31,8 +34,9 @@ section. Edit only your own.
   `exitcode.Usage`, `Precondition`, `ConfirmRequired`, `Incompatible` or
   `Failed` from a command; any other error exits 1. Errors cobra raises
   while parsing the command line (unknown command or flag, wrong argument
-  count, missing required flag) exit 2. SIGINT and SIGTERM cancel the
-  command's context and exit 128+N.
+  count, missing required flag, unknown help topic) exit 2. SIGINT and
+  SIGTERM cancel the command's context, and the CLI then exits 128+N even
+  if the command returned cleanly.
 - **Secrets never go in argv** (§6.3). A secret reaches a container as a bare
   `-e NAME` in `docker.Cmd.Argv` plus `NAME=value` in `Cmd.Env`, or on
   `Cmd.Stdin`, or in a 0600 file. Runners never log env values or stdin.
@@ -115,7 +119,7 @@ version variables are set with `-ldflags` (see the Makefile).
 
 `main_test.go` is the testscript harness. It registers the binary as
 `pic-sure` and the fakes from `internal/fakecmd` as `docker` and `git`, then
-runs every script in `testdata/script/`, one per command group. Scripts must
+runs every script in `testdata/script/`. Scripts must
 `exec` programs explicitly. The harness adds one command:
 `exitcode N PROGRAM [ARGS...]` runs PROGRAM and requires exit status N,
 because `! exec` accepts any failure.
@@ -127,9 +131,11 @@ it.
 
 - `app.go`: `App` (build info, global options, streams, and seams for the
   terminal check and the TUI), `Execute`, and the error-to-exit-code
-  mapping. With no arguments, pic-sure opens the TUI when stdin and stdout
-  are terminals and none of `--json`, `--plain`, `--yes` or
-  `--non-interactive` is given. Otherwise it prints help.
+  mapping. A signal received while a command runs decides the exit code,
+  because the TUI returns cleanly when Bubble Tea turns SIGTERM into a quit.
+  With no arguments, pic-sure opens the TUI when stdin and stdout are
+  terminals and none of `--json`, `--plain`, `--yes` or `--non-interactive`
+  is given. Otherwise it prints help.
 - `globals.go`: the global flags (§5). `--yes` answers yes to every
   confirmation. `--non-interactive` only forbids prompting, so a
   destructive command still needs `--yes`. `--json` implies
@@ -138,8 +144,9 @@ it.
   error raised before a `RunE` starts is reported as a usage error. A
   `PreRunE` that fails for any other reason must return an
   `*exitcode.Error`.
-- `helpers.go`: `notImplemented(ticket)` and `newGroup`. A group run without
-  a subcommand, or with an unknown one, is a usage error.
+- `helpers.go`: `notImplemented(ticket)`, `newGroup`, and the `help`
+  command. A group run without a subcommand, or with an unknown one, is a
+  usage error, and so is `help` with an unknown topic.
 - `deps.go`: `newDeps` assembles `ops.Deps`. Each field comes from a
   constructor in its owner's file: `runner.go` (003), `output.go` (004, which
   also reports errors), `logging.go` (005), `engine.go` (016) and
@@ -174,7 +181,8 @@ it.
 
 _Tickets 006 (config schema), 007 (stack directory, state, manifest, lock),
 008 (secrets) and 009 (version gate, config migrations) fill this in. File
-ownership is in the package doc._
+ownership is in the package doc._ `ops` imports `stack`, so `stack` must not
+import `ops`: secret generation takes the `io.Reader` as an argument.
 
 ## internal/render
 
@@ -342,15 +350,17 @@ code. The constructors take `fmt.Errorf` arguments, so `%w` wraps a cause.
 
 Ticket 001. The fake `docker` and `git` the testscript harness puts on
 `PATH`. Each reads rules from `$HOME/<name>.scenario` and appends every call's
-argv to `$HOME/<name>.log`; the harness sets `HOME` to the script's work
-directory. Rule syntax:
+argv to `$HOME/<name>.log` (quoting arguments with spaces, as
+`docker.FormatArgv` does); the harness sets `HOME` to the script's work
+directory. Calls are serialized with a lock file, so concurrent calls keep
+the log in order and `times=N` exact. Rule syntax:
 
 ```
 PATTERN => EXIT [stdout=FILE] [stderr=FILE] [times=N]
 ```
 
-PATTERN is a glob over the space-joined argv (program name included), or a
-regex after `re:`. FILE is relative to the scenario's directory. `times=N`
+PATTERN is a glob over the space-joined, unquoted argv (program name
+included), or a regex after `re:`. FILE is relative to the scenario's directory. `times=N`
 retires a rule after N matches. A call that no rule matches exits 97 with
 the reason on stderr. `cmd/pic-sure/testdata/script/fakes.txtar` is a
 worked example.
@@ -369,4 +379,5 @@ These packages exist only until the TUI tickets replace what uses them:
   renders (040 removes them).
 - `internal/dialog`: the reset confirmation dialog.
 - `internal/tty`: the terminal check behind `App.IsTerminal`, which output
-  mode selection (004) also uses.
+  mode selection (004) also uses. It uses isatty, so `/dev/null` on stdin
+  doesn't count as a terminal.

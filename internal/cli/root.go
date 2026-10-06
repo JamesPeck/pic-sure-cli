@@ -23,10 +23,9 @@ Run with no arguments on a terminal to open the TUI.`,
 		},
 	}
 	root.SetVersionTemplate("{{.Version}}\n")
+	root.SetHelpCommand(newHelpCmd(root))
 	a.Global.register(root)
 
-	// Every command, in spec §5 order. Each constructor lives in its group's
-	// file and is owned by the ticket that implements it.
 	root.AddCommand(
 		newInitCmd(a),
 		newUpCmd(a),

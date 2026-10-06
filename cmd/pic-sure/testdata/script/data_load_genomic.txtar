@@ -1,0 +1,8 @@
+# Not implemented yet: exit 1, naming ticket 049.
+exitcode 1 pic-sure data load-genomic --partition chr1 --vcf-index vcfIndex.tsv
+stderr '^pic-sure: not implemented \(ticket 049\)$'
+! stdout .
+
+# --partition and --vcf-index are required.
+exitcode 2 pic-sure data load-genomic --partition chr1
+stderr 'required flag\(s\) "vcf-index" not set'

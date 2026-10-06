@@ -60,28 +60,28 @@ func Execute(ctx context.Context, info BuildInfo, args []string) int {
 }
 
 // Run runs one command line and returns its exit code. If ctx was cancelled
-// with an *exitcode.Error cause (main does this for SIGINT and SIGTERM) and
-// the command failed, the cause decides the code.
+// with an *exitcode.Error cause (main does this for SIGINT and SIGTERM), that
+// cause decides the code even when the command returned cleanly, as the TUI
+// does when Bubble Tea turns SIGTERM into a normal quit.
 func (a *App) Run(ctx context.Context, args []string) int {
 	return a.execute(ctx, newRootCmd(a), args)
 }
 
 func (a *App) execute(ctx context.Context, root *cobra.Command, args []string) int {
+	a.running = false
 	root.SetArgs(args)
 	root.SetIn(a.Stdin)
 	root.SetOut(a.Stdout)
 	root.SetErr(a.Stderr)
 
 	cmd, err := root.ExecuteContextC(ctx)
-	if err == nil {
-		return exitcode.CodeOK
-	}
 	var coded *exitcode.Error
-	if cause := context.Cause(ctx); cause != nil && errors.As(cause, &coded) {
+	switch cause := context.Cause(ctx); {
+	case cause != nil && errors.As(cause, &coded):
 		err = cause
-	} else if !a.running && !errors.As(err, &coded) {
-		// cobra rejected the command line: an unknown command or flag, a
-		// bad argument count, a missing required flag.
+	case err == nil:
+		return exitcode.CodeOK
+	case !a.running && !errors.As(err, &coded):
 		err = exitcode.Usage("%w", err)
 	}
 	a.reportError(cmd, err)

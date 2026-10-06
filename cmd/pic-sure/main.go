@@ -30,7 +30,7 @@ func main() {
 // the process at once (spec §10.5).
 //
 // This is signal.NotifyContext done by hand: NotifyContext's cancellation
-// cause doesn't say which signal arrived, and the exit code needs it.
+// cause names the signal only as text, and the exit code needs its number.
 func run(args []string) int {
 	ctx, cancel := context.WithCancelCause(context.Background())
 	defer cancel(nil)

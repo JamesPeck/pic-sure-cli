@@ -1,0 +1,11 @@
+# Not implemented yet: exit 1, naming ticket 042.
+exitcode 1 pic-sure data load-phenotype --file pheno.csv
+stderr '^pic-sure: not implemented \(ticket 042\)$'
+! stdout .
+exitcode 1 pic-sure data load-phenotype --input-dir phenotypes
+stderr '^pic-sure: not implemented \(ticket 042\)$'
+
+# Exactly one of --file and --input-dir is required.
+exitcode 2 pic-sure data load-phenotype
+stderr 'at least one of the flags in the group \[file input-dir\] is required'
+exitcode 2 pic-sure data load-phenotype --file a.csv --input-dir d

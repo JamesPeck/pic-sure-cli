@@ -53,9 +53,8 @@ func wizardWriteTick() tea.Cmd {
 	return tea.Tick(wizardWriteTickRate, func(time.Time) tea.Msg { return wizardWriteTickMsg{} })
 }
 
-// runWizardWrites is a seam (tests stub it). v1 wrote the changed keys
-// through scripts/env-set.sh; v2 writes pic-sure.yaml once ticket 039 moves
-// the wizard onto the config schema.
+// runWizardWrites is a seam (tests stub it). It fails until ticket 039 moves
+// the wizard onto the config schema and writes pic-sure.yaml.
 var runWizardWrites = func(string, map[string]string, map[string]string) error {
 	return errors.New("writing the setup: not implemented in v2 yet (ticket 039)")
 }

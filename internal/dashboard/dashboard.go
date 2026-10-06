@@ -2,10 +2,8 @@
 // panes, a log follower, and keybound actions with an output pane. It is
 // embedded as a sibling screen of the unified TUI (internal/tui).
 //
-// v1 read everything through the AIO scripts and ran actions as scripts in a
-// PTY. That layer is gone in v2, so the polls, the log follower and every
-// action report "not implemented" until ticket 040 rewires them onto the v2
-// operations.
+// The polls, the log follower and every action report "not implemented"
+// until ticket 040 rewires them onto the v2 operations.
 package dashboard
 
 import (

@@ -30,8 +30,7 @@ func killGrace(seq int) tea.Cmd {
 	return tea.Tick(abortGracePeriod, func(time.Time) tea.Msg { return killGraceMsg{seq: seq} })
 }
 
-// runnerHandle is a running action, so tests can substitute a fake (mirrors
-// the activity screen's seam).
+// runnerHandle is a running action, so tests can substitute a fake.
 type runnerHandle interface {
 	WaitData() tea.Cmd
 	Resize(rows, cols int)
@@ -87,7 +86,7 @@ type model struct {
 	pollingServices bool // a compose ps poll is in flight
 	status          *contract.Status
 	statusErr       error
-	pollingStatus   bool // a status.sh --json poll is in flight
+	pollingStatus   bool // a status poll is in flight
 	selected        int
 
 	logView    viewport.Model

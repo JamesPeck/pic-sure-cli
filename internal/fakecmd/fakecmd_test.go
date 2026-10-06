@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -62,6 +63,47 @@ docker version => 0
 	}, "\n") + "\n"
 	if string(log) != want {
 		t.Errorf("log =\n%s\nwant\n%s", log, want)
+	}
+}
+
+func TestConcurrentCallsKeepExactCounts(t *testing.T) {
+	home := t.TempDir()
+	writeFiles(t, home, map[string]string{
+		"docker.scenario": "docker ps => 0 stdout=first.txt times=10\ndocker ps => 0 stdout=rest.txt\n",
+		"first.txt":       "first",
+		"rest.txt":        "rest",
+	})
+
+	const calls = 50
+	outputs := make(chan string, calls)
+	var wg sync.WaitGroup
+	for range calls {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			var out, errOut bytes.Buffer
+			if code := run("docker", []string{"ps"}, home, &out, &errOut); code != 0 {
+				t.Errorf("exit %d: %s", code, errOut.String())
+			}
+			outputs <- out.String()
+		}()
+	}
+	wg.Wait()
+	close(outputs)
+
+	got := map[string]int{}
+	for out := range outputs {
+		got[out]++
+	}
+	if got["first"] != 10 || got["rest"] != calls-10 {
+		t.Errorf("responses = %v, want 10 first and %d rest", got, calls-10)
+	}
+	log, err := os.ReadFile(filepath.Join(home, "docker.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(string(log), "docker ps\n"); n != calls {
+		t.Errorf("log has %d calls, want %d", n, calls)
 	}
 }
 

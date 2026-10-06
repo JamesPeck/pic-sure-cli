@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"strings"
+
 	"github.com/spf13/cobra"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
@@ -26,4 +28,20 @@ func newGroup(use, short string, subs ...*cobra.Command) *cobra.Command {
 	}
 	g.AddCommand(subs...)
 	return g
+}
+
+// newHelpCmd replaces cobra's help command, which prints the root help and
+// exits 0 for an unknown topic.
+func newHelpCmd(root *cobra.Command) *cobra.Command {
+	return &cobra.Command{
+		Use:   "help [command]",
+		Short: "Help about any command",
+		RunE: func(_ *cobra.Command, args []string) error {
+			target, rest, err := root.Find(args)
+			if err != nil || len(rest) > 0 {
+				return exitcode.Usage("unknown help topic %q", strings.Join(args, " "))
+			}
+			return target.Help()
+		},
+	}
 }

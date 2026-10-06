@@ -1,8 +1,7 @@
 // Package wizard implements the guided setup form: a data-driven field table
 // derived from the v1 .env.example, rendered as a huh form. This package
-// never writes configuration. v1 wrote the answers through the AIO
-// scripts/env-set.sh, which v2 deleted (ticket 001); ticket 039 moves the
-// fields onto the pic-sure.yaml schema (ticket 006) and runs init in-process.
+// never writes configuration. Ticket 039 moves the fields onto the
+// pic-sure.yaml schema (ticket 006) and runs init in-process.
 package wizard
 
 import (

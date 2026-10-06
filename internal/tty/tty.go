@@ -1,19 +1,22 @@
-// Package tty answers "may we prompt the user?" without external deps.
+// Package tty answers "may we prompt the user?".
 package tty
 
-import "os"
+import (
+	"os"
 
-// IsInteractive reports whether both stdin and stdout are character devices
-// (terminals). Prompting is only allowed when this is true; otherwise
-// commands must fail fast naming the flags that replace the prompt.
+	"github.com/mattn/go-isatty"
+)
+
+// IsInteractive reports whether both stdin and stdout are terminals.
+// Prompting is only allowed when this is true; otherwise commands must fail
+// fast naming the flags that replace the prompt.
 func IsInteractive() bool {
-	return isCharDevice(os.Stdin) && isCharDevice(os.Stdout)
+	return isTerminal(os.Stdin) && isTerminal(os.Stdout)
 }
 
-func isCharDevice(f *os.File) bool {
-	fi, err := f.Stat()
-	if err != nil {
-		return false
-	}
-	return fi.Mode()&os.ModeCharDevice != 0
+// isTerminal reports whether f is a terminal. A character-device check is
+// not enough: /dev/null is a character device, and cron, systemd and CI
+// often attach it to stdin.
+func isTerminal(f *os.File) bool {
+	return isatty.IsTerminal(f.Fd())
 }

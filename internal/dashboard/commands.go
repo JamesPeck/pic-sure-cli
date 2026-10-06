@@ -17,7 +17,6 @@ import (
 // polls the compose adapter (017) and the v2 status report (027) in-process.
 var errNotImplemented = errors.New("not implemented in v2 yet (ticket 040)")
 
-// Poll intervals: services every 2s, the status report every 15s.
 const (
 	servicesInterval = 2 * time.Second
 	statusInterval   = 15 * time.Second

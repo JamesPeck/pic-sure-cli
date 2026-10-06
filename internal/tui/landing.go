@@ -43,15 +43,14 @@ var (
 
 // fetchReleaseBranch reads the current release-control branch for the
 // switch-branch prefill. It must run inside a tea.Cmd (startBranchInput
-// dispatches it off the update path), never in Update itself. v1 read it from
-// status.sh --json; until ticket 039 reads the stack config, there is no
-// prefill.
+// dispatches it off the update path), never in Update itself. Until ticket
+// 039 reads the stack config, there is no prefill.
 var fetchReleaseBranch = func(string) string { return "" }
 
 // fetchDevOverlays lists the dev overlay names for the dev pickers, sorted.
-// It must run inside a tea.Cmd, never in Update. v1 ran
-// `scripts/compose.sh dev list`; until `pic-sure dev list` exists (ticket 052)
-// the list is empty and the pickers show their empty state.
+// It must run inside a tea.Cmd, never in Update. Until `pic-sure dev list`
+// exists (ticket 052) the list is empty and the pickers show their empty
+// state.
 var fetchDevOverlays = func(string) []string { return nil }
 
 // landing is the starfield + logo + menu home screen. Menu growth rule
@@ -377,10 +376,9 @@ func devPickerOptions(overlays []string) []huh.Option[string] {
 }
 
 // startDevPicker opens an overlay picker; the selection is the consent (like
-// the demo-data picker) and maps 1:1 to a scripts/compose.sh dev invocation.
-// The overlay list is fetched asynchronously via `scripts/compose.sh dev list`
-// (the documented contract surface) so the picker opens immediately with a
-// placeholder — matching the fetchReleaseBranch / startBranchInput pattern.
+// the demo-data picker). The overlay list is fetched asynchronously so the
+// picker opens immediately with a placeholder — matching the
+// fetchReleaseBranch / startBranchInput pattern.
 func (l *landing) startDevPicker(title, description string, makeAction func(string) actions.Action) (*landing, tea.Cmd) {
 	l.picked = ""
 	l.pickerMake = makeAction

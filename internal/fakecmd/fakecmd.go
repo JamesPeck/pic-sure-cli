@@ -5,11 +5,11 @@
 //
 // A fake reads its rules from $HOME/<name>.scenario (docker.scenario,
 // git.scenario), answers each call from the first matching rule, and
-// appends the call's argv to $HOME/<name>.log, one line per call. The
-// harness sets HOME to the script's work directory, so a script supplies
-// the scenario as a txtar file and checks the log with `cmp` or `grep`.
-// HOME is used because the CLI's runner passes it through to subprocesses
-// (ticket 003).
+// appends the call's argv to $HOME/<name>.log, one line per call, quoting
+// arguments that contain spaces as docker.FormatArgv does. The harness sets
+// HOME to the script's work directory, so a script supplies the scenario as
+// a txtar file and checks the log with `cmp` or `grep`. HOME is used because
+// the CLI's runner passes it through to subprocesses (ticket 003).
 //
 // Scenario syntax, one rule per line; blank lines and # comments are
 // ignored:
@@ -17,12 +17,12 @@
 //	PATTERN => EXIT [stdout=FILE] [stderr=FILE] [times=N]
 //
 // PATTERN is matched against the whole argv, program name included, joined
-// with single spaces: a glob in which * matches any run of characters and ?
-// any one character, or, with a re: prefix, a regular expression. EXIT is
-// the exit code. FILE names a file (relative paths are from the scenario's
-// directory) whose contents the fake writes to that stream. times=N retires the rule
-// after N matches, so later calls fall through to the next matching rule.
-// For example:
+// with single spaces and unquoted: a glob in which * matches any run of
+// characters and ? any one character, or, with a re: prefix, a regular
+// expression. EXIT is the exit code. FILE names a file (relative paths are
+// from the scenario's directory) whose contents the fake writes to that
+// stream. times=N retires the rule after N matches, so later calls fall
+// through to the next matching rule. For example:
 //
 //	docker version --format json => 0 stdout=version.json
 //	docker compose * ps --format json => 0 stdout=starting.json times=1
@@ -45,14 +45,14 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/docker"
 	"github.com/JamesPeck/pic-sure-cli/internal/docker/fakerunner"
 )
 
-// ExitMisuse is the exit code for an unmatched call or a bad scenario. No
-// docker or git exit code means this, so a test can't mistake it for a
-// scripted failure.
+// ExitMisuse is the exit code for an unmatched call or a bad scenario.
+// Scenarios should not script it, so it always means the fake was misused.
 const ExitMisuse = 97
 
 // Rule is one scenario line.
@@ -147,6 +147,13 @@ func run(name string, args []string, home string, stdout, stderr io.Writer) int 
 	if home == "" {
 		return fail("HOME is not set")
 	}
+	// The CLI may run several fakes at once; one lock per fake keeps the log
+	// in call order and the times=N counts exact.
+	unlock, err := lockFile(filepath.Join(home, name+".lock"))
+	if err != nil {
+		return fail("%v", err)
+	}
+	defer unlock()
 	if err := appendLine(filepath.Join(home, name+".log"), docker.FormatArgv(argv)); err != nil {
 		return fail("%v", err)
 	}
@@ -169,9 +176,11 @@ func run(name string, args []string, home string, stdout, stderr io.Writer) int 
 		if !rule.Match.Match(argv) {
 			continue
 		}
-		counts[i]++
-		if err := writeCounts(countsPath, counts); err != nil {
-			return fail("%v", err)
+		if rule.Times > 0 {
+			counts[i]++
+			if err := writeCounts(countsPath, counts); err != nil {
+				return fail("%v", err)
+			}
 		}
 		for _, out := range []struct {
 			file string
@@ -213,8 +222,8 @@ func readScenario(path string) ([]Rule, error) {
 	return rules, nil
 }
 
-// readCounts loads how often each rule (by index) has matched in earlier
-// calls of this script, for times=N.
+// readCounts loads how often each times=N rule (by index) has matched in
+// earlier calls of this script.
 func readCounts(path string) (map[int]int, error) {
 	counts := map[int]int{}
 	data, err := os.ReadFile(path)
@@ -236,6 +245,20 @@ func writeCounts(path string, counts map[int]int) error {
 		return err
 	}
 	return os.WriteFile(path, data, 0o644)
+}
+
+// lockFile takes an exclusive flock on path and returns the function that
+// releases it.
+func lockFile(path string) (func(), error) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("locking %s: %w", path, err)
+	}
+	return func() { _ = f.Close() }, nil
 }
 
 func appendLine(path, line string) error {

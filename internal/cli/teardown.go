@@ -2,8 +2,6 @@ package cli
 
 import "github.com/spf13/cobra"
 
-// reset and destroy (ticket 056).
-
 func newResetCmd(a *App) *cobra.Command {
 	c := &cobra.Command{
 		Use:   "reset",

@@ -92,8 +92,8 @@ const defaultGenomicHeap = "16000"
 // fetchArchiveCSVs lists the *.csv entries of a compressed/archived phenotype
 // file, exact entry paths sorted, and nothing for a raw .csv or a plain .gz.
 // A package var so tests inject entries. It must run inside a tea.Cmd, never
-// in Update. v1 ran `etl.sh archive-csvs`; ticket 041 replaces it with an
-// in-process lister (ListCSVEntries), and ticket 047 wires that in here.
+// in Update. Ticket 041 adds the in-process lister (ListCSVEntries), and
+// ticket 047 wires it in here.
 var fetchArchiveCSVs = func(_, _ string) ([]string, error) {
 	return nil, errors.New("listing archive entries: not implemented in v2 yet (ticket 041)")
 }

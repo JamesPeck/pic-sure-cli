@@ -2,9 +2,6 @@ package actions
 
 import "fmt"
 
-// MaxOutput caps retained action scrollback (1 MiB), shared by all surfaces.
-const MaxOutput = 1 << 20
-
 // OutputMsg carries a batch of action output bytes.
 type OutputMsg struct{ Data []byte }
 

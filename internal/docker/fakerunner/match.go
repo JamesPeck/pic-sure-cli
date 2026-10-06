@@ -26,8 +26,8 @@ func (m exact) String() string           { return docker.FormatArgv(m) }
 // Glob matches the whole argv joined with single spaces against pattern, in
 // which * matches any run of characters (spaces included) and ? matches any
 // one character. Everything else is literal; there is no escape for * or ?.
-// For example, Glob("docker compose * up -d *") matches any `up -d` call
-// whatever its -f files and services.
+// For example, Glob("docker compose * up -d --wait *") matches an
+// `up -d --wait` of one or more services, whatever the -f files before it.
 func Glob(pattern string) Matcher {
 	var b strings.Builder
 	b.WriteString(`(?s)^`)
