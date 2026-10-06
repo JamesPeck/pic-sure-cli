@@ -150,9 +150,9 @@ it.
 - `deps.go`: `newDeps` assembles `ops.Deps`. Each field comes from a
   constructor in its owner's file: `runner.go` (003), `output.go` (004, which
   also reports errors), `logging.go` (005), `engine.go` (016) and
-  `gitclient.go` (018). Until those land, the runner fails every call, the
-  sink discards events, the logger discards logs, and Docker and Git are
-  nil.
+  `gitclient.go` (018, landed). Until the others land, the runner fails
+  every call, the sink discards events, the logger discards logs, and
+  Docker is nil.
 
 | File | Commands | Ticket |
 |---|---|---|
@@ -251,9 +251,10 @@ for the stack being acted on (`Compose`, nil until the command has a
 rendered stack), the git `Client` (`Git`), a `Clock`, `Rand` (an
 `io.Reader`; `crypto/rand.Reader` in production), the event `Sink` and the
 `*slog.Logger`. `SystemClock` is the real clock; `FixedClock` is for tests.
-`docker.Engine`, `docker.Composer` and `git.Client` are empty placeholder
-interfaces until tickets 016, 017 and 018 add their methods, in their own
-packages, so that none of those tickets has to edit `Deps`.
+`docker.Engine` and `docker.Composer` are empty placeholder interfaces
+until tickets 016 and 017 add their methods, in their own packages, so that
+neither ticket has to edit `Deps`. Ticket 018 filled in `git.Client` the
+same way.
 
 ## internal/steps
 
