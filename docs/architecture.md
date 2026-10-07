@@ -167,8 +167,10 @@ it.
 - `output.go` (004): output mode selection, the run's sink, and how a
   command ends. The mode is JSON for `--json`; plain for `--plain`, when
   stdin or stdout isn't a terminal, or when `CI` is set (`CI=false` and
-  `CI=0` don't count); and TUI otherwise. TUI renders as plain until
-  ticket 038. `newSink` returns the same sink for the whole run. Only
+  `CI=0` don't count); and TUI otherwise. TUI mode draws with
+  `progress.Renderer` (038) when stderr is a terminal and `TERM` isn't
+  `dumb`, and as plain otherwise. `newSink` returns the same sink for the
+  whole run. Only
   `output.go` emits `Result`. A command ends in one of three ways:
   - a streaming command returns `a.finish(report, text)`. When the
     command returns nil, the run ends with a success `Result` (`--json`
@@ -1404,7 +1406,7 @@ GitHub API root (mirrors, tests).
 ## internal/events
 
 Ticket 001 defines the event types and `Sink`; ticket 004 adds the plain
-and NDJSON renderers, and ticket 038 the TUI renderer.
+and NDJSON renderers. The TUI renderer (038) is in `internal/progress`.
 
 - Events: `StepStarted{ID, Title}`, `Progress{ID, Text, Pct}` (`Pct` is
   0–100, or nil when unknown), `Log{ID, Stream, Line}`, `Warning{ID, Text}`,
@@ -1442,6 +1444,50 @@ Ticket 004 added the plain and NDJSON renderers, both Sinks:
 
 Goldens for both renderers are in `testdata/`; `go test -update` rewrites
 them.
+
+## internal/progress
+
+Ticket 038. The TUI renderer for an operation's events (§10.3).
+
+- `Model` is a Bubble Tea v2 model fed `EventMsg{Event}` and ended with
+  `DoneMsg{OK, LogPath}`. It shows each step with a spinner (a static `•`
+  without `Options.Animations`), `✓`, `-` (skipped) or `✗`, the step's
+  progress text and warnings, the running step's last `LiveTail` (8) log
+  lines, and a failed step's last `FailTail` (20). Log lines lose escape
+  sequences, control characters and everything before a `\r`. A progress or
+  log event for an ID that isn't a running step goes under the last running
+  step, or at the bottom when none runs; a warning no running step owns gets
+  its own row. Ctrl-C asks first ("Press Ctrl-C again", withdrawn after 5 s
+  or by another key); the second press calls `Options.Interrupt` once.
+- With `Options.Scrollback` (the inline program), finished leading rows are
+  printed above the program with `tea.Println`, one print in flight at a
+  time so order holds, and the live area keeps only what still runs. After
+  `DoneMsg` it quits; the final frame keeps whatever wasn't printed and,
+  after a failure, `Log file: <path>`. Without it (a screen embedding the
+  model, tickets 039/040/047), `View` keeps every row and `DoneMsg` doesn't
+  quit; `Done()` reports it.
+- `Renderer` is an `events.Sink` that runs the model as an inline program
+  (not the alt-screen) on the given terminal, with Bubble Tea's signal
+  handler off. It starts with the first event, so a command that emits none
+  never touches the terminal. A `Result` ends it (`Close` ends it as a
+  success) and waits for the final frame, so what the caller prints next
+  goes below it; later events are dropped. `Write` is an `io.Writer` that
+  prints whole lines above the frame while it runs and straight to the
+  output otherwise. A program that fails to start leaves the run without a
+  display; the operation still runs.
+
+**Wiring (`internal/cli`).** `execute` wraps the command's context so the
+renderer's `Interrupt` cancels it with `exitcode.Signaled(os.Interrupt)`:
+while the TUI runs, the terminal is in raw mode and Ctrl-C arrives as a key,
+not SIGINT, and the run still exits 130 with the step to resume named.
+SIGTERM still cancels through `main`. The renderer draws on stderr, so
+stdout keeps only the command's summary; `finish` and `printReport` end it
+before writing that. The run log's stderr records go through `Write`
+(`logStderr`), and `openRunLog` keeps the file's path for the failure
+line. The hidden `smoke-steps` command (`smokesteps.go`, build tag
+`smoketest`, registered through `extraCommands`) emits steps without
+Docker for the PTY tests in `smoke/progress_pty_test.go`; the smoke tests
+build the binary with that tag.
 
 ## internal/log
 
@@ -1502,7 +1548,8 @@ signal handler, so SIGINT and SIGTERM end the TUI through the context and
 the CLI exits 128+N. Ticket 001 removed its script layer: every action fails
 to start with "not implemented in v2 yet (ticket NNN)", the release-branch
 and dev-overlay lookups return nothing, and the archive lister fails. Tickets
-038, 039 and 047 rewire it onto in-process operations.
+039 and 047 rewire it onto in-process operations, showing their progress
+with an embedded `progress.Model` (038).
 
 It runs on the Charm v2 modules (`charm.land/bubbletea/v2`, `bubbles/v2`,
 `huh/v2`, `lipgloss/v2`; ticket 002). The root model's `View` returns a

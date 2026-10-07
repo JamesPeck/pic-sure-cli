@@ -5,11 +5,13 @@ import (
 	"errors"
 	"io"
 	"os"
+	"sync/atomic"
 
 	"github.com/spf13/cobra"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
 	"github.com/JamesPeck/pic-sure-cli/internal/log"
+	"github.com/JamesPeck/pic-sure-cli/internal/progress"
 	"github.com/JamesPeck/pic-sure-cli/internal/stack"
 	"github.com/JamesPeck/pic-sure-cli/internal/tty"
 	"github.com/JamesPeck/pic-sure-cli/internal/tui"
@@ -48,8 +50,16 @@ type App struct {
 	// first use.
 	out *output
 	// runLog is the running command's logging (logging.go), from the start
-	// of its RunE until Run returns.
-	runLog *log.Run
+	// of its RunE until Run returns, and runLogPath its file, once open.
+	runLog     *log.Run
+	runLogPath string
+	// tuiOut is the run's TUI renderer, if it has one, for log records
+	// written from any goroutine (logStderr).
+	tuiOut atomic.Pointer[progress.Renderer]
+	// interrupt cancels the running command's context as SIGINT would. The
+	// TUI renderer calls it when the user confirms Ctrl-C, which the
+	// terminal delivers as a key rather than a signal while it runs.
+	interrupt func()
 }
 
 // NewApp returns an App wired to the process's streams and terminal.
@@ -83,6 +93,11 @@ func (a *App) Run(ctx context.Context, args []string) int {
 func (a *App) execute(ctx context.Context, root *cobra.Command, args []string) int {
 	a.running = false
 	a.out = nil
+	a.tuiOut.Store(nil)
+	a.runLogPath = ""
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	a.interrupt = func() { cancel(exitcode.Signaled(os.Interrupt)) }
 	root.SetArgs(args)
 	root.SetIn(a.Stdin)
 	root.SetOut(a.Stdout)

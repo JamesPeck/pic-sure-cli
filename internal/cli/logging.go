@@ -37,7 +37,7 @@ func (a *App) startRunLog(cmd *cobra.Command, args []string) {
 	path := strings.TrimPrefix(cmd.CommandPath(), cmd.Root().Name()+" ")
 	a.runLog = log.New(log.Options{
 		Level:  level,
-		Stderr: a.Stderr,
+		Stderr: logStderr{a},
 		File:   level <= slog.LevelDebug || !readOnlyCommands[path],
 	})
 	var flags []string
@@ -58,9 +58,23 @@ func (a *App) openRunLog(st *stack.Stack) {
 	if a.runLog == nil {
 		return
 	}
-	if _, err := a.runLog.OpenFile(runLogStore{st}, time.Now()); err != nil {
+	path, err := a.runLog.OpenFile(runLogStore{st}, time.Now())
+	if err != nil {
 		a.runLog.Logger().Warn("can't write the run log", "dir", st.Dir, "err", err)
+		return
 	}
+	a.runLogPath = path
+}
+
+// logStderr is where log records for stderr go: through the TUI renderer
+// while the run has one, so they print above its frame, else to stderr.
+type logStderr struct{ a *App }
+
+func (w logStderr) Write(b []byte) (int, error) {
+	if r := w.a.tuiOut.Load(); r != nil {
+		return r.Write(b)
+	}
+	return w.a.Stderr.Write(b)
 }
 
 // runLogStore is the stack as log.Run uses it: a run log is the CLI's if

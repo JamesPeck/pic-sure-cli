@@ -2,6 +2,10 @@ package cli
 
 import "github.com/spf13/cobra"
 
+// extraCommands are hidden commands that only some builds have, such as
+// the smoke tests' smoke-steps (smokesteps.go, build tag smoketest).
+var extraCommands []func(*App) *cobra.Command
+
 func newRootCmd(a *App) *cobra.Command {
 	root := &cobra.Command{
 		Use:   "pic-sure",
@@ -52,6 +56,9 @@ Run with no arguments on a terminal to open the TUI.`,
 		newSupportBundleCmd(a),
 		newVersionCmd(a),
 	)
+	for _, extra := range extraCommands {
+		root.AddCommand(extra(a))
+	}
 	rejectUnknownHelpTopics(root)
 	markRunning(a, root)
 	return root

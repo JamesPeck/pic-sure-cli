@@ -16,6 +16,8 @@ import (
 	"github.com/JamesPeck/pic-sure-cli/internal/events"
 	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
 	"github.com/JamesPeck/pic-sure-cli/internal/log"
+	"github.com/JamesPeck/pic-sure-cli/internal/progress"
+	"github.com/JamesPeck/pic-sure-cli/internal/tui"
 )
 
 // outputMode is how a command reports to the user (spec §10.3).
@@ -70,6 +72,8 @@ func isTerminalWriter(w io.Writer) bool {
 type output struct {
 	mode outputMode
 	sink *runSink
+	// tui is the TUI renderer, when the run has one.
+	tui *progress.Renderer
 	// report is finish's report: the data of the success Result.
 	report any
 	// final is set once the run's Result is emitted or its report printed,
@@ -80,18 +84,39 @@ type output struct {
 func (a *App) output() *output {
 	if a.out == nil {
 		mode := selectMode(a.Global, a.IsTerminal(), os.Getenv)
+		o := &output{mode: mode}
 		var sink events.Sink
-		switch mode {
-		case modeJSON:
+		switch {
+		case mode == modeJSON:
 			sink = events.NewNDJSON(a.Stdout)
-		default: // modeTUI falls back to plain until ticket 038
+		case mode == modeTUI && isTerminalWriter(a.Stderr) && os.Getenv("TERM") != "dumb":
+			o.tui = progress.NewRenderer(progress.RendererOptions{
+				Animations: tui.AnimationsEnabled(a.Global.NoAnimations, os.Getenv),
+				Interrupt:  a.interrupt,
+				Input:      a.Stdin,
+				Output:     a.Stderr,
+				NoColor:    os.Getenv("NO_COLOR") != "",
+				LogPath:    func() string { return a.runLogPath },
+			})
+			a.tuiOut.Store(o.tui)
+			sink = o.tui
+		default:
 			sink = events.NewPlain(a.Stderr, events.PlainOptions{
 				Color: useColor(isTerminalWriter(a.Stderr), os.Getenv),
 			})
 		}
-		a.out = &output{mode: mode, sink: &runSink{Sink: sink}}
+		o.sink = &runSink{Sink: sink}
+		a.out = o
 	}
 	return a.out
+}
+
+// endTUI ends the TUI renderer, if the run has one, so that what the
+// command prints next goes below its last frame.
+func (o *output) endTUI() {
+	if o.tui != nil {
+		o.tui.Close()
+	}
 }
 
 // newSink returns the event sink for the run's output mode. Every call in
@@ -117,6 +142,7 @@ func (a *App) finish(report any, text func(io.Writer) error) error {
 	if o.mode == modeJSON || text == nil {
 		return nil
 	}
+	o.endTUI()
 	return text(a.Stdout)
 }
 
@@ -128,6 +154,7 @@ func (a *App) finish(report any, text func(io.Writer) error) error {
 func (a *App) printReport(report any, text func(io.Writer) error) error {
 	o := a.output()
 	if o.mode != modeJSON {
+		o.endTUI()
 		return text(a.Stdout)
 	}
 	if err := events.WriteReport(a.Stdout, report); err != nil {

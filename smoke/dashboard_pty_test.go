@@ -31,7 +31,8 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	bin = filepath.Join(dir, "pic-sure")
-	out, err := exec.Command("go", "build", "-o", bin, "../cmd/pic-sure").CombinedOutput()
+	// The smoketest tag adds the hidden smoke-steps command (progress_pty_test.go).
+	out, err := exec.Command("go", "build", "-tags", "smoketest", "-o", bin, "../cmd/pic-sure").CombinedOutput()
 	if err != nil {
 		_ = os.RemoveAll(dir)
 		panic(fmt.Sprintf("go build: %v\n%s", err, out))
