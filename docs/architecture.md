@@ -655,6 +655,26 @@ builds it with no env, since `ps` needs no secret. Migrations are
 and `render.HMROrigin` (httpd-hmr's Vite origin, which status prints for
 Auth0) for it.
 
+**Frontend and dictionary-etl images (030, `images.go`).** §7.2 steps 4
+and 5, the two images built outside the reactor.
+`BuildFrontend(ctx, d, cfg, ImageBuildOptions)` builds
+`hms-dbmi/pic-sure-httpd:<sha12>-<cfghash8>`. `FrontendConfigHash` is the
+sha256 of `render.ViteEnv(cfg)` (theme included) as sorted JSON, so stacks
+with the same frontend commit and config share the image. The source is
+copied to the cache's `FrontendBuildDir` (`build/frontend-<sha12>-<cfghash8>`),
+`FrontendDotEnv` writes the `.env` into the copy, and the copy is removed
+after the build. Each value is quoted so dotenv and dotenv-expand return it
+unchanged: single quotes (backquotes if it holds a `'`), `$` as `\$`; a
+line break, or both `'` and a backquote, is an error.
+`BuildDictionaryETL(ctx, d, ImageBuildOptions)` builds
+`hms-dbmi/dictionary-etl:<sha12>` from its tree. Both run under the image's
+`LockImage`, skip when the image exists with matching labels
+(`FrontendSrcLabel` and `FrontendConfigLabel` with the full hash;
+`DictionaryETLSrcLabel`), pass the proxy build args, take the cache tree
+unless `Source` is set (`Tag` and `Force` serve §7.3 builds), and write
+`<image>.log` to `LogDir`, showing the tail on failure. They return
+`ImageBuildResult{Tag, Ref, Built}`; 031 records the tags in state.json.
+
 ## internal/steps
 
 Ticket 011, on the `Step` type and `Run` signature from 001.
@@ -922,6 +942,8 @@ command holds a lock.
   waits on it would let two holders in. The locks cover one cache root, but
   images and `pic-sure-m2` belong to the Docker daemon, so two users with
   their own caches on one daemon don't exclude each other.
+- `FrontendBuildDir(sha, cfghash)` (030) is `build/frontend-<sha12>-<cfghash>`,
+  the frontend build's copy of its source, not created.
 - `EnsureMavenVolume(ctx, d.Docker)` creates `MavenVolume` (`pic-sure-m2`).
   Mount the volume only under the reactor lock.
 
