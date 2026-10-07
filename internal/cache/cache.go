@@ -22,6 +22,7 @@ const (
 	buildDir          = "build"           // build/<sha12>/, build/frontend-<tag>/: image build contexts
 	tmpDir            = "tmp"             // per-run temporary directories
 	locksDir          = "locks"           // lock files, which are never removed
+	stacksDir         = "stacks"          // stacks/<key>: the stack registry
 )
 
 // Cache is the host cache at one root. It is safe for concurrent use, and
@@ -109,7 +110,7 @@ func Open(root string, opts Options) (*Cache, error) {
 	if err := os.MkdirAll(filepath.Dir(root), 0o700); err != nil {
 		return nil, err
 	}
-	for _, dir := range []string{gitDir, srcDir, downloadsDir, buildDir, tmpDir, locksDir} {
+	for _, dir := range []string{gitDir, srcDir, downloadsDir, buildDir, tmpDir, locksDir, stacksDir} {
 		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
 			return nil, err
 		}

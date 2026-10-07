@@ -536,3 +536,84 @@ func TestFormatBytes(t *testing.T) {
 		}
 	}
 }
+
+// A registered stack with no labelled resource keeps what its state names.
+func TestCacheInventoryCountsARegisteredStack(t *testing.T) {
+	fx := newCacheFixture(t)
+	fx.daemon.volumes = nil
+	if err := fx.cache.RegisterStack(context.Background(), fx.alpha, "alpha"); err != nil {
+		t.Fatal(err)
+	}
+	d, _ := fx.deps(t, nil)
+	r, err := ops.CacheInventory(context.Background(), d, fx.cache, ops.CacheOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := statuses(r.Items)
+	for _, name := range []string{"hms-dbmi/pic-sure-hpds:aaaaaaaaaaaa", "hms-dbmi/pic-sure-psama:dev-alpha-aaaaaaaaaaaa", "src/pic-sure/" + shaA} {
+		if st[name] != ops.CacheInUse {
+			t.Errorf("%s is %s, want in-use", name, st[name])
+		}
+	}
+	i := slices.IndexFunc(r.Stacks, func(s ops.CacheStack) bool { return s.Dir == fx.alpha })
+	if i < 0 || !r.Stacks[i].Registered || !r.Stacks[i].Readable || r.Stacks[i].Name != "alpha" {
+		t.Errorf("stacks %+v, want alpha registered and readable", r.Stacks)
+	}
+}
+
+// A registered stack whose directory is gone and that has no labelled
+// resource protects nothing, and prune forgets it; a dry run only says so.
+func TestPruneCacheForgetsAGoneStack(t *testing.T) {
+	fx := newCacheFixture(t)
+	fx.daemon.containers = nil // "gone"'s labelled container
+	gone := filepath.Join(t.TempDir(), "deleted")
+	if err := fx.cache.RegisterStack(context.Background(), gone, "deleted"); err != nil {
+		t.Fatal(err)
+	}
+	d, _ := fx.deps(t, nil)
+
+	r, err := ops.PruneCache(context.Background(), d, fx.cache, ops.PruneOptions{DryRun: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Forgotten) != 1 || r.Forgotten[0].Dir != gone || !r.Forgotten[0].Gone {
+		t.Fatalf("dry run would forget %+v, want %s", r.Forgotten, gone)
+	}
+	if st := statuses(r.Items)["hms-dbmi/pic-sure-psama:cccccccccccc"]; st != ops.CacheUnused {
+		t.Errorf("an image only the gone stack might use is %s, want unused", st)
+	}
+	if reg, _ := fx.cache.RegisteredStacks(); len(reg) != 1 {
+		t.Fatalf("dry run changed the registry: %+v", reg)
+	}
+
+	if _, err := ops.PruneCache(context.Background(), d, fx.cache, ops.PruneOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if reg, _ := fx.cache.RegisteredStacks(); len(reg) != 0 {
+		t.Errorf("registry after prune: %+v, want empty", reg)
+	}
+}
+
+// A registered stack whose directory is gone but whose labelled resources
+// remain has moved: it blocks what it might use, and stays registered.
+func TestPruneCacheKeepsAMovedRegisteredStack(t *testing.T) {
+	fx := newCacheFixture(t)
+	gone := fx.daemon.containers[1].labels[stack.LabelStackDir]
+	if err := fx.cache.RegisterStack(context.Background(), gone, "gone"); err != nil {
+		t.Fatal(err)
+	}
+	d, _ := fx.deps(t, nil)
+	r, err := ops.PruneCache(context.Background(), d, fx.cache, ops.PruneOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Forgotten) != 0 {
+		t.Errorf("forgot %+v, want nothing", r.Forgotten)
+	}
+	if st := statuses(r.Items)["hms-dbmi/pic-sure-psama:cccccccccccc"]; st != ops.CacheUnknownStack {
+		t.Errorf("an image the moved stack might use is %s, want unknown-stack", st)
+	}
+	if reg, _ := fx.cache.RegisteredStacks(); len(reg) != 1 {
+		t.Errorf("registry after prune: %+v, want the moved stack", reg)
+	}
+}

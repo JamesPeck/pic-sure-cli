@@ -148,6 +148,9 @@ func (a *App) initStack(cmd *cobra.Command, args []string) (err error) {
 		// Another init finished the stack while this one waited for it.
 		return a.alreadyInitialized(cmd, dir)
 	}
+	if err := r.cache.RegisterStack(ctx, r.st.Dir, r.cfg.Name); err != nil {
+		return err
+	}
 
 	plan := ops.InitSteps(r.d, r.st, r.cfg, r.sec, r.state, ops.ConvergeOptions{
 		Cache:      r.cache,

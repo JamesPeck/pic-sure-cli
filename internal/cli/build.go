@@ -76,6 +76,9 @@ func (a *App) build(cmd *cobra.Command, components []string, force bool) (err er
 	if err != nil {
 		return err
 	}
+	if err := c.RegisterStack(ctx, st.Dir, cfg.Name); err != nil {
+		return err
+	}
 
 	state.StartOperation("build", d.Clock.Now())
 	if err := st.SaveState(state); err != nil {

@@ -27,7 +27,7 @@ const (
 	// EntryDownload is a downloaded dataset in downloads/.
 	EntryDownload EntryKind = "download"
 	// EntryTemp is a per-run directory in tmp/, or a temporary sibling of
-	// a clone or source tree left by a run that died.
+	// a clone, source tree or stack registry entry left by a run that died.
 	EntryTemp EntryKind = "temp"
 )
 
@@ -109,6 +109,17 @@ func (c *Cache) Entries() ([]Entry, error) {
 	for _, e := range top {
 		if strings.HasPrefix(e.Name(), releaseControlDir+".tmp-") {
 			if err := add(EntryTemp, e.Name(), releaseControlDir, ""); err != nil {
+				return nil, err
+			}
+		}
+	}
+	registry, err := readDir(filepath.Join(c.root, stacksDir))
+	if err != nil {
+		return nil, err
+	}
+	for _, e := range registry {
+		if strings.Contains(e.Name(), ".tmp-") {
+			if err := add(EntryTemp, stacksDir+"/"+e.Name(), "", ""); err != nil {
 				return nil, err
 			}
 		}

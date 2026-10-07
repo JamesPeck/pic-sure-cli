@@ -113,7 +113,10 @@ func writeCacheList(w io.Writer, r *ops.CacheReport) error {
 		tw := tabwriter.NewWriter(&b, 0, 0, 2, ' ', 0)
 		for _, s := range r.Stacks {
 			note := ""
-			if !s.Readable {
+			switch {
+			case s.Gone:
+				note = "GONE: " + s.Error
+			case !s.Readable:
 				note = "UNREADABLE: " + s.Error
 			}
 			_, _ = fmt.Fprintf(tw, "  %s\t%s\t%s\n", orDash(s.Name), s.Dir, note)
@@ -140,13 +143,20 @@ func writeCacheList(w io.Writer, r *ops.CacheReport) error {
 }
 
 func writePruneSummary(w io.Writer, r *ops.PruneReport) error {
-	verb, freed := "Removed", "freed"
+	verb, freed, forget := "Removed", "freed", "forgot"
 	if r.DryRun {
-		verb, freed = "Would remove", "freeing"
+		verb, freed, forget = "Would remove", "freeing", "would forget"
 	}
 	var b bytes.Buffer
 	for _, it := range r.Removed {
 		fmt.Fprintf(&b, "%s %s %s (%s)\n", strings.ToLower(verb), it.Kind, it.Name, ops.FormatBytes(it.Size))
+	}
+	for _, s := range r.Forgotten {
+		where := s.Dir
+		if where == "" {
+			where = s.Error
+		}
+		fmt.Fprintf(&b, "%s the gone stack %s (%s)\n", forget, orDash(s.Name), where)
 	}
 	gone := map[string]bool{}
 	for _, it := range r.Removed {

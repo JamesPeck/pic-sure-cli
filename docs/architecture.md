@@ -1070,11 +1070,13 @@ the stacks it found and every `CacheItem` with a status.
   `catch-up`), pull-mode refs and third-party images are never listed. The
   rest are `cache.Entries()`.
 - **Stacks.** Every distinct `stack-dir` label on a container (running or
-  stopped), volume or network, plus `CacheOptions.Stacks` (the cli passes
-  the stack the command runs in, which may have built images before it has
-  any containers). A stack is readable when `stack.Open` succeeds and
-  `LoadState` does too or finds no state.json (a stack not built yet names
-  nothing).
+  stopped), volume or network, every entry of the cache's stack registry
+  (073), plus `CacheOptions.Stacks` (the cli passes the stack the command
+  runs in). A stack is readable when `stack.Open` succeeds and `LoadState`
+  does too or finds no state.json (a stack not built yet names nothing). A
+  registered stack whose directory is no longer a stack, with no labelled
+  resource, is `Gone`: it protects nothing. With labelled resources left it
+  has moved, and is unreadable like any labelled stack.
 - **Status**, in order:
   - `in-use`: a container references it (an image by ID or reference, an
     entry by a bind mount of it, inside it or above it), whether or not
@@ -1098,7 +1100,8 @@ started meanwhile. Entries go through `cache.RemoveEntry`. A lock still
 busy after the cache's `LockTimeout` (the cli uses 5 s) skips the item with
 a warning. Other failures don't stop the rest, and the step then fails
 naming them. `Freed` counts an image's size once, and only when its last
-tag goes.
+tag goes. It then forgets the gone stacks' registry entries (`Forgotten`),
+still under the prune lock.
 
 ## internal/steps
 
@@ -1442,6 +1445,16 @@ command holds a lock.
   source tree or image from the cache until state.json records it:
   `ImagesStep`'s Apply holds it for its whole run. Both wait up to
   `UseLockTimeout` (15 min).
+- **Stack registry** (073, `stacks.go`): `stacks/<key>` holds the stack
+  directory and name, so prune counts a stack that has no labelled
+  container, volume or network (after `build`, before the first `up`, or
+  after `compose -- down -v`). init, up, update and build call
+  `RegisterStack(ctx, dir, name)` after opening the cache; it takes the
+  use lock, skips an unchanged entry and writes atomically. destroy calls
+  `UnregisterStack(dir)`. `RegisteredStacks()` lists the entries; one that
+  can't be parsed comes back with only its `Key`, and `ForgetStack(key)`
+  removes an entry (prune, for gone stacks). A dead write's `*.tmp-*` file
+  is an `EntryTemp`.
 - `Entries()` (057, `prune.go`) lists what prune may remove: source trees
   (`EntrySource`), `build/` contexts, `downloads/`, and `EntryTemp` for
   `tmp/` entries and the `*.tmp-*` siblings in `src/<repo>/`, `git/` and the

@@ -75,7 +75,7 @@ func TestOpenMakesTheLayout(t *testing.T) {
 	if c.Root() != root {
 		t.Errorf("Root() = %s, want %s", c.Root(), root)
 	}
-	want := []string{"build", "downloads", "git", "locks", "src", "tmp"}
+	want := []string{"build", "downloads", "git", "locks", "src", "stacks", "tmp"}
 	if got := entries(t, root); !slices.Equal(got, want) {
 		t.Errorf("root holds %q, want %q", got, want)
 	}

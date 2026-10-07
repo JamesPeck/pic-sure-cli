@@ -62,8 +62,16 @@ type CacheStack struct {
 	// Readable says its state.json was read; Error says why not.
 	Readable bool   `json:"readable"`
 	Error    string `json:"error,omitempty"`
+	// Registered says the cache's stack registry has it.
+	Registered bool `json:"registered,omitempty"`
+	// Gone marks a registered stack whose directory is no longer a stack
+	// and that has no labelled Docker resource: it uses nothing, and prune
+	// drops its registry entry.
+	Gone bool `json:"gone,omitempty"`
 
-	state *stack.State
+	state    *stack.State
+	labelled bool
+	key      string // its registry entry
 }
 
 // CacheItem is one image or cache entry.
@@ -104,7 +112,8 @@ type CacheOptions struct {
 // CacheInventory lists the cache's source trees, build contexts, downloads
 // and temporary directories, and the commit-tagged and dev images, with
 // what uses each (§7.1). A stack counts if a container, volume or network
-// carries its stack-dir label, or opts names it.
+// carries its stack-dir label, the cache's stack registry has it, or opts
+// names it.
 func CacheInventory(ctx context.Context, d *Deps, c *cache.Cache, opts CacheOptions) (*CacheReport, error) {
 	containers, err := d.Docker.ContainerList(ctx)
 	if err != nil {
@@ -128,7 +137,11 @@ func CacheInventory(ctx context.Context, d *Deps, c *cache.Cache, opts CacheOpti
 	for _, n := range nets {
 		labelled = append(labelled, n.Labels)
 	}
-	stacks := readStacks(labelled, opts.Stacks)
+	registry, err := c.RegisteredStacks()
+	if err != nil {
+		return nil, fmt.Errorf("reading the stack registry: %w", err)
+	}
+	stacks := readStacks(labelled, registry, opts.Stacks)
 
 	imgs, err := d.Docker.ImageList(ctx, catalog.Namespace+"/*")
 	if err != nil {
@@ -176,35 +189,49 @@ func cachedImage(ref string) (devStack string, ok bool) {
 	return "", false
 }
 
-// readStacks finds the stacks the labels name, plus extra, and reads each
-// one's state.json.
-func readStacks(labels []map[string]string, extra []string) []CacheStack {
+// readStacks finds the stacks the labels and the registry name, plus extra,
+// and reads each one's state.json. A registered stack whose directory is no
+// longer a stack is gone, unless labels name it: then it has moved, and
+// counts as unreadable.
+func readStacks(labels []map[string]string, registry []cache.RegisteredStack, extra []string) []CacheStack {
 	var stacks []CacheStack
 	seen := map[string]int{}
-	add := func(name, dir string) {
-		if dir == "" {
-			return
-		}
+	add := func(name, dir string) *CacheStack {
 		if i, ok := seen[dir]; ok {
 			if stacks[i].Name == "" {
 				stacks[i].Name = name
 			}
-			return
+			return &stacks[i]
 		}
 		seen[dir] = len(stacks)
 		stacks = append(stacks, CacheStack{Name: name, Dir: dir})
+		return &stacks[len(stacks)-1]
 	}
 	for _, l := range labels {
-		add(l[stack.LabelStack], l[stack.LabelStackDir])
+		if dir := l[stack.LabelStackDir]; dir != "" {
+			add(l[stack.LabelStack], dir).labelled = true
+		}
 	}
 	for _, dir := range extra {
-		add("", dir)
+		add("", dir).labelled = true // the stack the command runs in
+	}
+	for _, r := range registry {
+		if r.Dir == "" { // an unreadable entry
+			stacks = append(stacks, CacheStack{Registered: true, Gone: true, key: r.Key, Error: "unreadable registry entry " + r.Key})
+			continue
+		}
+		s := add(r.Name, r.Dir)
+		s.Registered, s.key = true, r.Key
 	}
 	for i := range stacks {
 		s := &stacks[i]
+		if s.Gone {
+			continue
+		}
 		state, err := loadStackState(s.Dir)
 		if err != nil {
 			s.Error = err.Error()
+			s.Gone = s.Registered && !s.labelled && errors.Is(err, stack.ErrNotFound)
 			continue
 		}
 		s.Readable, s.state = true, state
@@ -294,6 +321,9 @@ func within(path, dir string) bool {
 func stackUses(it *CacheItem, stacks []CacheStack) []string {
 	var uses []string
 	for _, s := range stacks {
+		if s.Gone {
+			continue
+		}
 		label := s.Name
 		if label == "" {
 			label = s.Dir
@@ -362,6 +392,9 @@ type PruneReport struct {
 	// Freed is the bytes reclaimed, or with DryRun that would be. An image
 	// counts only once its last tag goes.
 	Freed int64 `json:"freed"`
+	// Forgotten lists the gone stacks whose registry entries were removed,
+	// or with DryRun would be.
+	Forgotten []CacheStack `json:"forgotten"`
 }
 
 // PruneSkip is an item prune couldn't remove.
@@ -379,7 +412,7 @@ type PruneSkip struct {
 // own lock stays busy is skipped with a warning. Failures to remove one
 // item don't stop the others; the error at the end names them.
 func PruneCache(ctx context.Context, d *Deps, c *cache.Cache, opts PruneOptions) (*PruneReport, error) {
-	report := &PruneReport{DryRun: opts.DryRun, Removed: []CacheItem{}}
+	report := &PruneReport{DryRun: opts.DryRun, Removed: []CacheItem{}, Forgotten: []CacheStack{}}
 	step := steps.Step{
 		ID:    StepPrune,
 		Title: "Prune the cache",
@@ -407,7 +440,7 @@ func PruneCache(ctx context.Context, d *Deps, c *cache.Cache, opts PruneOptions)
 
 func prune(ctx context.Context, d *Deps, c *cache.Cache, sink events.Sink, opts PruneOptions, report *PruneReport) error {
 	for _, s := range report.Stacks {
-		if s.Readable {
+		if s.Readable || s.Gone {
 			continue
 		}
 		label := s.Name
@@ -459,6 +492,22 @@ func prune(ctx context.Context, d *Deps, c *cache.Cache, sink events.Sink, opts 
 			report.Freed += it.Size
 		}
 	}
+	for _, s := range report.Stacks {
+		if !s.Gone {
+			continue
+		}
+		verb := "forgot"
+		if opts.DryRun {
+			verb = "would forget"
+		} else if err := c.ForgetStack(s.key); err != nil {
+			failed = append(failed, "the registry entry of "+orKey(s))
+			sink.Emit(events.Warning{ID: StepPrune, Text: "couldn't forget " + orKey(s) + ": " + err.Error()})
+			continue
+		}
+		sink.Emit(events.Progress{ID: StepPrune, Text: fmt.Sprintf("%s the stack at %s: it is gone", verb, orKey(s))})
+		report.Forgotten = append(report.Forgotten, s)
+	}
+
 	counted := map[string]bool{}
 	for _, it := range report.Removed {
 		if it.image == nil || counted[it.ImageID] {
@@ -473,6 +522,15 @@ func prune(ctx context.Context, d *Deps, c *cache.Cache, sink events.Sink, opts 
 		return fmt.Errorf("couldn't remove %s", strings.Join(failed, ", "))
 	}
 	return nil
+}
+
+// orKey names a gone stack by its directory, or by its registry entry when
+// that couldn't be read.
+func orKey(s CacheStack) string {
+	if s.Dir != "" {
+		return s.Dir
+	}
+	return "stacks/" + s.key
 }
 
 func removeCacheItem(ctx context.Context, d *Deps, c *cache.Cache, it CacheItem) error {

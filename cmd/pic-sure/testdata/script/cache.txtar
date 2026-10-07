@@ -8,6 +8,7 @@ stdout '^  gone +/nonexistent/moved-stack +UNREADABLE: '
 stdout '^image +hms-dbmi/pic-sure-hpds:0123456789ab +425 MB +unknown-stack +maybe gone$'
 stdout '^image +hms-dbmi/pic-sure-psama:dev-zed-0123456789ab +1.20 kB +unused +-$'
 stdout '^download +downloads/nhanes.tgz +7 B +recent +-$'
+stdout '^  deleted +/nonexistent/deleted-stack +GONE: '
 ! stdout 'other-tool'
 
 exec pic-sure cache list --json
@@ -18,12 +19,17 @@ stdout '"name":"hms-dbmi/pic-sure-hpds:0123456789ab","image_id":"sha256:hpds","s
 exec pic-sure --plain cache prune --dry-run
 stdout '^would remove image hms-dbmi/pic-sure-psama:dev-zed-0123456789ab \(1.20 kB\)$'
 stdout '^Would remove 1 item, freeing 1.20 kB. Kept 1 unknown-stack, 1 recent.$'
+stdout '^would forget the gone stack deleted \(/nonexistent/deleted-stack\)$'
 stderr 'can''t read the state of gone at /nonexistent/moved-stack .*--force removes them'
+! stderr 'deleted-stack .*--force'
+exists cache/pic-sure/stacks/deleted
 ! grep 'image rm' docker.log
 exists cache/pic-sure/downloads/nhanes.tgz
 
-# prune removes only the unused image.
+# prune removes only the unused image, and forgets the gone stack.
 exec pic-sure --plain cache prune
+stdout '^forgot the gone stack deleted'
+! exists cache/pic-sure/stacks/deleted
 grep '^docker image rm hms-dbmi/pic-sure-psama:dev-zed-0123456789ab$' docker.log
 ! grep 'image rm hms-dbmi/pic-sure-hpds' docker.log
 exists cache/pic-sure/downloads/nhanes.tgz
@@ -37,6 +43,8 @@ exists cache/pic-sure/downloads/nhanes.tgz
 exists cache/pic-sure/locks
 stdout '"type":"result","ok":true'
 
+-- cache/pic-sure/stacks/deleted --
+{"dir":"/nonexistent/deleted-stack","name":"deleted"}
 -- cache/pic-sure/downloads/nhanes.tgz --
 nhanes
 -- docker.scenario --

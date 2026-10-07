@@ -100,6 +100,9 @@ func (a *App) up(cmd *cobra.Command, _ []string) (err error) {
 	if err != nil {
 		return err
 	}
+	if err := c.RegisterStack(ctx, st.Dir, cfg.Name); err != nil {
+		return err
+	}
 
 	state.StartOperation("up", d.Clock.Now())
 	if err := st.SaveState(state); err != nil {

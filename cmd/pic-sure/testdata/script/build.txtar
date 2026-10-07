@@ -32,12 +32,32 @@ exitcode 1 pic-sure --stack stack build --force dictionary-etl
 stderr 'step images failed: building hms-dbmi/dictionary-etl:444444444444: .*did not complete successfully'
 grep '"status": "failed"' stack/.pic-sure/state.json
 
+# build registered the stack in the cache, so a prune run from elsewhere
+# keeps its image and source tree though no container or volume of it
+# exists.
+cp prune.scenario docker.scenario
+exec pic-sure --plain cache prune --dry-run
+stdout '^Would remove 0 items, freeing 0 B. Kept 2 in-use.$'
+exec pic-sure cache list
+stdout '^image +hms-dbmi/dictionary-etl:444444444444 .* in-use +stack demo$'
+stdout '^source +src/picsure-dictionary-etl/4{40} .* in-use +stack demo$'
+
 -- docker.scenario --
 docker image inspect hms-dbmi/dictionary-etl:444444444444 => 0 stdout=etl.json
 docker build * => 0
 -- docker-fail.scenario --
 docker image inspect hms-dbmi/dictionary-etl:444444444444 => 0 stdout=etl.json
 docker build * => 1 stderr=build-error.txt
+-- prune.scenario --
+docker ps -a -q --no-trunc => 0
+docker volume ls -q --filter label=org.hms-dbmi.picsure.stack-dir => 0
+docker network ls -q --no-trunc --filter label=org.hms-dbmi.picsure.stack-dir => 0
+docker image ls --filter reference=hms-dbmi/* * => 0 stdout=images.txt
+docker image inspect * => 0 stdout=images.json
+-- images.txt --
+hms-dbmi/dictionary-etl:444444444444
+-- images.json --
+[{"Id":"sha256:1","RepoTags":["hms-dbmi/dictionary-etl:444444444444"],"Size":1000,"Created":"2026-01-01T00:00:00Z"}]
 -- build-error.txt --
 ERROR: failed to solve: process "/bin/sh -c make" did not complete successfully
 -- etl.json --
