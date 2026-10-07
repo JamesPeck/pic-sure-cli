@@ -5,12 +5,14 @@ import (
 	"errors"
 	"io/fs"
 	"net"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/catalog"
+	"github.com/JamesPeck/pic-sure-cli/internal/docker"
 	"github.com/JamesPeck/pic-sure-cli/internal/stack"
 )
 
@@ -50,7 +52,15 @@ type StatusReport struct {
 	Migrations    StatusMigrations `json:"migrations"`
 	Token         StatusToken      `json:"token"`
 	Auth0         *StatusAuth0     `json:"auth0"`
-	LastOperation *stack.Operation `json:"last_operation"`
+	LastOperation *StatusOperation `json:"last_operation"`
+}
+
+// StatusOperation is the last mutating command state.json records.
+type StatusOperation struct {
+	Name       string    `json:"name"`
+	Status     string    `json:"status"`
+	StartedAt  time.Time `json:"started_at"`
+	FinishedAt time.Time `json:"finished_at,omitzero"`
 }
 
 // StatusStack identifies the stack.
@@ -80,6 +90,7 @@ const (
 	GateOK                = "ok"
 	GateStackNewer        = "stack_newer"
 	GateMigrationsPending = "migrations_pending"
+	GateUnsupportedSchema = "unsupported_schema"
 	GateUnknown           = "unknown"
 )
 
@@ -90,8 +101,7 @@ type StatusVersions struct {
 	StackCLI     string `json:"stack_cli"`
 	StackSchema  int    `json:"stack_schema"`
 	ConfigSchema int    `json:"config_schema"`
-	// Gate is ok, stack_newer, migrations_pending or unknown.
-	Gate string `json:"gate"`
+	Gate         string `json:"gate"`
 	// PendingMigrations summarizes the config migrations update would run.
 	PendingMigrations []string `json:"pending_migrations"`
 	Error             string   `json:"error,omitempty"`
@@ -119,6 +129,9 @@ type StatusImage struct {
 	Ref string `json:"ref"`
 	// Present is null when unknown: no recorded tag, or docker failed.
 	Present *bool `json:"present"`
+	// Dev is set when a dev variant runs the image, so Ref is the local
+	// build's tag (§7.3).
+	Dev bool `json:"dev"`
 }
 
 // StatusService is one container from compose ps.
@@ -161,6 +174,11 @@ type StatusAuth0 struct {
 	CallbackURL string `json:"callback_url"`
 	LogoutURL   string `json:"logout_url"`
 	WebOrigin   string `json:"web_origin"`
+	// The Dev URLs are httpd-hmr's Vite origin, set while that dev
+	// variant is on.
+	DevCallbackURL string `json:"dev_callback_url,omitempty"`
+	DevLogoutURL   string `json:"dev_logout_url,omitempty"`
+	DevWebOrigin   string `json:"dev_web_origin,omitempty"`
 }
 
 // Status reports on st without changing anything: no lock, no writes, no
@@ -181,12 +199,14 @@ func Status(ctx context.Context, d *Deps, st *stack.Stack, opts StatusOptions) *
 		state = &stack.State{}
 	}
 	r.Release = StatusRelease(state.Release)
-	r.LastOperation = state.LastOperation
+	if op := state.LastOperation; op != nil {
+		r.LastOperation = &StatusOperation{Name: op.Name, Status: string(op.Status), StartedAt: op.StartedAt.UTC(), FinishedAt: op.FinishedAt.UTC()}
+	}
 	for _, c := range catalog.Components() {
 		rec := state.Components[c.Name]
 		r.Components = append(r.Components, StatusComponent{Name: c.Name, Ref: rec.Ref, Commit: rec.Commit})
 	}
-	statusImages(ctx, d, r, state)
+	statusImages(ctx, d, r, state, cfg)
 	statusServices(ctx, d, r, opts.ComposeErr)
 	statusToken(d, r, st)
 	if cfg != nil {
@@ -254,9 +274,12 @@ func statusVersions(r *StatusReport, st *stack.Stack, opts StatusOptions) {
 	for _, m := range v.Pending {
 		r.Versions.PendingMigrations = append(r.Versions.PendingMigrations, m.Summary)
 	}
+	_, migrateErr := v.Gate(stack.Migrating)
 	switch {
 	case v.Newer():
 		r.Versions.Gate = GateStackNewer
+	case migrateErr != nil:
+		r.Versions.Gate = GateUnsupportedSchema
 	case len(v.Pending) > 0:
 		r.Versions.Gate = GateMigrationsPending
 	default:
@@ -264,21 +287,29 @@ func statusVersions(r *StatusReport, st *stack.Stack, opts StatusOptions) {
 	}
 }
 
-// statusImages checks each built image at the tag state.json records. The
-// first docker failure stops the checks, since the rest would fail the
-// same way.
-func statusImages(ctx context.Context, d *Deps, r *StatusReport, state *stack.State) {
+// statusImages checks each built image at the tag state.json records, or
+// at its dev build's tag while a dev variant runs it. The first docker
+// failure stops the checks, since the rest would fail the same way. Each
+// check has Ps's timeout, so a wedged daemon can't hang status.
+func statusImages(ctx context.Context, d *Deps, r *StatusReport, state *stack.State, cfg *stack.Config) {
 	r.Images = []StatusImage{}
+	dev := devImages(cfg)
 	for _, img := range catalog.Images() {
 		if !img.Built() {
 			continue
 		}
-		si := StatusImage{Name: img.Name, Component: img.Component}
-		if tag := state.Images[img.Name]; tag != "" {
+		si := StatusImage{Name: img.Name, Component: img.Component, Dev: dev[img.Name]}
+		tag := state.Images[img.Name]
+		if si.Dev {
+			tag = state.DevImages[img.Name]
+		}
+		if tag != "" {
 			si.Ref = img.Repository() + ":" + tag
 		}
 		if si.Ref != "" && r.ImagesError == "" {
-			ok, err := d.Docker.ImageExists(ctx, si.Ref)
+			ictx, cancel := context.WithTimeout(ctx, docker.PsTimeout)
+			ok, err := d.Docker.ImageExists(ictx, si.Ref)
+			cancel()
 			if err != nil {
 				r.ImagesError = err.Error()
 			} else {
@@ -287,6 +318,27 @@ func statusImages(ctx context.Context, d *Deps, r *StatusReport, state *stack.St
 		}
 		r.Images = append(r.Images, si)
 	}
+}
+
+// devImages are the images that the config's dev variants build locally,
+// as render picks them.
+func devImages(cfg *stack.Config) map[string]bool {
+	images := map[string]bool{}
+	if cfg == nil {
+		return images
+	}
+	for _, name := range cfg.Dev.Services {
+		v, ok := catalog.LookupDevVariant(name)
+		if !ok || v.Image != "" {
+			continue
+		}
+		for _, svc := range v.Services {
+			if s, ok := catalog.LookupService(svc); ok {
+				images[s.Image] = true
+			}
+		}
+	}
+	return images
 }
 
 func statusServices(ctx context.Context, d *Deps, r *StatusReport, composeErr error) {
@@ -342,10 +394,16 @@ func auth0URLs(cfg *stack.Config) *StatusAuth0 {
 		host = "[" + host + "]"
 	}
 	origin := "https://" + host
-	return &StatusAuth0{
+	a := &StatusAuth0{
 		Needed:      cfg.Auth.Mode != stack.AuthOpen,
 		CallbackURL: origin + "/login/loading/",
 		LogoutURL:   origin,
 		WebOrigin:   origin,
 	}
+	if v, ok := catalog.LookupDevVariant("httpd-hmr"); ok && slices.Contains(cfg.Dev.Services, v.Name) {
+		// render's VITE_ORIGIN for httpd-hmr.
+		dev := "http://localhost:" + strconv.Itoa(cfg.Network.DevPorts.Base+v.Port)
+		a.DevCallbackURL, a.DevLogoutURL, a.DevWebOrigin = dev+"/login/loading/", dev, dev
+	}
+	return a
 }

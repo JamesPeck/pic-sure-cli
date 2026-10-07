@@ -82,9 +82,12 @@ func writeStatus(w io.Writer, r *ops.StatusReport) error {
 	}
 	v := r.Versions
 	line("CLI", "%s (config schema %d)", v.CLI, v.Schema)
-	if v.Error != "" {
+	switch {
+	case v.Error != "":
 		line("Stack CLI", "unknown: %s", v.Error)
-	} else {
+	case v.StackCLI == "" && v.StackSchema == 0:
+		line("Stack CLI", "(not rendered yet)")
+	default:
 		line("Stack CLI", "%s (rendered schema %d, config schema %d)", orNone(v.StackCLI), v.StackSchema, v.ConfigSchema)
 	}
 	line("Gate", "%s", gateText(v))
@@ -92,7 +95,11 @@ func writeStatus(w io.Writer, r *ops.StatusReport) error {
 		line("State", "unreadable: %s", r.StateError)
 	}
 
-	line("Release", "%s %s %s", orNone(r.Release.Repo), r.Release.Branch, shortSHA(r.Release.Commit))
+	if r.Release.Commit == "" {
+		line("Release", "(not recorded)")
+	} else {
+		line("Release", "%s %s %s", r.Release.Repo, r.Release.Branch, shortSHA(r.Release.Commit))
+	}
 	for _, c := range r.Components {
 		ref := ""
 		if c.Ref != "" {
@@ -111,6 +118,9 @@ func writeStatus(w io.Writer, r *ops.StatusReport) error {
 			state = "present"
 		case img.Present != nil:
 			state = "missing"
+		}
+		if img.Dev {
+			state += " (dev build)"
 		}
 		fmt.Fprintf(&b, "  %-28s %s\n", img.Name, state)
 	}
@@ -166,6 +176,10 @@ func writeStatus(w io.Writer, r *ops.StatusReport) error {
 			b.WriteString("Auth0 (not needed in open mode; register these to allow login):\n")
 		}
 		fmt.Fprintf(&b, "  Callback URL: %s\n  Logout URL:   %s\n  Web origin:   %s\n", au.CallbackURL, au.LogoutURL, au.WebOrigin)
+		if au.DevWebOrigin != "" {
+			b.WriteString("Auth0 for httpd-hmr (dev):\n")
+			fmt.Fprintf(&b, "  Callback URL: %s\n  Logout URL:   %s\n  Web origin:   %s\n", au.DevCallbackURL, au.DevLogoutURL, au.DevWebOrigin)
+		}
 	}
 	_, err := io.WriteString(w, b.String())
 	return err
@@ -175,6 +189,8 @@ func gateText(v ops.StatusVersions) string {
 	switch v.Gate {
 	case ops.GateStackNewer:
 		return "the stack was rendered by a newer pic-sure; mutating commands are refused"
+	case ops.GateUnsupportedSchema:
+		return "this pic-sure can't migrate the config's schema; mutating commands are refused"
 	case ops.GateMigrationsPending:
 		return fmt.Sprintf("%d config migration(s) pending; run pic-sure update", len(v.PendingMigrations))
 	case ops.GateOK:

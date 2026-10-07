@@ -18,7 +18,7 @@ stdout '^\{"schema_version":2,"stack":\{"name":"demo","dir":".*stack"\},"config"
 stdout '"versions":\{"cli":"dev","schema":1,"stack_cli":"dev","stack_schema":1,"config_schema":1,"gate":"ok","pending_migrations":\[\]\}'
 stdout '"release":\{"repo":"https://github.com/hms-dbmi/pic-sure-release-control","branch":"james_mono","commit":"49be6ec0123456789abcdef0123456789abcdef0"\}'
 stdout '\{"name":"pic-sure","ref":"v3.1.0","commit":"1111111111111111111111111111111111111111"\}'
-stdout '\{"name":"pic-sure-gateway","component":"pic-sure","ref":"hms-dbmi/pic-sure-gateway:111111111111","present":null\}'
+stdout '\{"name":"pic-sure-gateway","component":"pic-sure","ref":"hms-dbmi/pic-sure-gateway:111111111111","present":null,"dev":false\}'
 stdout '"images_error":"[^"]+"'
 stdout '"services":\[\],"services_error":"[^"]+"'
 stdout '"db":\{"mode":"local"\},"migrations":\{"status":"unknown"\}'
@@ -54,7 +54,8 @@ stdout '"auth0":null,"last_operation":null\}$'
 exec pic-sure --stack broken status
 stdout '^Config: +invalid$'
 stdout '^  - network.http_port \(line 3\): '
-stdout '^Stack CLI: +\(not recorded\)'
+stdout '^Stack CLI: +\(not rendered yet\)$'
+stdout '^Release: +\(not recorded\)$'
 stdout '^Token: +not issued$'
 ! stdout Auth0
 

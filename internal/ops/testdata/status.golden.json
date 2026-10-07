@@ -49,79 +49,92 @@
       "name": "pic-sure-gateway",
       "component": "pic-sure",
       "ref": "hms-dbmi/pic-sure-gateway:111111111111",
-      "present": true
+      "present": true,
+      "dev": false
     },
     {
       "name": "pic-sure-operations-service",
       "component": "pic-sure",
       "ref": "",
-      "present": null
+      "present": null,
+      "dev": false
     },
     {
       "name": "pic-sure-hpds-query-service",
       "component": "pic-sure",
       "ref": "",
-      "present": null
+      "present": null,
+      "dev": false
     },
     {
       "name": "pic-sure-psama",
       "component": "pic-sure",
       "ref": "",
-      "present": null
+      "present": null,
+      "dev": false
     },
     {
       "name": "pic-sure-hpds",
       "component": "pic-sure",
       "ref": "hms-dbmi/pic-sure-hpds:111111111111",
-      "present": false
+      "present": false,
+      "dev": false
     },
     {
       "name": "pic-sure-hpds-etl",
       "component": "pic-sure",
       "ref": "",
-      "present": null
+      "present": null,
+      "dev": false
     },
     {
       "name": "pic-sure-visualization",
       "component": "pic-sure",
       "ref": "",
-      "present": null
+      "present": null,
+      "dev": false
     },
     {
       "name": "pic-sure-logging",
       "component": "pic-sure",
       "ref": "",
-      "present": null
+      "present": null,
+      "dev": false
     },
     {
       "name": "pic-sure-dictionary-api",
       "component": "pic-sure",
       "ref": "",
-      "present": null
+      "present": null,
+      "dev": false
     },
     {
       "name": "pic-sure-dictionary-dump",
       "component": "pic-sure",
       "ref": "",
-      "present": null
+      "present": null,
+      "dev": false
     },
     {
       "name": "dictionary-weights",
       "component": "pic-sure",
       "ref": "",
-      "present": null
+      "present": null,
+      "dev": false
     },
     {
       "name": "pic-sure-httpd",
       "component": "frontend",
       "ref": "",
-      "present": null
+      "present": null,
+      "dev": false
     },
     {
       "name": "dictionary-etl",
       "component": "dictionary-etl",
       "ref": "",
-      "present": null
+      "present": null,
+      "dev": false
     }
   ],
   "services": [

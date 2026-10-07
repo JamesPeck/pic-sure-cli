@@ -644,7 +644,9 @@ the read-only `StatusReport` (`status --json`, documented field by field in
 pic-sure.yaml (migrated in memory), the version gate, state.json's release,
 components, image tags and last operation, and the token expiry from
 secrets.yaml; it asks docker only `image inspect` per built image with a
-recorded tag (stopping at the first docker failure) and `compose ps`. It
+recorded tag, or its dev build's tag while a dev variant runs it (each
+with `docker.PsTimeout`, stopping at the first docker failure), and
+`compose ps`. It
 takes no lock, writes nothing and never fetches release-control. A section
 it can't read carries an error string instead of failing, so the command
 exits 0. The command leaves `Deps.Compose` nil for an unrendered stack and

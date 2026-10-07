@@ -5,10 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"flag"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -18,9 +18,8 @@ import (
 	"github.com/JamesPeck/pic-sure-cli/internal/events"
 	"github.com/JamesPeck/pic-sure-cli/internal/ops"
 	"github.com/JamesPeck/pic-sure-cli/internal/stack"
+	"go.yaml.in/yaml/v3"
 )
-
-var update = flag.Bool("update", false, "rewrite the golden files in testdata")
 
 var statusNow = time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)
 
@@ -209,26 +208,6 @@ func TestStatusReportsUnreadableStateAndSecrets(t *testing.T) {
 	}
 }
 
-func golden(t *testing.T, name string, got []byte) {
-	t.Helper()
-	path := filepath.Join("testdata", name)
-	if *update {
-		if err := os.MkdirAll("testdata", 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, got, 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	want, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(got, want) {
-		t.Errorf("%s differs (go test -update rewrites it):\n%s", path, got)
-	}
-}
-
 // TestStatusSchemaIsDocumented keeps docs/json-schemas.md in step with
 // StatusReport: every JSON field is documented, and nothing else is.
 func TestStatusSchemaIsDocumented(t *testing.T) {
@@ -294,5 +273,87 @@ func jsonFields(t reflect.Type, prefix string, into map[string]bool) {
 			into[path] = strings.Contains(opts, "omit")
 		}
 		jsonFields(f.Type, path, into)
+	}
+}
+
+func TestStatusGateStates(t *testing.T) {
+	toTwo := stack.Registry{Target: 2, Steps: []stack.Migration{{From: 1, Summary: "rename a key", Apply: func(*yaml.Node) error { return nil }}}}
+	tests := []struct {
+		config  string
+		reg     stack.Registry
+		gate    string
+		pending []string
+	}{
+		{"schema: 1\nname: demo\n", toTwo, ops.GateMigrationsPending, []string{"rename a key"}},
+		{"schema: 0\nname: demo\n", stack.ConfigMigrations(), ops.GateUnsupportedSchema, []string{}},
+	}
+	for _, tt := range tests {
+		st := newStatusStack(t, tt.config)
+		r := ops.Status(context.Background(), statusDeps(t, fakerunner.New(t), st), st, ops.StatusOptions{CLIVersion: "2.0.0", Migrations: tt.reg})
+		if r.Versions.Gate != tt.gate || !slices.Equal(r.Versions.PendingMigrations, tt.pending) {
+			t.Errorf("%q: versions = %+v, want gate %s, pending %q", tt.config, r.Versions, tt.gate, tt.pending)
+		}
+	}
+}
+
+func TestStatusReportsTimesInUTC(t *testing.T) {
+	st := newStatusStack(t, statusConfig)
+	east := time.FixedZone("EDT", -4*3600)
+	state := &stack.State{}
+	state.StartOperation("up", statusNow.In(east))
+	if err := st.SaveState(state); err != nil {
+		t.Fatal(err)
+	}
+	r := ops.Status(context.Background(), statusDeps(t, fakerunner.New(t), st), st, statusOpts())
+	if r.LastOperation == nil || r.LastOperation.StartedAt.Location() != time.UTC || !r.LastOperation.FinishedAt.IsZero() {
+		t.Errorf("last operation = %+v, want UTC and no finish", r.LastOperation)
+	}
+}
+
+func TestStatusChecksImagesWithATimeout(t *testing.T) {
+	st := newStatusStack(t, statusConfig)
+	saveStatusState(t, st)
+	f := fakerunner.New(t)
+	f.On(fakerunner.Glob("docker image inspect *")).Do(func(ctx context.Context, _ fakerunner.Call) (docker.Result, error) {
+		if _, ok := ctx.Deadline(); !ok {
+			t.Error("image inspect has no deadline")
+		}
+		return docker.Result{Stdout: []byte(`[{"Id":"sha256:1"}]`)}, nil
+	})
+	f.On(fakerunner.Glob("docker compose *"))
+	ops.Status(context.Background(), statusDeps(t, f, st), st, statusOpts())
+}
+
+func TestStatusFollowsDevVariants(t *testing.T) {
+	src := t.TempDir()
+	st := newStatusStack(t, statusConfig+"dev: {services: [hpds, httpd-hmr]}\ncomponents: {frontend: {source: "+src+"}}\n")
+	state := &stack.State{
+		Images:    map[string]string{"pic-sure-hpds": "111111111111", "pic-sure-gateway": "111111111111"},
+		DevImages: map[string]string{"pic-sure-hpds": "dev-demo-222222222222"},
+	}
+	if err := st.SaveState(state); err != nil {
+		t.Fatal(err)
+	}
+	f := fakerunner.New(t)
+	f.On(fakerunner.Glob("docker image inspect *")).Stdout(`[{"Id":"sha256:1"}]`)
+
+	r := ops.Status(context.Background(), statusDeps(t, f, st), st, statusOpts())
+	if !r.Config.Valid {
+		t.Fatalf("config = %+v", r.Config)
+	}
+	for _, img := range r.Images {
+		switch img.Name {
+		case "pic-sure-hpds":
+			if !img.Dev || img.Ref != "hms-dbmi/pic-sure-hpds:dev-demo-222222222222" {
+				t.Errorf("hpds = %+v, want the dev build", img)
+			}
+		case "pic-sure-gateway":
+			if img.Dev || img.Ref != "hms-dbmi/pic-sure-gateway:111111111111" {
+				t.Errorf("gateway = %+v, want the release build", img)
+			}
+		}
+	}
+	if r.Auth0 == nil || r.Auth0.DevWebOrigin != "http://localhost:15006" || r.Auth0.DevCallbackURL != "http://localhost:15006/login/loading/" {
+		t.Errorf("auth0 = %+v, want httpd-hmr's origin", r.Auth0)
 	}
 }
