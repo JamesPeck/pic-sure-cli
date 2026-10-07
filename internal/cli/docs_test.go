@@ -28,7 +28,7 @@ func TestWriteCommandDocsReplacesThePages(t *testing.T) {
 			t.Errorf("index lacks %s", want)
 		}
 	}
-	for _, unwanted := range []string{"pic-sure_help.md", "pic-sure_completion.md"} {
+	for _, unwanted := range []string{"pic-sure_help.md"} {
 		if _, err := os.Stat(filepath.Join(dir, unwanted)); err == nil {
 			t.Errorf("%s was written", unwanted)
 		}
@@ -37,7 +37,7 @@ func TestWriteCommandDocsReplacesThePages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"# pic-sure data demo\n", "--heap MB", "See also: [`pic-sure data`](pic-sure_data.md)\n"} {
+	for _, want := range []string{"# pic-sure data demo\n", "--heap MB", "```text\nReplace the stack's HPDS", "See also: [`pic-sure data`](pic-sure_data.md)\n"} {
 		if !strings.Contains(string(page), want) {
 			t.Errorf("data demo page lacks %q", want)
 		}

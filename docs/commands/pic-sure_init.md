@@ -2,6 +2,7 @@
 
 Create a stack in DIR (default: the current directory) and bring it up
 
+```text
 Create a PIC-SURE stack in DIR and bring it up: check the host, fetch the
 release, write pic-sure.yaml and the secrets, build the images, install the
 TLS certificate, render the compose file, set up and migrate the database,
@@ -21,6 +22,7 @@ is, a config flag, --source or --set that would change it is an error
 (change it with pic-sure config set), and the steps already done are
 skipped. On a stack init has finished it only registers the stack in
 the cache (see cache prune).
+```
 
 ```
 pic-sure init [DIR] [flags]

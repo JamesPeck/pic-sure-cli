@@ -2,10 +2,12 @@
 
 Load facet categories, facets and facet concepts
 
+```text
 Load facet categories, facets and facet concepts from CSV, in that order.
 The stack must be up: the operation runs a dictionary-etl container on the
 stack's data network, sends it the data from short-lived curl containers,
 then removes it, touches dict.update_info and restarts dictionary-api.
+```
 
 ```
 pic-sure dictionary load-facets --categories FILE --facets FILE --concepts FILE [flags]

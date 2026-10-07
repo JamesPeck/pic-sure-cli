@@ -2,6 +2,7 @@
 
 Write a redacted diagnostics archive to attach to an issue
 
+```text
 Write a gzipped tar of diagnostics to attach to an issue: status --deep
 --json, doctor --json, the newest 5 run logs, compose ps, each service's last
 500 log lines, and pic-sure.yaml, state.json and manifest.json. Every value
@@ -13,6 +14,7 @@ the archive has the host checks alone. The archive goes to
 ./pic-sure-support-NAME-TIMESTAMP.tar.gz unless -o names a file, and its
 path is printed. It exits 0 once the archive is written, even if parts of
 it couldn't be collected.
+```
 
 ```
 pic-sure support-bundle [flags]

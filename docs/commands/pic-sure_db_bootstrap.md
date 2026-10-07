@@ -2,6 +2,7 @@
 
 Create the databases, users and grants on a remote MySQL
 
+```text
 For a stack with db.mode remote: connect to the remote MySQL as
 db.remote.root_user and create the auth and picsure databases and the
 picsure, auth and airflow users, with their passwords from secrets.yaml and
@@ -17,6 +18,7 @@ connect from theirs, so db.remote.host must be reachable from a container:
 localhost or 127.0.0.1 is the container itself. For a MySQL on the Docker
 host, use host.docker.internal where the runtime provides it (Docker Desktop,
 OrbStack).
+```
 
 ```
 pic-sure db bootstrap [flags]

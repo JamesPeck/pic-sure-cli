@@ -2,6 +2,7 @@
 
 Rotate a secret everywhere it is used
 
+```text
 Replace one secret: first in the database that checks it, then in
 secrets.yaml, then in the running services whose compose config uses it,
 which are recreated. NAME is one of:
@@ -17,8 +18,8 @@ which are recreated. NAME is one of:
 New values are generated, except the Auth0 client secret and, with a remote
 database, the root password: those are read from stdin and need --yes. The
 Auth0 client secret must be at least 32 bytes; supplying it re-issues the
-introspection token, and it is how a stack leaves open mode: set auth.mode,
-rotate auth0-client-secret, then run `pic-sure up`. With a remote database,
+introspection token, and it is how a stack leaves open mode: set
+auth.auth0.client_id, then auth.mode, rotate auth0-client-secret, then run `pic-sure up`. With a remote database,
 db-root records a password the DBA has already changed, after checking it
 logs in.
 
@@ -27,6 +28,7 @@ it: --discard-data --yes deletes the data first. Load it again afterwards.
 
 The database must be running for a database secret. On a terminal you
 confirm; otherwise pass --yes.
+```
 
 ```
 pic-sure secrets rotate NAME [flags]

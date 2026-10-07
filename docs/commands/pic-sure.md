@@ -2,11 +2,13 @@
 
 Install and operate PIC-SURE All-in-One stacks
 
+```text
 pic-sure installs, runs, updates, loads data into, and tears down
 PIC-SURE All-in-One stacks on macOS and Linux. It needs only docker (with
 the compose plugin) and git.
 
 Run with no arguments on a terminal to open the TUI.
+```
 
 ```
 pic-sure [flags]
@@ -43,6 +45,7 @@ pic-sure [flags]
 ## Flags
 
 ```
+  -h, --help              help for pic-sure
       --json              machine-readable JSON on stdout; implies --non-interactive
       --log-level LEVEL   stderr log LEVEL: debug, info, warn or error (default info)
       --no-animations     static TUI, without animation
@@ -50,6 +53,7 @@ pic-sure [flags]
       --plain             plain timestamped output instead of the TUI
       --skip-step ID      skip the step with this ID (repeatable; converging commands only)
       --stack DIR         act on the stack in DIR (default: the stack containing the current directory)
+  -v, --version           version for pic-sure
       --wait-lock         if another pic-sure command is changing the stack, wait for it instead of failing
       --yes               answer yes to every confirmation, including destructive ones
 ```

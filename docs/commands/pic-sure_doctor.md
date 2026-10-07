@@ -2,10 +2,12 @@
 
 Check the host, Docker, the stack and the network
 
+```text
 Check the host, Docker, the stack and the network.
 
 Without a stack (no --stack, and none at or above the current directory)
 only the host and Docker are checked. Exits 1 if any check fails.
+```
 
 ```
 pic-sure doctor [flags]

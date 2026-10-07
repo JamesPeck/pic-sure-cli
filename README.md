@@ -33,7 +33,10 @@ and flag is in the [command reference](docs/commands/README.md).
   20 GB and fails below 5 GB).
 - Memory: HPDS's default heap is 16 GB (`-Xmx16g`). Give the Docker VM
   enough for it, or choose a smaller heap at init with
-  `--set hpds.java_opts=-Xmx2g` (enough for the demo data).
+  `--set hpds.java_opts=-Xmx2g`. The demo data loads with HPDS at 1 GB
+  and a 1 GB loader heap (`data demo --heap 1024`; the default loader heap
+  is 4096 MB), which is what the nightly end-to-end tests use. Besides HPDS
+  the stack runs about 4 GB of other services.
 
 `pic-sure doctor` checks all of this.
 
@@ -187,8 +190,8 @@ In open mode with no secret given, init generates a random one, since
 PSAMA signs its tokens with it. To move such a stack to `required` later:
 
 ```sh
+pic-sure config set auth.auth0.client_id "$AUTH0_CLIENT_ID"   # first: required mode needs it
 pic-sure config set auth.mode required
-pic-sure config set auth.auth0.client_id "$AUTH0_CLIENT_ID"
 printf '%s\n' "$AUTH0_CLIENT_SECRET" | pic-sure --yes secrets rotate auth0-client-secret
 pic-sure up
 ```

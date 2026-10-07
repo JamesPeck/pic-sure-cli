@@ -2,6 +2,7 @@
 
 Converge an existing stack to running
 
+```text
 Bring the stack to running: build any missing images, install the TLS
 certificate and truststore if their volumes need them, re-render the compose
 file, then start and migrate the database, seed it, install the HPDS key and
@@ -16,6 +17,7 @@ A component whose components.<c>.source was unset goes back to its release
 images: up resolves it at the stack's recorded release, builds or pulls
 the images and recreates its services. It never moves the stack to
 another release; that is pic-sure update.
+```
 
 ```
 pic-sure up

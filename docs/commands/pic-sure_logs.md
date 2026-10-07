@@ -2,9 +2,11 @@
 
 Show service logs
 
+```text
 Show service logs (default: every service) on stdout. With -f, keep
 following new lines until Ctrl-C. With --json, each line is a log event of
 step "logs".
+```
 
 ```
 pic-sure logs [SERVICE] [flags]

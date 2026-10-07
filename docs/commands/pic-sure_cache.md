@@ -2,10 +2,6 @@
 
 Inspect and prune the host cache
 
-```
-pic-sure cache
-```
-
 ## Subcommands
 
 - [`pic-sure cache list`](pic-sure_cache_list.md): List cached sources, images and downloads, and what uses them

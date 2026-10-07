@@ -11,12 +11,14 @@ import (
 )
 
 // WriteCommandDocs replaces the Markdown command reference in dir with one
-// page per visible command, plus README.md listing them (ticket 065,
-// `make docs`). The pages hold only what cobra's help shows, so they are
+// page per visible command, plus README.md listing them (`make docs`).
+// The pages hold only what cobra's help shows, so they are
 // the same on every machine.
 func WriteCommandDocs(dir string) error {
 	root := newRootCmd(NewApp(BuildInfo{}))
-	root.DisableAutoGenTag = true
+	// cobra adds these at execute time; the root page should list them.
+	root.InitDefaultHelpFlag()
+	root.InitDefaultVersionFlag()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
@@ -32,7 +34,7 @@ func WriteCommandDocs(dir string) error {
 
 	var index bytes.Buffer
 	index.WriteString("# Command reference\n\n")
-	index.WriteString("Generated from `pic-sure --help` by `make docs`; don't edit by hand.\n\n")
+	index.WriteString("Generated from the CLI's help by `make docs`; don't edit by hand.\n\n")
 	index.WriteString("| Command | Does |\n|---|---|\n")
 	for _, c := range docCommands(root) {
 		fmt.Fprintf(&index, "| [`%s`](%s) | %s |\n", c.CommandPath(), docFile(c), c.Short)
@@ -44,16 +46,21 @@ func WriteCommandDocs(dir string) error {
 }
 
 // docCommands returns cmd and its visible descendants, depth first in
-// cobra's (alphabetical) order. help and completion are cobra's own.
+// cobra's (alphabetical) order.
 func docCommands(cmd *cobra.Command) []*cobra.Command {
 	out := []*cobra.Command{cmd}
 	for _, c := range cmd.Commands() {
-		if c.Hidden || c.Name() == "help" || c.Name() == "completion" {
-			continue
+		if documented(c) {
+			out = append(out, docCommands(c)...)
 		}
-		out = append(out, docCommands(c)...)
 	}
 	return out
+}
+
+// documented reports whether c gets a page: help and completion are
+// cobra's own.
+func documented(c *cobra.Command) bool {
+	return !c.Hidden && c.Name() != "help" && c.Name() != "completion"
 }
 
 func docFile(c *cobra.Command) string {
@@ -63,10 +70,14 @@ func docFile(c *cobra.Command) string {
 func commandDoc(c *cobra.Command) []byte {
 	var b bytes.Buffer
 	fmt.Fprintf(&b, "# %s\n\n%s\n\n", c.CommandPath(), c.Short)
+	// Help text is plain text, with <placeholders> and indented tables that
+	// Markdown would swallow, so it goes in a code block as --help shows it.
 	if c.Long != "" {
-		b.WriteString(c.Long + "\n\n")
+		fmt.Fprintf(&b, "```text\n%s\n```\n\n", strings.TrimRight(c.Long, "\n"))
 	}
-	if c.Runnable() {
+	// A group's RunE only rejects a missing subcommand; the root's opens
+	// the TUI.
+	if c.Runnable() && (!c.HasParent() || !c.HasAvailableSubCommands()) {
 		fmt.Fprintf(&b, "```\n%s\n```\n\n", c.UseLine())
 	}
 	if len(c.Aliases) > 0 {
@@ -75,10 +86,10 @@ func commandDoc(c *cobra.Command) []byte {
 	if c.Example != "" {
 		fmt.Fprintf(&b, "## Examples\n\n```\n%s\n```\n\n", c.Example)
 	}
-	if subs := docCommands(c)[1:]; len(subs) > 0 {
+	if c.HasAvailableSubCommands() {
 		b.WriteString("## Subcommands\n\n")
-		for _, s := range subs {
-			if s.Parent() == c {
+		for _, s := range c.Commands() {
+			if documented(s) {
 				fmt.Fprintf(&b, "- [`%s`](%s): %s\n", s.CommandPath(), docFile(s), s.Short)
 			}
 		}

@@ -2,10 +2,6 @@
 
 Show and change pic-sure.yaml
 
-```
-pic-sure config
-```
-
 ## Subcommands
 
 - [`pic-sure config edit`](pic-sure_config_edit.md): Edit the config in $EDITOR, validating on save

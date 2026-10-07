@@ -2,6 +2,7 @@
 
 Update the stack to the current release: config, images, migrations
 
+```text
 Move the stack to the head of release.branch, or to --release-commit: work
 out a plan (config migrations, component commits, images, database
 migrations, the introspection token, services to restart), then back up
@@ -12,6 +13,7 @@ stack, restarting only the services that need it.
 --dry-run prints the plan and changes nothing in the stack, though it may
 start the stack's database to compare its migrations. --no-build keeps the
 components and images the stack runs and doesn't move its release.
+```
 
 ```
 pic-sure update [flags]

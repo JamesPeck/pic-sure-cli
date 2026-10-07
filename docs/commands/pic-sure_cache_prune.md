@@ -2,6 +2,7 @@
 
 Remove cache entries no stack uses
 
+```text
 Remove the commit-tagged and dev images, source trees, leftover build
 contexts, downloads and temporary directories that nothing uses.
 
@@ -17,6 +18,7 @@ made or changed in the last hour are always kept, as a running command may
 not have recorded them yet. Images tagged by other tools, git clones and
 lock files are never removed. prune waits up to 5 s for a running build to
 finish with the cache, and otherwise fails, removing nothing.
+```
 
 ```
 pic-sure cache prune [flags]

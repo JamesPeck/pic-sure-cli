@@ -1,8 +1,11 @@
 # JSON output
 
-`status --json`, `doctor --json`, `ps --json`, `support-bundle --json` and `version --json` print one JSON object
-on stdout with `schema_version` first. Commands that stream print NDJSON
-events instead, ending with a `result` event. Within `schema_version` 2,
+`status --json`, `doctor --json`, `ps --json`, `support-bundle --json`,
+`version --json`, `cache list --json`, `dev list --json`, `shared-data
+list --json`, `migrate --check --json` and `db bootstrap --check --json`
+print one JSON object on stdout with `schema_version` first, and no
+`result` event. Commands that stream print NDJSON events instead, ending
+with a `result` event. Within `schema_version` 2,
 changes are additive only: fields are added, never renamed, removed or
 retyped. Ignore fields you don't know.
 
@@ -153,7 +156,8 @@ when parts couldn't be collected; 1 when it can't be written; 3 when
 
 ## NDJSON events
 
-Every other command, with `--json`, prints one JSON object per line on
+Every command that doesn't print a report (above) and isn't `config` or
+`compose`, with `--json`, prints one JSON object per line on
 stdout as it runs, each with `type` first, and ends with exactly one
 `result` line. Logs and warnings meant for people go to stderr, so stdout
 is only events. Read lines until `result`; don't rely on the events before
@@ -174,13 +178,13 @@ it beyond what's below.
 For example, `pic-sure up --json` on a running stack:
 
 ```
-{"type":"step_started","id":"images","title":"Build the images"}
-{"type":"step_done","id":"images","status":"skipped"}
+{"type":"step_started","id":"resolve","title":"Resolve the component commits"}
+{"type":"step_done","id":"resolve","status":"skipped"}
 ...
 {"type":"step_started","id":"start","title":"Start the stack"}
 {"type":"log","id":"start","stream":"stderr","line":" Container demo-hpds-1  Running"}
 {"type":"step_done","id":"start","status":"ok"}
-{"type":"result","ok":true}
+{"type":"result","ok":true,"data":{"stack":"demo","dir":"/home/me/picsure/demo","url":"https://localhost:8443",...}}
 ```
 
 A command that fails before it starts any step (a usage error, no stack)
@@ -193,16 +197,18 @@ the same additive-only rule:
 
 | Command | `data` |
 |---|---|
-| `init` | `{"stack", "dir", "already_initialized" (omitted unless true), "url", "auth0", "token_expiry", "next_steps"}`; `auth0` is `status --json`'s object. |
+| `init`, `up` | `{"stack", "dir", "already_initialized" (omitted unless true), "url", "auth0", "token_expiry", "next_steps"}`; `auth0` is `status --json`'s object, and `up`'s `next_steps` is empty. |
 | `update` | The plan: `{"stack", "dry_run", "config": {"from", "to", "migrations"}, "release": {"repo", "branch", "from", "to"}, "components": [{"name", "from_ref", "from_commit", "to_ref", "to_commit", "source", "changed"}], "images": [{"name", "component", "from", "to", "action"}], "migrations": {"status", "detail", "started_db"}, "token": {"expiry", "renew"}, "restarts": [{"service", "action", "reasons"}]}`. `images[].action` is `build`, `pull`, `up-to-date`, or `keep` (with `--no-build`); `migrations.status` is `pending`, `up-to-date` or `unknown`; `restarts[].action` is `recreate` or `restart`. Note the hyphen: `status --json` spells the same state `up_to_date`. |
 | `data demo` | `{"dataset": "demo:<name>"}`, where `<name>` is the argument, `all` included. |
 | `data load-phenotype` | `{"dataset": "phenotype:<sha256>", "dictionary": "auto" or "custom", "weights": bool}` |
 | `data load-genomic` | `{"partition", "promoted": [...], "profile"}` |
 | `shared-data publish` | The data set, as one entry of `shared-data list`. |
-| `shared-data list` | `{"data_sets": [...]}` |
 | `shared-data remove` | `{"name", "removed": [...]}` |
-| `dev list` | `{"variants": [...]}` |
 | `dev on`, `dev off` | `{"service", "on", "services", "port", "source"}` |
 | `reset`, `destroy` | `{"stack", "volumes": [...], "kept_volumes": [...], "images": [...], "files", "pruned"}`: the volumes removed, the volumes reset kept (`--keep-db`), destroy's dev images, and for destroy `files: {"removed", "kept", "remaining", "dir_removed"}` (`remaining` lists what you added, which destroy leaves). `pruned` is there with `--prune-images`. Empty lists may be omitted. |
 
 Other commands' `data` isn't listed here yet; treat it as informational.
+
+`cache list`, `dev list` and `shared-data list` are reports, not streams:
+`dev list --json` is `{"schema_version": 2, "variants": [...]}` and
+`shared-data list --json` is `{"schema_version": 2, "data_sets": [...]}`.

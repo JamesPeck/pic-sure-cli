@@ -2,10 +2,6 @@
 
 Run services from local source with debug ports
 
-```
-pic-sure dev
-```
-
 ## Subcommands
 
 - [`pic-sure dev list`](pic-sure_dev_list.md): List the services that have a dev mode

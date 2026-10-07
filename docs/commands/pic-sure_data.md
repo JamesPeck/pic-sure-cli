@@ -2,10 +2,6 @@
 
 Load data into HPDS and the dictionary
 
-```
-pic-sure data
-```
-
 ## Subcommands
 
 - [`pic-sure data demo`](pic-sure_data_demo.md): Load a demo dataset (default: nhanes)

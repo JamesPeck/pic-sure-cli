@@ -1,6 +1,6 @@
 # Command reference
 
-Generated from `pic-sure --help` by `make docs`; don't edit by hand.
+Generated from the CLI's help by `make docs`; don't edit by hand.
 
 | Command | Does |
 |---|---|

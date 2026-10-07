@@ -2,11 +2,13 @@
 
 Remove SERVICE's dev variant and debug port
 
+```text
 Remove SERVICE from dev.services, re-render and recreate SERVICE without
 its debug port. While components.<component>.source is set, SERVICE keeps
 running the build of that checkout, since a source applies to the whole
 component. To return to the release images, unset the source and run
 pic-sure up.
+```
 
 ```
 pic-sure dev off SERVICE

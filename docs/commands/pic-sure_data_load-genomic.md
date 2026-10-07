@@ -2,6 +2,7 @@
 
 Load VCF data into a genomic partition
 
+```text
 Load the VCFs a vcfIndex.tsv names into a genomic partition, staged in
 the stack's genomic-staging volume, where it replaces any earlier load of
 the partition. HPDS keeps running on its live data while the loaders run.
@@ -15,6 +16,7 @@ same path.
 into all-bak with --backup), and starts HPDS again. --enable-profile sets
 hpds.profile to bch-dev, the profile that reads the genomic data, re-renders
 the stack and starts HPDS on it.
+```
 
 ```
 pic-sure data load-genomic --partition P --vcf-index F [--vcf-dir D] [--promote] [--enable-profile] [flags]

@@ -18,7 +18,9 @@ every flag.
 3. **Parse only JSON.** Human output, plain-mode lines and stderr change
    freely. The JSON shapes are in [json-schemas.md](json-schemas.md) and
    change additively within `schema_version` 2: ignore fields you don't know.
-4. **Decide on the exit code**, then read the JSON for detail.
+4. **Decide on the exit code**, then read the JSON for detail. The one
+   exception is `pic-sure compose -- ARGS`, which exits with compose's own
+   code, so 2–5 there don't mean what the table below says.
 5. **Secrets go on stdin**, never in arguments: `--auth0-client-secret-stdin`,
    `--db-root-password-stdin`, and `secrets rotate auth0-client-secret`
    (and `db-root` with a remote database). One trailing newline is
@@ -81,15 +83,19 @@ a missing required flag is exit 2 naming it. Its required flags are
 On a non-zero exit, stderr's last line is `pic-sure: MESSAGE`. With
 `--json`, stdout's last line is then the failed `result` with the same
 message and the exit code, unless the command already printed its report:
-`doctor` prints its report and exits 1 with nothing after it. A report
+`doctor` (exit 1), `migrate --check` and `db bootstrap --check` (exit 3)
+print their report with nothing after it. A report
 command that fails before it has a report (`status` with no stack, exit 3)
 prints the failed `result` instead. Re-running a failed converging command (`init`, `up`,
 `update`) resumes it: completed steps are skipped.
 
 ## JSON output
 
-- **Reports.** `status`, `doctor`, `ps`, `version` and `support-bundle`
-  print one object with `schema_version: 2` first.
+- **Reports.** `status`, `doctor`, `ps`, `version`, `support-bundle`,
+  `cache list`, `dev list`, `shared-data list`, `migrate --check` and
+  `db bootstrap --check` print one object with `schema_version: 2` first,
+  and no `result`. `config show --json` prints the config and `config get
+  KEY --json` prints `{"key", "value"}`, without `schema_version`.
 - **Event streams.** Every other command prints NDJSON events and ends
   with one `result` line, whose `data` holds the command's report.
   `compose` refuses `--json`. `logs --json` emits each log line as a `log`
@@ -98,6 +104,8 @@ prints the failed `result` instead. Re-running a failed converging command (`ini
 Both are specified in [json-schemas.md](json-schemas.md).
 
 ## Recipe: a demo stack from nothing
+
+Needs `jq` besides pic-sure's own requirements.
 
 ```sh
 set -eu
@@ -112,7 +120,9 @@ pic-sure doctor --json > doctor.json || {
 }
 
 # Open mode needs no Auth0 credentials; init generates the client secret.
-# The first init builds every image from source: allow an hour.
+# The first init builds every image from source: allow an hour, and give
+# the command that long a timeout. If it's killed (exit 130/143 after its
+# cleanups), re-running the same command resumes it.
 pic-sure init "$dir" --json --name demo --auth-mode open \
   --admin-email admin@example.com --auto-ports \
   --set hpds.java_opts=-Xmx2g > init.ndjson || fail init.ndjson

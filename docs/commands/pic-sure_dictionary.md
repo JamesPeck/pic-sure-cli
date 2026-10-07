@@ -2,10 +2,6 @@
 
 Rebuild and load the search dictionary
 
-```
-pic-sure dictionary
-```
-
 ## Subcommands
 
 - [`pic-sure dictionary hydrate`](pic-sure_dictionary_hydrate.md): Build the dictionary from the loaded HPDS data

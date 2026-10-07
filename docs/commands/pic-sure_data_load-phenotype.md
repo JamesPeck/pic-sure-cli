@@ -2,6 +2,7 @@
 
 Load phenotype data into HPDS, then the dictionary
 
+```text
 Replace the stack's HPDS phenotype data with a CSV in HPDS's allConcepts
 format. --file takes a CSV, or a gzip, tar, tar.gz or zip holding one; an
 archive with several CSVs needs --entry. HPDS is stopped for the load and
@@ -24,6 +25,7 @@ Both replace the dictionary's contents. Last, the search weights are
 recomputed, unless --skip-weights. If a dictionary step fails, HPDS keeps
 the new data and the error gives the dictionary commands that finish the
 load.
+```
 
 ```
 pic-sure data load-phenotype (--file F [--entry E] | --input-dir D) [flags]

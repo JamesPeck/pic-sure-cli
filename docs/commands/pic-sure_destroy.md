@@ -2,6 +2,7 @@
 
 Remove everything the CLI created for this stack
 
+```text
 Remove the stack's containers, every volume labelled for it, its dev
 images, and the files and directories pic-sure created in the stack
 directory (those manifest.json lists). Files pic-sure didn't create are
@@ -11,6 +12,7 @@ Commit-tagged images are shared between stacks and left for `cache prune`;
 --prune-images removes those no other stack uses, by cache prune's rules.
 
 On a terminal you confirm by typing the stack name; otherwise pass --yes.
+```
 
 ```
 pic-sure destroy [flags]

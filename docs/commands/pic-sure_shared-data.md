@@ -2,10 +2,6 @@
 
 Publish HPDS data for other stacks to mount read-only
 
-```
-pic-sure shared-data
-```
-
 ## Subcommands
 
 - [`pic-sure shared-data list`](pic-sure_shared-data_list.md): List the published data sets
