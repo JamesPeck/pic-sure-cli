@@ -15,7 +15,10 @@ TAG="v2.0.0"
 case "$(uname -s)" in Linux) os=linux ;; Darwin) os=darwin ;; *) echo "unsupported OS" >&2; exit 1 ;; esac
 case "$(uname -m)" in x86_64 | amd64) arch=amd64 ;; arm64 | aarch64) arch=arm64 ;; *) echo "unsupported arch" >&2; exit 1 ;; esac
 ASSET="pic-sure_${os}_${arch}.tar.gz"
-[ -f "$DIST/$ASSET" ] && [ -f "$DIST/checksums.txt" ] || { echo "no $ASSET or checksums.txt in $DIST; run make snapshot" >&2; exit 1; }
+if [ ! -f "$DIST/$ASSET" ] || [ ! -f "$DIST/checksums.txt" ]; then
+  echo "no $ASSET or checksums.txt in $DIST; run make snapshot" >&2
+  exit 1
+fi
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/pic-sure-install-test.XXXXXX")"
 server=""
