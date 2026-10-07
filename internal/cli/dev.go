@@ -142,11 +142,6 @@ func (a *App) dev(cmd *cobra.Command, name string, on bool) (err error) {
 			return err
 		})
 	}
-	if on {
-		if err := ops.CheckDevOn(cfg, v); err != nil {
-			return err
-		}
-	}
 	state, err := st.LoadState()
 	if errors.Is(err, fs.ErrNotExist) || err == nil && state.InitializedAt.IsZero() {
 		return exitcode.Precondition("the stack in %s isn't initialised; run `pic-sure init %s` to finish it", st.Dir, st.Dir)
@@ -154,14 +149,17 @@ func (a *App) dev(cmd *cobra.Command, name string, on bool) (err error) {
 	if err != nil {
 		return err
 	}
+	if on {
+		if err := ops.CheckDevOn(cfg, state, v); err != nil {
+			return err
+		}
+	}
 	sec, err := upSecrets(d, st, cfg)
 	if err != nil {
 		return err
 	}
-	if on {
-		if err := checkDevPort(cmd, d, st, cfg, v); err != nil {
-			return err
-		}
+	if err := checkDevStack(cmd, d, st, cfg, v, on); err != nil {
+		return err
 	}
 	proxy, err := netproxy.New(netproxy.Config(cfg.Proxy), netproxy.CatalogServices())
 	if err != nil {
@@ -244,10 +242,11 @@ func verb(services []string, one, many string) string {
 	return many
 }
 
-// checkDevPort makes sure no other stack or compose project uses the stack's
-// name, and the port dev on v publishes is free or already published by the
-// stack's own containers, so either is exit 3 before anything is built.
-func checkDevPort(cmd *cobra.Command, d *ops.Deps, st *stack.Stack, cfg *stack.Config, v catalog.DevVariant) error {
+// checkDevStack makes sure no other stack or compose project uses the
+// stack's name and, for dev on, that the port v publishes is free or already
+// published by the stack's own containers, so either is exit 3 before
+// anything is built or recreated.
+func checkDevStack(cmd *cobra.Command, d *ops.Deps, st *stack.Stack, cfg *stack.Config, v catalog.DevVariant, on bool) error {
 	user, published, err := ops.StackNameInUse(cmd.Context(), d, cfg.Name, st.Dir)
 	if err != nil {
 		return err
@@ -255,7 +254,7 @@ func checkDevPort(cmd *cobra.Command, d *ops.Deps, st *stack.Stack, cfg *stack.C
 	if user != "" {
 		return exitcode.Precondition("the stack name %s is in use by another stack or compose project (%s)", cfg.Name, user)
 	}
-	if port := ops.DevPort(cfg, v); port != 0 && !published[port] && !(systemHost{}).PortFree(port) {
+	if port := ops.DevPort(cfg, v); on && port != 0 && !published[port] && !(systemHost{}).PortFree(port) {
 		return exitcode.Precondition("port %d, dev %s's port from network.dev_ports.base (%d), is in use", port, v.Name, cfg.Network.DevPorts.Base)
 	}
 	return nil

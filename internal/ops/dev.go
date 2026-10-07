@@ -82,12 +82,16 @@ func LookupDev(name string) (catalog.DevVariant, error) {
 }
 
 // CheckDevOn refuses `dev on v` when the variant's component has no local
-// source, or when it would run beside the other variant that replaces
-// httpd. Both are exit 3.
-func CheckDevOn(cfg *stack.Config, v catalog.DevVariant) error {
+// source, when it runs an image state doesn't name (httpd-hmr's node), or
+// when it would run beside the other variant that replaces httpd. All are
+// exit 3.
+func CheckDevOn(cfg *stack.Config, state *stack.State, v catalog.DevVariant) error {
 	if componentSource(cfg, v.Component) == "" {
 		return exitcode.Precondition("dev %s builds %s from a local checkout; set it first: pic-sure config set components.%s.source PATH",
 			v.Name, v.Component, v.Component)
+	}
+	if v.Image != "" && state.Images[v.Image] == "" {
+		return exitcode.Precondition("dev %s needs the %s image from the %s source's .nvmrc, which this pic-sure doesn't set up yet", v.Name, v.Image, v.Component)
 	}
 	for _, other := range cfg.Dev.Services {
 		o, ok := catalog.LookupDevVariant(other)
@@ -125,9 +129,6 @@ func DevSteps(d *Deps, st *stack.Stack, doc *stack.ConfigDoc, cfg *stack.Config,
 		services = append(services, v.Name)
 	}
 	cfg.Dev.Services = services
-	if v.Image != "" && opts.On && state.Images[v.Image] == "" {
-		return nil, exitcode.Precondition("dev %s needs the %s image from the %s source's .nvmrc, which this pic-sure doesn't set up yet", v.Name, v.Image, v.Component)
-	}
 	r := &upRestarts{d: d, st: st, cfg: cfg, opts: opts.ConvergeOptions}
 	save := steps.Step{
 		ID:    DevConfigStepID,
@@ -143,7 +144,7 @@ func DevSteps(d *Deps, st *stack.Stack, doc *stack.ConfigDoc, cfg *stack.Config,
 	}
 	list = append(list,
 		withCompose(d, opts.ConvergeOptions, r.step()),
-		withCompose(d, opts.ConvergeOptions, devStartStep(d, cfg, v)),
+		withCompose(d, opts.ConvergeOptions, devStartStep(d, cfg, v, opts.On)),
 	)
 	if !opts.On {
 		list = append(list, save)
@@ -185,12 +186,12 @@ func saveDevServices(st *stack.Stack, doc *stack.ConfigDoc, state *stack.State, 
 }
 
 // devStartStep is dev-start. On a running stack it runs `compose up -d
-// --no-deps --wait` for the variant's services and the running services
-// built from its component, which a rebuild from the source may have
-// changed even under the same tag (a dirty checkout's); compose recreates
-// only those whose config or image changed. On a stopped stack it leaves
-// the new render to up.
-func devStartStep(d *Deps, cfg *stack.Config, v catalog.DevVariant) steps.Step {
+// --no-deps --wait` for the variant's services and, after a build, the
+// running services built from its component, which a rebuild from the
+// source may have changed even under the same tag (a dirty checkout's);
+// compose recreates only those whose config or image changed. On a stopped
+// stack it leaves the new render to up.
+func devStartStep(d *Deps, cfg *stack.Config, v catalog.DevVariant, built bool) steps.Step {
 	return steps.Step{
 		ID:    DevStartStepID,
 		Title: "Recreate " + strings.Join(v.Services, ", "),
@@ -213,7 +214,7 @@ func devStartStep(d *Deps, cfg *stack.Config, v catalog.DevVariant) steps.Step {
 			for _, svc := range StartServices(cfg) {
 				s, _ := catalog.LookupService(svc)
 				img, _ := catalog.LookupImage(s.Image)
-				if slices.Contains(v.Services, svc) || running[svc] && img.Component == v.Component {
+				if slices.Contains(v.Services, svc) || built && running[svc] && img.Component == v.Component {
 					svcs = append(svcs, svc)
 				}
 			}

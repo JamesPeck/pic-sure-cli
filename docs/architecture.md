@@ -417,11 +417,11 @@ it.
   `{"variants": [...]}`), and `dev on|off SERVICE`. Usage problems first:
   an unknown variant (`ops.LookupDev`, exit 2, listing them) and any
   `--skip-step`. Under the stack lock: `dev off` of a variant that isn't on
-  changes nothing; `dev on` needs the component's source and refuses httpd
-  beside httpd-hmr (`ops.CheckDevOn`, exit 3); then up's checks (an
-  initialised stack, `upSecrets`) and, for `on`, `StackNameInUse` and its
-  port free or the stack's own. It records the `dev on`/`dev off` operation and runs
-  `ops.DevSteps` with up's lazy-env Composer. `--json`'s data is
+  changes nothing. Then an initialised stack, and for `on`
+  `ops.CheckDevOn` (exit 3: the component's source, httpd-hmr's node
+  image, not httpd beside httpd-hmr); `upSecrets`; `StackNameInUse`, and
+  for `on` its port free or the stack's own. It records the `dev on` or
+  `dev off` operation and runs `ops.DevSteps` with up's lazy-env Composer. `--json`'s data is
   `{"service", "on", "services", "port", "source"}`. `dev off`'s text says
   the service keeps the source build while the source is set (§7.3), and
   that unsetting it then takes `build COMPONENT` before `up`, since up's
@@ -1247,11 +1247,11 @@ step, and `dev-start`. `off`: render, `restart`, `dev-start`, then
 failed `dev off` can be retried; it doesn't build, so the services keep the
 component's source build while the source is set. `dev-start` runs
 `compose up -d --no-deps --wait` (new `ComposeUpOpts.NoDeps`) for the
-variant's services plus the running services built from its component
-(a dirty checkout rebuilds them under the same tag; compose recreates only
-what changed), and on a stack with nothing running only warns, leaving the
-start to `up`. `on` of httpd-hmr is exit 3 while state.json has no `node`
-image (its `.nvmrc` tag is 053's). `DevList(cfg)`, `DevPort`, `LookupDev`,
+variant's services plus, for `on`, the running services built from its
+component (a dirty checkout rebuilds them under the same tag; compose
+recreates only what changed), and on a stack with nothing running only
+warns, leaving the start to `up`. `CheckDevOn` makes `on` of httpd-hmr exit
+3 while state.json has no `node` image (its `.nvmrc` tag is 053's). `DevList(cfg)`, `DevPort`, `LookupDev`,
 `CheckDevOn` and `ComponentSource` serve the command.
 
 **Phenotype loader (042, `loader.go`).** §9.6's one loader, for `data

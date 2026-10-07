@@ -149,14 +149,15 @@ func TestDevOnRefusesHMRWithoutTheNodeImage(t *testing.T) {
 	x.cfg.Components.Frontend.Source = "/src/fe"
 	x.saveConfig()
 	delete(x.state.Images, "node")
-	if err := x.dev("httpd-hmr", true); exitcode.FromError(err) != 3 || !strings.Contains(err.Error(), ".nvmrc") {
+	hmr, _ := catalog.LookupDevVariant("httpd-hmr")
+	if err := ops.CheckDevOn(x.cfg, x.state, hmr); exitcode.FromError(err) != 3 || !strings.Contains(err.Error(), ".nvmrc") {
 		t.Fatalf("err = %v", err)
 	}
 }
 
 func TestDevOffKeepsTheSourceBuildWithoutTheDebugPort(t *testing.T) {
 	x, tag := devFixture(t)
-	x.running("psama")
+	x.running("psama", "gateway")
 	if err := x.dev("psama", true); err != nil {
 		t.Fatal(err)
 	}
@@ -217,13 +218,13 @@ func TestDevOffSavesTheConfigLastSoAFailureCanBeRetried(t *testing.T) {
 func TestDevOnRefusals(t *testing.T) {
 	cfg := stack.DefaultConfig()
 	psama, _ := catalog.LookupDevVariant("psama")
-	if err := ops.CheckDevOn(&cfg, psama); exitcode.FromError(err) != 3 || !strings.Contains(err.Error(), "config set components.pic-sure.source PATH") {
+	if err := ops.CheckDevOn(&cfg, &stack.State{}, psama); exitcode.FromError(err) != 3 || !strings.Contains(err.Error(), "config set components.pic-sure.source PATH") {
 		t.Errorf("no source: %v", err)
 	}
 	cfg.Components.Frontend.Source = "/src/fe"
 	cfg.Dev.Services = []string{"httpd-hmr"}
 	httpd, _ := catalog.LookupDevVariant("httpd")
-	if err := ops.CheckDevOn(&cfg, httpd); exitcode.FromError(err) != 3 || !strings.Contains(err.Error(), "dev off httpd-hmr") {
+	if err := ops.CheckDevOn(&cfg, &stack.State{}, httpd); exitcode.FromError(err) != 3 || !strings.Contains(err.Error(), "dev off httpd-hmr") {
 		t.Errorf("httpd beside httpd-hmr: %v", err)
 	}
 	if _, err := ops.LookupDev("nope"); exitcode.FromError(err) != 2 {
