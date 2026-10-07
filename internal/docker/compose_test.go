@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -707,5 +708,17 @@ func TestComposeRunPassesEnvByName(t *testing.T) {
 	}
 	if n := len(f.Calls()); n != 1 {
 		t.Errorf("%d calls, want refused envs not to run", n)
+	}
+}
+
+func TestComposeConfigHashes(t *testing.T) {
+	f := fakerunner.New(t)
+	f.On(fakerunner.Glob("docker compose * config --hash *")).Stdout("httpd 2213c4e3\npsama 9e7ae5ea\n\n")
+	got, err := newTestCompose(f).ConfigHashes(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := map[string]string{"httpd": "2213c4e3", "psama": "9e7ae5ea"}; !maps.Equal(got, want) {
+		t.Errorf("hashes %v, want %v", got, want)
 	}
 }

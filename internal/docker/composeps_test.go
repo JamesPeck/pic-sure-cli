@@ -16,7 +16,7 @@ const psLines = `{"Command":"\"/entrypoint.sh\"","CreatedAt":"2026-10-06 10:00:0
 
 // psArray is the same three containers as compose < 2.21 printed them.
 const psArray = `[
-  {"ID":"a1","Name":"demo-hpds-1","Project":"demo","Service":"hpds","Image":"hms-dbmi/pic-sure-hpds:abc123","State":"running","Status":"Up 2 minutes (healthy)","Health":"healthy","ExitCode":0,"Publishers":null,"Created":1791295200},
+  {"ID":"a1","Name":"demo-hpds-1","Project":"demo","Service":"hpds","Image":"hms-dbmi/pic-sure-hpds:abc123","Labels":"com.docker.compose.project=demo","State":"running","Status":"Up 2 minutes (healthy)","Health":"healthy","ExitCode":0,"Publishers":null,"Created":1791295200},
   {"ID":"b2","Name":"demo-httpd-1","Project":"demo","Service":"httpd","Image":"httpd:2.4","State":"running","Status":"Up 2 minutes","Health":null,"ExitCode":null,"Publishers":[{"URL":"0.0.0.0","TargetPort":443,"PublishedPort":8443,"Protocol":"tcp"}]},
   {"ID":"c3","Name":"demo-picsure-db-1","Project":"demo","Service":"picsure-db","Image":"mysql:8.0","State":"exited","Status":"Exited (137) 5 seconds ago","Health":"unhealthy","ExitCode":137}
 ]
@@ -24,7 +24,7 @@ const psArray = `[
 
 var psWant = []docker.ComposeService{
 	{ID: "a1", Name: "demo-hpds-1", Project: "demo", Service: "hpds", Image: "hms-dbmi/pic-sure-hpds:abc123",
-		State: "running", Status: "Up 2 minutes (healthy)", Health: "healthy"},
+		State: "running", Status: "Up 2 minutes (healthy)", Health: "healthy", Labels: "com.docker.compose.project=demo"},
 	{ID: "b2", Name: "demo-httpd-1", Project: "demo", Service: "httpd", Image: "httpd:2.4",
 		State: "running", Status: "Up 2 minutes",
 		Publishers: []docker.ComposePublisher{{URL: "0.0.0.0", TargetPort: 443, PublishedPort: 8443, Protocol: "tcp"}}},
@@ -43,6 +43,17 @@ func TestParseComposePsBothShapes(t *testing.T) {
 				t.Errorf("got  %+v\nwant %+v", got, psWant)
 			}
 		})
+	}
+}
+
+func TestComposeServiceLabel(t *testing.T) {
+	s := docker.ComposeService{Labels: "com.docker.compose.project=demo,com.docker.compose.config-hash=abc,empty="}
+	for key, want := range map[string]string{
+		"com.docker.compose.project": "demo", docker.ConfigHashLabel: "abc", "empty": "", "missing": "", "com.docker.compose": "",
+	} {
+		if got := s.Label(key); got != want {
+			t.Errorf("Label(%q) = %q, want %q", key, got, want)
+		}
 	}
 }
 

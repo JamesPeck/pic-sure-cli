@@ -91,7 +91,13 @@ func (a *App) update(cmd *cobra.Command, _ []string) (err error) {
 	}
 
 	ctx := cmd.Context()
-	if r.st, err = a.openStack(cmd); err != nil {
+	open := a.openStack
+	if r.dryRun {
+		// A run log is a write to the stack, and its retention removes old
+		// ones.
+		open = a.openStackUnlogged
+	}
+	if r.st, err = open(cmd); err != nil {
 		return err
 	}
 	defer func() { _ = r.st.Close() }()
@@ -107,7 +113,7 @@ func (a *App) update(cmd *cobra.Command, _ []string) (err error) {
 		return err
 	}
 	defer func() { _ = lock.Unlock() }()
-	if err := r.preconditions(cmd); err != nil {
+	if err := r.preconditions(); err != nil {
 		return err
 	}
 
@@ -123,6 +129,11 @@ func (a *App) update(cmd *cobra.Command, _ []string) (err error) {
 		return a.finish(r.plan, func(w io.Writer) error { return writeUpdatePlan(w, r.plan) })
 	}
 
+	// Past the gate, so a refused update hasn't written secrets.yaml.
+	if r.sec, err = upSecrets(r.d, r.st, r.cfg); err != nil {
+		return err
+	}
+	r.d.Compose = nil // its env was computed from the secrets as read
 	r.state.StartOperation("update", r.d.Clock.Now())
 	if err := r.st.SaveState(r.state); err != nil {
 		return err
@@ -155,11 +166,15 @@ func (a *App) update(cmd *cobra.Command, _ []string) (err error) {
 // readConfig reads pic-sure.yaml and migrates it in memory: until the
 // config step, the file may be an older schema.
 func (r *updateRun) readConfig() error {
-	doc, err := r.st.ReadConfigDoc()
+	data, err := r.st.ReadFile(stack.ConfigFile)
+	if err != nil {
+		return err
+	}
+	doc, err := stack.ParseConfigDoc(data)
 	if err != nil {
 		return configError(err)
 	}
-	migrated, err := r.st.ReadConfigDoc()
+	migrated, err := stack.ParseConfigDoc(data)
 	if err != nil {
 		return configError(err)
 	}
@@ -189,8 +204,9 @@ func checkUpdateSkips(cfg *stack.Config, skips []string) error {
 
 // preconditions are up's, under the stack lock: the config (re-read, since
 // it may have changed while we waited), an initialised stack, its secrets
-// and its ports. A dry run only reads secrets.yaml.
-func (r *updateRun) preconditions(cmd *cobra.Command) error {
+// and its ports. secrets.yaml is only read: update fills in missing
+// secrets after the gate.
+func (r *updateRun) preconditions() error {
 	if err := r.readConfig(); err != nil {
 		return err
 	}
@@ -209,22 +225,18 @@ func (r *updateRun) preconditions(cmd *cobra.Command) error {
 		return err
 	}
 	r.state = state
-	if r.dryRun {
-		sec, err := r.st.LoadSecrets()
-		if errors.Is(err, fs.ErrNotExist) {
-			return exitcode.Precondition("the stack in %s has no %s; run `pic-sure init %s` to finish it", r.st.Dir, stack.SecretsFile, r.st.Dir)
-		}
-		if err != nil {
-			return err
-		}
-		if err := refuseClientSecret(r.cfg, sec); err != nil {
-			return err
-		}
-		r.sec = sec
-	} else if r.sec, err = upSecrets(r.d, r.st, r.cfg); err != nil {
+	sec, err := r.st.LoadSecrets()
+	if errors.Is(err, fs.ErrNotExist) {
+		return exitcode.Precondition("the stack in %s has no %s; run `pic-sure init %s` to finish it", r.st.Dir, stack.SecretsFile, r.st.Dir)
+	}
+	if err != nil {
 		return err
 	}
-	return checkUpPorts(cmd, r.d, r.st, r.cfg)
+	if err := refuseClientSecret(r.cfg, sec); err != nil {
+		return err
+	}
+	r.sec = sec
+	return checkUpPorts(r.cmd, r.d, r.st, r.cfg)
 }
 
 // fetchRelease is §9.3 step 1: release-control into the host cache, and
@@ -344,10 +356,9 @@ func writeUpdatePlan(w io.Writer, p *ops.UpdatePlan) error {
 		b.WriteString("; started the database to check")
 	}
 	b.WriteString("\n")
-	switch {
-	case p.Token.Renew:
+	if p.Token.Renew {
 		b.WriteString("  token:       renewed\n")
-	default:
+	} else {
 		fmt.Fprintf(&b, "  token:       valid until %s\n", p.Token.Expiry.UTC().Format("2006-01-02"))
 	}
 	if len(p.Restarts) == 0 {

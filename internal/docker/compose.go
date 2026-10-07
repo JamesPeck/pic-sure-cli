@@ -359,6 +359,31 @@ func (c *Compose) Config(ctx context.Context, quiet bool) ([]byte, error) {
 	return res.Stdout, nil
 }
 
+// ConfigHashLabel is the label compose sets on a container to the hash of
+// its service's config, and compares with ConfigHashes to decide whether
+// `up` recreates it.
+const ConfigHashLabel = "com.docker.compose.config-hash"
+
+// ConfigHashes returns the config hash of every service compose would
+// start (`config --hash *`), interpolated with the adapter's env.
+func (c *Compose) ConfigHashes(ctx context.Context) (map[string]string, error) {
+	cmd, err := c.cmd(false, []string{"config", "--hash", "*"})
+	if err != nil {
+		return nil, err
+	}
+	res, err := runCmd(ctx, c.Runner, cmd)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]string{}
+	for _, line := range strings.Split(string(res.Stdout), "\n") {
+		if svc, hash, ok := strings.Cut(strings.TrimSpace(line), " "); ok {
+			out[svc] = hash
+		}
+	}
+	return out, nil
+}
+
 // Passthrough implements Composer.
 func (c *Compose) Passthrough(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
 	cmd, err := c.cmd(false, args)

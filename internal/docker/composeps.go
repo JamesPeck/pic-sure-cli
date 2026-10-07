@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 )
 
 // ComposeService is one container from `docker compose ps --format json`.
@@ -29,6 +30,20 @@ type ComposeService struct {
 	// ExitCode is the exit code of an exited container.
 	ExitCode   int                `json:"ExitCode"`
 	Publishers []ComposePublisher `json:"Publishers"`
+	// Labels are the container's labels as compose prints them:
+	// key=value pairs joined by commas. Read one with Label.
+	Labels string `json:"Labels"`
+}
+
+// Label returns the value of the container label key, or "". A value that
+// itself holds ",<key>=" can't be told apart from the next label.
+func (s ComposeService) Label(key string) string {
+	for _, kv := range strings.Split(s.Labels, ",") {
+		if k, v, ok := strings.Cut(kv, "="); ok && k == key {
+			return v
+		}
+	}
+	return ""
 }
 
 // ComposePublisher is one port a container publishes.

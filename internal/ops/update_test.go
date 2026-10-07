@@ -3,7 +3,9 @@ package ops_test
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"os"
 	"slices"
 	"strings"
@@ -36,11 +38,14 @@ type updateFixture struct {
 	sec        *stack.Secrets
 	running    []string
 	migrations bool
+	// stale are the running services whose container was made from
+	// another config than the current render's.
+	stale map[string]bool
 }
 
 func newUpdateFixture(t *testing.T) *updateFixture {
 	t.Helper()
-	x := &updateFixture{buildFixture: newBuildFixture(t), migrations: true}
+	x := &updateFixture{buildFixture: newBuildFixture(t), migrations: true, stale: map[string]bool{}}
 	x.d.Clock = ops.FixedClock(t0)
 	x.sec = &stack.Secrets{IntrospectionToken: tokenVar, IntrospectionTokenExpiry: t0.Add(300 * 24 * time.Hour)}
 	x.state.Release = stack.Release{Repo: "https://example.com/rc.git", Branch: "main", Commit: relSHA}
@@ -69,12 +74,29 @@ func newUpdateFixture(t *testing.T) *updateFixture {
 	}
 	x.running = ops.StartServices(x.cfg)
 	x.f.On(fakerunner.Glob("docker compose * ps *")).Do(func(_ context.Context, c fakerunner.Call) (docker.Result, error) {
+		hashes := configHashes(t, x.st.Path(render.ComposeFile))
 		var b strings.Builder
 		only := c.Argv[len(c.Argv)-1]
 		for _, s := range x.running {
 			if strings.HasPrefix(only, "-") || only == "json" || only == s {
-				b.WriteString(psLine(s, "running", "healthy"))
+				h := hashes[s]
+				if x.stale[s] {
+					h = "stale"
+				}
+				line, err := json.Marshal(map[string]string{"ID": "id-" + s, "Service": s, "State": "running", "Health": "healthy",
+					"Labels": "com.docker.compose.project=demo," + docker.ConfigHashLabel + "=" + h})
+				if err != nil {
+					return docker.Result{}, err
+				}
+				b.Write(append(line, '\n'))
 			}
+		}
+		return docker.Result{Stdout: []byte(b.String())}, nil
+	})
+	x.f.On(fakerunner.Glob("docker compose -f * config --hash *")).Do(func(_ context.Context, c fakerunner.Call) (docker.Result, error) {
+		var b strings.Builder
+		for svc, h := range configHashes(t, c.Argv[3]) {
+			b.WriteString(svc + " " + h + "\n")
 		}
 		return docker.Result{Stdout: []byte(b.String())}, nil
 	})
@@ -123,6 +145,31 @@ func (x *updateFixture) installTLS() {
 		x.t.Fatal(err)
 	}
 	x.state.TLS = state.TLS
+}
+
+// configHashes stands in for compose's: a hash of each service's
+// definition in the compose file.
+func configHashes(t *testing.T, file string) map[string]string {
+	t.Helper()
+	data, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Services map[string]any `yaml:"services"`
+	}
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]string{}
+	for svc, def := range doc.Services {
+		b, err := json.Marshal(def)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out[svc] = fmt.Sprintf("%x", sha256.Sum256(b))
+	}
+	return out
 }
 
 func (x *updateFixture) compose() (docker.Composer, error) {
@@ -402,5 +449,81 @@ func TestUpdateRecordsTheTargetBeforeTheImageStep(t *testing.T) {
 	// the image it runs.
 	if saved.Images["pic-sure-httpd"] != x.feTag() {
 		t.Errorf("httpd image %q recorded before it is built", saved.Images["pic-sure-httpd"])
+	}
+}
+
+func TestPlanUpdateRecreatesWhatComposeWould(t *testing.T) {
+	// A container made from another config than the render's (an env value
+	// changed, or an earlier run rendered but never started) is recreated
+	// even though compose.yaml doesn't change.
+	x := newUpdateFixture(t)
+	x.stale["gateway"] = true
+	rel, comps := x.target(nil)
+	p := x.plan(ops.UpdateOptions{Release: rel, Components: comps})
+	if got := restarts(p); len(got) != 1 || got["gateway"] != ops.RestartRecreate {
+		t.Errorf("restarts %+v, want gateway recreated", p.Restarts)
+	}
+	if !p.Changes() {
+		t.Error("a recreate is no change")
+	}
+}
+
+func TestPlanUpdatePullModeAlwaysPulls(t *testing.T) {
+	x := newUpdateFixture(t)
+	x.cfg.Images.Mode = stack.ImagesPull
+	x.f.On(fakerunner.Glob("docker image inspect hms-dbmi/*:v*")).Stdout(`[{"Id":"sha256:1","Config":{"Labels":{}}}]`)
+	rel, comps := x.target(nil)
+	p := x.plan(ops.UpdateOptions{Release: rel, Components: comps})
+	for name, a := range imageActions(p) {
+		want := ops.ImagePull
+		if name == "pic-sure-httpd" {
+			want = ops.ImageUpToDate // the frontend is always built
+		}
+		if a != want {
+			t.Errorf("%s: %s, want %s", name, a, want)
+		}
+	}
+	if !p.Changes() {
+		t.Error("pull mode's pulls are no change")
+	}
+}
+
+func TestPlanUpdateStartsThePicsureDatabaseToCompareMigrations(t *testing.T) {
+	x := newUpdateFixture(t)
+	x.sec.DBRootPassword = "synthetic-root-password"
+	x.running = slices.DeleteFunc(x.running, func(s string) bool { return s == "picsure-db" })
+	up := fakerunner.Glob("docker compose * up -d picsure-db")
+	x.f.On(up).Do(func(context.Context, fakerunner.Call) (docker.Result, error) {
+		x.running = append(x.running, "picsure-db")
+		return docker.Result{}, nil
+	})
+	x.f.On(fakerunner.Glob("docker exec -i -e MYSQL_PWD id-picsure-db mysql *")).Stdout("1\n")
+	rel, comps := x.target(nil)
+	p := x.plan(ops.UpdateOptions{Release: rel, Components: comps, StartDB: true})
+	x.f.AssertCalled(up)
+	if p.Migrations.Status != ops.MigrationsStatusUpToDate || !p.Migrations.StartedDB {
+		t.Errorf("migrations %+v, want up to date after starting the database", p.Migrations)
+	}
+}
+
+func TestPlanUpdateDoesntStartTheDatabaseWithoutTheDictionary(t *testing.T) {
+	x := newUpdateFixture(t)
+	x.running = slices.DeleteFunc(x.running, func(s string) bool { return s == "picsure-db" || s == "dictionary-db" })
+	rel, comps := x.target(nil)
+	p := x.plan(ops.UpdateOptions{Release: rel, Components: comps, StartDB: true})
+	x.f.AssertNotCalled(fakerunner.Glob("docker compose * up *"))
+	if p.Migrations.Status != ops.MigrationsStatusUnknown || p.Migrations.StartedDB {
+		t.Errorf("migrations %+v, want unknown with nothing started", p.Migrations)
+	}
+}
+
+func TestPlanUpdateTreatsANewMigrationsSourceAsMovedFiles(t *testing.T) {
+	x := newUpdateFixture(t)
+	x.missing()
+	x.cfg.Components.Migrations.Source = x.checkout(false)
+	rel, comps := x.target(nil)
+	p := x.plan(ops.UpdateOptions{Release: rel, Components: comps})
+	if p.Migrations.Status != ops.MigrationsStatusUnknown {
+		t.Errorf("migrations %+v, want unknown when the files come from a new checkout", p.Migrations)
 	}
 }

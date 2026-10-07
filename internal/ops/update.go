@@ -4,11 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io/fs"
 	"maps"
 	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -16,7 +15,9 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
+	"github.com/JamesPeck/pic-sure-cli/internal/cache"
 	"github.com/JamesPeck/pic-sure-cli/internal/catalog"
+	"github.com/JamesPeck/pic-sure-cli/internal/docker"
 	"github.com/JamesPeck/pic-sure-cli/internal/events"
 	"github.com/JamesPeck/pic-sure-cli/internal/render"
 	"github.com/JamesPeck/pic-sure-cli/internal/stack"
@@ -170,9 +171,9 @@ func (p *UpdatePlan) Changes() bool {
 }
 
 // PlanUpdate works out the plan for moving the stack to opts.Release: the
-// config migrations, the component commits, the
-// images, the Flyway migrations, the token and the services to restart. It
-// writes nothing to the stack. With StartDB it may start the stack's
+// config migrations, the component commits, the images, the Flyway
+// migrations, the token and the services to restart. It writes nothing to
+// the stack. With StartDB it may start the stack's
 // database, and says so. state is state.json as it is; doc is pic-sure.yaml
 // as read, and cfg the config migrated in memory.
 func PlanUpdate(ctx context.Context, d *Deps, st *stack.Stack, doc *stack.ConfigDoc, cfg *stack.Config, sec *stack.Secrets, state *stack.State, opts UpdateOptions) (*UpdatePlan, error) {
@@ -262,6 +263,9 @@ func (p *UpdatePlan) planImages(ctx context.Context, d *Deps, st *stack.Stack, c
 		// A local checkout's commit is only known now.
 		if part.comp.Source != "" {
 			p.target.Components[part.component] = part.comp
+			if part.comp != state.Components[part.component] && (part.component == catalog.PicSure || part.component == catalog.Migrations) {
+				p.trees[part.component] = true
+			}
 			for i := range p.Components {
 				if c := &p.Components[i]; c.Name == part.component {
 					c.ToCommit, c.ToRef = part.comp.Commit, ""
@@ -275,10 +279,11 @@ func (p *UpdatePlan) planImages(ctx context.Context, d *Deps, st *stack.Stack, c
 		}
 		action := ImageBuild
 		switch {
+		case part.pull:
+			// Update pulls every time: a ref such as a branch can move.
+			action = ImagePull
 		case upToDate:
 			action = ImageUpToDate
-		case part.pull:
-			action = ImagePull
 		}
 		part.record(p.target, cfg, part.tag)
 		for _, img := range part.images {
@@ -303,12 +308,22 @@ func (p *UpdatePlan) planMigrations(ctx context.Context, d *Deps, cfg *stack.Con
 	if err := ensureCompose(d, opts.ConvergeOptions); err != nil {
 		return err
 	}
+	healthy := func(service string) (bool, error) {
+		svc, err := composeService(ctx, d, service)
+		return err == nil && svc != nil && svc.State == "running" && svc.Health == "healthy", err
+	}
+	// The comparison needs both databases; without dictionary-db, starting
+	// picsure-db would tell nothing.
+	if ok, err := healthy(dictionaryDB); err != nil || !ok {
+		p.Migrations.Status, p.Migrations.Detail = MigrationsStatusUnknown, dictionaryDB+" isn't running; the migrate step checks once it is"
+		return err
+	}
 	if cfg.DB.Mode != stack.DBRemote {
-		svc, err := composeService(ctx, d, picsureDB)
+		ok, err := healthy(picsureDB)
 		if err != nil {
 			return err
 		}
-		if svc == nil || svc.State != "running" || svc.Health != "healthy" {
+		if !ok {
 			if !opts.StartDB {
 				p.Migrations = MigrationsPlan{Status: MigrationsStatusUnknown, Detail: picsureDB + " isn't running"}
 				return nil
@@ -318,14 +333,6 @@ func (p *UpdatePlan) planMigrations(ctx context.Context, d *Deps, cfg *stack.Con
 			}
 			p.Migrations.StartedDB = true
 		}
-	}
-	dict, err := composeService(ctx, d, dictionaryDB)
-	if err != nil {
-		return err
-	}
-	if dict == nil || dict.State != "running" || dict.Health != "healthy" {
-		p.Migrations.Status, p.Migrations.Detail = MigrationsStatusUnknown, dictionaryDB+" isn't running; the migrate step checks once it is"
-		return nil
 	}
 	cctx, cancel := context.WithTimeout(ctx, checkTimeout)
 	defer cancel()
@@ -389,16 +396,25 @@ func (p *UpdatePlan) planRestarts(ctx context.Context, d *Deps, st *stack.Stack,
 			newCompose = f.Data
 		}
 	}
-	oldCompose, err := os.ReadFile(st.Path(render.ComposeFile))
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return err
-	}
-	changed, tokenReaders, err := composeChanges(oldCompose, newCompose)
+	recreated, err := recreatedServices(ctx, d, newCompose, running, opts.Cache)
 	if err != nil {
 		return err
 	}
-	for _, svc := range changed {
-		add(svc, RestartRecreate, "its compose definition changes")
+	for _, svc := range recreated {
+		add(svc, RestartRecreate, "its compose config changes")
+	}
+	for _, img := range p.Images {
+		reason := map[string]string{ImageBuild: "its image is rebuilt", ImagePull: "if the pull brings a new image"}[img.Action]
+		if reason == "" {
+			continue
+		}
+		for _, svc := range catalog.ServicesUsing(img.Name) {
+			add(svc, RestartRecreate, reason)
+		}
+	}
+	tokenReaders, err := tokenReaders(newCompose)
+	if err != nil {
+		return err
 	}
 	if p.Token.Renew {
 		for _, svc := range tokenReaders {
@@ -448,29 +464,57 @@ func (p *UpdatePlan) planRestarts(ctx context.Context, d *Deps, st *stack.Stack,
 	return nil
 }
 
-// composeChanges compares two renders of compose.yaml: the services the
-// new one adds or defines differently, and the services whose definition
-// reads the introspection token.
-func composeChanges(oldData, newData []byte) (changed, tokenReaders []string, err error) {
-	var oldDoc, newDoc struct {
+// recreatedServices returns the running services `compose up` would
+// recreate at the new render: those whose config hash, with the stack's
+// env, differs from the one compose labelled the container with. That
+// covers a changed definition, image tag or env value, and a render an
+// earlier run wrote but never started. The new compose.yaml goes to a
+// temporary file in the cache, so the stack is untouched.
+func recreatedServices(ctx context.Context, d *Deps, compose []byte, running []docker.ComposeService, c *cache.Cache) ([]string, error) {
+	cur, ok := d.Compose.(*docker.Compose)
+	if !ok {
+		return nil, fmt.Errorf("planning the restarts needs the compose adapter, not %T", d.Compose)
+	}
+	dir, err := c.TempDir("update-plan-")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	file := filepath.Join(dir, "compose.yaml")
+	if err := os.WriteFile(file, compose, 0o600); err != nil {
+		return nil, err
+	}
+	next := *cur
+	next.Files = append([]string{file}, cur.Files[1:]...)
+	hashes, err := next.ConfigHashes(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("hashing the new compose config: %w", err)
+	}
+	var out []string
+	for _, svc := range running {
+		if h, ok := hashes[svc.Service]; ok && svc.State == "running" && h != svc.Label(docker.ConfigHashLabel) {
+			out = append(out, svc.Service)
+		}
+	}
+	return out, nil
+}
+
+// tokenReaders returns the services of a compose.yaml whose definition
+// reads the introspection token, which compose passes in the env.
+func tokenReaders(compose []byte) ([]string, error) {
+	var doc struct {
 		Services map[string]any `yaml:"services"`
 	}
-	if err := yaml.Unmarshal(oldData, &oldDoc); err != nil {
-		return nil, nil, fmt.Errorf("reading the current %s: %w", render.ComposeFile, err)
+	if err := yaml.Unmarshal(compose, &doc); err != nil {
+		return nil, err
 	}
-	if err := yaml.Unmarshal(newData, &newDoc); err != nil {
-		return nil, nil, err
-	}
-	for _, name := range slices.Sorted(maps.Keys(newDoc.Services)) {
-		def := newDoc.Services[name]
-		if old, ok := oldDoc.Services[name]; !ok || !reflect.DeepEqual(old, def) {
-			changed = append(changed, name)
-		}
-		if mentions(def, "${PICSURE_INTROSPECTION_TOKEN}") {
-			tokenReaders = append(tokenReaders, name)
+	var out []string
+	for _, name := range slices.Sorted(maps.Keys(doc.Services)) {
+		if mentions(doc.Services[name], "${PICSURE_INTROSPECTION_TOKEN}") {
+			out = append(out, name)
 		}
 	}
-	return changed, tokenReaders, nil
+	return out, nil
 }
 
 // mentions reports whether s occurs in a string anywhere in v, a decoded

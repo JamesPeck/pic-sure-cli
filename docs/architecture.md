@@ -292,19 +292,20 @@ it.
   `--release-commit` (exit 2: `--no-build` keeps the stack's release),
   `--dry-run` with `--skip-step`, and a `--skip-step` not in
   `ops.UpdateStepIDs(cfg)`. openStack gates it as `update`'s class, so
-  pending config migrations are allowed; until the `config` step,
-  pic-sure.yaml is migrated in memory only. Under the stack lock: up's
-  checks (CheckFiles, shared HPDS data, `initialized_at`, the client
-  secret, the ports); a dry run only loads secrets.yaml, a real run
-  `EnsureSecrets` like up. Then two unskippable steps: `release`
-  (`release.Fetch` of the `release.branch` head or `--release-commit`, or
-  with `--no-build` the stack's recorded release; the gate with
-  `newSelfUpdater`; then `ResolveComponents`) and `plan` (`registerStack`,
-  then `ops.PlanUpdate`). `--dry-run` ends there with the plan as the
-  report. Otherwise it records the `update` operation and runs
+  pending config migrations are allowed (a dry run uses
+  `openStackUnlogged`, since a run log is a write to the stack); until the
+  `config` step, pic-sure.yaml is migrated in memory only. Under the stack
+  lock: up's checks (CheckFiles, shared HPDS data, `initialized_at`, the
+  client secret, the ports), reading secrets.yaml only. Then two
+  unskippable steps: `release` (`release.Fetch` of the `release.branch`
+  head or `--release-commit`, or with `--no-build` the stack's recorded
+  release; the gate with `newSelfUpdater`; then `ResolveComponents`) and
+  `plan` (`registerStack`, then `ops.PlanUpdate`). `--dry-run` ends there
+  with the plan as the report. Otherwise, past the gate, up's `upSecrets`
+  (`EnsureSecrets`), then it records the `update` operation and runs
   `ops.UpdateSteps` (`--no-build` skips `images`). The report is the plan,
-  and the text says whether anything changed. There is no TTY prompt
-  for the gate's self-update yet (`--self-update` is needed), since the
+  and the text says whether anything changed. There is no TTY prompt for
+  the gate's self-update yet (`--self-update` is needed), since the
   progress renderer owns the terminal.
 - `tuiinit.go` (039): `initFromTUI`, the TUI's `Options.Init`, runs
   `initRun.run` in-process on the wizard's config (its ports given
@@ -1127,19 +1128,25 @@ Migrations, NoBuild, StartDB})` is the plan, `update --dry-run --json`'s
 data: the pending config migrations (from `Registry.Plan` on the file as
 read; `cfg` is it migrated in memory), the release and each component's
 commit current → target (the caller resolves `Components`; a local source
-keeps its checkout's commit), each image's tag and action (`build`,
-`pull`, `up-to-date` from the image step's own up-to-date check, or
-`keep` with `NoBuild`, which moves nothing), the Flyway status, the token
-(renewed when it is valid for less than `TokenRenewBefore`) and the
-running services to `recreate` or `restart`, with reasons. Migrations are
-`unknown` when the pic-sure or migrations tree moves (the new files aren't
-in the cache yet; the migrate step's Check decides after the image step)
-or dictionary-db isn't healthy; otherwise `MigrationsUpToDate`, after
+keeps its checkout's commit), each image's tag and action (`up-to-date`
+from the image step's own check; `build`; `pull` for every pulled image,
+since update always pulls; `keep` with `NoBuild`, which moves nothing),
+the Flyway status, the token (renewed when it is valid for less than
+`TokenRenewBefore`) and the running services to `recreate` or `restart`,
+with reasons. Migrations are `unknown` when the pic-sure or migrations
+tree moves, to another commit or a local source (the new files aren't in
+the cache yet; the migrate step's Check decides after the image step), or
+when dictionary-db isn't healthy; otherwise `MigrationsUpToDate`, after
 starting picsure-db through `DBSteps` if `StartDB` and it isn't healthy
 (`started_db`). Restarts come from an in-memory render at the target
-(`renderStack`, shared with `RenderStep`): services whose compose
-definition changes are recreated, and so are those that read
-`${PICSURE_INTROSPECTION_TOKEN}` when the token is renewed; readers of
+(`renderStack`, shared with `RenderStep`), written to a temporary file in
+the cache: a running service whose `compose config --hash` there (with
+the stack's env and overrides; `docker.Compose.ConfigHashes`) differs from
+its container's `com.docker.compose.config-hash` label is recreated. That
+is compose's own test, so it covers a changed definition, image tag or
+env value, and a render an earlier run never started. So are the users of
+an image being built or pulled, and the readers of
+`${PICSURE_INTROSPECTION_TOKEN}` when the token is renewed. Readers of
 changed `render/files` (up's `readers`), httpd and psama when the TLS or
 truststore Check isn't done, the `RestartAfterMigrate` services unless
 migrations are up to date, psama for a renewed token, and
@@ -1617,7 +1624,11 @@ argv. `Compose` implements it over a `Runner`.
 - `Ps` runs `ps --all --format json` with a 10 s timeout. `ParseComposePs`
   accepts the JSON-lines form (compose 2.21 and later), the older array
   form, nulls and unknown fields. `Health` is empty for a container without
-  a healthcheck; compare it exactly.
+  a healthcheck; compare it exactly. `Label(key)` reads one of `Labels`
+  (036).
+- `ConfigHashes` (036) runs `config --hash *`: each service's config hash,
+  which compose compares with a container's `ConfigHashLabel` to decide
+  whether `up` recreates it.
 - `Config(quiet)`: `config --quiet` validates. Without quiet,
   `config --no-interpolate` returns the merged YAML, with no secret values
   in it.
