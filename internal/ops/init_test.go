@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/JamesPeck/pic-sure-cli/internal/cache"
+	"github.com/JamesPeck/pic-sure-cli/internal/catalog"
 	"github.com/JamesPeck/pic-sure-cli/internal/docker"
 	"github.com/JamesPeck/pic-sure-cli/internal/docker/fakerunner"
 	"github.com/JamesPeck/pic-sure-cli/internal/events"
@@ -246,5 +248,80 @@ func TestSummaryInSharedModeSuggestsHydrateNotDemo(t *testing.T) {
 	steps := strings.Join(ops.Summary(x.st, x.cfg, nil).NextSteps, "\n")
 	if strings.Contains(steps, "data demo") || !strings.Contains(steps, "dictionary hydrate") {
 		t.Errorf("next steps:\n%s", steps)
+	}
+}
+
+// writeRegisteredStack makes a stack in dir whose pic-sure.yaml sets the
+// ports, and registers it in c.
+func writeRegisteredStack(t *testing.T, c *cache.Cache, dir string, http, https, devBase int) {
+	t.Helper()
+	st, err := stack.Create(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	cfg := stack.DefaultConfig()
+	cfg.Name, cfg.Auth.Mode, cfg.Auth.AdminEmail = filepath.Base(dir), stack.AuthOpen, "admin@example.com"
+	cfg.Network.HTTPPort, cfg.Network.HTTPSPort, cfg.Network.DevPorts.Base = http, https, devBase
+	doc, err := stack.NewConfigDoc(&cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := doc.Bytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.WriteConfig(data); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.RegisterStack(context.Background(), dir, cfg.Name); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReservedPortsAreSkipped(t *testing.T) {
+	tmp, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := cache.Open(filepath.Join(tmp, "cache"), cache.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeRegisteredStack(t, c, filepath.Join(tmp, "a"), 8080, 8443, 15000)
+	writeRegisteredStack(t, c, filepath.Join(tmp, "self"), 8081, 8444, 15010)
+	// Gone: its directory is no longer a stack.
+	writeRegisteredStack(t, c, filepath.Join(tmp, "gone"), 8082, 8445, 15020)
+	if err := os.RemoveAll(filepath.Join(tmp, "gone", stack.CLIDir)); err != nil {
+		t.Fatal(err)
+	}
+	// Unreadable: its pic-sure.yaml is missing.
+	writeRegisteredStack(t, c, filepath.Join(tmp, "broken"), 8083, 8446, 15030)
+	if err := os.Remove(filepath.Join(tmp, "broken", stack.ConfigFile)); err != nil {
+		t.Fatal(err)
+	}
+
+	reserved, err := ops.ReservedPorts(c, filepath.Join(tmp, "self"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[int]bool{8080: true, 8443: true}
+	for p := 15000; p < 15000+catalog.DevPortSpan; p++ {
+		want[p] = true
+	}
+	if !maps.Equal(reserved, want) {
+		t.Fatalf("reserved %v, want %v", slices.Sorted(maps.Keys(reserved)), slices.Sorted(maps.Keys(want)))
+	}
+
+	h := ops.ReservingHost{Host: busyHost(), Reserved: reserved}
+	if hp, sp, err := ops.ChoosePorts(h, 0, 0, true); err != nil || hp != 8081 || sp != 8444 {
+		t.Errorf("auto ports = %d/%d, %v; want 8081/8444", hp, sp, err)
+	}
+	if base, err := ops.ChooseDevPortsBase(h, 8081, 8444); err != nil || base != 15010 {
+		t.Errorf("dev base = %d, %v; want 15010", base, err)
+	}
+	reserved[80] = true
+	if _, _, err := ops.ChoosePorts(h, 0, 0, false); err == nil || !strings.Contains(err.Error(), "80 (another stack's)") {
+		t.Errorf("default port another stack has: %v", err)
 	}
 }

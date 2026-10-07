@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -175,6 +176,27 @@ func exitError(argv []string, code int, stderr []byte) error {
 		return notFoundError{ee}
 	}
 	return ee
+}
+
+// portAllocatedRE matches the daemon's error for a host port another
+// process holds: "Bind for 0.0.0.0:8080 failed: port is already allocated"
+// on Linux, "listen tcp 0.0.0.0:8080: bind: address already in use" from
+// Docker Desktop.
+var portAllocatedRE = regexp.MustCompile(`Bind for \S*:(\d+) failed: port is already allocated|listen tcp\S* \S*:(\d+): bind: address already in use`)
+
+// PortAllocated returns the host port a docker or compose command failed to
+// publish because something else holds it, or 0 when err isn't that.
+func PortAllocated(err error) int {
+	var ee *ExitError
+	if !errors.As(err, &ee) {
+		return 0
+	}
+	m := portAllocatedRE.FindSubmatch(ee.Stderr)
+	if m == nil {
+		return 0
+	}
+	port, _ := strconv.Atoi(string(m[1]) + string(m[2]))
+	return port
 }
 
 // ignoreNotFound makes removing a missing object a success.

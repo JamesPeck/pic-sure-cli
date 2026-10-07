@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/JamesPeck/pic-sure-cli/internal/cache"
 	"github.com/JamesPeck/pic-sure-cli/internal/events"
 	"github.com/JamesPeck/pic-sure-cli/internal/log"
 	"github.com/JamesPeck/pic-sure-cli/internal/ops"
@@ -91,11 +92,19 @@ var _ io.Writer = (*logEvents)(nil)
 
 // wizardDefaults is tui.Options.Defaults: the default config, named after
 // dir, with the ports init would choose now (§6.5: 80/443 when free, else
-// the first free pair from 8080/8443).
+// the first free pair from 8080/8443), passing over the ports registered
+// stacks have.
 func wizardDefaults(dir string) stack.Config {
 	cfg := stack.DefaultConfig()
 	cfg.Name = suggestName(filepath.Base(dir))
-	h := systemHost{}
+	var h ops.Host = systemHost{}
+	if root, err := cache.DefaultRoot(); err == nil {
+		if c, err := cache.Open(root, cache.Options{}); err == nil {
+			if reserved, err := ops.ReservedPorts(c, dir); err == nil {
+				h = ops.ReservingHost{Host: h, Reserved: reserved}
+			}
+		}
+	}
 	hp, sp, err := ops.ChoosePorts(h, 0, 0, false)
 	if err != nil {
 		hp, sp, err = ops.ChoosePorts(h, 0, 0, true)

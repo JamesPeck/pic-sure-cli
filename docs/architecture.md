@@ -270,7 +270,16 @@ it.
   a `--*-stdin` flag is given) and `config` (`stack.Create`, the run log,
   the stack lock, pic-sure.yaml, `EnsureSecrets` with `OpenAuth`, state.json with
   the release and the operation). Then `ops.InitSteps` with `--skip-step`,
-  and `initialized_at` once they succeed. `r.compose` builds the adapter
+  and `initialized_at` once they succeed. A new stack's ports (077): the
+  preconditions' choice only checks there are some; `claimPorts` chooses
+  them again under the cache's `LockPorts`, with `ops.ReservedPorts`
+  (given ports exempt), then writes pic-sure.yaml and registers the stack
+  before unlocking, so concurrent inits choose different ports. If the plan
+  fails with `docker.PortAllocated` on a port init chose itself (not
+  `--http-port`/`--https-port`/their `--set`, not a `--set` dev base, not a
+  resumed stack), `retryPorts` claims new ports avoiding it and runs the
+  plan again from `render`, once. `initRun.host` replaces the system's
+  ports in tests. `r.compose` builds the adapter
   with a lazy env over init's `*Secrets`, so `compose up` sees the token
   seed issued; `up` (035) can copy it. `startRunLog` registers
   `--admin-email` with the redactor before it logs the flags. An
@@ -325,7 +334,8 @@ it.
   installs the new pic-sure without re-executing (which would restart the
   TUI), so the gate then says to run pic-sure again. `wizardDefaults` is
   `Options.Defaults`: the default config named after DIR, with the ports
-  §6.5 would choose now. `startTUI` opens on the stack `stack.Find`
+  §6.5 would choose now, passing over the default cache's
+  `ops.ReservedPorts`. `startTUI` opens on the stack `stack.Find`
   finds, else on init's directory.
 
 - `secrets.go` (058): `secrets rotate NAME [--discard-data]`. Usage
@@ -1166,7 +1176,11 @@ init, and the parts `up` and `update` reuse.
   `hpds.data: shared` it does nothing: the data set carries its key.
 - `ChoosePorts(host, http, https, auto)` and `ChooseDevPortsBase(host,
   avoid...)` are §6.5's port rules: a port not given is 80 or 443, or with
-  `auto` the first free pair from 8080/8443. `StackNameInUse(ctx, d, name,
+  `auto` the first free pair from 8080/8443. `ReservedPorts(c, dir)` (077)
+  is the HTTP, HTTPS and dev-block ports that the registry's other stacks
+  set in their pic-sure.yaml (a gone or unreadable one counts for
+  nothing); `ReservingHost{Host, Reserved}` makes them busy for both
+  choosers, and a busy default that is reserved says "another stack's". `StackNameInUse(ctx, d, name,
   dir)` finds a container or volume of compose project `name`, or a volume
   labelled for stack `name`, whose stack-dir label isn't `dir`, and returns
   the host ports `dir`'s own containers publish.
@@ -1785,6 +1799,8 @@ Rules every method follows:
 - **Errors.** A failed query or change returns an `*ExitError` whose message
   is docker's own (its "Run 'docker … --help'" hint is dropped). If docker
   says the object doesn't exist, the error also matches `ErrNotFound`.
+  `PortAllocated(err)` (077) returns the host port a docker or compose
+  command couldn't publish because something else holds it, 0 otherwise.
   Removals (`Rm`, `VolumeRemove`, `RemoveImage`) treat a missing object as
   removed.
 - **Env.** `RunOpts.Env`, `ExecOpts.Env` and `BuildOpts.BuildArgs` are
@@ -2009,6 +2025,9 @@ waits are warnings.
   build's copy of its source, not created.
 - `EnsureMavenVolume(ctx, d.Docker)` creates `MavenVolume` (`pic-sure-m2`).
   Mount the volume only under the reactor lock.
+- `LockPorts(ctx)` (077) is init's lock from choosing a new stack's
+  ports to registering it; it waits as long as the use lock, which
+  registering takes inside it.
 - `LockUse(ctx)` (057) takes the cache's use lock shared, and
   `LockPrune(ctx)` takes it exclusively. Any number of commands hold
   `LockUse`, but never alongside a prune. Hold it from before taking a
@@ -2647,7 +2666,9 @@ to `v2`/`main`, and on PRs labelled `e2e`); all run locally as they are.
 (`E2E_*` variables): open mode with no client secret (init generates one),
 `--auto-ports`, `--set hpds.java_opts`, and an EXIT trap that, on failure,
 saves each stack's compose logs, `status --json`, run logs and support
-bundle to `E2E_ARTIFACTS`, then destroys every stack it made. The
+bundle to `E2E_ARTIFACTS`, then destroys every stack it made.
+`e2e-two-stacks.sh` runs its two inits at once (077), so it also checks
+that concurrent `--auto-ports` inits get different ports. The
 assertions read `status --deep --json` and `update --json`'s plan
 (`docs/json-schemas.md`, `ops.UpdatePlan`), so changing those fields means
 changing the scripts.

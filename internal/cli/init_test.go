@@ -2,13 +2,18 @@ package cli
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/JamesPeck/pic-sure-cli/internal/cache"
+	"github.com/JamesPeck/pic-sure-cli/internal/catalog"
 	"github.com/JamesPeck/pic-sure-cli/internal/docker"
 	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
 	"github.com/JamesPeck/pic-sure-cli/internal/ops"
@@ -79,7 +84,11 @@ func newInitRun(t *testing.T, dir, stdin string, args ...string) (*initRun, erro
 		}
 		dir = filepath.Join(tmp, "demo")
 	}
-	r := &initRun{a: a, cmd: cmd, dir: dir, d: a.newDeps()}
+	c, err := cache.Open(filepath.Join(t.TempDir(), "cache"), cache.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &initRun{a: a, cmd: cmd, dir: dir, d: a.newDeps(), cache: c, host: anyPortFree{}}
 	t.Cleanup(func() {
 		if r.lock != nil {
 			_ = r.lock.Unlock()
@@ -192,5 +201,98 @@ func TestInitWritesTheSetValues(t *testing.T) {
 	}
 	if cfg.HPDS.JavaOpts != "-Xmx2g" || cfg.Network.DevPorts.Base != 16000 || !slices.Equal(cfg.Dev.Services, []string{"hpds", "psama"}) {
 		t.Errorf("pic-sure.yaml: hpds %+v, network %+v, dev %+v", cfg.HPDS, cfg.Network, cfg.Dev)
+	}
+}
+
+// Inits writing their config at once share one cache, so each sees the
+// ports the others claimed and chooses different ones.
+func TestConcurrentInitsChooseDifferentPorts(t *testing.T) {
+	const n = 4
+	root := filepath.Join(t.TempDir(), "cache")
+	runs := make([]*initRun, n)
+	for i := range runs {
+		r, err := newInitRun(t, "", "", "--name", fmt.Sprintf("demo%d", i), "--admin-email", "admin@example.com",
+			"--auth-mode", "open", "--auto-ports")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.cache, err = cache.Open(root, cache.Options{}); err != nil {
+			t.Fatal(err)
+		}
+		r.rel = &release.Release{Repo: "https://example.com/release-control", Branch: "main", Commit: strings.Repeat("a", 40)}
+		runs[i] = r
+	}
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	for i, r := range runs {
+		wg.Go(func() { errs[i] = r.writeConfig(context.Background(), r.d.Sink) })
+	}
+	wg.Wait()
+	seen := map[int]string{}
+	for i, r := range runs {
+		if errs[i] != nil {
+			t.Fatal(errs[i])
+		}
+		cfg, err := r.st.LoadConfig()
+		if err != nil {
+			t.Fatal(err)
+		}
+		net := cfg.Network
+		ports := []int{net.HTTPPort, net.HTTPSPort}
+		for p := net.DevPorts.Base; p < net.DevPorts.Base+catalog.DevPortSpan; p++ {
+			ports = append(ports, p)
+		}
+		for _, p := range ports {
+			if other, ok := seen[p]; ok {
+				t.Errorf("%s and %s both have port %d", other, cfg.Name, p)
+			}
+			seen[p] = cfg.Name
+		}
+	}
+}
+
+// Ports the user gave are kept even when another stack has them, and only
+// ports init chose itself are chosen again when one is taken at start.
+func TestInitKeepsGivenPorts(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "cache")
+	rel := &release.Release{Repo: "https://example.com/release-control", Branch: "main", Commit: strings.Repeat("a", 40)}
+	start := func(args ...string) *initRun {
+		t.Helper()
+		r, err := newInitRun(t, "", "", append([]string{"--admin-email", "admin@example.com", "--auth-mode", "open"}, args...)...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.cache, err = cache.Open(root, cache.Options{}); err != nil {
+			t.Fatal(err)
+		}
+		r.rel = rel
+		if err := r.writeConfig(context.Background(), r.d.Sink); err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	a := start("--name", "a", "--auto-ports")
+	if a.cfg.Network.HTTPPort != 8080 || a.cfg.Network.HTTPSPort != 8443 || a.cfg.Network.DevPorts.Base != 15000 {
+		t.Fatalf("a: %+v", a.cfg.Network)
+	}
+	b := start("--name", "b", "--http-port", "8080", "--auto-ports")
+	if b.cfg.Network.HTTPPort != 8080 || b.cfg.Network.HTTPSPort != 8444 || b.cfg.Network.DevPorts.Base != 15010 {
+		t.Fatalf("b: %+v", b.cfg.Network)
+	}
+
+	taken := func(port int) error {
+		return fmt.Errorf("start: %w", &docker.ExitError{Argv: []string{"docker", "compose", "up"}, ExitCode: 1,
+			Stderr: fmt.Appendf(nil, "Error response from daemon: Bind for 0.0.0.0:%d failed: port is already allocated\n", port)})
+	}
+	for _, tc := range []struct {
+		port  int
+		retry bool
+	}{{8080, false}, {8444, true}, {15013, true}, {15000, false}, {9999, false}} {
+		if _, retry := b.portRetry(taken(tc.port)); retry != tc.retry {
+			t.Errorf("port %d taken: retry %v, want %v", tc.port, retry, tc.retry)
+		}
+	}
+	if _, retry := b.portRetry(errors.New("compose up failed")); retry {
+		t.Error("retry on an error that isn't a taken port")
 	}
 }

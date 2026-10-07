@@ -135,6 +135,7 @@ func TestSuggestName(t *testing.T) {
 }
 
 func TestWizardDefaultsNameAndPorts(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	cfg := wizardDefaults("/srv/My Stack")
 	if cfg.Name != "my-stack" {
 		t.Errorf("name = %q", cfg.Name)

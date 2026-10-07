@@ -4,9 +4,8 @@
 # leaves the other running with its data. Needs docker, git, go and jq;
 # settings are in scripts/e2e-lib.sh.
 #
-# The inits run one after the other: init picks its ports when it starts
-# but binds them only when the stack comes up, so two concurrent inits
-# would pick the same pair.
+# The two inits run at once, which checks that each reserves the ports it
+# chose before the other chooses.
 
 # shellcheck source=scripts/e2e-lib.sh
 . "$(dirname "$0")/e2e-lib.sh"
@@ -15,8 +14,21 @@ base="${E2E_NAME:-e2e-two}"
 a="$base-a" b="$base-b"
 dir_a="$E2E_WORK/$a" dir_b="$E2E_WORK/$b"
 
-init_stack "$a" "$dir_a"
-init_stack "$b" "$dir_b"
+say "init $a and $b at once"
+# A background job's changes to the cleanup lists are lost, so they are
+# made here.
+e2e_stacks+=("$a" "$b")
+e2e_dirs+=("$dir_a" "$dir_b")
+init_stack "$a" "$dir_a" > "$E2E_WORK/init-$a.log" 2>&1 &
+pid_a=$!
+init_stack "$b" "$dir_b" > "$E2E_WORK/init-$b.log" 2>&1 &
+pid_b=$!
+rc_a=0 rc_b=0
+wait "$pid_a" || rc_a=$?
+wait "$pid_b" || rc_b=$?
+cat "$E2E_WORK/init-$a.log" "$E2E_WORK/init-$b.log" >&2
+[ "$rc_a" -eq 0 ] || fail "$a: init exited $rc_a"
+[ "$rc_b" -eq 0 ] || fail "$b: init exited $rc_b"
 
 ports_a="$(pic --stack "$dir_a" config get network.http_port)/$(pic --stack "$dir_a" config get network.https_port)"
 ports_b="$(pic --stack "$dir_b" config get network.http_port)/$(pic --stack "$dir_b" config get network.https_port)"

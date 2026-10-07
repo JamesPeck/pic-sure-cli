@@ -315,11 +315,10 @@ func ChoosePorts(h Host, httpPort, httpsPort int, auto bool) (int, int, error) {
 			return hp, sp, nil
 		}
 		var busy []string
-		if httpPort == 0 && !h.PortFree(DefaultHTTPPort) {
-			busy = append(busy, strconv.Itoa(DefaultHTTPPort))
-		}
-		if httpsPort == 0 && !h.PortFree(DefaultHTTPSPort) {
-			busy = append(busy, strconv.Itoa(DefaultHTTPSPort))
+		for _, p := range []struct{ given, port int }{{httpPort, DefaultHTTPPort}, {httpsPort, DefaultHTTPSPort}} {
+			if p.given == 0 && !h.PortFree(p.port) {
+				busy = append(busy, busyPort(h, p.port))
+			}
 		}
 		if len(busy) == 0 {
 			return 0, 0, exitcode.Usage("port %d is the other port's default; pass both --http-port and --https-port, or --auto-ports", httpPort+httpsPort)
@@ -334,6 +333,65 @@ func ChoosePorts(h Host, httpPort, httpsPort int, auto bool) (int, int, error) {
 	}
 	return 0, 0, exitcode.Precondition("no free port pair from %d/%d to %d/%d; pass --http-port and --https-port",
 		AutoHTTPPort, AutoHTTPSPort, AutoHTTPPort+autoPortTries-1, AutoHTTPSPort+autoPortTries-1)
+}
+
+// busyPort names a port h reports busy, saying so when another stack
+// reserves it.
+func busyPort(h Host, port int) string {
+	if r, ok := h.(ReservingHost); ok && r.Reserved[port] {
+		return fmt.Sprintf("%d (another stack's)", port)
+	}
+	return strconv.Itoa(port)
+}
+
+// ReservingHost is a Host whose Reserved ports are busy as well as those
+// in use, so ChoosePorts and ChooseDevPortsBase pass over them.
+type ReservingHost struct {
+	Host
+	Reserved map[int]bool
+}
+
+// PortFree implements Host.
+func (h ReservingHost) PortFree(port int) bool {
+	return !h.Reserved[port] && h.Host.PortFree(port)
+}
+
+// ReservedPorts are the ports the stacks in c's registry, other than the
+// one in dir, set in their pic-sure.yaml: the HTTP and HTTPS ports and the
+// dev_ports block. Such a stack may be stopped, or still initialising, so
+// its ports may be free now and taken later. A stack whose config can't be
+// read, a gone one among them, reserves nothing.
+func ReservedPorts(c *cache.Cache, dir string) (map[int]bool, error) {
+	registry, err := c.RegisteredStacks()
+	if err != nil {
+		return nil, err
+	}
+	dir = filepath.Clean(dir)
+	reserved := map[int]bool{}
+	for _, r := range registry {
+		if r.Dir == "" || r.Dir == dir || !hasCLIDir(r.Dir) {
+			continue
+		}
+		cfg, err := readConfig(r.Dir)
+		if err != nil {
+			continue
+		}
+		reserved[cfg.Network.HTTPPort] = true
+		reserved[cfg.Network.HTTPSPort] = true
+		for p := cfg.Network.DevPorts.Base; p < cfg.Network.DevPorts.Base+catalog.DevPortSpan; p++ {
+			reserved[p] = true
+		}
+	}
+	return reserved, nil
+}
+
+func readConfig(dir string) (*stack.Config, error) {
+	st, err := stack.Open(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = st.Close() }()
+	return st.LoadConfig()
 }
 
 // ChooseDevPortsBase returns the first base from 15000, in steps of 10,

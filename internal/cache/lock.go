@@ -79,6 +79,14 @@ func (c *Cache) LockUse(ctx context.Context) (*Lock, error) {
 	return c.lockMode(ctx, "use.lock", "cache use lock", UseLockTimeout, true)
 }
 
+// LockPorts takes the port lock, which init holds from choosing a new
+// stack's ports until the stack is registered with its pic-sure.yaml
+// written, so two inits never choose the same free ports (§6.5). It waits
+// as long as the use lock, which registering takes.
+func (c *Cache) LockPorts(ctx context.Context) (*Lock, error) {
+	return c.lock(ctx, "ports.lock", "port lock", UseLockTimeout)
+}
+
 // LockPrune takes the use lock exclusively, which waits for every LockUse
 // holder to finish and keeps new ones out until Unlock.
 func (c *Cache) LockPrune(ctx context.Context) (*Lock, error) {
