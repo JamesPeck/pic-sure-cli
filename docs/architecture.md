@@ -1021,7 +1021,55 @@ v1's jwt-creator container. Pass `ops.Deps.Clock`'s time as `now` and
 
 ## internal/sql
 
-_Ticket 014 fills this in._
+Ticket 014. Statement builders, escaping, and the clients that run the
+statements. Every value reaches the database inside SQL text on the
+client's stdin, and the password reaches the client as `MYSQL_PWD` or
+`PGPASSWORD` through `Cmd.Env` with a bare `-e`, so neither ever appears in
+argv. The clients run through the `docker.Engine` (`Deps.Docker`): `Exec`
+for a container, `Run` for a remote client. They take the Engine rather
+than `ops.Deps` so that operations can import this package.
+
+- **Running SQL.** `ExecMySQL(ctx, engine, target, statements...)` runs the
+  statements in one `mysql --batch` session, which stops at the first
+  error. A client that exits non-zero gives a `*docker.ExitError` whose
+  argv is the client's own and whose stderr is the client's
+  (`ERROR 1045 ... Access denied`, say); a docker failure gives the
+  Engine's error. `QueryMySQL` does the same for one
+  query and returns its rows as `[][]string`.
+  - A `MySQLTarget` with `Container` runs
+    `docker exec -i -e MYSQL_PWD <cid> mysql ...` in the stack's
+    picsure-db. Adding `Host: "127.0.0.1"` makes the client connect over
+    TCP, for the readiness probe.
+  - Without `Container`, it runs
+    `docker run -i --rm -e MYSQL_PWD mysql:8.0 mysql --host=... --port=...`
+    against a remote server.
+  - `User` defaults to root.
+  - `ExecPostgres` runs psql in the dictionary-db container with
+    `PGPASSWORD`, and with `ON_ERROR_STOP`, so that a failure exits
+    non-zero.
+  - A statement's trailing semicolon is optional.
+- **Escaping.** `QuoteMySQL` doubles single quotes and backslash-escapes
+  `\`, NUL, CR, LF and Ctrl-Z. `QuotePostgres` doubles single quotes and
+  switches to `E'...'` when the value has a backslash. It fails with
+  `ErrNUL` on a NUL, which Postgres text can't hold. Both escapers assume a
+  UTF-8 connection, and the clients force one (`utf8mb4`,
+  `PGCLIENTENCODING=UTF8`).
+- **Builders** return SQL text containing escaped secrets. Never log it.
+  - Seed (033): `AppliedMigrationsQuery`, `CountUsersWithEmail`,
+    `SeedAdminUser(email, id)` and `SetApplicationToken`. `SeedAdminUser`
+    is one transaction that inserts the user only if the email is absent,
+    and gives it the Top Admin and User roles only when it inserted it.
+  - Bootstrap (054): `Bootstrap(AppUsers(AppPasswords{...}), syncPasswords)`.
+    It creates the databases and users with `IF NOT EXISTS`, plus the
+    grants. With `syncPasswords` it adds an `ALTER USER` for each user.
+  - Rotation (058): `AlterUserPassword(Account{User, Host}, pw)` for MySQL
+    and `AlterPostgresPassword(role, pw)` for Postgres. The local
+    picsure-db has both `root@localhost` and `root@%`, so rotating root
+    needs a statement for each account.
+- `integration_test.go` (build tag `integration`) runs all of this against
+  real `mysql:8.0` and `postgres:16-alpine` containers, and skips when
+  there is no Docker daemon:
+  `go test -tags integration ./internal/sql/`.
 
 ## internal/netproxy
 
