@@ -9,36 +9,40 @@ import (
 	"github.com/JamesPeck/pic-sure-cli/internal/dialog"
 )
 
-// The dashboard's actions. Each is the pic-sure command it runs.
+// confirmation is a yes/no dialog's question and description.
+type confirmation struct{ question, describe string }
 
-func restartAction(service string) (Action, string) {
+func restartAction(service string) (Action, confirmation) {
 	return Action{
-		Title: "Restarting " + service,
-		Done:  "Restarted " + service,
-		Args:  []string{"restart", service},
-	}, fmt.Sprintf("Restarts the %s container.", service)
+			Title: "Restarting " + service,
+			Done:  "Restarted " + service,
+			Args:  []string{"restart", service},
+		}, confirmation{"Restart " + service + "?",
+			fmt.Sprintf("Restarts the %s container.", service)}
 }
 
-func updateAction() (Action, string) {
+func updateAction() (Action, confirmation) {
 	return Action{
 			Title: "Updating PIC-SURE",
 			Done:  "Update finished",
 			Args:  []string{"update"},
-		}, "Fetches the release, rebuilds what changed, runs the migrations,\n" +
-			"renews the introspection token and restarts what needs it.\n" +
-			"Data volumes are kept."
+		}, confirmation{"Update PIC-SURE?",
+			"Fetches the release, rebuilds what changed, runs the migrations,\n" +
+				"renews the introspection token and restarts what needs it.\n" +
+				"Data volumes are kept."}
 }
 
-func migrateAction() (Action, string) {
+func migrateAction() (Action, confirmation) {
 	return Action{
-		Title: "Migrating the databases",
-		Done:  "Migrations applied",
-		Args:  []string{"migrate"},
-	}, "Runs the pending Flyway migrations on the PIC-SURE and dictionary\ndatabases."
+			Title: "Migrating the databases",
+			Done:  "Migrations applied",
+			Args:  []string{"migrate"},
+		}, confirmation{"Run the database migrations?",
+			"Runs the pending Flyway migrations on the PIC-SURE and dictionary\ndatabases."}
 }
 
 func resetAction(keepDB bool) Action {
-	a := Action{Title: "Resetting the stack", Done: "Stack reset; update starts it again", Args: []string{"--yes", "reset"}}
+	a := Action{Title: "Resetting the stack", Done: "Stack reset", Args: []string{"--yes", "reset"}}
 	if keepDB {
 		a.Args = append(a.Args, "--keep-db")
 	}
@@ -49,17 +53,15 @@ func destroyAction() Action {
 	return Action{Title: "Destroying the stack", Done: "Stack destroyed", Args: []string{"--yes", "destroy"}}
 }
 
-// startConfirm opens a yes/no dialog for act.
-func (m *model) startConfirm(act Action, describe string) (tea.Model, tea.Cmd) {
+func (m *model) startConfirm(act Action, c confirmation) (tea.Model, tea.Cmd) {
 	m.pending = &act
 	m.confirmOK = false
 	m.form = m.sizeForm(huh.NewForm(huh.NewGroup(huh.NewConfirm().
-		Title(act.Title + "?").
-		Description(describe).
+		Title(c.question).
+		Description(c.describe).
 		Affirmative("Run").
 		Negative("Cancel").
 		Value(&m.confirmOK))).WithShowHelp(true))
-	m.mode = modeConfirm
 	return m, m.form.Init()
 }
 
@@ -71,6 +73,7 @@ func (m *model) startTeardown(destroy bool) (tea.Model, tea.Cmd) {
 		m.lastResult = "the stack's name isn't known yet; wait for the status to load"
 		return m, nil
 	}
+	m.teardownName = name
 	m.teardownDestroy = destroy
 	m.keepDB = false
 	m.confirmText = ""
@@ -98,7 +101,7 @@ func (m *model) startTeardown(destroy bool) (tea.Model, tea.Cmd) {
 			huh.NewSelect[bool]().
 				Title("⚠ Reset — this deletes data").
 				Description("Stops the stack and removes its data volumes and TLS certificate.\n"+
-					"The config, secrets and logs are kept; update starts it again.").
+					"The config, secrets and logs are kept; pic-sure up sets it up again.").
 				Value(&m.keepDB).
 				Options(
 					huh.NewOption("Remove the database too", false),
@@ -108,7 +111,6 @@ func (m *model) startTeardown(destroy bool) (tea.Model, tea.Cmd) {
 		}
 	}
 	m.form = m.sizeForm(huh.NewForm(huh.NewGroup(fields...)).WithShowHelp(true))
-	m.mode = modeTeardown
 	return m, m.form.Init()
 }
 
@@ -134,7 +136,6 @@ func (m *model) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch m.form.State {
 	case huh.StateCompleted:
 		m.form = nil
-		m.mode = modeNormal
 		switch {
 		case m.pending != nil:
 			act := *m.pending
@@ -143,9 +144,8 @@ func (m *model) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			return m, run(act)
-		case m.confirmText != m.stackName():
-			// The form's own validation gates real input; this guards the
-			// dispatch against a name that changed while it was open.
+		case m.confirmText != m.teardownName:
+			// The form's own validation gates real input.
 			return m, nil
 		case m.teardownDestroy:
 			return m, run(destroyAction())
@@ -162,7 +162,6 @@ func (m *model) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *model) closeForm() {
 	m.form = nil
 	m.pending = nil
-	m.mode = modeNormal
 }
 
 func run(act Action) tea.Cmd {

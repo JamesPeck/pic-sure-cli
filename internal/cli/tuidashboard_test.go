@@ -3,13 +3,17 @@ package cli
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/events"
 	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
+	"github.com/JamesPeck/pic-sure-cli/internal/stack"
 	"github.com/JamesPeck/pic-sure-cli/internal/tui"
 )
 
@@ -23,7 +27,7 @@ func fakeDocker(t *testing.T) string {
 echo "$@" >> ` + logf + `
 case "$*" in
 *" ps "*) echo '{"Service":"hpds","Name":"demo-hpds-1","State":"running","Health":"healthy","Status":"Up 2 minutes"}' ;;
-*" logs "*) echo "hpds-1  | started"; echo "hpds-1  | ready" ;;
+*" logs "*) echo "hpds-1  | started"; echo "compose noise" >&2; echo "hpds-1  | ready" ;;
 *" restart nosuch") echo "no such service: nosuch" >&2; exit 1 ;;
 *" restart "*) echo " Container demo-hpds-1  Restarting" >&2 ;;
 *) echo "unexpected: $*" >&2; exit 1 ;;
@@ -149,5 +153,54 @@ func TestCommandFromTUISummary(t *testing.T) {
 	res, err := a.commandFromTUI(context.Background(), tui.CommandRequest{Dir: t.TempDir(), Args: []string{"version"}, Sink: events.Discard})
 	if err != nil || !strings.Contains(res.Summary, "v2.0.0-test") {
 		t.Errorf("summary %q, err %v", res.Summary, err)
+	}
+}
+
+// --wait-lock reaches the dashboard's actions: with it, a held lock is
+// waited for until the action is cancelled, instead of refused.
+func TestCommandFromTUIKeepsWaitLock(t *testing.T) {
+	fakeDocker(t)
+	dir := renderedStack(t)
+	st, err := stack.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	lock, err := st.Lock(context.Background(), stack.LockOptions{Command: "pic-sure test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = lock.Unlock() }()
+
+	a, _, _ := testApp(t)
+	req := tui.CommandRequest{Dir: dir, Args: []string{"restart", "hpds"}, Sink: events.Discard}
+	if _, err := a.commandFromTUI(context.Background(), req); err == nil || !strings.Contains(err.Error(), "--wait-lock") {
+		t.Fatalf("without --wait-lock: err = %v", err)
+	}
+	a.Global.WaitLock = true
+	var rec events.Recorder
+	req.Sink = &rec
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	if _, err := a.commandFromTUI(ctx, req); err == nil || strings.Contains(err.Error(), "pass --wait-lock") {
+		t.Errorf("with --wait-lock: err = %v", err)
+	}
+	if !slices.Contains(rec.Types(), "warning") {
+		t.Errorf("no waiting warning: %v", rec.Types())
+	}
+}
+
+func TestWarnEvents(t *testing.T) {
+	var rec events.Recorder
+	var rest strings.Builder
+	w := &warnEvents{sink: &rec, rest: &rest}
+	_, _ = io.WriteString(w, "pic-sure: warning: can't open the cache\n")
+	_, _ = io.WriteString(w, "pic-sure: the stack is locked\n")
+	got := rec.Events()
+	if len(got) != 1 || got[0].(events.Warning).Text != "can't open the cache" {
+		t.Errorf("events = %#v", got)
+	}
+	if rest.String() != "pic-sure: the stack is locked\n" {
+		t.Errorf("rest = %q", rest.String())
 	}
 }

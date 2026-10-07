@@ -2404,8 +2404,11 @@ Ticket 040. The dashboard screen, embedded in the TUI (alt-screen).
   timeout, the status pane every 15 s; each poll has at most one in flight.
   `h` runs the deep check, which is cached (with its time) until an action
   runs: `deepGen` drops a check that started before one. The log pane
-  follows the selected service; a follower that ends is restarted with a
-  backoff (2 s doubling to 30 s), and its new tail replaces the scrollback.
+  follows the selected service, and the selection stays on its service
+  across polls. A follower that ends is restarted after 2 s, doubling to
+  30 s while followers keep ending within 30 s of starting (an error, a
+  stopped container); the new one's tail replaces the scrollback. Compose's
+  own messages stay out of the pane.
   Leaving the dashboard cancels its context, which stops all of them.
 - **Actions** are pic-sure command lines (`Action.Args`): `r` restart the
   selected service, `u` update, `m` migrate (each after a yes/no dialog),
@@ -2415,7 +2418,9 @@ Ticket 040. The dashboard screen, embedded in the TUI (alt-screen).
   `RunMsg`; the embedder runs it and sends `ActionDoneMsg` back, which drops
   the deep check and polls again.
 - `Owns(msg)` names the dashboard's own messages (ticks, poll results, log
-  lines), which the embedder routes to it while another screen shows.
+  lines), which the embedder routes to it while another screen shows. They
+  carry the dashboard's id, so a closed dashboard's late ones are dropped
+  by the next.
 
 **Wiring.** `tui.Options.Dashboard` is the backend and `Options.Command`
 runs an action; the app shows it on the run screen (039's `runScreen`,
@@ -2427,8 +2432,9 @@ to the landing when the stack is gone (destroy). In `internal/cli`
 `App` with no terminal: `App.tuiSink` replaces the output mode's sink with
 the TUI's (the `Result` event becomes the returned error), log records go
 to it as `Log` events, and the summary the command prints is the result's
-`Summary`. A prompt the command would need (the gate's self-update) is
-refused as on a non-interactive run.
+`Summary`. Its warnings become `Warning` events, and `--wait-lock` is passed
+on. A prompt the command would need (the gate's self-update) is refused as
+on a non-interactive run.
 
 ## internal/wizard
 

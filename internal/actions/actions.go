@@ -1,11 +1,11 @@
-// Package actions describes the operations the TUI surfaces (dashboard pane
-// and activity screen) can launch. Destructive actions must be confirmed by
+// Package actions describes the operations the landing and the activity
+// screen can launch (the dashboard runs pic-sure commands instead). Destructive actions must be confirmed by
 // typing ConfirmWord and clearly state what is destroyed; every action
 // carries an AbortNote so a confirmed abort never leaves the user guessing
 // about state.
 //
 // Starting an action fails with NotImplemented until the TUI tickets (038
-// renderer, 039 landing, 040 dashboard, 047 load wizard) run in-process
+// renderer, 039 landing, 047 load wizard) run in-process
 // operations. Args holds the v1 script arguments: they record the choices
 // each screen collected, which the TUI tests assert, and they go away with
 // that rewiring.

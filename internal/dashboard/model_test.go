@@ -316,8 +316,58 @@ func TestLogFollowerErrorBacksOffAndKeepsScrollback(t *testing.T) {
 	b.mu.Unlock()
 	m, cmd = update(t, m, logRetryMsg{seq: m.logSeq})
 	m, _ = update(t, m, cmd())
-	if !slices.Equal(m.logLines, []string{"hpds line 2", "hpds line 3"}) || m.logRetryDelay != 0 {
-		t.Errorf("after recovery: %q, delay %v", m.logLines, m.logRetryDelay)
+	if !slices.Equal(m.logLines, []string{"hpds line 2", "hpds line 3"}) {
+		t.Errorf("after recovery: %q", m.logLines)
+	}
+
+	// Only a follower that ran a while resets the backoff: one that ends
+	// soon after its lines (a stopped container) keeps backing off.
+	m, _ = update(t, m, logClosedMsg{sessionID: m.logSession.id})
+	if m.logRetryDelay != 8*time.Second {
+		t.Errorf("a short session: delay %v, want 8s", m.logRetryDelay)
+	}
+	m, cmd = update(t, m, logRetryMsg{seq: m.logSeq})
+	m, _ = update(t, m, cmd())
+	m.logSession.started = time.Now().Add(-time.Minute)
+	m, _ = update(t, m, logClosedMsg{sessionID: m.logSession.id})
+	if m.logRetryDelay != logRetryBase {
+		t.Errorf("a long session: delay %v, want %v", m.logRetryDelay, logRetryBase)
+	}
+}
+
+// The selection stays on its service when the list changes, and the log
+// pane follows the selection when its service goes.
+func TestSelectionFollowsItsServiceAcrossPolls(t *testing.T) {
+	m, _ := testModel(t)
+	m = deliverServices(t, m)
+	m, cmd := update(t, m, keyMsg("down"))
+	m, _ = update(t, m, cmd())
+	// A new service sorts before psama: the selection moves with psama.
+	m, cmd = update(t, m, servicesMsg{services: []ops.StatusService{{Service: "dictionary"}, {Service: "hpds"}, {Service: "psama"}}})
+	if m.selectedService() != "psama" || cmd != nil {
+		t.Errorf("selected %q (cmd %v)", m.selectedService(), cmd != nil)
+	}
+	// psama goes: the pane follows the service now selected.
+	m, cmd = update(t, m, servicesMsg{services: []ops.StatusService{{Service: "hpds"}}})
+	if m.selectedService() != "hpds" || cmd == nil {
+		t.Fatalf("selected %q (cmd %v)", m.selectedService(), cmd != nil)
+	}
+	m, _ = update(t, m, cmd())
+	if m.logSvc != "hpds" || !slices.Contains(m.logLines, "hpds line 2") {
+		t.Errorf("logs follow %q: %q", m.logSvc, m.logLines)
+	}
+}
+
+// A dashboard's messages don't reach one opened after it.
+func TestMessagesFromAClosedDashboardAreDropped(t *testing.T) {
+	old, _ := testModel(t)
+	stale := old.own(func() tea.Msg { return statusTickMsg{} })()
+	m, _ := testModel(t)
+	if _, cmd := update(t, m, stale); cmd != nil {
+		t.Error("an old dashboard's tick started a poll chain in the new one")
+	}
+	if _, cmd := update(t, m, m.own(func() tea.Msg { return statusTickMsg{} })()); cmd == nil {
+		t.Error("the dashboard's own tick was dropped")
 	}
 }
 
@@ -419,12 +469,12 @@ func TestActionsAskFirst(t *testing.T) {
 			m, _ := testModel(t)
 			m = deliverServices(t, m)
 			m, run := press(t, m, tc.key)
-			if run != nil || m.mode != modeConfirm || m.form == nil {
+			if run != nil || m.pending == nil || m.form == nil {
 				t.Fatalf("%s didn't open a confirmation", tc.key)
 			}
 			// esc cancels without running.
 			m, run = press(t, m, "esc")
-			if run != nil || m.mode != modeNormal || m.form != nil {
+			if run != nil || m.form != nil {
 				t.Fatal("esc didn't cancel")
 			}
 			// Run: move to the affirmative and submit.
@@ -434,7 +484,7 @@ func TestActionsAskFirst(t *testing.T) {
 			if run == nil || !slices.Equal(run.Action.Args, tc.args) {
 				t.Fatalf("run = %+v, want args %q", run, tc.args)
 			}
-			if m.mode != modeNormal {
+			if m.form != nil {
 				t.Error("the dialog stayed open")
 			}
 		})
@@ -462,7 +512,7 @@ func TestTeardownNeedsTheStackName(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			m, _ := testModel(t)
 			m, _ = press(t, m, tc.key)
-			if m.mode != modeTeardown || m.form == nil {
+			if m.teardownName != "demo" || m.form == nil {
 				t.Fatal("no teardown dialog")
 			}
 			if v := view(m); !strings.Contains(v, "Type the stack's name, demo") {
@@ -474,13 +524,14 @@ func TestTeardownNeedsTheStackName(t *testing.T) {
 			m.confirmText = "dem"
 			m.form.State = huh.StateCompleted
 			m, cmd := update(t, m, struct{}{})
-			if cmd != nil || m.mode != modeNormal {
+			if cmd != nil || m.form != nil {
 				t.Fatal("a wrong name ran the action")
 			}
 
 			m, _ = press(t, m, tc.key)
 			m.keepDB = tc.keepDB
 			m.confirmText = "demo"
+			m.status = nil // a status poll failed while the dialog was open
 			m.form.State = huh.StateCompleted
 			_, cmd = update(t, m, struct{}{})
 			if cmd == nil {
@@ -612,12 +663,11 @@ func TestSummaryWorstCaseFitsThePane(t *testing.T) {
 }
 
 func TestOwns(t *testing.T) {
-	for _, msg := range []tea.Msg{servicesTickMsg{}, statusTickMsg{}, servicesMsg{}, statusMsg{}, deepMsg{}, logLinesMsg{}, logClosedMsg{}, logRetryMsg{}} {
-		if !Owns(msg) {
-			t.Errorf("Owns(%T) = false", msg)
-		}
+	m, _ := testModel(t)
+	if msg := m.own(servicesTick())(); !Owns(msg) {
+		t.Errorf("Owns(%T) = false", msg)
 	}
-	for _, msg := range []tea.Msg{ActionDoneMsg{}, RunMsg{}, tea.KeyPressMsg{}} {
+	for _, msg := range []tea.Msg{ActionDoneMsg{}, RunMsg{}, tea.KeyPressMsg{}, servicesMsg{}} {
 		if Owns(msg) {
 			t.Errorf("Owns(%T) = true", msg)
 		}

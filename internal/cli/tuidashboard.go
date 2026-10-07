@@ -104,7 +104,9 @@ func (b dashBackend) FollowLogs(ctx context.Context, service string, w io.Writer
 		return redacted(err)
 	}
 	defer done()
-	err = comp.Logs(ctx, docker.ComposeLogsOpts{Services: []string{service}, Follow: true, Tail: dashLogTail, Out: w})
+	// Compose's own messages stay out of the pane; the end of them is in
+	// the error.
+	err = comp.Logs(ctx, docker.ComposeLogsOpts{Services: []string{service}, Follow: true, Tail: dashLogTail, Out: w, Err: io.Discard})
 	return redacted(err)
 }
 
@@ -123,7 +125,7 @@ func redacted(err error) error {
 // result's Summary. Its exit code and message come back as the error.
 func (a *App) commandFromTUI(ctx context.Context, req tui.CommandRequest) (tui.InitResult, error) {
 	var out, errOut bytes.Buffer
-	c := a.child(&out, &errOut)
+	c := a.child(&out, &warnEvents{sink: req.Sink, rest: &errOut})
 	var result *events.Result
 	c.tuiSink = events.SinkFunc(func(e events.Event) {
 		if r, ok := e.(events.Result); ok {
@@ -134,6 +136,9 @@ func (a *App) commandFromTUI(ctx context.Context, req tui.CommandRequest) (tui.I
 	})
 	c.tuiLog.Store(&logEvents{req.Sink})
 	args := []string{"--stack", req.Dir}
+	if a.Global.WaitLock {
+		args = append(args, "--wait-lock")
+	}
 	if a.Global.LogLevel != "" {
 		args = append(args, "--log-level", a.Global.LogLevel)
 	}
@@ -148,4 +153,23 @@ func (a *App) commandFromTUI(ctx context.Context, req tui.CommandRequest) (tui.I
 		msg = result.Error.Message
 	}
 	return res, &exitcode.Error{Code: code, Err: errors.New(msg)}
+}
+
+// warnEvents is an in-process command's stderr: its warnings become Warning
+// events, and the rest (the error, which the Result also carries) goes to
+// rest.
+type warnEvents struct {
+	sink events.Sink
+	rest io.Writer
+}
+
+func (w *warnEvents) Write(b []byte) (int, error) {
+	for _, line := range strings.Split(strings.TrimRight(string(b), "\n"), "\n") {
+		if text, ok := strings.CutPrefix(line, "pic-sure: warning: "); ok {
+			w.sink.Emit(events.Warning{Text: text})
+		} else {
+			_, _ = io.WriteString(w.rest, line+"\n")
+		}
+	}
+	return len(b), nil
 }

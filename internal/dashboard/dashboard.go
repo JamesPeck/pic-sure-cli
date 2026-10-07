@@ -59,10 +59,6 @@ func New(ctx context.Context, root string, b Backend) tea.Model {
 // route them to the dashboard even while another screen is showing, or the
 // polls and the log follower stop.
 func Owns(msg tea.Msg) bool {
-	switch msg.(type) {
-	case servicesTickMsg, statusTickMsg, servicesMsg, statusMsg, deepMsg,
-		logLinesMsg, logClosedMsg, logRetryMsg:
-		return true
-	}
-	return false
+	_, ok := msg.(ownMsg)
+	return ok
 }

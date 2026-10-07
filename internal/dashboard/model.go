@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	"charm.land/bubbles/v2/viewport"
@@ -15,19 +16,11 @@ import (
 // in-process.
 const loadNotBuilt = "loading data from the dashboard isn't built yet (ticket 047)"
 
-type mode int
-
-const (
-	modeNormal mode = iota
-	modeConfirm
-	modeTeardown
-)
-
 const (
 	leftWidthMin = 36 // floor: fits the services row format below
 	leftWidthMax = 50 // ceiling: don't starve the logs/status panes on huge terminals
 	// summaryHeight is the status pane's fixed total height, its 2 border
-	// rows included. The worst case (summaryBody) is 11 content rows.
+	// rows included. Its content (summaryPane) is at most 10 rows.
 	summaryHeight = 13
 	maxLogLines   = 2000
 )
@@ -40,6 +33,9 @@ func (m *model) leftWidth() int {
 }
 
 type model struct {
+	// id tells this dashboard's messages from those of one closed before
+	// it (ownMsg).
+	id      int64
 	ctx     context.Context
 	cancel  context.CancelFunc
 	root    string
@@ -77,11 +73,11 @@ type model struct {
 	// error until then instead of flickering.
 	logReplace bool
 
-	mode            mode
 	form            *huh.Form
 	pending         *Action // the yes/no dialog's action
 	confirmOK       bool
 	confirmText     string
+	teardownName    string // the name the open teardown dialog asks for
 	teardownDestroy bool
 	keepDB          bool
 	lastResult      string
@@ -89,16 +85,44 @@ type model struct {
 
 func newModel(ctx context.Context, root string, b Backend) *model {
 	ctx, cancel := context.WithCancel(ctx)
-	return &model{ctx: ctx, cancel: cancel, root: root, backend: b}
+	return &model{id: instances.Add(1), ctx: ctx, cancel: cancel, root: root, backend: b}
+}
+
+var instances atomic.Int64
+
+// ownMsg is a message one of this dashboard's commands produced. A closed
+// dashboard's ticks and poll results can still arrive after a new one
+// opens; the id keeps them out of it.
+type ownMsg struct {
+	id  int64
+	msg tea.Msg
+}
+
+// own stamps cmd's message with the dashboard's id.
+func (m *model) own(cmd tea.Cmd) tea.Cmd {
+	id := m.id
+	return func() tea.Msg {
+		msg := cmd()
+		if msg == nil {
+			return nil
+		}
+		return ownMsg{id: id, msg: msg}
+	}
 }
 
 func (m *model) Init() tea.Cmd {
 	m.pollingServices, m.pollingStatus = true, true
-	return tea.Batch(pollServices(m.ctx, m.backend), pollStatus(m.ctx, m.backend), servicesTick(), statusTick())
+	return tea.Batch(m.own(pollServices(m.ctx, m.backend)), m.own(pollStatus(m.ctx, m.backend)), m.own(servicesTick()), m.own(statusTick()))
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case ownMsg:
+		if msg.id != m.id {
+			return m, nil
+		}
+		return m.Update(msg.msg)
+
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.layout()
@@ -113,21 +137,27 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case servicesTickMsg:
 		// One poll in flight at a time: a slow docker daemon must not stack
 		// a new compose ps on every tick.
-		return m, tea.Batch(servicesTick(), m.refreshServices())
+		return m, tea.Batch(m.own(servicesTick()), m.refreshServices())
 
 	case statusTickMsg:
-		return m, tea.Batch(statusTick(), m.refreshStatus())
+		return m, tea.Batch(m.own(statusTick()), m.refreshStatus())
 
 	case servicesMsg:
 		m.pollingServices = false
 		m.servicesErr = msg.err
 		if msg.err == nil {
+			// The selection stays on its service while it is listed, and
+			// the log pane follows the selection.
+			prev := m.selectedService()
 			m.services = msg.services
-			if m.selected >= len(m.services) {
-				m.selected = max(len(m.services)-1, 0)
+			m.selected = min(m.selected, max(len(m.services)-1, 0))
+			for i, s := range m.services {
+				if s.Service == prev {
+					m.selected = i
+				}
 			}
-			if m.logSvc == "" && len(m.services) > 0 {
-				return m, m.followLogs(m.services[m.selected].Service)
+			if svc := m.selectedService(); svc != "" && svc != m.logSvc {
+				return m, m.followLogs(svc)
 			}
 		}
 		return m, nil
@@ -158,32 +188,33 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.logSession == nil || msg.sessionID != m.logSession.id {
 			return m, nil // stale session
 		}
-		// A session that delivers its own lines came up: reset the restart
-		// backoff so a later drop retries fast.
-		if !m.logSession.failed.Load() {
-			m.logRetryDelay = 0
-			if m.logReplace {
-				m.logReplace = false
-				m.logLines = nil
-			}
+		if m.logReplace && !m.logSession.failed.Load() {
+			m.logReplace = false
+			m.logLines = nil
 		}
 		m.logLines = append(m.logLines, msg.lines...)
 		if len(m.logLines) > maxLogLines {
 			m.logLines = m.logLines[len(m.logLines)-maxLogLines:]
 		}
 		m.refreshLogPane()
-		return m, m.logSession.waitLines()
+		return m, m.own(m.logSession.waitLines())
 
 	case logClosedMsg:
 		if m.logSession == nil || msg.sessionID != m.logSession.id {
 			return m, nil // stale closure
+		}
+		// A follower that ran a while restarts quickly; one that keeps
+		// ending soon after it starts (an error, a stopped container) is
+		// restarted ever less often.
+		if time.Since(m.logSession.started) >= logRetryMax {
+			m.logRetryDelay = 0
 		}
 		m.logSession = nil
 		if m.logSvc == "" {
 			return m, nil
 		}
 		m.logRetryDelay = nextLogRetryDelay(m.logRetryDelay)
-		return m, logRetry(m.logSeq, m.logRetryDelay)
+		return m, m.own(logRetry(m.logSeq, m.logRetryDelay))
 
 	case logRetryMsg:
 		// Restart the follower for the still-current service. Ignore a tick for
@@ -205,13 +236,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// refreshServices starts a compose ps poll unless one is in flight.
 func (m *model) refreshServices() tea.Cmd {
 	if m.pollingServices {
 		return nil
 	}
 	m.pollingServices = true
-	return pollServices(m.ctx, m.backend)
+	return m.own(pollServices(m.ctx, m.backend))
 }
 
 // refreshStatus starts a status poll unless one, or a deep check, is in
@@ -221,7 +251,7 @@ func (m *model) refreshStatus() tea.Cmd {
 		return nil
 	}
 	m.pollingStatus = true
-	return pollStatus(m.ctx, m.backend)
+	return m.own(pollStatus(m.ctx, m.backend))
 }
 
 // invalidateDeep drops the cached deep check, and any still running.
@@ -262,7 +292,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.deepRunning = true
-		return m, probeDeep(m.ctx, m.backend, m.deepGen)
+		return m, m.own(probeDeep(m.ctx, m.backend, m.deepGen))
 	case "r":
 		if svc := m.selectedService(); svc != "" {
 			return m.startConfirm(restartAction(svc))
@@ -334,7 +364,7 @@ func (m *model) startLogs(service string) tea.Cmd {
 	m.logSeq++
 	m.logSvc = service
 	m.logSession = startLogSession(m.ctx, m.backend, service, m.logSeq)
-	return m.logSession.waitLines()
+	return m.own(m.logSession.waitLines())
 }
 
 // cleanup stops the polls and the log follower when the dashboard closes.

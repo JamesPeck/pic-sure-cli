@@ -13,8 +13,9 @@ const (
 	servicesInterval = 2 * time.Second
 	statusInterval   = 15 * time.Second
 
-	// servicesTimeout bounds one `compose ps`, so a hung daemon can't
-	// wedge the pane: only one poll runs at a time.
+	// servicesTimeout bounds one services read, opening the stack
+	// included, so a hung daemon can't wedge the pane: only one poll runs
+	// at a time.
 	servicesTimeout = 10 * time.Second
 	// statusTimeout bounds one status report, which inspects images and
 	// checks the migrations.

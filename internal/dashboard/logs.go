@@ -5,6 +5,7 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -16,12 +17,12 @@ import (
 // so output from a cancelled session (after a selection change) can be
 // discarded.
 type logSession struct {
-	id     int
-	cancel context.CancelFunc
-	lines  chan string
+	id      int
+	started time.Time
+	cancel  context.CancelFunc
+	lines   chan string
 	// failed is set when the follower ended with an error before it
-	// delivered a line. The retry loop keeps backing off for such a session,
-	// and resets the backoff for one that came up.
+	// delivered a line. Its error line then doesn't replace the scrollback.
 	failed atomic.Bool
 }
 
@@ -29,7 +30,7 @@ type logSession struct {
 // session is stopped. An error ends the session with one line saying why.
 func startLogSession(ctx context.Context, b Backend, service string, id int) *logSession {
 	ctx, cancel := context.WithCancel(ctx)
-	s := &logSession{id: id, cancel: cancel, lines: make(chan string, 256)}
+	s := &logSession{id: id, started: time.Now(), cancel: cancel, lines: make(chan string, 256)}
 	w := &lineWriter{ctx: ctx, lines: s.lines}
 	go func() {
 		defer close(s.lines)
