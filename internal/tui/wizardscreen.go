@@ -128,9 +128,7 @@ func (s *wizardScreen) setSize(width, height int) {
 	}
 }
 
-// applySize fits the form to the screen (dialog.Fit). A form sized with
-// WithWidth instead clipped the input line of any field whose description
-// wraps taller at the real width: typed text recorded but invisible.
+// applySize fits the form to the screen (dialog.Fit).
 func (s *wizardScreen) applySize(f *huh.Form) *huh.Form {
 	return dialog.Fit(f, s.formWidth(), s.formHeight())
 }

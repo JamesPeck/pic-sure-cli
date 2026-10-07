@@ -317,9 +317,8 @@ func (l *landing) choose(id string) (*landing, tea.Cmd) {
 	return l, nil
 }
 
-// sizeForm fits a landing dialog form to the landing's centre column (see
-// dialog.Fit: WithWidth would freeze the layout, and once froze the dev
-// picker showing only its Cancel row).
+// sizeForm fits a landing dialog form to the landing's centre column
+// (dialog.Fit).
 func (l *landing) sizeForm(f *huh.Form) *huh.Form {
 	width := max(min(l.width-4, 76), 40) // floor: l.width is 0 pre-resize
 	height := 40

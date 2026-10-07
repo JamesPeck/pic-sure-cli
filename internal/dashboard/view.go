@@ -150,8 +150,8 @@ func (m *model) servicesPane() string {
 	}
 
 	// Row layout: cursor(1) + service(svcCol) + space(1) + state(7) + space(1) +
-	// health(9). lipgloss .Width() excludes the border (drawn outside it), so the
-	// content wrap width = leftWidth − padding(1+1). The cursor takes 1 col, two
+	// health(9). paneBox sizes the box inside the border, so the content wrap
+	// width = leftWidth − padding(1+1). The cursor takes 1 col, two
 	// separator spaces take 2, and state+health are fixed at 7+9; the service
 	// column flexes to absorb the rest:
 	//   svcCol = (leftWidth−2) − 1 − 2 − 7 − 9 = leftWidth − 21.

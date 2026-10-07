@@ -1380,8 +1380,9 @@ Bubble Tea downsamples it, so tests that check NO_COLOR output downsample with
 ## internal/dialog
 
 The huh dialogs shared by `tui` and `dashboard` (the reset form), and `Fit`,
-which sizes an embedded form with a synthetic `WindowSizeMsg` and passes it
-the terminal background.
+which sizes an embedded form with a synthetic `WindowSizeMsg` and gives it
+`Theme`: huh's Charm theme for the background `styles` reports, with v1's
+option grays (huh v2.0.3 swaps their light and dark values).
 
 ## internal/exitcode
 

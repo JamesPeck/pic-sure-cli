@@ -88,8 +88,7 @@ func (a *app) Init() tea.Cmd {
 func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.BackgroundColorMsg:
-		// Record it for the shared palette and for dialogs opened later, then
-		// fall through to the active screen so an open dialog restyles too.
+		// The palette and dialog.Theme read it on every render.
 		styles.SetDarkBackground(msg.IsDark())
 
 	case tea.WindowSizeMsg:

@@ -402,9 +402,7 @@ func TestLoadWizardConfirmSummaryLeadsWithWarning(t *testing.T) {
 }
 
 // TestLoadWizardFrameStaysInBox: across the size matrix the screen renders
-// without panicking and never overflows the terminal box. (The color profile
-// no longer matters here: Lip Gloss v2 renders the same cells for every
-// profile and downsampling happens on output.)
+// without panicking and never overflows the terminal box.
 func TestLoadWizardFrameStaysInBox(t *testing.T) {
 	for _, w := range []int{80, 120, 200} {
 		h := 30
