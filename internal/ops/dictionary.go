@@ -34,6 +34,7 @@ const (
 	StepDatasets          = "datasets"
 	StepConcepts          = "concepts"
 	StepFacets            = "facets"
+	StepFacetConfig       = "facet-config"
 	StepWeights           = "weights"
 	StepDictionaryRefresh = "dictionary-refresh"
 )
@@ -308,6 +309,31 @@ func (x *Dictionary) FacetSteps(opts FacetOptions) []steps.Step {
 					return err
 				}
 			}
+			return nil
+		},
+	}}
+}
+
+// FacetConfigSteps posts a facet loader configuration (JSON, as AIO's
+// demo-data/facet_loader_configuration.json) to /api/facet/loader/load, as
+// one step, `facet-config`.
+func (x *Dictionary) FacetConfigSteps(config []byte) []steps.Step {
+	return []steps.Step{{
+		ID:    StepFacetConfig,
+		Title: "Load the facet configuration",
+		Apply: func(ctx context.Context, sink events.Sink) error {
+			resp, err := x.request(ctx, sink, StepFacetConfig, "POST", "/api/facet/loader/load", "application/json", bytes.NewReader(config))
+			if err != nil {
+				return err
+			}
+			var r struct {
+				CategoriesCreated, CategoriesUpdated, FacetsCreated, FacetsUpdated int
+			}
+			if err := json.Unmarshal([]byte(resp), &r); err != nil {
+				return fmt.Errorf("dictionary-etl's answer to the facet configuration isn't its result: %s", truncate(strings.TrimSpace(resp), 500))
+			}
+			sink.Emit(events.Progress{ID: StepFacetConfig, Text: fmt.Sprintf("%d facet categories created, %d updated; %d facets created, %d updated",
+				r.CategoriesCreated, r.CategoriesUpdated, r.FacetsCreated, r.FacetsUpdated)})
 			return nil
 		},
 	}}

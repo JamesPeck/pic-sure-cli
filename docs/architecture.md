@@ -310,6 +310,12 @@ it.
   `*EntryError` is exit 2), and `ops.LoadPhenotype`, recording the `data
   load-phenotype` operation in state.json. `--json`'s data is
   `{"dataset": "phenotype:<sha256>"}`.
+- `data_demo.go` (046): `data demo [nhanes|synthea|1000genomes|all]
+  [--heap MB]`, default nhanes. The same usage checks and refusals as
+  load-phenotype, then `ops.DataDemo` with the stack's proxy (the
+  environment's when it sets none, as self-update) on the download client,
+  recording the `data demo` operation. `--json`'s data is
+  `{"dataset": "demo:<name>"}`.
 - `teardown.go` (056): `reset [--keep-db]` and `destroy [--prune-images]`.
   Both open the stack with `openStackUnlogged` (openStack without the run
   log, so a refusal writes nothing) and read the config (exit 2 if
@@ -349,7 +355,7 @@ it.
 | `migrate.go` | `migrate` | 032 |
 | `config.go` | `config show/get/set/edit` | 006 |
 | `secrets.go` | `secrets rotate` | 058 |
-| `data.go`, `data_phenotype.go`, `data_genomic.go` | `data demo`, `load-phenotype`, `load-genomic` | 046, 042/043/045, 049 |
+| `data.go`, `data_demo.go`, `data_phenotype.go`, `data_genomic.go` | `data demo`, `load-phenotype`, `load-genomic` | 046, 042/043/045, 049 |
 | `dictionary.go` | `dictionary hydrate/load-csv/load-facets/weights` | 044 |
 | `shareddata.go` | `shared-data publish/list/remove` | 050 |
 | `dev.go` | `dev list/on/off` | 052 |
@@ -587,7 +593,7 @@ the drift job (066), and lists every deliberate difference from AIO.
   fragment.
 - `files/` holds what render writes to `render/files/`: the httpd vhost (a
   template), the Vite dev config, the Flyway scripts, the MySQL init script
-  and the demo facet config.
+  and the demo facet config, which `DemoFacetConfig()` also returns for `data demo` (046).
 - Templates are executed with `templateData`: names, labels, ports, image
   references, source and render paths, and the config switches the services
   read. It holds no secrets. A secret appears in the compose file only as
@@ -1155,6 +1161,8 @@ concatenate its step lists with their own and end with one `RefreshStep()`.
   `concepts_*.csv` files, at any depth, in name order, split by exact
   `dataset_ref` into a temp dir, one pass per 200 datasets (`LoadCSVOptions.TempDir`; the cli
   uses the cache's), then one PUT per dataset, `datasetRef` URL-encoded. `FacetSteps`: `facets`, three PUTs in order.
+  `FacetConfigSteps(json)` (046): `facet-config`, POST
+  `/api/facet/loader/load`; the answer must be the ETL's JSON result.
   `WeightsSteps`: `weights`, the reactor's `dictionary-weights` image with
   the file bind-mounted read-only at `/weights.csv`; the default file is
   the pic-sure tree's (`components.pic-sure.source`, else the cache).
@@ -1211,6 +1219,28 @@ skippable:
 - `hpds-start`: `compose up -d --wait hpds` (which recreates it on the new
   profile) and the health check; hpds comes off `PendingRestarts`, since it
   was stopped, and any other pending service gets a warning to run `up`.
+
+**Demo data (046, `demo.go`).** `DataDemo(ctx, d, st, cfg, sec, state,
+DemoOptions{Dataset, HeapMB, Cache, HTTP})` is `data demo` (§9.6).
+
+- **Files.** `DemoFiles` pins each dataset's file in
+  hms-dbmi/pic-sure-public-datasets at `DemoDatasetsCommit`: its path,
+  size and SHA-256. `all` is every file, merged in that order. Re-pinning
+  means updating all three fields.
+- **Steps.** `demo-download`: each file is reused from the cache's
+  `downloads/<sha16>-<name>` when its SHA-256 matches, else fetched from
+  `raw.githubusercontent.com` (written beside its final name, renamed into
+  place only when size and hash match the pins; a minute with no data
+  abandons it). `demo-prepare`: one file goes through `phenoinput.Resolve`
+  as `--file` does; for `all`, each is resolved and appended in turn into
+  a merged CSV in the cache's `tmp/`, after its header (parsed, so quoting
+  may differ) matches the first's. Then `LoadPhenotype` with
+  `demo:<name>` and `DemoLoaderArgs`. The cache's use lock is held from
+  the download until the load returns. Then one dictionary run:
+  `HydrateSteps` (default facets, clear), `FacetConfigSteps` with
+  `render.DemoFacetConfig()`, `WeightsSteps` and `RefreshStep`.
+- A dictionary failure says HPDS has the data and to re-run `data demo`;
+  the downloads are reused.
 
 **Cache list and prune (057, `cache.go`).** §7.1's in-use rules.
 `CacheInventory(ctx, d, c, CacheOptions{Stacks})` returns a `CacheReport`:

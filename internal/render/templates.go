@@ -361,3 +361,10 @@ func keyIndex(m *yaml.Node, key string) int {
 	}
 	return -1
 }
+
+// DemoFacetConfig returns the facet categories `data demo` loads through
+// dictionary-etl's /api/facet/loader/load, AIO's
+// demo-data/facet_loader_configuration.json.
+func DemoFacetConfig() ([]byte, error) {
+	return fs.ReadFile(templateFS(), "files/dictionary/facet_loader_configuration.json")
+}

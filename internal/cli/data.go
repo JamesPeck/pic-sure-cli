@@ -1,6 +1,10 @@
 package cli
 
-import "github.com/spf13/cobra"
+import (
+	"github.com/spf13/cobra"
+
+	"github.com/JamesPeck/pic-sure-cli/internal/ops"
+)
 
 // Each data subcommand has its own constructor because different tickets
 // implement them: demo (046), load-phenotype (042, 043, 045) and
@@ -15,13 +19,21 @@ func newDataCmd(a *App) *cobra.Command {
 }
 
 func newDataDemoCmd(a *App) *cobra.Command {
-	return &cobra.Command{
-		Use:       "demo [nhanes|synthea|1000genomes|all]",
-		Short:     "Load a demo dataset (default: nhanes)",
-		ValidArgs: []string{"nhanes", "synthea", "1000genomes", "all"},
+	c := &cobra.Command{
+		Use:   "demo [nhanes|synthea|1000genomes|all]",
+		Short: "Load a demo dataset (default: nhanes)",
+		Long: `Replace the stack's HPDS phenotype data with a public demo dataset, then
+rebuild the dictionary from it with the demo facets and search weights.
+
+The files come from hms-dbmi/pic-sure-public-datasets at a commit pinned in
+pic-sure, through the stack's proxy, and are checked against pinned SHA-256
+sums and kept in the cache's downloads/. "all" loads every dataset as one.`,
+		ValidArgs: ops.DemoDatasets(),
 		Args:      cobra.MatchAll(cobra.MaximumNArgs(1), cobra.OnlyValidArgs),
-		RunE:      notImplemented("046"),
+		RunE:      a.dataDemo,
 	}
+	c.Flags().Int("heap", 0, "loader JVM heap in `MB` (default 4096)")
+	return c
 }
 
 func newDataLoadPhenotypeCmd(a *App) *cobra.Command {
