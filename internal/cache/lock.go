@@ -20,6 +20,9 @@ const (
 	RepoLockTimeout    = 15 * time.Minute
 	ReactorLockTimeout = time.Hour
 	ImageLockTimeout   = 30 * time.Minute
+	// UseLockTimeout covers a prune: a listing of the daemon and the cache
+	// and its removals.
+	UseLockTimeout = 15 * time.Minute
 )
 
 // ErrLockTimeout is wrapped by the error a lock returns when its timeout
@@ -32,7 +35,8 @@ const lockPoll = 100 * time.Millisecond
 
 // Lock is a held cache lock.
 type Lock struct {
-	f *os.File
+	f      *os.File
+	shared bool
 }
 
 // holder is what a lock file says about the command holding it.
@@ -67,12 +71,32 @@ func (c *Cache) LockImage(ctx context.Context, tag string) (*Lock, error) {
 	return c.lock(ctx, "image-"+url.PathEscape(tag)+".lock", "build lock for "+tag, ImageLockTimeout)
 }
 
+// LockUse takes the use lock shared, so any number of commands can hold it
+// at once but none while a prune holds it. Hold it from before taking a
+// source tree or image from the cache until its use is recorded in the
+// stack's state.json, so prune can't remove it in between.
+func (c *Cache) LockUse(ctx context.Context) (*Lock, error) {
+	return c.lockMode(ctx, "use.lock", "cache use lock", UseLockTimeout, true)
+}
+
+// LockPrune takes the use lock exclusively, which waits for every LockUse
+// holder to finish and keeps new ones out until Unlock.
+func (c *Cache) LockPrune(ctx context.Context) (*Lock, error) {
+	return c.lockMode(ctx, "use.lock", "cache use lock", UseLockTimeout, false)
+}
+
 // lock takes an exclusive flock on locks/<file>, waiting up to timeout for
 // another holder to release it. Flocks belong to the open file, so a second
 // lock in the same process waits like any other. The kernel releases a lock
 // when its holder exits, however it exits, so a crash never leaves a stale
 // lock.
 func (c *Cache) lock(ctx context.Context, file, what string, timeout time.Duration) (*Lock, error) {
+	return c.lockMode(ctx, file, what, timeout, false)
+}
+
+// lockMode is lock, taking the flock shared if shared is set. A shared
+// lock doesn't write its holder into the file, which several share.
+func (c *Cache) lockMode(ctx context.Context, file, what string, timeout time.Duration, shared bool) (*Lock, error) {
 	if c.lockTimeout > 0 {
 		timeout = c.lockTimeout
 	}
@@ -81,9 +105,16 @@ func (c *Cache) lock(ctx context.Context, file, what string, timeout time.Durati
 	if err != nil {
 		return nil, err
 	}
-	if err := c.wait(ctx, f, path, what, timeout); err != nil {
+	how := syscall.LOCK_EX
+	if shared {
+		how = syscall.LOCK_SH
+	}
+	if err := c.wait(ctx, f, path, what, timeout, how); err != nil {
 		_ = f.Close()
 		return nil, err
+	}
+	if shared {
+		return &Lock{f: f, shared: true}, nil
 	}
 	data, _ := json.Marshal(holder{PID: os.Getpid(), Holder: c.holder})
 	if err := f.Truncate(0); err == nil {
@@ -94,8 +125,8 @@ func (c *Cache) lock(ctx context.Context, file, what string, timeout time.Durati
 
 // wait takes the flock on f, polling until timeout if another holder has
 // it.
-func (c *Cache) wait(ctx context.Context, f *os.File, path, what string, timeout time.Duration) error {
-	locked, err := tryLock(f, what)
+func (c *Cache) wait(ctx context.Context, f *os.File, path, what string, timeout time.Duration, how int) error {
+	locked, err := tryLock(f, what, how)
 	if locked || err != nil {
 		return err
 	}
@@ -112,15 +143,16 @@ func (c *Cache) wait(ctx context.Context, f *os.File, path, what string, timeout
 			return fmt.Errorf("%w after %s waiting for the %s held by %s", ErrLockTimeout, timeout, what, lockHolder(path))
 		case <-poll.C:
 		}
-		if locked, err := tryLock(f, what); locked || err != nil {
+		if locked, err := tryLock(f, what, how); locked || err != nil {
 			return err
 		}
 	}
 }
 
-// tryLock takes the flock on f if nobody else holds it.
-func tryLock(f *os.File, what string) (bool, error) {
-	err := flock(f, syscall.LOCK_EX|syscall.LOCK_NB)
+// tryLock takes the flock on f, how being LOCK_EX or LOCK_SH, if no
+// conflicting holder has it.
+func tryLock(f *os.File, what string, how int) (bool, error) {
+	err := flock(f, how|syscall.LOCK_NB)
 	switch {
 	case err == nil:
 		return true, nil
@@ -136,8 +168,10 @@ func (l *Lock) Unlock() error {
 	if l.f == nil {
 		return nil
 	}
-	_ = l.f.Truncate(0) // so nobody reads a stale holder
-	err := l.f.Close()  // closing releases the flock
+	if !l.shared {
+		_ = l.f.Truncate(0) // so nobody reads a stale holder
+	}
+	err := l.f.Close() // closing releases the flock
 	l.f = nil
 	return err
 }

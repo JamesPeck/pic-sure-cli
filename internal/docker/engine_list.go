@@ -102,3 +102,39 @@ func (e *cliEngine) ContainerList(ctx context.Context) ([]ContainerInfo, error) 
 		return cs, nil
 	}
 }
+
+// Network is a network, from `docker network inspect`.
+type Network struct {
+	Name   string
+	Labels map[string]string
+}
+
+func (e *cliEngine) NetworkList(ctx context.Context, labels ...string) ([]Network, error) {
+	argv := []string{"docker", "network", "ls", "-q", "--no-trunc"}
+	for _, l := range labels {
+		argv = append(argv, "--filter", "label="+l)
+	}
+	for attempt := 1; ; attempt++ {
+		res, err := e.run(ctx, Cmd{Argv: argv})
+		if err != nil {
+			return nil, err
+		}
+		ids := strings.Fields(string(res.Stdout))
+		if len(ids) == 0 {
+			return nil, nil
+		}
+		res, err = e.run(ctx, Cmd{Argv: append([]string{"docker", "network", "inspect"}, ids...)})
+		if errors.Is(err, ErrNotFound) && attempt < 2 {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		var nets []Network
+		if err := decodeJSON(res.Stdout, &nets); err != nil {
+			return nil, fmt.Errorf("parsing docker network inspect: %w", err)
+		}
+		slices.SortFunc(nets, func(a, b Network) int { return strings.Compare(a.Name, b.Name) })
+		return nets, nil
+	}
+}

@@ -3,6 +3,7 @@ package ops_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -32,6 +33,7 @@ type fakeDaemon struct {
 	images     []fakeImage
 	containers []fakeContainer
 	volumes    map[string]map[string]string // name: labels
+	networks   map[string]map[string]string // name: labels
 	rmFail     map[string]string            // ref: docker's error
 }
 
@@ -94,6 +96,18 @@ func (fd *fakeDaemon) answer(argv []string) (docker.Result, error) {
 		var res []any
 		for _, n := range argv[3:] {
 			res = append(res, map[string]any{"Name": n, "Labels": fd.volumes[n]})
+		}
+		return out(res)
+	case "network ls":
+		var names []string
+		for n := range fd.networks {
+			names = append(names, n)
+		}
+		return docker.Result{Stdout: []byte(strings.Join(names, "\n"))}, nil
+	case "network inspect":
+		var res []any
+		for _, n := range argv[3:] {
+			res = append(res, map[string]any{"Name": n, "Labels": fd.networks[n]})
 		}
 		return out(res)
 	case "image ls":
@@ -387,13 +401,14 @@ func TestPruneCacheForceStillKeepsInUse(t *testing.T) {
 		"hms-dbmi/pic-sure-gateway:bbbbbbbbbbbb",
 		"hms-dbmi/pic-sure-gateway:other-tool", // not managed
 		"hms-dbmi/pic-sure-psama:dev-alpha-aaaaaaaaaaaa",
+		"hms-dbmi/pic-sure-httpd:dev-new-dddddddddddd", // recent
 	}
 	if got := fx.daemon.refs(); !slices.Equal(got, want) {
 		t.Errorf("images left %v, want %v", got, want)
 	}
 	for rel, kept := range map[string]bool{
-		"src/pic-sure/" + shaA: true, "src/pic-sure/" + shaB: true,
-		"src/pic-sure/" + shaC: false, "src/PIC-SURE-Frontend/" + shaD: false, "tmp/load-new": false,
+		"src/pic-sure/" + shaA: true, "src/pic-sure/" + shaB: true, "tmp/load-new": true,
+		"src/pic-sure/" + shaC: false, "src/PIC-SURE-Frontend/" + shaD: false,
 	} {
 		_, err := os.Stat(filepath.Join(fx.cache.Root(), rel))
 		if kept != (err == nil) {
@@ -431,5 +446,89 @@ func TestPruneCacheFreedAndFailures(t *testing.T) {
 	}
 	if want := int64(1000 + 3*5); r.Freed != want {
 		t.Errorf("freed %d, want %d", r.Freed, want)
+	}
+}
+
+// A stack whose only labelled resource left is a network still counts.
+func TestCacheInventoryFindsAStackByItsNetwork(t *testing.T) {
+	fx := newCacheFixture(t)
+	fx.daemon.volumes = nil
+	fx.daemon.networks = map[string]map[string]string{
+		"alpha_default": {stack.LabelStack: "alpha", stack.LabelStackDir: fx.alpha},
+	}
+	d, _ := fx.deps(t, nil)
+	r, err := ops.CacheInventory(context.Background(), d, fx.cache, ops.CacheOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := statuses(r.Items)["hms-dbmi/pic-sure-hpds:aaaaaaaaaaaa"]; s != ops.CacheInUse {
+		t.Errorf("alpha's image is %s, want in-use", s)
+	}
+}
+
+// A stack that hasn't saved state.json yet names nothing, and doesn't
+// block prune like an unreadable one.
+func TestCacheInventoryStackWithoutStateNamesNothing(t *testing.T) {
+	fx := newCacheFixture(t)
+	fx.daemon.containers = nil
+	fresh, err := stack.Create(filepath.Join(t.TempDir(), "fresh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = fresh.Close() }()
+	if err := fresh.WriteFile(stack.ConfigFile, []byte("schema: 1\nname: fresh\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	d, _ := fx.deps(t, nil)
+	r, err := ops.CacheInventory(context.Background(), d, fx.cache, ops.CacheOptions{Stacks: []string{fresh.Dir}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range r.Stacks {
+		if !s.Readable {
+			t.Errorf("stack %s unreadable: %s", s.Dir, s.Error)
+		}
+	}
+	if s := statuses(r.Items)["hms-dbmi/pic-sure-psama:cccccccccccc"]; s != ops.CacheUnused {
+		t.Errorf("an image no stack names is %s, want unused", s)
+	}
+}
+
+// While an image step holds the use lock, prune removes nothing; a dry run
+// still reports.
+func TestPruneCacheWaitsForImageSteps(t *testing.T) {
+	fx := newCacheFixture(t)
+	builder, err := cache.Open(fx.cache.Root(), cache.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	use, err := builder.LockUse(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = use.Unlock() }()
+
+	d, f := fx.deps(t, nil)
+	if _, err := ops.PruneCache(context.Background(), d, fx.cache, ops.PruneOptions{}); !errors.Is(err, cache.ErrLockTimeout) ||
+		!strings.Contains(err.Error(), "a build is using the cache") {
+		t.Fatalf("err = %v, want a lock timeout saying a build is running", err)
+	}
+	f.AssertNotCalled(fakerunner.Glob("docker image rm *"))
+	if _, err := os.Stat(filepath.Join(fx.cache.Root(), "downloads/nhanes")); err != nil {
+		t.Errorf("download removed: %v", err)
+	}
+	if r, err := ops.PruneCache(context.Background(), d, fx.cache, ops.PruneOptions{DryRun: true}); err != nil || len(r.Removed) == 0 {
+		t.Errorf("dry run: %d items, %v", len(r.Removed), err)
+	}
+}
+
+func TestFormatBytes(t *testing.T) {
+	for n, want := range map[int64]string{
+		0: "0 B", 999: "999 B", 1000: "1.00 kB", 1234: "1.23 kB", 99_949: "99.9 kB", 999_499: "999 kB",
+		999_999: "1.00 MB", 424_693_812: "425 MB", 1_150_000_000: "1.15 GB",
+	} {
+		if got := ops.FormatBytes(n); got != want {
+			t.Errorf("FormatBytes(%d) = %q, want %q", n, got, want)
+		}
 	}
 }

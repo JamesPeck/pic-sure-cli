@@ -5,10 +5,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/cache"
 	"github.com/JamesPeck/pic-sure-cli/internal/catalog"
@@ -591,4 +593,30 @@ func TestBuildRefusesAStackNameTooLongForADevTag(t *testing.T) {
 	if exitcode.FromError(err) != exitcode.CodeUsage || !strings.Contains(err.Error(), "too long for a dev image tag") {
 		t.Errorf("err = %v, want a usage error about the name", err)
 	}
+}
+
+// The image step holds the cache's use lock, so it can't run while cache
+// prune does (057).
+func TestBuildWaitsForCachePrune(t *testing.T) {
+	x := newBuildFixture(t)
+	x.missing()
+	c, err := cache.Open(x.root, cache.Options{Git: git.New(x.f), LockTimeout: 200 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	x.cache = c
+	pruner, err := cache.Open(x.root, cache.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock, err := pruner.LockPrune(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = lock.Unlock() }()
+
+	if _, err := x.build(ops.ImagesOptions{}); !errors.Is(err, cache.ErrLockTimeout) {
+		t.Fatalf("err = %v, want the use lock's timeout", err)
+	}
+	x.f.AssertNotCalled(fakerunner.Glob("docker build *"))
 }

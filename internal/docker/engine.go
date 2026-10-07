@@ -72,6 +72,9 @@ type Engine interface {
 	// VolumeRemove removes a volume. It fails if any container, even a
 	// stopped one, uses it.
 	VolumeRemove(ctx context.Context, name string) error
+	// NetworkList returns the networks carrying every given label filter,
+	// each "KEY" or "KEY=VALUE", sorted by name.
+	NetworkList(ctx context.Context, labels ...string) ([]Network, error)
 	// ContainersUsingVolume returns every container, running or stopped,
 	// that mounts the volume.
 	ContainersUsingVolume(ctx context.Context, name string) ([]Container, error)
@@ -147,7 +150,7 @@ func (e daemonError) Error() string        { return e.err.Error() }
 func (e daemonError) Is(target error) bool { return target == ErrDaemonUnreachable }
 func (e daemonError) Unwrap() error        { return e.err }
 
-var notFoundRE = regexp.MustCompile(`(?i)no such (image|volume|container|object)`)
+var notFoundRE = regexp.MustCompile(`(?i)no such (image|volume|container|object)|network \S+ not found`)
 
 func (e *cliEngine) run(ctx context.Context, c Cmd) (Result, error) { return runCmd(ctx, e.r, c) }
 

@@ -804,7 +804,9 @@ was recorded from a source the config no longer sets), through 029's
 `BuildReactor` and 030's `BuildFrontend`/`BuildDictionaryETL`, which skip
 what is up to date. It also makes sure the cache has the pic-sure and
 migrations trees, which render bind-mounts. It records each part's commit
-and tags in `state` and saves it as soon as that part is done. Build logs
+and tags in `state` and saves it as soon as that part is done. Apply holds
+the cache's use lock (057) throughout, so `cache prune` can't remove what
+it uses before state.json records it. Build logs
 go to `BuildLogDir` (`.pic-sure/logs/build/<part>.log`, made through the stack
 so they are in the manifest; each holds that part's last build). `Check`
 is done when every image is present with its labels and recorded and
@@ -982,10 +984,11 @@ the stacks it found and every `CacheItem` with a status.
   `catch-up`), pull-mode refs and third-party images are never listed. The
   rest are `cache.Entries()`.
 - **Stacks.** Every distinct `stack-dir` label on a container (running or
-  stopped) or volume, plus `CacheOptions.Stacks` (the cli passes the stack
-  the command runs in, which may have built images before it has any
-  containers). A stack is readable when `stack.Open` and `LoadState`
-  succeed.
+  stopped), volume or network, plus `CacheOptions.Stacks` (the cli passes
+  the stack the command runs in, which may have built images before it has
+  any containers). A stack is readable when `stack.Open` succeeds and
+  `LoadState` does too or finds no state.json (a stack not built yet names
+  nothing).
 - **Status**, in order:
   - `in-use`: a container references it (an image by ID or reference, an
     entry by a bind mount of it, inside it or above it), whether or not
@@ -999,8 +1002,11 @@ the stacks it found and every `CacheItem` with a status.
   - `unused`.
 
 `PruneCache(ctx, d, c, PruneOptions{DryRun, Force})` runs one step,
-`prune`. It removes `unused` items, and with `Force` also `unknown-stack` and
-`recent` ones; `in-use` items are never removed. Images go through `docker
+`prune`. It removes `unused` items, and with `Force` also `unknown-stack`
+ones; `in-use` and `recent` items are never removed. Unless `DryRun`, it
+holds the cache's prune lock (`LockPrune`) from before the inventory to the
+last removal, and fails, removing nothing, if an image step still holds the
+use lock after the cache's `LockTimeout`. Images go through `docker
 image rm` under the image's lock, which also refuses an image a container
 started meanwhile. Entries go through `cache.RemoveEntry`. A lock still
 busy after the cache's `LockTimeout` (the cli uses 5 s) skips the item with
@@ -1103,6 +1109,7 @@ tried in order, and a call that none matches fails the test. Recorded
   (streams output), `Pull`, `Tag` (031), `RemoveImage`, and `ImageList(ref
   filter)` (057), one `Image{Ref, ID, RepoTags, Size, Created, Labels}`
   per tag.
+- **Networks.** `NetworkList(labelFilters...)` (057).
 - **Volumes.** `VolumeCreate(name, labels)` (a no-op if the volume exists,
   whatever its labels), `VolumeInspect`, `VolumeList(labelFilters...)`,
   `VolumeRemove`, and `ContainersUsingVolume`, which includes stopped
@@ -1343,6 +1350,12 @@ command holds a lock.
   build's copy of its source, not created.
 - `EnsureMavenVolume(ctx, d.Docker)` creates `MavenVolume` (`pic-sure-m2`).
   Mount the volume only under the reactor lock.
+- `LockUse(ctx)` (057) takes the cache's use lock shared, and
+  `LockPrune(ctx)` takes it exclusively. Any number of commands hold
+  `LockUse`, but never alongside a prune. Hold it from before taking a
+  source tree or image from the cache until state.json records it:
+  `ImagesStep`'s Apply holds it for its whole run. Both wait up to
+  `UseLockTimeout` (15 min).
 - `Entries()` (057, `prune.go`) lists what prune may remove: source trees
   (`EntrySource`), `build/` contexts, `downloads/`, and `EntryTemp` for
   `tmp/` entries and the `*.tmp-*` siblings in `src/<repo>/`, `git/` and the

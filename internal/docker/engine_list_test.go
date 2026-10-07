@@ -75,3 +75,15 @@ func TestContainerListWithNoContainers(t *testing.T) {
 		t.Errorf("ContainerList = %+v, %v", cs, err)
 	}
 }
+
+func TestNetworkListRetriesWhenANetworkGoesMeanwhile(t *testing.T) {
+	f, e := newEngine(t)
+	f.On(fakerunner.Exact("docker", "network", "ls", "-q", "--no-trunc", "--filter", "label=org.hms-dbmi.picsure.stack-dir")).Times(1).Stdout("n1\nn2\n")
+	f.On(fakerunner.Exact("docker", "network", "inspect", "n1", "n2")).Exit(1).Stderr("Error response from daemon: network n2 not found\n")
+	f.On(fakerunner.Glob("docker network ls *")).Stdout("n1\n")
+	f.On(fakerunner.Exact("docker", "network", "inspect", "n1")).Stdout(`[{"Name":"demo_default","Id":"n1","Labels":{"org.hms-dbmi.picsure.stack":"demo"}}]`)
+	nets, err := e.NetworkList(context.Background(), "org.hms-dbmi.picsure.stack-dir")
+	if err != nil || len(nets) != 1 || nets[0].Name != "demo_default" || nets[0].Labels["org.hms-dbmi.picsure.stack"] != "demo" {
+		t.Errorf("NetworkList = %+v, %v", nets, err)
+	}
+}

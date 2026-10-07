@@ -22,7 +22,7 @@ type EntryKind string
 const (
 	// EntrySource is a source tree, src/<repo>/<sha>/.
 	EntrySource EntryKind = "source"
-	// EntryBuild is a build context left in build/ by a build that died.
+	// EntryBuild is a build context in build/.
 	EntryBuild EntryKind = "build"
 	// EntryDownload is a downloaded dataset in downloads/.
 	EntryDownload EntryKind = "download"
@@ -163,8 +163,8 @@ func (c *Cache) entry(kind EntryKind, rel, repo, sha string) (Entry, error) {
 
 // RemoveEntry removes an entry Entries returned, holding the lock of
 // whatever might be writing or reading it: the repository's fetch lock for
-// a source tree or a clone's temporary sibling, the reactor lock for a
-// reactor build context, and the image's lock for a frontend build
+// a source tree or a clone's temporary sibling, the image's lock for a
+// frontend build context, and the reactor lock for any other build
 // context. A source tree is first renamed to a temporary sibling, so a
 // removal cut short never leaves a partial tree that EnsureSource would
 // take as complete. When a lock is busy past the cache's lock timeout the

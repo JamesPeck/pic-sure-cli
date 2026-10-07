@@ -17,7 +17,7 @@ stdout '"name":"hms-dbmi/pic-sure-hpds:0123456789ab","image_id":"sha256:hpds","s
 # --dry-run removes nothing.
 exec pic-sure --plain cache prune --dry-run
 stdout '^would remove image hms-dbmi/pic-sure-psama:dev-zed-0123456789ab \(1.20 kB\)$'
-stdout '^Would remove 1 items, freeing 1.20 kB. Kept 1 unknown-stack, 1 recent.$'
+stdout '^Would remove 1 item, freeing 1.20 kB. Kept 1 unknown-stack, 1 recent.$'
 stderr 'can''t read the state of gone at /nonexistent/moved-stack .*--force removes them'
 ! grep 'image rm' docker.log
 exists cache/pic-sure/downloads/nhanes.tgz
@@ -29,11 +29,11 @@ grep '^docker image rm hms-dbmi/pic-sure-psama:dev-zed-0123456789ab$' docker.log
 exists cache/pic-sure/downloads/nhanes.tgz
 exists cache/pic-sure/locks
 
-# --force also removes what the unreadable stack might use and the recent
-# download, never the lock files.
+# --force also removes what the unreadable stack might use, but never the
+# recent download or the lock files.
 exec pic-sure --json cache prune --force
 grep '^docker image rm hms-dbmi/pic-sure-hpds:0123456789ab$' docker.log
-! exists cache/pic-sure/downloads/nhanes.tgz
+exists cache/pic-sure/downloads/nhanes.tgz
 exists cache/pic-sure/locks
 stdout '"type":"result","ok":true'
 
@@ -43,6 +43,7 @@ nhanes
 docker ps -a -q --no-trunc => 0 stdout=ps.txt
 docker container inspect id-gone => 0 stdout=containers.json
 docker volume ls -q --filter label=org.hms-dbmi.picsure.stack-dir => 0
+docker network ls -q --no-trunc --filter label=org.hms-dbmi.picsure.stack-dir => 0
 docker image ls --filter reference=hms-dbmi/* * => 0 stdout=images.txt
 docker image inspect * => 0 stdout=images.json
 docker image rm * => 0

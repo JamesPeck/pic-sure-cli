@@ -195,6 +195,15 @@ func imagesStep(d *Deps, st *stack.Stack, cfg *stack.Config, state *stack.State,
 			return true, nil
 		},
 		Apply: func(ctx context.Context, sink events.Sink) error {
+			// Until state.json names the trees and images this uses, only the
+			// use lock keeps cache prune from removing them (057).
+			if opts.Cache != nil {
+				lock, err := opts.Cache.WithEvents(sink, ImagesStepID).LockUse(ctx)
+				if err != nil {
+					return err
+				}
+				defer func() { _ = lock.Unlock() }()
+			}
 			parts, err := planImages(ctx, d, st, cfg, state, opts)
 			if err != nil {
 				return err

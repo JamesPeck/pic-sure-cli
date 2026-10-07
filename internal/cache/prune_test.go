@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/cache"
@@ -165,5 +166,37 @@ func TestRemoveEntryRefusesAPathOutsideTheCache(t *testing.T) {
 	}
 	if _, err := os.Stat(outside); err != nil {
 		t.Errorf("outside directory removed: %v", err)
+	}
+}
+
+func TestUseLocksShareAndExcludePrune(t *testing.T) {
+	first, second := twoCaches(t)
+	ctx := context.Background()
+	a, err := first.LockUse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := second.LockUse(ctx)
+	if err != nil {
+		t.Fatalf("a second use lock: %v", err)
+	}
+	if _, err := second.LockPrune(ctx); !errors.Is(err, cache.ErrLockTimeout) {
+		t.Errorf("prune while in use: %v, want ErrLockTimeout", err)
+	}
+	_ = a.Unlock()
+	_ = b.Unlock()
+
+	p, err := first.LockPrune(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := second.LockUse(ctx); !errors.Is(err, cache.ErrLockTimeout) || !strings.Contains(err.Error(), "pic-sure build") {
+		t.Errorf("use while pruning: %v, want ErrLockTimeout naming the holder", err)
+	}
+	_ = p.Unlock()
+	if l, err := second.LockUse(ctx); err != nil {
+		t.Errorf("after prune: %v", err)
+	} else {
+		_ = l.Unlock()
 	}
 }

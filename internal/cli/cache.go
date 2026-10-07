@@ -33,9 +33,10 @@ references it, or if the state.json of a stack labelled on a container or
 volume, or of the stack you run this in, names it. If a labelled stack's
 directory can't be read (it was moved or deleted), prune keeps every shared
 image and source tree that stack might use, unless --force is given. Items
-made or changed in the last hour are kept too, unless --force is given, as
-a running build may not have recorded them yet. Images tagged by other
-tools, git clones and lock files are never removed.`,
+made or changed in the last hour are always kept, as a running command may
+not have recorded them yet. Images tagged by other tools, git clones and
+lock files are never removed. prune waits up to 5 s for a running build to
+finish with the cache, and otherwise fails, removing nothing.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			dryRun, _ := cmd.Flags().GetBool("dry-run")
@@ -44,7 +45,7 @@ tools, git clones and lock files are never removed.`,
 		},
 	}
 	prune.Flags().Bool("dry-run", false, "show what would be removed, and remove nothing")
-	prune.Flags().Bool("force", false, "also remove what an unreadable stack might use, and recent items")
+	prune.Flags().Bool("force", false, "also remove what a stack whose directory can't be read might use")
 	return newGroup("cache", "Inspect and prune the host cache",
 		&cobra.Command{
 			Use:   "list",
@@ -166,7 +167,11 @@ func writePruneSummary(w io.Writer, r *ops.PruneReport) error {
 			notes = append(notes, fmt.Sprintf("%d %s", n, s))
 		}
 	}
-	fmt.Fprintf(&b, "%s %d items, %s %s.", verb, len(r.Removed), freed, ops.FormatBytes(r.Freed))
+	items := "items"
+	if len(r.Removed) == 1 {
+		items = "item"
+	}
+	fmt.Fprintf(&b, "%s %d %s, %s %s.", verb, len(r.Removed), items, freed, ops.FormatBytes(r.Freed))
 	if len(notes) > 0 {
 		b.WriteString(" Kept " + strings.Join(notes, ", ") + ".")
 	}

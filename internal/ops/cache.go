@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,7 +23,8 @@ import (
 // StepPrune is cache prune's one step.
 const StepPrune = "prune"
 
-// Cache item kinds: an image, or one of cache.EntryKind.
+// CacheImage is an image item's kind; the other items' kinds are
+// cache.EntryKind values.
 const CacheImage = "image"
 
 // Cache item statuses (§7.1).
@@ -34,7 +37,7 @@ const (
 	CacheUnknownStack = "unknown-stack"
 	// CacheRecent: unused, but created or changed within RecentCacheAge,
 	// so a build or load still running may be about to record or mount
-	// it. Pruned only with --force.
+	// it. Never pruned, even with --force.
 	CacheRecent = "recent"
 	// CacheUnused: pruned.
 	CacheUnused = "unused"
@@ -100,8 +103,8 @@ type CacheOptions struct {
 
 // CacheInventory lists the cache's source trees, build contexts, downloads
 // and temporary directories, and the commit-tagged and dev images, with
-// what uses each (§7.1). A stack counts if a container or volume carries
-// its stack-dir label, or opts names it.
+// what uses each (§7.1). A stack counts if a container, volume or network
+// carries its stack-dir label, or opts names it.
 func CacheInventory(ctx context.Context, d *Deps, c *cache.Cache, opts CacheOptions) (*CacheReport, error) {
 	containers, err := d.Docker.ContainerList(ctx)
 	if err != nil {
@@ -111,12 +114,19 @@ func CacheInventory(ctx context.Context, d *Deps, c *cache.Cache, opts CacheOpti
 	if err != nil {
 		return nil, fmt.Errorf("listing volumes: %w", err)
 	}
-	labelled := make([]map[string]string, 0, len(containers)+len(vols))
+	nets, err := d.Docker.NetworkList(ctx, stack.LabelStackDir)
+	if err != nil {
+		return nil, fmt.Errorf("listing networks: %w", err)
+	}
+	labelled := make([]map[string]string, 0, len(containers)+len(vols)+len(nets))
 	for _, ct := range containers {
 		labelled = append(labelled, ct.Labels)
 	}
 	for _, v := range vols {
 		labelled = append(labelled, v.Labels)
+	}
+	for _, n := range nets {
+		labelled = append(labelled, n.Labels)
 	}
 	stacks := readStacks(labelled, opts.Stacks)
 
@@ -212,7 +222,11 @@ func loadStackState(dir string) (*stack.State, error) {
 		return nil, err
 	}
 	defer func() { _ = st.Close() }()
-	return st.LoadState()
+	state, err := st.LoadState()
+	if errors.Is(err, fs.ErrNotExist) {
+		return &stack.State{}, nil // not built yet: it names nothing
+	}
+	return state, err
 }
 
 // classifyCache sets each item's status by the §7.1 rules.
@@ -332,8 +346,8 @@ type PruneOptions struct {
 	CacheOptions
 	// DryRun reports what would go without removing anything.
 	DryRun bool
-	// Force also removes items an unreadable stack might use and recent
-	// ones. Items in use are never removed.
+	// Force also removes items an unreadable stack might use. In-use and
+	// recent items are never removed.
 	Force bool
 }
 
@@ -358,16 +372,28 @@ type PruneSkip struct {
 
 // PruneCache removes the cache items nothing uses (§7.1): unused images
 // with `docker image rm`, which also refuses one a container uses, and
-// cache entries with cache.RemoveEntry, under their locks. An image's lock
-// is held while it's removed, so a build of that tag can't run meanwhile.
-// An item whose lock stays busy is skipped with a warning. Failures to
-// remove one item don't stop the others; the error at the end names them.
+// cache entries with cache.RemoveEntry, under their locks. Unless DryRun,
+// it holds the cache's prune lock throughout, so no image step runs
+// between the inventory and the removals; when one is running past the
+// cache's lock timeout, it fails without removing anything. An item whose
+// own lock stays busy is skipped with a warning. Failures to remove one
+// item don't stop the others; the error at the end names them.
 func PruneCache(ctx context.Context, d *Deps, c *cache.Cache, opts PruneOptions) (*PruneReport, error) {
 	report := &PruneReport{DryRun: opts.DryRun, Removed: []CacheItem{}}
 	step := steps.Step{
 		ID:    StepPrune,
 		Title: "Prune the cache",
 		Apply: func(ctx context.Context, sink events.Sink) error {
+			if !opts.DryRun {
+				lock, err := c.LockPrune(ctx)
+				if errors.Is(err, cache.ErrLockTimeout) {
+					return fmt.Errorf("a build is using the cache; prune again when it's done: %w", err)
+				}
+				if err != nil {
+					return err
+				}
+				defer func() { _ = lock.Unlock() }()
+			}
 			inv, err := CacheInventory(ctx, d, c, opts.CacheOptions)
 			if err != nil {
 				return err
@@ -400,7 +426,7 @@ func prune(ctx context.Context, d *Deps, c *cache.Cache, sink events.Sink, opts 
 	for _, it := range report.Items {
 		switch it.Status {
 		case CacheUnused:
-		case CacheUnknownStack, CacheRecent:
+		case CacheUnknownStack:
 			if !opts.Force {
 				continue
 			}
@@ -468,18 +494,17 @@ func FormatBytes(n int64) string {
 	if n < unit {
 		return fmt.Sprintf("%d B", n)
 	}
-	div, exp := int64(unit), 0
-	for m := n / unit; m >= unit; m /= unit {
-		div *= unit
+	v, exp := float64(n)/unit, 0
+	for v >= 999.5 && exp < 5 { // 999.5 would print as 1000
+		v /= unit
 		exp++
 	}
-	v := float64(n) / float64(div)
 	prec := 0
 	switch {
-	case v < 10:
+	case v < 9.995:
 		prec = 2
-	case v < 100:
+	case v < 99.95:
 		prec = 1
 	}
-	return fmt.Sprintf("%.*f %cB", prec, v, "kMGTPE"[exp])
+	return strconv.FormatFloat(v, 'f', prec, 64) + " " + string("kMGTPE"[exp]) + "B"
 }
