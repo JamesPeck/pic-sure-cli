@@ -215,6 +215,42 @@
       ]
     },
     {
+      "name": "variant-chr21-33001877-full-spec-any",
+      "genomicFilters": [
+        {
+          "key": "chr21,33001877,C,T,SYNTHA,synonymous_variant",
+          "values": [
+            "0/1",
+            "1/1"
+          ]
+        }
+      ],
+      "patients": [
+        102,
+        103,
+        104
+      ]
+    },
+    {
+      "name": "gene-SYNTHC-and-chr21-variant",
+      "genomicFilters": [
+        {
+          "key": "Gene_with_variant",
+          "values": [
+            "SYNTHC"
+          ]
+        },
+        {
+          "key": "chr21,33001877,C,T",
+          "values": [
+            "0/1",
+            "1/1"
+          ]
+        }
+      ],
+      "patients": []
+    },
+    {
       "name": "gene-SYNTHC-female",
       "genomicFilters": [
         {

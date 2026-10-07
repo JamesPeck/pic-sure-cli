@@ -18,6 +18,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -32,7 +33,6 @@ const (
 	noCall = "./."
 )
 
-// The fixture's file names inside the output directory.
 const (
 	IndexFile     = "vcfIndex.tsv"
 	PhenotypeFile = "phenotype.csv"
@@ -131,9 +131,9 @@ var variants = []variant{
 
 // infoFields describes the INFO keys, in the order they appear on a record.
 // They are the annotation columns PIC-SURE's genomic filters use. HPDS
-// takes each ##INFO line's 4th comma-separated part as the description and
-// drops every '>', so keep ID, Number, Type, Description in that order and
-// keep '>' out of descriptions.
+// drops every '>' from an ##INFO line and takes everything after its third
+// comma as the description, so keep ID, Number, Type, Description in that
+// order and keep '>' out of descriptions.
 var infoFields = []struct{ id, typ, desc string }{
 	{"Gene_with_variant", "String", "Official symbol of the gene the variant affects (synthetic)"},
 	{"Variant_severity", "String", "Severity of the calculated consequence: HIGH, MODERATE or LOW"},
@@ -181,12 +181,15 @@ func (v variant) genotype(patientID int) string {
 	return homRef
 }
 
-// spec is the variant's HPDS spec without gene and consequence, the form a
-// query's genomic filter key takes. HPDS matches it as a prefix of the
-// stored spec.
+// spec is the variant spec HPDS stores. A query's variant-spec filter key
+// selects the variants whose stored spec starts with it, so the key may stop
+// after the alt allele or carry gene and consequence too.
 func (v variant) spec() string {
-	return fmt.Sprintf("%s,%d,%s,%s", v.contig, v.pos, v.ref, v.alt)
+	return fmt.Sprintf("%s,%d,%s,%s,%s,%s", v.contig, v.pos, v.ref, v.alt, v.gene, v.consequence)
 }
+
+// variantSpecKey is HPDS's VariantUtils.pathIsVariantSpec.
+var variantSpecKey = regexp.MustCompile(`^(rs[0-9]+.*|.*,[0-9.]+,[CATGcatg]*,[CATGcatg]*(,\w*,\w*)?)$`)
 
 func genomicPatients() []patient {
 	var out []patient
@@ -353,19 +356,30 @@ var queries = []query{
 	{Name: "variant-chr21-33001877-het", GenomicFilters: []filter{{"chr21,33001877,C,T", []string{het}}}},
 	{Name: "variant-chr21-33001877-hom", GenomicFilters: []filter{{"chr21,33001877,C,T", []string{hom}}}},
 	{Name: "variant-chr21-33001877-any", GenomicFilters: []filter{{"chr21,33001877,C,T", []string{het, hom}}}},
+	{Name: "variant-chr21-33001877-full-spec-any", GenomicFilters: []filter{{"chr21,33001877,C,T,SYNTHA,synonymous_variant", []string{het, hom}}}},
+	{Name: "gene-SYNTHC-and-chr21-variant", GenomicFilters: []filter{
+		{"Gene_with_variant", []string{"SYNTHC"}},
+		{"chr21,33001877,C,T", []string{het, hom}},
+	}},
 	{Name: "gene-SYNTHC-female", GenomicFilters: []filter{{"Gene_with_variant", []string{"SYNTHC"}}},
 		PhenotypeFilters: []phenotypeFilter{{sexConcept, []string{"Female"}}}},
 }
 
-// evaluate returns the patients q matches, with HPDS's semantics. INFO
-// filters select the variants that match all of them, and a patient
-// matches when heterozygous or homozygous for any selected variant. Each
-// variant-spec filter keeps the patients whose genotype for that variant is
-// one of its zygosities. Phenotype filters intersect with the result.
+// evaluate returns the patients q matches, with HPDS's semantics. HPDS
+// evaluates the genomic filters on each contig separately and unions the
+// patients across contigs, so every filter must be satisfied on one contig.
+// On a contig, INFO filters select the variants that match all of them, and
+// a patient matches when heterozygous or homozygous for any selected
+// variant; each variant-spec filter keeps the patients whose genotype for a
+// variant it selects is one of its zygosities. Phenotype filters intersect
+// with the result.
 func (q query) evaluate() []int {
+	if len(q.GenomicFilters) == 0 {
+		panic("query " + q.Name + " has no genomic filter")
+	}
 	var infoFilters, specFilters []filter
 	for _, f := range q.GenomicFilters {
-		if strings.Count(f.Key, ",") >= 3 {
+		if variantSpecKey.MatchString(f.Key) {
 			specFilters = append(specFilters, f)
 		} else {
 			infoFilters = append(infoFilters, f)
@@ -373,38 +387,32 @@ func (q query) evaluate() []int {
 	}
 	matched := []int{}
 	for _, p := range genomicPatients() {
-		if q.matches(p, infoFilters, specFilters) {
+		if q.matchesPhenotype(p) && slices.ContainsFunc(contigs, func(c contig) bool {
+			return matchesOnContig(p, c.name, infoFilters, specFilters)
+		}) {
 			matched = append(matched, p.id)
 		}
 	}
 	return matched
 }
 
-func (q query) matches(p patient, infoFilters, specFilters []filter) bool {
-	if len(infoFilters) > 0 {
-		carrier := false
-		for _, v := range variants {
-			if variantMatches(v, infoFilters) && isCarrier(v.genotype(p.id)) {
-				carrier = true
-				break
-			}
-		}
-		if !carrier {
-			return false
-		}
+func matchesOnContig(p patient, contig string, infoFilters, specFilters []filter) bool {
+	if len(infoFilters) > 0 && !slices.ContainsFunc(variants, func(v variant) bool {
+		return v.contig == contig && variantMatches(v, infoFilters) && isCarrier(v.genotype(p.id))
+	}) {
+		return false
 	}
 	for _, f := range specFilters {
-		found := false
-		for _, v := range variants {
-			if strings.HasPrefix(v.spec(), f.Key) && slices.Contains(f.Values, v.genotype(p.id)) {
-				found = true
-				break
-			}
-		}
-		if !found {
+		if !slices.ContainsFunc(variants, func(v variant) bool {
+			return v.contig == contig && strings.HasPrefix(v.spec(), f.Key) && slices.Contains(f.Values, v.genotype(p.id))
+		}) {
 			return false
 		}
 	}
+	return true
+}
+
+func (q query) matchesPhenotype(p patient) bool {
 	for _, f := range q.PhenotypeFilters {
 		if !slices.Contains(f.Values, phenotype(p, f.ConceptPath)) {
 			return false

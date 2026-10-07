@@ -12,8 +12,9 @@ import (
 
 // TestFixtureLoadsInHPDS runs the three HPDS genomic loaders from a real
 // pic-sure-hpds-etl image over the fixture, the way load-genomic does, and
-// checks that each exits 0 and leaves a store per contig. It needs Docker
-// and runs only when asked:
+// checks that each exits 0 and leaves a store per contig. It also loads the
+// phenotype CSV with CSVLoaderNewSearch. It needs Docker and runs only when
+// asked:
 //
 //	PICSURE_HPDS_ETL_IMAGE=hms-dbmi/pic-sure-hpds-etl:<tag> go test -run LoadsInHPDS ./internal/testfixtures/genomic
 func TestFixtureLoadsInHPDS(t *testing.T) {
@@ -24,17 +25,13 @@ func TestFixtureLoadsInHPDS(t *testing.T) {
 	if err := exec.Command("docker", "info").Run(); err != nil {
 		t.Skip("no Docker daemon")
 	}
-	// The index names the VCFs by the path the container sees, and the VCF
-	// directory is mounted at that same path, so resolve /var -> /private/var
-	// symlinks first or Docker Desktop mounts a path the index doesn't use.
-	dir, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	// The VCF directory is mounted at its own path, so the index's paths
+	// work inside the container.
+	dir := t.TempDir()
 	if err := Write(dir, dir); err != nil {
 		t.Fatal(err)
 	}
-	suffix := randomSuffix(t)
+	suffix := randomHex(t, 4)
 	volume := "picsure-genomic-fixture-test-" + suffix
 	docker(t, "volume", "create", volume)
 	t.Cleanup(func() {
@@ -45,16 +42,19 @@ func TestFixtureLoadsInHPDS(t *testing.T) {
 
 	// The loaders read /opt/local/hpds/vcfIndex.tsv and write under
 	// /opt/local/hpds/all and /opt/local/hpds/merged; one volume holds all three.
-	run := func(name string, args ...string) string {
+	run := func(name string, mounts []string, args ...string) string {
 		t.Helper()
-		base := []string{"run", "--rm", "--user", "0:0", "--name", "picsure-genomic-fixture-" + name + "-" + suffix,
-			"-v", volume + ":/opt/local/hpds", "-v", dir + ":" + dir + ":ro"}
+		base := []string{"run", "--rm", "--user", "0:0", "--name", "picsure-genomic-fixture-" + name + "-" + suffix}
+		for _, m := range mounts {
+			base = append(base, "-v", m)
+		}
 		return docker(t, append(base, args...)...)
 	}
-	run("stage", "--entrypoint", "sh", image, "-c",
+	genomicMounts := []string{volume + ":/opt/local/hpds", dir + ":" + dir + ":ro"}
+	run("stage", genomicMounts, "--entrypoint", "sh", image, "-c",
 		`cp "$0"/vcfIndex.tsv /opt/local/hpds/ && mkdir -p /opt/local/hpds/all /opt/local/hpds/merged`, dir)
 	for _, loader := range []string{"SplitChromosomeVcfLoader", "VariantMetadataLoader", "GenomicDatasetFinalizer"} {
-		run(strings.ToLower(loader), "-e", "HEAPSIZE=512", "-e", "LOADER_NAME="+loader, image)
+		run(strings.ToLower(loader), genomicMounts, "-e", "HEAPSIZE=512", "-e", "LOADER_NAME="+loader, image)
 	}
 
 	var want []string
@@ -63,8 +63,22 @@ func TestFixtureLoadsInHPDS(t *testing.T) {
 			want = append(want, "all/"+c.name+"/"+f)
 		}
 	}
-	out := run("check", append([]string{"--entrypoint", "sh", image, "-c", `cd /opt/local/hpds && ls "$@"`, "sh"}, want...)...)
+	out := run("check", genomicMounts, append([]string{"--entrypoint", "sh", image, "-c", `cd /opt/local/hpds && ls "$@"`, "sh"}, want...)...)
 	t.Logf("loaded:\n%s", out)
+
+	// The phenotype loader encrypts its store with /opt/local/hpds/encryption_key,
+	// which must hold exactly 32 hex characters.
+	pheno := "picsure-genomic-fixture-pheno-test-" + suffix
+	docker(t, "volume", "create", pheno)
+	t.Cleanup(func() {
+		if out, err := exec.Command("docker", "volume", "rm", "-f", pheno).CombinedOutput(); err != nil {
+			t.Logf("removing %s: %v: %s", pheno, err, out)
+		}
+	})
+	phenoMounts := []string{pheno + ":/opt/local/hpds", filepath.Join(dir, PhenotypeFile) + ":/opt/local/hpds/allConcepts.csv:ro"}
+	run("key", phenoMounts, "--entrypoint", "sh", image, "-c", `printf %s "$0" > /opt/local/hpds/encryption_key`, randomHex(t, 16))
+	run("csvloader", phenoMounts, "-e", "HEAPSIZE=512", "-e", "LOADER_NAME=CSVLoaderNewSearch", image)
+	run("check-pheno", phenoMounts, "--entrypoint", "ls", image, "/opt/local/hpds/allObservationsStore.javabin", "/opt/local/hpds/columnMeta.javabin")
 }
 
 func docker(t *testing.T, args ...string) string {
@@ -81,8 +95,8 @@ func tail(s string, n int) string {
 	return strings.Join(lines[max(0, len(lines)-n):], "\n")
 }
 
-func randomSuffix(t *testing.T) string {
-	b := make([]byte, 4)
+func randomHex(t *testing.T, n int) string {
+	b := make([]byte, n)
 	if _, err := rand.Read(b); err != nil {
 		t.Fatal(err)
 	}

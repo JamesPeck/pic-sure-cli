@@ -108,7 +108,10 @@ func TestVCFsMatchLoaderRules(t *testing.T) {
 			if cols[0] != c.name {
 				t.Errorf("%s: CHROM %s, want only %s", c.file, cols[0], c.name)
 			}
-			pos, _ := strconv.Atoi(cols[1])
+			pos, err := strconv.Atoi(cols[1])
+			if err != nil {
+				t.Fatalf("%s: POS %q: %v", c.file, cols[1], err)
+			}
 			if pos <= lastPos {
 				t.Errorf("%s: position %d not after %d", c.file, pos, lastPos)
 			}
@@ -163,19 +166,40 @@ func TestBGZFBlocksSplitLargeInput(t *testing.T) {
 	}
 }
 
+// TestExpectedQueries checks every documented query against results worked
+// out by hand from the carrier lists, independently of evaluate.
 func TestExpectedQueries(t *testing.T) {
 	want := map[string][]int{
-		"gene-SYNTHA":                 {102, 103, 104},
-		"gene-SYNTHD":                 {108},
-		"gene-unknown":                {},
-		"gene-SYNTHA-and-stop_gained": {104},
-		"variant-chr21-33001877-het":  {102, 103},
-		"variant-chr21-33001877-hom":  {104},
-		"gene-SYNTHC-female":          {103, 107},
+		"gene-SYNTHA":                          {102, 103, 104},
+		"gene-SYNTHB":                          {105, 106},
+		"gene-SYNTHC":                          {103, 107, 108},
+		"gene-SYNTHD":                          {108},
+		"gene-SYNTHA-or-SYNTHD":                {102, 103, 104, 108},
+		"gene-unknown":                         {},
+		"consequence-stop_gained":              {104, 105, 107, 108},
+		"frequency-Novel":                      {102, 104, 105, 107, 108},
+		"gene-SYNTHA-and-stop_gained":          {104},
+		"variant-chr21-33001877-het":           {102, 103},
+		"variant-chr21-33001877-hom":           {104},
+		"variant-chr21-33001877-any":           {102, 103, 104},
+		"variant-chr21-33001877-full-spec-any": {102, 103, 104},
+		"gene-SYNTHC-and-chr21-variant":        {},
+		"gene-SYNTHC-female":                   {103, 107},
 	}
+	got := map[string][]int{}
 	for _, q := range expected().Queries {
-		if w, ok := want[q.Name]; ok && !slices.Equal(q.Patients, w) {
-			t.Errorf("%s: patients %v, want %v", q.Name, q.Patients, w)
+		got[q.Name] = q.Patients
+	}
+	for name, w := range want {
+		if g, ok := got[name]; !ok {
+			t.Errorf("%s: missing from expected.json", name)
+		} else if !slices.Equal(g, w) {
+			t.Errorf("%s: patients %v, want %v", name, g, w)
+		}
+	}
+	for name := range got {
+		if _, ok := want[name]; !ok {
+			t.Errorf("%s: no hand-checked result", name)
 		}
 	}
 }

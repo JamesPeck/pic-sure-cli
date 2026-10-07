@@ -32,9 +32,10 @@ whose index uses absolute paths:
     go run ./internal/testfixtures/genomic/cmd/genomic-fixture -abs /some/dir
     pic-sure data load-genomic --partition fixture \
         --vcf-index /some/dir/vcfIndex.tsv --vcf-dir /some/dir
-    pic-sure data load-phenotype /some/dir/phenotype.csv
+    pic-sure data load-phenotype --file /some/dir/phenotype.csv
 
-`TestFixtureLoadsInHPDS` runs the three loaders from a real image over it:
+`TestFixtureLoadsInHPDS` runs the three genomic loaders and the phenotype
+CSV loader from a real image over it:
 
     PICSURE_HPDS_ETL_IMAGE=hms-dbmi/pic-sure-hpds-etl:<tag> \
         go test -run LoadsInHPDS ./internal/testfixtures/genomic
@@ -70,8 +71,9 @@ every genotype must be a three-character diploid call: `0/0`, `0/1`, `1/1`, `./.
 
 **INFO.** Every token must be `key=value`: the loader pairs tokens up, so a
 bare flag shifts every value after it. HPDS indexes each INFO key as a
-filterable column, taking the description from the `##INFO` line's fourth
-comma-separated part with `>` removed. The fixture uses the annotation keys
+filterable column. It removes every `>` from the `##INFO` line and takes
+everything after the third comma as the description, so the attributes must
+come in the order ID, Number, Type, Description. The fixture uses the annotation keys
 PIC-SURE's genomic filters show: `Gene_with_variant`, `Variant_severity`,
 `Variant_consequence_calculated`, `Variant_class`,
 `Variant_frequency_in_gnomAD` (absent for novel variants) and
@@ -87,15 +89,19 @@ phenotypes only, so a query that dropped its genomic filter would count them.
 `expected.json` lists the genomic patients (101–108), the phenotype patients
 (101–110) and a set of named queries with the patients each returns.
 `genomicFilters` use the shape of a PIC-SURE query: `key` is an INFO column
-or a variant spec (`chr21,33001877,C,T`), and `values` are the accepted
-values, or zygosities (`0/1`, `1/1`) for a variant spec. The results follow
-HPDS semantics:
+or a variant spec, and `values` are the accepted values, or zygosities
+(`0/1`, `1/1`) for a variant spec. A spec key selects the variants whose
+stored spec, `chr21,33001877,C,T,SYNTHA,synonymous_variant`, starts with it,
+so `chr21,33001877,C,T` works too. The results follow HPDS semantics:
 
-- INFO filters in one query are ANDed per variant; a patient matches if they
+- HPDS evaluates the genomic filters on each contig separately and unions
+  the patients. Every filter must be satisfied on the same contig, so a
+  query mixing a chr21 filter with a chr22 filter returns nobody.
+- On a contig, INFO filters are ANDed per variant; a patient matches if they
   are heterozygous or homozygous for any variant that passes all of them.
 - Values within one filter are ORed.
-- A variant-spec filter keeps patients whose genotype for that variant is one
-  of its zygosities. `./.` never matches.
+- A variant-spec filter keeps patients whose genotype for a variant it
+  selects is one of its zygosities. `./.` never matches.
 - Phenotype filters intersect with the genomic result.
 
 Carriers by gene: SYNTHA 102, 103, 104 (104 homozygous); SYNTHB 105, 106;
