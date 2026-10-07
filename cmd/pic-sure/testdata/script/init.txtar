@@ -115,6 +115,54 @@ exec pic-sure --json init done
 stdout '"already_initialized":true'
 stdout '"url":"https://localhost:8443/"'
 
+# --set sets any non-secret key, as config set does, before the
+# preconditions: the memory check reads the heap it sets.
+! exec pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --auto-ports --set hpds.java_opts=-Xmx32g
+stderr 'this stack 32.0 GiB when up'
+! exec pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --auto-ports --set hpds.java_opts=-Xmx2g
+! stderr 'when up'
+stderr 'step release failed'
+! exists new
+exitcode 2 pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --set hpds.heap=2g
+stderr '^pic-sure: --set hpds.heap=2g: hpds.heap: unknown config key$'
+exitcode 2 pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --set hpds.java_opts
+stderr '--set hpds.java_opts: want KEY=VALUE'
+exitcode 2 pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --set network.http_port=eighty
+stderr '--set network.http_port=eighty'
+exitcode 2 pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --set auth.auth0.client_secret=x
+stderr '--set auth.auth0.client_secret: auth.auth0.client_secret is a secret; give it on stdin with --auth0-client-secret-stdin'
+! stderr '=x'
+exitcode 2 pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --set email.password=x
+stderr 'email.password is a secret'
+exitcode 2 pic-sure init new --admin-email admin@example.com --auth-mode open --set name=demo
+stderr '--set name=demo: use --name'
+
+# A flag and a --set for the same key must agree, as must two --sets.
+exitcode 2 pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --http-port 8081 --set network.http_port=8082
+stderr '--set network.http_port=8082 and --http-port set network.http_port to different values'
+exitcode 2 pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --set hpds.java_opts=-Xmx2g --set hpds.java_opts=-Xmx4g
+stderr 'and --set hpds.java_opts=-Xmx2g set hpds.java_opts to different values'
+! exec pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --auto-ports --set auth.admin_email=admin@example.com
+stderr 'step release failed'
+
+# The debug log of the flags redacts an admin email given with --set too.
+exitcode 2 pic-sure --log-level debug init new --name demo --auth-mode open --set auth.admin_email=admin@example.com --skip-step bogus
+stderr 'flags=.*--set=\[auth.admin_email=\[REDACTED\]\]'
+! stderr 'admin@example.com'
+
+# A --set port is used as the port flag would be.
+exitcode 2 pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --set network.http_port=443
+stderr 'port 443 is the other port''s default'
+
+# A resumed init refuses a --set that would change its pic-sure.yaml, and
+# takes one that wouldn't.
+exitcode 2 pic-sure init resume --set hpds.java_opts=-Xmx2g
+stderr '--set hpds.java_opts=-Xmx2g: .*resume.pic-sure.yaml already has hpds.java_opts -Xmx4g, and init resumes with it as it is'
+! exists resume/.pic-sure
+! exec pic-sure init resume --set hpds.java_opts=-Xmx4g --set network.http_port=8083
+! stderr 'already has'
+stderr 'step release failed'
+
 -- short.txt --
 short
 -- one-line.txt --
@@ -159,3 +207,9 @@ network: {http_port: 8083, https_port: 8443}
 auth: {mode: open, admin_email: admin@example.com}
 -- done/.pic-sure/state.json --
 {"cli_version": "dev", "schema_version": 1, "initialized_at": "2026-10-07T12:00:00Z"}
+-- resume/pic-sure.yaml --
+schema: 1
+name: demo
+network: {http_port: 8083, https_port: 8443}
+auth: {mode: open, admin_email: admin@example.com}
+hpds: {java_opts: -Xmx4g}

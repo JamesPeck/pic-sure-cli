@@ -165,3 +165,22 @@ func TestInitWritesTheConfigSecretsAndState(t *testing.T) {
 		t.Errorf("resume replaced the recorded release with %s", r2.state.Release.Commit)
 	}
 }
+
+func TestInitWritesTheSetValues(t *testing.T) {
+	r, err := newInitRun(t, "", "", "--name", "demo", "--admin-email", "admin@example.com", "--auth-mode", "open",
+		"--set", "hpds.java_opts=-Xmx2g", "--set", "network.dev_ports.base=16000", "--set", "dev.services=hpds,psama")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.rel = &release.Release{Repo: "https://example.com/release-control", Branch: "main", Commit: strings.Repeat("a", 40)}
+	if err := r.writeConfig(context.Background(), r.d.Sink); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := r.st.LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.HPDS.JavaOpts != "-Xmx2g" || cfg.Network.DevPorts.Base != 16000 || !slices.Equal(cfg.Dev.Services, []string{"hpds", "psama"}) {
+		t.Errorf("pic-sure.yaml: hpds %+v, network %+v, dev %+v", cfg.HPDS, cfg.Network, cfg.Dev)
+	}
+}

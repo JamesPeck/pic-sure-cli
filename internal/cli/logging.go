@@ -46,9 +46,16 @@ func (a *App) startRunLog(cmd *cobra.Command, args []string) {
 	})
 	var flags []string
 	cmd.Flags().Visit(func(f *pflag.Flag) {
+		// init's admin email is personal data, redacted like a secret.
 		if f.Name == "admin-email" {
-			// init's admin email is personal data, redacted like a secret.
 			log.RegisterSecrets(f.Value.String())
+		}
+		if sv, ok := f.Value.(pflag.SliceValue); ok && f.Name == "set" {
+			for _, kv := range sv.GetSlice() {
+				if email, ok := strings.CutPrefix(kv, "auth.admin_email="); ok {
+					log.RegisterSecrets(email)
+				}
+			}
 		}
 		flags = append(flags, "--"+f.Name+"="+f.Value.String())
 	})

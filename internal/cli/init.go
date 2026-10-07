@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -48,14 +49,17 @@ release, write pic-sure.yaml and the secrets, build the images, install the
 TLS certificate, render the compose file, set up and migrate the database,
 seed it, install the HPDS key and start the services.
 
-Every config flag sets the pic-sure.yaml key its help names. Secrets are
+Every config flag sets the pic-sure.yaml key its help names, and
+--set KEY=VALUE sets any other key, such as --set hpds.java_opts=-Xmx2g.
+Secrets are
 read from stdin only (--auth0-client-secret-stdin, --db-root-password-stdin;
 with both, one per line in that order). Ports not given are 80 and 443,
 which must be free; --auto-ports takes the first free pair from 8080/8443
 instead.
 
 A DIR that already has a pic-sure.yaml is resumed: its config is used as it
-is, and the steps already done are skipped. On a stack init has finished it
+is, a --set that would change it is an error, and the steps already done are
+skipped. On a stack init has finished it
 does nothing.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: a.initStack,
@@ -73,6 +77,7 @@ does nothing.`,
 	c.Flags().Bool("self-update", false, "if the release needs a newer pic-sure, install it and continue (not with a --*-stdin flag)")
 	c.Flags().Bool("ignore-cli-version", false, "go on even if the release was validated with another pic-sure version")
 	c.Flags().StringArray("source", nil, "build `COMPONENT=PATH` from a local checkout (repeatable)")
+	c.Flags().StringArray("set", nil, "set any non-secret config `KEY=VALUE`, as pic-sure config set does (repeatable)")
 	return c
 }
 
@@ -87,6 +92,7 @@ type initRun struct {
 	doc     *stack.ConfigDoc
 	cfg     *stack.Config
 
+	sets     []initSet
 	supplied stack.UserSecrets
 	cache    *cache.Cache
 	proxy    *netproxy.Proxy
@@ -202,6 +208,10 @@ func (a *App) alreadyInitialized(cmd *cobra.Command, dir string) error {
 // config from the flags. Problems are exit 2, naming the flag.
 func (r *initRun) readConfig() error {
 	flags := r.cmd.Flags()
+	var err error
+	if r.sets, err = parseSets(flags); err != nil {
+		return err
+	}
 	data, err := os.ReadFile(filepath.Join(r.dir, stack.ConfigFile))
 	switch {
 	case err == nil:
@@ -211,6 +221,9 @@ func (r *initRun) readConfig() error {
 		}
 		if r.cfg, err = r.doc.Config(); err != nil {
 			return configError(err)
+		}
+		if err := r.checkResumedSets(data); err != nil {
+			return err
 		}
 		var ignored []string
 		flags.Visit(func(f *pflag.Flag) {
@@ -233,6 +246,7 @@ func (r *initRun) readConfig() error {
 	if r.doc, err = stack.NewConfigDoc(&def); err != nil {
 		return err
 	}
+	flagKeys := map[string]string{} // the keys flags set, to their flag
 	for _, f := range stack.Fields {
 		if f.Flag == "" || f.Flag == "name" || f.Secret || !flags.Changed(f.Flag) {
 			continue
@@ -240,6 +254,10 @@ func (r *initRun) readConfig() error {
 		v, _ := flags.GetString(f.Flag)
 		if err := r.setFlag(f, v); err != nil {
 			return err
+		}
+		flagKeys[f.Key] = "--" + f.Flag
+		if f.Flag == "hpds-data" {
+			flagKeys["hpds.shared_name"] = "--" + f.Flag
 		}
 	}
 	sources, _ := flags.GetStringArray("source")
@@ -255,15 +273,19 @@ func (r *initRun) readConfig() error {
 		if err := r.doc.SetValue("components."+comp+".source", abs); err != nil {
 			return exitcode.Usage("--source %s: %v", s, err)
 		}
+		flagKeys["components."+comp+".source"] = "--source " + s
+	}
+	if err := r.applySets(flagKeys); err != nil {
+		return err
 	}
 	// Validation refuses clashing ports, but preconditions chooses the
 	// ports not given only later, on the host. Until then use what it
 	// would choose were every port free.
-	httpPort, err := portFlag(flags, "http-port")
+	httpPort, err := r.portFlag("http-port", "network.http_port")
 	if err != nil {
 		return err
 	}
-	httpsPort, err := portFlag(flags, "https-port")
+	httpsPort, err := r.portFlag("https-port", "network.https_port")
 	if err != nil {
 		return err
 	}
@@ -275,6 +297,91 @@ func (r *initRun) readConfig() error {
 		return flagProblems(err)
 	}
 	return refuseShared(r.cfg)
+}
+
+// initSet is one --set KEY=VALUE.
+type initSet struct{ arg, key, value string }
+
+// parseSets splits the --set flags and refuses the keys init sets another
+// way. The key's lookup and the value's parsing are config set's, when the
+// value is set.
+func parseSets(flags *pflag.FlagSet) ([]initSet, error) {
+	args, _ := flags.GetStringArray("set")
+	var sets []initSet
+	for _, arg := range args {
+		key, value, ok := strings.Cut(arg, "=")
+		if !ok || key == "" {
+			return nil, exitcode.Usage("--set %s: want KEY=VALUE", arg)
+		}
+		f, _ := stack.LookupField(key)
+		switch {
+		case f.Secret && f.Flag != "":
+			return nil, exitcode.Usage("--set %s: %s is a secret; give it on stdin with --%s", key, key, f.Flag)
+		case f.Secret:
+			return nil, exitcode.Usage("--set %s: %s is a secret, kept in .pic-sure/secrets.yaml; init can't set it", key, key)
+		case f.Key == "name":
+			return nil, exitcode.Usage("--set %s: use --name", arg)
+		}
+		sets = append(sets, initSet{arg: arg, key: key, value: value})
+	}
+	return sets, nil
+}
+
+// applySets sets each --set in a new config, after the flags. A key a flag
+// or an earlier --set also sets must get the same value from each.
+func (r *initRun) applySets(flagKeys map[string]string) error {
+	for _, s := range r.sets {
+		before, _ := r.doc.Raw(s.key)
+		if err := r.doc.Set(s.key, s.value); err != nil {
+			return exitcode.Usage("--set %s: %v", s.arg, err)
+		}
+		if flag, ok := flagKeys[s.key]; ok {
+			if after, _ := r.doc.Raw(s.key); !reflect.DeepEqual(before, after) {
+				return exitcode.Usage("--set %s and %s set %s to different values", s.arg, flag, s.key)
+			}
+		}
+		flagKeys[s.key] = "--set " + s.arg
+	}
+	return nil
+}
+
+// checkResumedSets refuses a --set that would change the config a resumed
+// init uses as it is.
+func (r *initRun) checkResumedSets(data []byte) error {
+	if len(r.sets) == 0 {
+		return nil
+	}
+	probe, err := stack.ParseConfigDoc(data)
+	if err != nil {
+		return configError(err)
+	}
+	for _, s := range r.sets {
+		if err := probe.Set(s.key, s.value); err != nil {
+			return exitcode.Usage("--set %s: %v", s.arg, err)
+		}
+	}
+	cfg, err := probe.Config()
+	if err != nil {
+		return exitcode.Usage("--set: %v", err)
+	}
+	for _, s := range r.sets {
+		was, _ := r.cfg.Get(s.key)
+		if now, _ := cfg.Get(s.key); !reflect.DeepEqual(was, now) {
+			return exitcode.Usage("--set %s: %s already has %s %v, and init resumes with it as it is; change it there first",
+				s.arg, filepath.Join(r.dir, stack.ConfigFile), s.key, was)
+		}
+	}
+	return nil
+}
+
+// setValue is the last --set value for key.
+func (r *initRun) setValue(key string) (value string, ok bool) {
+	for _, s := range r.sets {
+		if s.key == key {
+			value, ok = s.value, true
+		}
+	}
+	return value, ok
 }
 
 // refuseShared refuses shared HPDS data, which init can't set up until
@@ -456,11 +563,11 @@ func (r *initRun) preconditions(ctx context.Context, sink events.Sink) error {
 		return nil
 	}
 	flags := r.cmd.Flags()
-	httpPort, err := portFlag(flags, "http-port")
+	httpPort, err := r.portFlag("http-port", "network.http_port")
 	if err != nil {
 		return err
 	}
-	httpsPort, err := portFlag(flags, "https-port")
+	httpsPort, err := r.portFlag("https-port", "network.https_port")
 	if err != nil {
 		return err
 	}
@@ -481,11 +588,15 @@ func (r *initRun) setPorts(h ops.Host, httpPort, httpsPort int, auto bool) error
 	if err != nil {
 		return err
 	}
-	base, err := ops.ChooseDevPortsBase(h, httpPort, httpsPort)
-	if err != nil {
-		return err
+	ports := map[string]int{"network.http_port": httpPort, "network.https_port": httpsPort}
+	if _, given := r.setValue("network.dev_ports.base"); !given {
+		base, err := ops.ChooseDevPortsBase(h, httpPort, httpsPort)
+		if err != nil {
+			return err
+		}
+		ports["network.dev_ports.base"] = base
 	}
-	for key, v := range map[string]int{"network.http_port": httpPort, "network.https_port": httpsPort, "network.dev_ports.base": base} {
+	for key, v := range ports {
 		if err := r.doc.SetValue(key, v); err != nil {
 			return err
 		}
@@ -493,15 +604,22 @@ func (r *initRun) setPorts(h ops.Host, httpPort, httpsPort int, auto bool) error
 	return nil
 }
 
-// portFlag is a port flag's value, 0 when not given.
-func portFlag(flags *pflag.FlagSet, name string) (int, error) {
-	if !flags.Changed(name) {
-		return 0, nil
-	}
+// portFlag is a port flag's value, or else its key's --set, 0 when neither
+// is given.
+func (r *initRun) portFlag(name, key string) (int, error) {
+	flags := r.cmd.Flags()
 	v, _ := flags.GetString(name)
+	arg := "--" + name + " " + v
+	if !flags.Changed(name) {
+		var given bool
+		if v, given = r.setValue(key); !given {
+			return 0, nil
+		}
+		arg = "--set " + key + "=" + v
+	}
 	p, err := strconv.Atoi(v)
 	if err != nil || p < 1 || p > 65535 {
-		return 0, exitcode.Usage("--%s %s: not a port number", name, v)
+		return 0, exitcode.Usage("%s: not a port number", arg)
 	}
 	return p, nil
 }
