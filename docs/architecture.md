@@ -288,6 +288,24 @@ it.
   Composer like init's, recording the `up` operation in state.json. The
   version gate is openStack's: pending config migrations are exit 5 ("run
   `pic-sure update`"); §6.2's up prompt isn't implemented.
+- `update.go` (036): `update`. Usage problems first: `--no-build` with
+  `--release-commit` (exit 2: `--no-build` keeps the stack's release),
+  `--dry-run` with `--skip-step`, and a `--skip-step` not in
+  `ops.UpdateStepIDs(cfg)`. openStack gates it as `update`'s class, so
+  pending config migrations are allowed; until the `config` step,
+  pic-sure.yaml is migrated in memory only. Under the stack lock: up's
+  checks (CheckFiles, shared HPDS data, `initialized_at`, the client
+  secret, the ports); a dry run only loads secrets.yaml, a real run
+  `EnsureSecrets` like up. Then two unskippable steps: `release`
+  (`release.Fetch` of the `release.branch` head or `--release-commit`, or
+  with `--no-build` the stack's recorded release; the gate with
+  `newSelfUpdater`; then `ResolveComponents`) and `plan` (`registerStack`,
+  then `ops.PlanUpdate`). `--dry-run` ends there with the plan as the
+  report. Otherwise it records the `update` operation and runs
+  `ops.UpdateSteps` (`--no-build` skips `images`). The report is the plan,
+  and the text says whether anything changed. There is no TTY prompt
+  for the gate's self-update yet (`--self-update` is needed), since the
+  progress renderer owns the terminal.
 - `tuiinit.go` (039): `initFromTUI`, the TUI's `Options.Init`, runs
   `initRun.run` in-process on the wizard's config (its ports given
   explicitly) or, with none, resumes DIR's pic-sure.yaml. For the call it
@@ -1102,6 +1120,43 @@ start service if that can't be read). `restart` restarts the pending services th
 clears them, so `start`'s `--wait` covers the restarted services, and a
 run that fails before then leaves them pending for the next. `bindMounts`
 (migrate.go) is the shared `compose config` parse.
+
+**Update (036, `update.go`).** §9.3. `PlanUpdate(ctx, d, st, doc, cfg,
+sec, state, UpdateOptions{ConvergeOptions, Release, Components,
+Migrations, NoBuild, StartDB})` is the plan, `update --dry-run --json`'s
+data: the pending config migrations (from `Registry.Plan` on the file as
+read; `cfg` is it migrated in memory), the release and each component's
+commit current → target (the caller resolves `Components`; a local source
+keeps its checkout's commit), each image's tag and action (`build`,
+`pull`, `up-to-date` from the image step's own up-to-date check, or
+`keep` with `NoBuild`, which moves nothing), the Flyway status, the token
+(renewed when it is valid for less than `TokenRenewBefore`) and the
+running services to `recreate` or `restart`, with reasons. Migrations are
+`unknown` when the pic-sure or migrations tree moves (the new files aren't
+in the cache yet; the migrate step's Check decides after the image step)
+or dictionary-db isn't healthy; otherwise `MigrationsUpToDate`, after
+starting picsure-db through `DBSteps` if `StartDB` and it isn't healthy
+(`started_db`). Restarts come from an in-memory render at the target
+(`renderStack`, shared with `RenderStep`): services whose compose
+definition changes are recreated, and so are those that read
+`${PICSURE_INTROSPECTION_TOKEN}` when the token is renewed; readers of
+changed `render/files` (up's `readers`), httpd and psama when the TLS or
+truststore Check isn't done, the `RestartAfterMigrate` services unless
+migrations are up to date, psama for a renewed token, and
+`pending_restarts` are restarted. Only running services are listed.
+`Changes()` says whether the plan does anything. PlanUpdate writes nothing
+to the stack.
+
+`UpdateSteps(d, st, plan, sec, state, opts)` are `config` (Check: nothing
+pending; Apply: `Registry.Apply`, which backs up first), `resolve`
+(records the plan's release and non-source component commits in
+state.json), then up's steps (`upSteps`) with an image step that has
+`Refresh`, and no Check in pull mode so moved refs are pulled. Up's
+restart machinery covers the restarts; psama's restart for its caches
+comes from the migrate and seed steps, or its recreation, so an update
+that changes nothing restarts nothing. A failure leaves the old images
+(their tags differ) and data in place, and the step error names the step
+a re-run resumes from.
 
 **Phenotype loader (042, `loader.go`).** §9.6's one loader, for `data
 demo` (046) and `data load-phenotype`. `LoadPhenotype(ctx, d, st, cfg,
