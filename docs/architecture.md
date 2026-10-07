@@ -1475,8 +1475,8 @@ must be this stack's, `st.EnsureVolume`; any file besides the key and the
 without `DiscardData`. HPDS doesn't encrypt the genomic store, so it is
 kept), `hpds-stop`, `hpds-wipe`, `rotate-save` (`st.ReplaceHPDSKey`),
 `hpds-key` (`HPDSKeyStep`'s Apply) and `hpds-start` (only if hpds was
-running). `volumeHelper` is the alpine helper on a volume that the loader
-shares. The new values come from `stack.GeneratePassword` and
+running). `volumeHelper` runs its alpine helpers.
+The new values come from `stack.GeneratePassword` and
 `stack.GenerateHexToken`, added here; `markPendingRestarts` is shared with
 up.
 
