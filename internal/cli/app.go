@@ -68,6 +68,10 @@ type App struct {
 	// output mode would choose: the full-screen TUI's, for a command the
 	// dashboard runs in-process (commandFromTUI).
 	tuiSink events.Sink
+	// tuiConfirm, when set, is the full-screen TUI's yes/no dialog: update's
+	// compatibility gate offers its self-update through it, and installs
+	// without re-running (installOnly).
+	tuiConfirm func(context.Context, string) (bool, error)
 	// interrupt cancels the running command's context as SIGINT would. The
 	// TUI renderer calls it when the user confirms Ctrl-C, which the
 	// terminal delivers as a key rather than a signal while it runs.

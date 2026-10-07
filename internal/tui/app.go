@@ -55,6 +55,9 @@ type CommandRequest struct {
 	Args []string
 	// Sink receives the command's events.
 	Sink events.Sink
+	// Confirm asks the user a yes/no question on the run screen, for the
+	// compatibility gate's self-update offer.
+	Confirm func(ctx context.Context, question string) (bool, error)
 }
 
 // openWizardMsg asks the app to open the setup wizard.
@@ -340,7 +343,7 @@ func (a *app) startAction(act dashboard.Action) (tea.Model, tea.Cmd) {
 	}
 	command := a.opts.Command
 	run := func(ctx context.Context, req InitRequest) (InitResult, error) {
-		return command(ctx, CommandRequest{Dir: req.Dir, Args: act.Args, Sink: req.Sink})
+		return command(ctx, CommandRequest{Dir: req.Dir, Args: act.Args, Sink: req.Sink, Confirm: req.Confirm})
 	}
 	a.run = newRunScreen(a.ctx, act.Title, run, InitRequest{Dir: a.opts.Root}, a.opts.Animations)
 	a.run.doneText = act.Done

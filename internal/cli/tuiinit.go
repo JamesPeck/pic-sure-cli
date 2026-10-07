@@ -67,8 +67,9 @@ func (a *App) initFromTUI(ctx context.Context, req tui.InitRequest) (tui.InitRes
 }
 
 // installOnly is the gate's self-updater in the TUI: it installs the new
-// pic-sure but doesn't re-run, which would restart the TUI and lose the
-// wizard's answers. The gate then says to run pic-sure again.
+// pic-sure but doesn't re-run, which would restart the TUI and lose its
+// state, such as the wizard's answers. The gate then says to run pic-sure
+// again.
 type installOnly struct{ u *selfupdate.Updater }
 
 func (i installOnly) SelfUpdate(ctx context.Context, version string) error {

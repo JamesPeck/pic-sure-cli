@@ -288,19 +288,25 @@ func (r *updateRun) fetchRelease(ctx context.Context, sink events.Sink) error {
 }
 
 // gateOptions are the compatibility gate's options for this run. On a
-// terminal the gate offers the self-update (D12).
+// terminal, or in the TUI's dialog, the gate offers the self-update (D12).
 func (r *updateRun) gateOptions(sink events.Sink) release.GateOptions {
+	u := r.a.newSelfUpdater(r.proxy, sink, updateRelease)
 	opts := release.GateOptions{
 		CLIVersion:       r.a.Info.Version,
 		Compat:           r.cfg.Release.CLICompat,
 		SelfUpdate:       r.selfUpdate,
 		IgnoreCLIVersion: r.ignoreCLIVersion,
-		Updater:          r.a.newSelfUpdater(r.proxy, sink, updateRelease),
+		Updater:          u,
 		Command:          "pic-sure update",
 		Sink:             sink,
 		Step:             updateRelease,
 	}
-	if r.a.canOfferSelfUpdate() {
+	switch {
+	case r.a.tuiConfirm != nil:
+		opts.Confirm = r.a.tuiConfirm
+		opts.Updater = installOnly{u}
+		opts.Command = "pic-sure"
+	case r.a.canOfferSelfUpdate():
 		opts.Confirm = r.a.gateConfirm(events.StepStarted{ID: updateRelease, Title: releaseTitle})
 	}
 	return opts

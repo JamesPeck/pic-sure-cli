@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -242,5 +243,36 @@ func TestDashboardActionThatRemovedTheStack(t *testing.T) {
 	a.Update(runClosedMsg{})
 	if a.screen != ScreenLanding || a.dash != nil {
 		t.Errorf("screen %v, dashboard kept %v", a.screen, a.dash != nil)
+	}
+}
+
+// A dashboard action's command asks through the run screen's dialog.
+func TestDashboardActionAsksOnTheRunScreen(t *testing.T) {
+	answer := make(chan bool, 1)
+	a := newApp(context.Background(), Options{
+		Root: t.TempDir(), Start: ScreenDashboard,
+		Command: func(ctx context.Context, req CommandRequest) (InitResult, error) {
+			yes, err := req.Confirm(ctx, "release-control abc needs pic-sure 2.1.0; this is pic-sure 2.0.0. Update pic-sure now?")
+			answer <- yes
+			return InitResult{}, err
+		},
+	})
+	a.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	a.Update(dashboard.RunMsg{Action: dashboard.Action{Title: "Updating PIC-SURE", Args: []string{"update"}}})
+	s := a.run
+	defer s.close()
+	pumpRun(t, s, func() bool { return s.askDlg != nil })
+	if v := a.content(); !strings.Contains(v, "needs pic-sure 2.1.0") {
+		t.Fatalf("the question isn't shown:\n%s", v)
+	}
+	feedRun(s, runCmd(s.askDlg.Init())...)
+	feedRun(s, left, enter)
+	select {
+	case yes := <-answer:
+		if !yes {
+			t.Error("Update answered no")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("no answer reached the command; view:\n%s", a.content())
 	}
 }

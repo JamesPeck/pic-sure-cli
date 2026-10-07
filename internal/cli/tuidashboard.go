@@ -123,18 +123,11 @@ func redacted(err error) error {
 // run in-process for a dashboard action. Its events, and the run log's
 // stderr records, go to req.Sink; the summary it would print is the
 // result's Summary. Its exit code and message come back as the error.
+// update's compatibility gate offers its self-update through req.Confirm.
 func (a *App) commandFromTUI(ctx context.Context, req tui.CommandRequest) (tui.InitResult, error) {
 	var out, errOut bytes.Buffer
-	c := a.child(&out, &warnEvents{sink: req.Sink, rest: &errOut})
 	var result *events.Result
-	c.tuiSink = events.SinkFunc(func(e events.Event) {
-		if r, ok := e.(events.Result); ok {
-			result = &r
-			return
-		}
-		req.Sink.Emit(e)
-	})
-	c.tuiLog.Store(&logEvents{req.Sink})
+	c := a.actionApp(req, &out, &errOut, func(r events.Result) { result = &r })
 	args := []string{"--stack", req.Dir}
 	if a.Global.WaitLock {
 		args = append(args, "--wait-lock")
@@ -153,6 +146,23 @@ func (a *App) commandFromTUI(ctx context.Context, req tui.CommandRequest) (tui.I
 		msg = result.Error.Message
 	}
 	return res, &exitcode.Error{Code: code, Err: errors.New(msg)}
+}
+
+// actionApp is the child App commandFromTUI runs req on: its summary goes
+// to stdout, its warnings, log records and other events to req.Sink, and
+// its error to rest and to onResult; the gate asks through req.Confirm.
+func (a *App) actionApp(req tui.CommandRequest, stdout, rest io.Writer, onResult func(events.Result)) *App {
+	c := a.child(stdout, &warnEvents{sink: req.Sink, rest: rest})
+	c.tuiSink = events.SinkFunc(func(e events.Event) {
+		if r, ok := e.(events.Result); ok {
+			onResult(r)
+			return
+		}
+		req.Sink.Emit(e)
+	})
+	c.tuiLog.Store(&logEvents{req.Sink})
+	c.tuiConfirm = req.Confirm
+	return c
 }
 
 // warnEvents is an in-process command's stderr: its warnings become Warning

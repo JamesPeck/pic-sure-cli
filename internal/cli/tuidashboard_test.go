@@ -204,3 +204,52 @@ func TestWarnEvents(t *testing.T) {
 		t.Errorf("rest = %q", rest.String())
 	}
 }
+
+// The dashboard's update offers the gate's self-update through the run
+// screen's Confirm, and installs without re-running; with no Confirm, or a
+// no, it refuses with exit 5 as before.
+func TestCommandFromTUIGateAsksThroughConfirm(t *testing.T) {
+	for _, tc := range []struct {
+		name                string
+		confirm, yes        bool
+		wantUpdated         bool
+		wantMsg, notWantMsg string
+	}{
+		{name: "yes", confirm: true, yes: true, wantUpdated: true, wantMsg: "run pic-sure again"},
+		{name: "no", confirm: true, wantMsg: "pic-sure self-update --to v2.1.0", notWantMsg: "--self-update to update"},
+		{name: "no dialog", wantMsg: "pic-sure update --self-update"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, _, _ := testApp(t)
+			var asked string
+			req := tui.CommandRequest{Args: []string{"update"}, Sink: events.Discard}
+			if tc.confirm {
+				req.Confirm = func(_ context.Context, q string) (bool, error) { asked = q; return tc.yes, nil }
+			}
+			c := a.actionApp(req, io.Discard, io.Discard, func(events.Result) {})
+			r := &updateRun{a: c, cfg: &stack.Config{}}
+			o := r.gateOptions(&events.Recorder{})
+			if _, ok := o.Updater.(installOnly); ok != tc.confirm {
+				t.Errorf("updater = %T, want installOnly: %v", o.Updater, tc.confirm)
+			}
+			u := &recordingUpdater{}
+			o.Updater, o.CLIVersion = u, "v2.0.0"
+			err := newerCLIRelease(t).Gate(context.Background(), o)
+			if code := exitcode.FromError(err); code != exitcode.CodeIncompatible {
+				t.Fatalf("exit = %d (%v), want 5", code, err)
+			}
+			if tc.confirm != strings.Contains(asked, "Update pic-sure now?") {
+				t.Errorf("asked %q", asked)
+			}
+			if got := u.version == "v2.1.0"; got != tc.wantUpdated {
+				t.Errorf("self-updated to %q", u.version)
+			}
+			if !strings.Contains(err.Error(), tc.wantMsg) {
+				t.Errorf("error = %q, want %q", err, tc.wantMsg)
+			}
+			if tc.notWantMsg != "" && strings.Contains(err.Error(), tc.notWantMsg) {
+				t.Errorf("error = %q names %q", err, tc.notWantMsg)
+			}
+		})
+	}
+}

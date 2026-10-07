@@ -312,8 +312,9 @@ it.
   (`canPrompt`, and stderr is a terminal), the gate offers the self-update
   through `a.gateConfirm` (`selfupdate.go`): it ends the progress renderer,
   asks `[y/N]` on stderr, then starts the release step again in the
-  renderer's next program. Otherwise only `--self-update` replaces the
-  binary (exit 5 without it).
+  renderer's next program. Run from the dashboard (`App.tuiConfirm`), it
+  asks through the TUI's dialog instead. Otherwise only `--self-update`
+  replaces the binary (exit 5 without it).
 - `tuiinit.go` (039): `initFromTUI`, the TUI's `Options.Init`, runs
   `initRun.run` in-process on the wizard's config (its ports given
   explicitly) or, with none, resumes DIR's pic-sure.yaml. For the call it
@@ -2434,8 +2435,10 @@ to the landing when the stack is gone (destroy). In `internal/cli`
 the TUI's (the `Result` event becomes the returned error), log records go
 to it as `Log` events, and the summary the command prints is the result's
 `Summary`. Its warnings become `Warning` events, and `--wait-lock` is passed
-on. A prompt the command would need (the gate's self-update) is refused as
-on a non-interactive run.
+on. `CommandRequest.Confirm` is the run screen's yes/no dialog: update's
+gate offers its self-update through it (`App.tuiConfirm`) and installs with
+`installOnly`, as `initFromTUI` does. Any other prompt is refused as on a
+non-interactive run.
 
 ## internal/wizard
 
