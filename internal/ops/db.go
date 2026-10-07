@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -86,6 +85,9 @@ func BootstrapStep(d *Deps, cfg *stack.Config, sec *stack.Secrets, opts Bootstra
 			return err == nil && r.OK, nil
 		},
 		Apply: func(ctx context.Context, sink events.Sink) error {
+			if err := requireRemoteSecrets(sec); err != nil {
+				return err
+			}
 			stmts := sql.Bootstrap(sql.AppUsers(appPasswords(sec)), opts.SyncPasswords)
 			if err := sql.ExecMySQL(ctx, d.Docker, mysqlTarget(cfg, sec, ""), stmts...); err != nil {
 				return remoteDBError(cfg, "bootstrapping", err)
@@ -98,15 +100,13 @@ func BootstrapStep(d *Deps, cfg *stack.Config, sec *stack.Secrets, opts Bootstra
 				return nil
 			}
 			var problems []string
-			mismatch := false
 			for _, c := range r.Checks {
 				if !c.OK {
 					problems = append(problems, c.Name+": "+c.Problem)
-					mismatch = mismatch || c.Problem == problemPassword
 				}
 			}
 			msg := "the remote database is still not ready after bootstrap: " + strings.Join(problems, "; ")
-			if mismatch {
+			if r.NeedsSync() {
 				return exitcode.Precondition("%s. Run `pic-sure db bootstrap --sync-passwords` "+
 					"to set the users' passwords to the ones in secrets.yaml", msg)
 			}
@@ -118,11 +118,49 @@ func BootstrapStep(d *Deps, cfg *stack.Config, sec *stack.Secrets, opts Bootstra
 // problemPassword is a user's login check failing on its password.
 const problemPassword = "its password doesn't match secrets.yaml"
 
+// NeedsSync reports whether a user's password differs from secrets.yaml,
+// which --sync-passwords fixes.
+func (r *BootstrapReport) NeedsSync() bool {
+	for _, c := range r.Checks {
+		if c.Problem == problemPassword {
+			return true
+		}
+	}
+	return false
+}
+
+// requireRemoteSecrets refuses secrets without a password Bootstrap needs:
+// an empty one would create, or with --sync-passwords leave, an account
+// that logs in without a password.
+func requireRemoteSecrets(sec *stack.Secrets) error {
+	var missing []string
+	for _, s := range []struct {
+		name string
+		v    stack.Secret
+	}{
+		{"db_remote_root_password", sec.DBRemoteRootPassword},
+		{"db_picsure_password", sec.DBPicsurePassword},
+		{"db_auth_password", sec.DBAuthPassword},
+		{"db_airflow_password", sec.DBAirflowPassword},
+	} {
+		if s.v == "" {
+			missing = append(missing, s.name)
+		}
+	}
+	if missing != nil {
+		return exitcode.Precondition("secrets.yaml lacks %s, which the remote database needs", strings.Join(missing, ", "))
+	}
+	return nil
+}
+
 // CheckBootstrap reports what the remote database has of what BootstrapStep
 // creates, and whether each existing user logs in with its password from
 // secrets.yaml and reaches its databases. It changes nothing. An error
 // means it couldn't read the server as the root user.
 func CheckBootstrap(ctx context.Context, d *Deps, cfg *stack.Config, sec *stack.Secrets) (*BootstrapReport, error) {
+	if err := requireRemoteSecrets(sec); err != nil {
+		return nil, err
+	}
 	users := sql.AppUsers(appPasswords(sec))
 	root := mysqlTarget(cfg, sec, "")
 	r := &BootstrapReport{Server: net.JoinHostPort(cfg.DB.Remote.Host, strconv.Itoa(cfg.DB.Remote.Port)),
@@ -132,20 +170,29 @@ func CheckBootstrap(ctx context.Context, d *Deps, cfg *stack.Config, sec *stack.
 		return nil, remoteDBError(cfg, "reading", err)
 	}
 	have := map[string]bool{}
+	others := map[string][]string{} // user → its accounts other than user@'%'
 	for _, row := range rows {
 		if len(row) != 2 {
 			return nil, fmt.Errorf("reading the remote database: unexpected row %q", row)
 		}
-		if row[0] == "version" {
+		switch row[0] {
+		case "version":
 			r.Version = row[1]
+		case "account":
+			user, host, _ := strings.Cut(row[1], " ")
+			others[user] = append(others[user], "'"+user+"'@'"+host+"'")
 		}
 		have[row[0]+" "+row[1]] = true
 	}
 	add := func(name, problem string) {
 		r.Checks = append(r.Checks, BootstrapCheck{Name: name, OK: problem == "", Problem: problem})
 	}
-	for _, db := range bootstrapDatabases(users) {
-		add("database "+db, missingIf(!have["database "+db]))
+	for _, db := range sql.Databases(users) {
+		problem := ""
+		if !have["database "+db] {
+			problem = "missing"
+		}
+		add("database "+db, problem)
 	}
 	for _, u := range users {
 		if !have["user "+u.Name] {
@@ -160,20 +207,21 @@ func CheckBootstrap(ctx context.Context, d *Deps, cfg *stack.Config, sec *stack.
 			}
 			add("grants "+u.Name+" on "+db, problem)
 		}
-		add("login "+u.Name, loginProblem(ctx, d, cfg, u))
+		problem := loginProblem(ctx, d, cfg, u)
+		// The server matches the most specific host first, so another
+		// account can refuse the login even when user@'%' has the right
+		// password.
+		if problem == problemPassword && len(others[u.Name]) > 0 {
+			problem = "access denied; check the password of " + strings.Join(others[u.Name], ", ") +
+				", which the server may match before '" + u.Name + "'@'%'"
+		}
+		add("login "+u.Name, problem)
 	}
 	r.OK = true
 	for _, c := range r.Checks {
 		r.OK = r.OK && c.OK
 	}
 	return r, nil
-}
-
-func missingIf(missing bool) string {
-	if missing {
-		return "missing"
-	}
-	return ""
 }
 
 // loginProblem logs in as u with its password and selects each of its
@@ -205,27 +253,13 @@ func firstLine(b []byte) string {
 	return s
 }
 
-// bootstrapDatabases lists the users' databases, each once, in order.
-func bootstrapDatabases(users []sql.AppUser) []string {
-	var dbs []string
-	for _, u := range users {
-		for _, db := range u.Databases {
-			if !slices.Contains(dbs, db) {
-				dbs = append(dbs, db)
-			}
-		}
-	}
-	return dbs
-}
-
 func appPasswords(sec *stack.Secrets) sql.AppPasswords {
 	return sql.AppPasswords{Picsure: string(sec.DBPicsurePassword), Auth: string(sec.DBAuthPassword),
 		Airflow: string(sec.DBAirflowPassword)}
 }
 
-// remoteDBError wraps a failure to reach the remote server as root: exit 3
-// for refused credentials, or with a hint when the host is a loopback
-// address, which inside a container is the container itself.
+// remoteDBError wraps a failure to reach the remote server as root, adding
+// LoopbackHint; refused credentials are exit 3.
 func remoteDBError(cfg *stack.Config, doing string, err error) error {
 	server := net.JoinHostPort(cfg.DB.Remote.Host, strconv.Itoa(cfg.DB.Remote.Port))
 	err = fmt.Errorf("%s the remote database at %s as %s: %w%s", doing, server, cfg.DB.Remote.RootUser, err,
@@ -241,7 +275,7 @@ func remoteDBError(cfg *stack.Config, doing string, err error) error {
 // any other host.
 func LoopbackHint(host string) string {
 	ip := net.ParseIP(host)
-	if !strings.EqualFold(host, "localhost") && (ip == nil || !ip.IsLoopback()) {
+	if !strings.EqualFold(host, "localhost") && (ip == nil || !ip.IsLoopback() && !ip.IsUnspecified()) {
 		return ""
 	}
 	return ". db.remote.host " + host + " is the container itself when a container connects to it; " +

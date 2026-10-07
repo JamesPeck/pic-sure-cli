@@ -121,14 +121,8 @@ func AppUsers(p AppPasswords) []AppUser {
 // is also set to its Password.
 func Bootstrap(users []AppUser, syncPasswords bool) []string {
 	var stmts []string
-	created := map[string]bool{}
-	for _, u := range users {
-		for _, db := range u.Databases {
-			if !created[db] {
-				created[db] = true
-				stmts = append(stmts, "CREATE DATABASE IF NOT EXISTS "+quoteMySQLIdent(db))
-			}
-		}
+	for _, db := range Databases(users) {
+		stmts = append(stmts, "CREATE DATABASE IF NOT EXISTS "+quoteMySQLIdent(db))
 	}
 	for _, u := range users {
 		a := Account{User: u.Name, Host: "%"}

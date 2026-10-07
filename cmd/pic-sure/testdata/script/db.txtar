@@ -51,6 +51,10 @@ rm docker.counts
 cp mismatch.scenario docker.scenario
 exitcode 3 pic-sure --stack remote db bootstrap
 stderr 'login auth: its password doesn''t match secrets.yaml.*--sync-passwords'
+# --check suggests the same. The probe's rule is used up.
+exitcode 3 pic-sure --stack remote db bootstrap --check
+stdout '^FAIL login auth \(its password doesn''t match secrets.yaml\)$'
+stderr 'needs `pic-sure db bootstrap --sync-passwords`'
 
 # --skip-step takes the command's step IDs only.
 exitcode 2 pic-sure --stack remote db bootstrap --skip-step migrate

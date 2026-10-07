@@ -23,7 +23,9 @@ type remoteServer struct {
 	users     map[string]bool // exists as name@'%'
 	matches   map[string]bool // its password is the one in secrets.yaml
 	grants    map[string]bool // "user db"
-	scripts   []string        // what root ran, besides the state query
+	accounts  []string        // "user host" for hosts other than '%'
+
+	scripts []string // what root ran, besides the state query
 }
 
 const remoteClient = "docker run -i --rm -e MYSQL_PWD mysql:8.0 mysql * --host=db.example.org --port=3307 "
@@ -70,6 +72,9 @@ func (s *remoteServer) root(_ context.Context, c fakerunner.Call) (docker.Result
 		}
 		for g := range s.grants {
 			out += "grant\t" + g + "\n"
+		}
+		for _, a := range s.accounts {
+			out += "account\t" + a + "\n"
 		}
 		return docker.Result{Stdout: []byte(out)}, nil
 	}
@@ -159,7 +164,7 @@ func TestCheckBootstrapFindsAPasswordMismatchAndAMissingGrant(t *testing.T) {
 		got["grants airflow on picsure"] != "missing ALL PRIVILEGES" || !strings.Contains(got["login airflow"], "picsure") {
 		t.Errorf("failing checks %v", got)
 	}
-	noSecretInArgv(t, s.f)
+	noPasswordInArgv(t, s.f, sec)
 }
 
 func TestBootstrapStepCreatesWhatIsMissing(t *testing.T) {
@@ -188,14 +193,7 @@ func TestBootstrapStepCreatesWhatIsMissing(t *testing.T) {
 	if got := stepStatuses(rec); got[ops.StepDB] != events.StepSkipped || got[ops.StepDBBootstrap] != events.StepOK {
 		t.Errorf("steps %v", got)
 	}
-	noSecretInArgv(t, s.f)
-	for _, c := range s.f.Calls() {
-		for _, pw := range []string{"Picsure-synthetic-pw", "Auth-synthetic-pw", "Airflow-synthetic-pw"} {
-			if strings.Contains(strings.Join(c.Argv, " "), pw) {
-				t.Errorf("a password reached argv: %q", c.Argv)
-			}
-		}
-	}
+	noPasswordInArgv(t, s.f, sec)
 
 	// A second run finds everything in place.
 	*rec = events.Recorder{}
@@ -229,6 +227,41 @@ func TestBootstrapStepNeedsSyncPasswordsForAnExistingUser(t *testing.T) {
 	}
 	if !s.matches["picsure"] {
 		t.Error("picsure's password still doesn't match")
+	}
+}
+
+func TestCheckBootstrapNamesAnAccountThatShadowsTheUser(t *testing.T) {
+	s := newRemoteServer(t)
+	s.full()
+	s.matches["auth"] = false
+	s.accounts = []string{"auth 172.17.%"}
+	d, _ := migrateDeps(s.f)
+	cfg, sec := remoteConfig()
+
+	r, err := ops.CheckBootstrap(context.Background(), d, cfg, sec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := failing(r)["login auth"]; !strings.Contains(got, "'auth'@'172.17.%'") || r.NeedsSync() {
+		t.Errorf("login auth: %q, needs sync %v", got, r.NeedsSync())
+	}
+}
+
+func TestBootstrapRefusesAnEmptyPassword(t *testing.T) {
+	s := newRemoteServer(t)
+	d, _ := migrateDeps(s.f)
+	cfg, sec := remoteConfig()
+	sec.DBAuthPassword = ""
+
+	err := ops.Bootstrap(context.Background(), d, cfg, sec, ops.BootstrapOptions{SyncPasswords: true}, nil)
+	if exitcode.FromError(err) != exitcode.CodePrecondition || !strings.Contains(err.Error(), "db_auth_password") {
+		t.Fatalf("err %v, want exit 3 naming db_auth_password", err)
+	}
+	if len(s.scripts) != 0 {
+		t.Errorf("bootstrap ran %q", s.scripts)
+	}
+	if _, err := ops.CheckBootstrap(context.Background(), d, cfg, sec); exitcode.FromError(err) != exitcode.CodePrecondition {
+		t.Errorf("check: %v, want exit 3", err)
 	}
 }
 
@@ -267,9 +300,21 @@ func TestDBStepsAddBootstrapForARemoteDatabase(t *testing.T) {
 
 func TestLoopbackHint(t *testing.T) {
 	for host, want := range map[string]bool{"localhost": true, "LOCALHOST": true, "127.0.0.1": true, "127.1.2.3": true,
-		"::1": true, "host.docker.internal": false, "db.example.org": false, "10.0.0.5": false} {
+		"::1": true, "0.0.0.0": true, "host.docker.internal": false, "db.example.org": false, "10.0.0.5": false} {
 		if got := ops.LoopbackHint(host) != ""; got != want {
 			t.Errorf("LoopbackHint(%q) set: %v, want %v", host, got, want)
+		}
+	}
+}
+
+func noPasswordInArgv(t *testing.T, f *fakerunner.Runner, sec *stack.Secrets) {
+	t.Helper()
+	for _, c := range f.Calls() {
+		argv := strings.Join(c.Argv, " ")
+		for _, pw := range []stack.Secret{sec.DBRemoteRootPassword, sec.DBPicsurePassword, sec.DBAuthPassword, sec.DBAirflowPassword} {
+			if strings.Contains(argv, string(pw)) {
+				t.Errorf("a password reached argv: %q", c.Argv)
+			}
 		}
 	}
 }

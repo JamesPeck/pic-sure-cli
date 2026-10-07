@@ -86,6 +86,9 @@ func (a *App) dbBootstrap(cmd *cobra.Command, _ []string) error {
 		if err := a.printReport(report, func(w io.Writer) error { return writeBootstrapCheck(w, report) }); err != nil {
 			return err
 		}
+		if report.NeedsSync() {
+			return exitcode.Precondition("the remote database needs `pic-sure db bootstrap --sync-passwords`")
+		}
 		if !report.OK {
 			return exitcode.Precondition("the remote database needs `pic-sure db bootstrap`")
 		}

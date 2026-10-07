@@ -895,8 +895,11 @@ computed before the step must recompute it.
 - The remote client and the stack's services resolve `db.remote.host` from
   their containers, where `localhost` is the container itself.
   `LoopbackHint` adds that, and the `host.docker.internal` suggestion, to
-  remote connection errors (here and in the db step). The real run reached
-  a published mysql:8.0 that way on Docker Desktop.
+  remote connection errors (here and in the db step).
+- Both refuse secrets.yaml without the root or an application password,
+  since an empty one would make a passwordless account. A login refused
+  while the user has accounts other than `name@'%'` names them instead of
+  suggesting `--sync-passwords`, which changes only `name@'%'`.
 
 ## internal/steps
 
