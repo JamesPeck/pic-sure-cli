@@ -972,6 +972,42 @@ init, and the parts `up` and `update` reuse.
 - `Summary` is init's report (URL, Auth0 URLs, token expiry, next steps);
   `PeekState(dir)` reads state.json without opening the stack.
 
+**Cache list and prune (057, `cache.go`).** §7.1's in-use rules.
+`CacheInventory(ctx, d, c, CacheOptions{Stacks})` returns a `CacheReport`:
+the stacks it found and every `CacheItem` with a status.
+
+- **Items.** Images are the built catalog images (`hms-dbmi/<name>`) with a
+  commit tag (`<sha12>` or `<sha12>-<cfghash8>`) or a dev tag
+  (`dev-<stack>-<sha12>[-dirty]`). Tags other tools made (`ws-als-13142`,
+  `catch-up`), pull-mode refs and third-party images are never listed. The
+  rest are `cache.Entries()`.
+- **Stacks.** Every distinct `stack-dir` label on a container (running or
+  stopped) or volume, plus `CacheOptions.Stacks` (the cli passes the stack
+  the command runs in, which may have built images before it has any
+  containers). A stack is readable when `stack.Open` and `LoadState`
+  succeed.
+- **Status**, in order:
+  - `in-use`: a container references it (an image by ID or reference, an
+    entry by a bind mount of it, inside it or above it), whether or not
+    the container is labelled, or a readable state names it (`images`,
+    `dev_images`, a component's commit for a source tree);
+  - `unknown-stack`: an unreadable stack might use it. That covers every
+    commit-tagged image and source tree, and that stack's own dev images.
+    Build contexts, downloads and `tmp/` belong to no stack;
+  - `recent`: made or changed within `RecentCacheAge` (1 h), because a
+    build may not have saved its state yet;
+  - `unused`.
+
+`PruneCache(ctx, d, c, PruneOptions{DryRun, Force})` runs one step,
+`prune`. It removes `unused` items, and with `Force` also `unknown-stack` and
+`recent` ones; `in-use` items are never removed. Images go through `docker
+image rm` under the image's lock, which also refuses an image a container
+started meanwhile. Entries go through `cache.RemoveEntry`. A lock still
+busy after the cache's `LockTimeout` (the cli uses 5 s) skips the item with
+a warning. Other failures don't stop the rest, and the step then fails
+naming them. `Freed` counts an image's size once, and only when its last
+tag goes.
+
 ## internal/steps
 
 Ticket 011, on the `Step` type and `Run` signature from 001.
@@ -1064,7 +1100,9 @@ tried in order, and a call that none matches fails the test. Recorded
   client knows (`Client`, `ClientInfo` with the context and plugin versions)
   and an error matching `ErrDaemonUnreachable`.
 - **Images.** `ImageExists`, `ImageID`, `ImageLabels`, `Build(BuildOpts)`
-  (streams output), `Pull`, `Tag` (031), `RemoveImage`.
+  (streams output), `Pull`, `Tag` (031), `RemoveImage`, and `ImageList(ref
+  filter)` (057), one `Image{Ref, ID, RepoTags, Size, Created, Labels}`
+  per tag.
 - **Volumes.** `VolumeCreate(name, labels)` (a no-op if the volume exists,
   whatever its labels), `VolumeInspect`, `VolumeList(labelFilters...)`,
   `VolumeRemove`, and `ContainersUsingVolume`, which includes stopped
@@ -1075,7 +1113,9 @@ tried in order, and a call that none matches fails the test. Recorded
   container or command or an unreachable daemon), they also return an
   `*ExitError`. `Create` takes the same
   `RunOpts` minus the run-only fields. There are also `CpFrom` (docker cp's
-  layout rules), `Rm` and `ContainerInspect` (compare `Health` exactly).
+  layout rules), `Rm`, `ContainerInspect` (compare `Health` exactly) and
+  `ContainerList` (057: every container, stopped ones included, with its
+  image ID and `Mounts`, the bind sources and volume names).
   `UniqueName(prefix, d.Rand)` names a one-off container.
 - **Logs.** `Logs(container, follow)` is a reader over stdout and stderr
   merged; always `Close` it. `WaitForLogLine(container, substr, timeout)`
@@ -1254,7 +1294,7 @@ layout.
 
 ## internal/cache
 
-Ticket 019; 057 adds `cache list/prune`. `cache.DefaultRoot()` is
+Ticket 019; 057 adds `Entries` and `RemoveEntry` for `cache list/prune`. `cache.DefaultRoot()` is
 `$XDG_CACHE_HOME/pic-sure`, or `~/.cache/pic-sure` when that is unset or
 relative. It refuses a root inside `$TMPDIR` (symlinks resolved), which
 Colima and Lima don't share with their VMs. `cache.Open(root, Options{Git,
@@ -1303,6 +1343,15 @@ command holds a lock.
   build's copy of its source, not created.
 - `EnsureMavenVolume(ctx, d.Docker)` creates `MavenVolume` (`pic-sure-m2`).
   Mount the volume only under the reactor lock.
+- `Entries()` (057, `prune.go`) lists what prune may remove: source trees
+  (`EntrySource`), `build/` contexts, `downloads/`, and `EntryTemp` for
+  `tmp/` entries and the `*.tmp-*` siblings in `src/<repo>/`, `git/` and the
+  root, with `Repo` set for those under a fetch lock. Clones, the
+  release-control clone and `locks/` are never entries. `RemoveEntry(ctx,
+  e)` removes one under the lock of whoever writes it (the fetch lock, the
+  reactor lock, or the frontend image's lock for `build/frontend-<tag>`),
+  and renames a source tree to `<sha>.tmp-prune` first, so a cut-short
+  removal never leaves a partial tree that `EnsureSource` would trust.
 
 ## internal/release
 

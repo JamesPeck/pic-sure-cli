@@ -89,6 +89,9 @@ type ContainerInfo struct {
 	// container has no healthcheck. Compare it exactly: "unhealthy"
 	// contains "healthy".
 	Health string
+	// Mounts are the host paths bind-mounted and the names of the volumes
+	// mounted into the container.
+	Mounts []string
 }
 
 // UniqueName returns prefix followed by "-" and 8 random hex digits read
@@ -321,33 +324,56 @@ type containerInspect struct {
 		ExitCode int
 		Health   *struct{ Status string }
 	}
+	Mounts []struct {
+		Type   string
+		Name   string
+		Source string
+	}
 }
 
 func (e *cliEngine) ContainerInspect(ctx context.Context, container string) (ContainerInfo, error) {
-	res, err := e.run(ctx, Cmd{Argv: []string{"docker", "container", "inspect", container}})
+	cs, err := e.inspectContainers(ctx, []string{container})
 	if err != nil {
 		return ContainerInfo{}, err
-	}
-	var cs []containerInspect
-	if err := decodeJSON(res.Stdout, &cs); err != nil {
-		return ContainerInfo{}, fmt.Errorf("parsing docker container inspect %s: %w", container, err)
 	}
 	if len(cs) != 1 {
 		return ContainerInfo{}, fmt.Errorf("docker container inspect %s: got %d containers, want 1", container, len(cs))
 	}
-	c := cs[0]
-	info := ContainerInfo{
-		ID:       c.ID,
-		Name:     strings.TrimPrefix(c.Name, "/"),
-		Image:    c.Config.Image,
-		ImageID:  c.Image,
-		Labels:   c.Config.Labels,
-		Status:   c.State.Status,
-		Running:  c.State.Running,
-		ExitCode: c.State.ExitCode,
+	return cs[0], nil
+}
+
+func (e *cliEngine) inspectContainers(ctx context.Context, containers []string) ([]ContainerInfo, error) {
+	res, err := e.run(ctx, Cmd{Argv: append([]string{"docker", "container", "inspect"}, containers...)})
+	if err != nil {
+		return nil, err
 	}
-	if c.State.Health != nil {
-		info.Health = c.State.Health.Status
+	var raw []containerInspect
+	if err := decodeJSON(res.Stdout, &raw); err != nil {
+		return nil, fmt.Errorf("parsing docker container inspect %s: %w", strings.Join(containers, " "), err)
 	}
-	return info, nil
+	infos := make([]ContainerInfo, len(raw))
+	for i, c := range raw {
+		info := ContainerInfo{
+			ID:       c.ID,
+			Name:     strings.TrimPrefix(c.Name, "/"),
+			Image:    c.Config.Image,
+			ImageID:  c.Image,
+			Labels:   c.Config.Labels,
+			Status:   c.State.Status,
+			Running:  c.State.Running,
+			ExitCode: c.State.ExitCode,
+		}
+		if c.State.Health != nil {
+			info.Health = c.State.Health.Status
+		}
+		for _, m := range c.Mounts {
+			if m.Type == "volume" {
+				info.Mounts = append(info.Mounts, m.Name)
+			} else {
+				info.Mounts = append(info.Mounts, m.Source)
+			}
+		}
+		infos[i] = info
+	}
+	return infos, nil
 }

@@ -51,6 +51,10 @@ type Engine interface {
 	Pull(ctx context.Context, ref string, out io.Writer) error
 	// Tag adds the reference dst to the local image src (`docker tag`).
 	Tag(ctx context.Context, src, dst string) error
+	// ImageList returns the local images whose reference matches
+	// reference, a `docker image ls` filter such as "hms-dbmi/*", one per
+	// REPOSITORY:TAG and sorted by it. Untagged images are left out.
+	ImageList(ctx context.Context, reference string) ([]Image, error)
 	// RemoveImage removes a local image. It fails if a container, even a
 	// stopped one, uses it.
 	RemoveImage(ctx context.Context, ref string) error
@@ -102,6 +106,9 @@ type Engine interface {
 	// ContainerInspect returns a container's state, or an error matching
 	// ErrNotFound.
 	ContainerInspect(ctx context.Context, container string) (ContainerInfo, error)
+	// ContainerList returns every container, running or stopped, sorted by
+	// name.
+	ContainerList(ctx context.Context) ([]ContainerInfo, error)
 
 	// Logs streams a container's stdout and stderr, merged; follow keeps
 	// the stream open until the container stops. Close stops it early and

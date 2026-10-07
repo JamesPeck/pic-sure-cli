@@ -54,7 +54,7 @@ var specCommands = map[string]string{
 	"dev list": "052", "dev on": "052", "dev off": "052",
 	"db bootstrap": "",
 	"reset":        "056", "destroy": "056",
-	"cache list": "057", "cache prune": "057",
+	"cache list": "", "cache prune": "",
 	"self-update":    "",
 	"support-bundle": "059",
 	"version":        "",
