@@ -205,10 +205,10 @@ func TestWarnEvents(t *testing.T) {
 	}
 }
 
-// The dashboard's update offers the gate's self-update through the run
-// screen's Confirm, and installs without re-running; with no Confirm, or a
-// no, it refuses with exit 5 as before.
-func TestCommandFromTUIGateAsksThroughConfirm(t *testing.T) {
+// update on the dashboard's child App (actionApp) offers the gate's
+// self-update through the run screen's Confirm, and installs without
+// re-running; with no Confirm, or a no, it refuses with exit 5 as before.
+func TestActionAppGateAsksThroughConfirm(t *testing.T) {
 	for _, tc := range []struct {
 		name                string
 		confirm, yes        bool

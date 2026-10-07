@@ -123,7 +123,6 @@ func redacted(err error) error {
 // run in-process for a dashboard action. Its events, and the run log's
 // stderr records, go to req.Sink; the summary it would print is the
 // result's Summary. Its exit code and message come back as the error.
-// update's compatibility gate offers its self-update through req.Confirm.
 func (a *App) commandFromTUI(ctx context.Context, req tui.CommandRequest) (tui.InitResult, error) {
 	var out, errOut bytes.Buffer
 	var result *events.Result
