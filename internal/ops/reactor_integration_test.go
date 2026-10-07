@@ -1,11 +1,8 @@
 package ops
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
-	"errors"
-	"io"
 	"os"
 	"os/exec"
 	"testing"
@@ -16,30 +13,6 @@ import (
 	"github.com/JamesPeck/pic-sure-cli/internal/events"
 	"github.com/JamesPeck/pic-sure-cli/internal/git"
 )
-
-// execRunner is a bare-bones docker.Runner for the integration test.
-type execRunner struct{}
-
-func (r execRunner) Run(ctx context.Context, c docker.Cmd) (docker.Result, error) {
-	var stdout, stderr bytes.Buffer
-	code, err := r.Stream(ctx, c, &stdout, &stderr)
-	return docker.Result{Stdout: stdout.Bytes(), Stderr: stderr.Bytes(), ExitCode: code}, err
-}
-
-func (execRunner) Stream(ctx context.Context, c docker.Cmd, stdout, stderr io.Writer) (int, error) {
-	cmd := exec.CommandContext(ctx, c.Argv[0], c.Argv[1:]...)
-	cmd.Env = append(os.Environ(), c.Env...)
-	cmd.Dir, cmd.Stdin, cmd.Stdout, cmd.Stderr = c.Dir, c.Stdin, stdout, stderr
-	err := cmd.Run()
-	if ctx.Err() != nil {
-		return -1, ctx.Err()
-	}
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
-		return exitErr.ExitCode(), nil
-	}
-	return 0, err
-}
 
 // TestReactorBuildForReal builds the pic-sure images from the commit in
 // PICSURE_REACTOR_SHA, in the user's real cache, and then checks that a
@@ -58,7 +31,7 @@ func TestReactorBuildForReal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := execRunner{}
+	r := &docker.ExecRunner{}
 	c, err := cache.Open(root, cache.Options{Git: git.New(r), Holder: "reactor integration test"})
 	if err != nil {
 		t.Fatal(err)

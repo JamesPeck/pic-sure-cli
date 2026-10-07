@@ -1,10 +1,8 @@
 package git_test
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,30 +13,6 @@ import (
 	"github.com/JamesPeck/pic-sure-cli/internal/docker"
 	"github.com/JamesPeck/pic-sure-cli/internal/git"
 )
-
-// execRunner is a bare-bones docker.Runner for these tests.
-type execRunner struct{}
-
-func (r execRunner) Run(ctx context.Context, c docker.Cmd) (docker.Result, error) {
-	var stdout, stderr bytes.Buffer
-	code, err := r.Stream(ctx, c, &stdout, &stderr)
-	return docker.Result{Stdout: stdout.Bytes(), Stderr: stderr.Bytes(), ExitCode: code}, err
-}
-
-func (execRunner) Stream(ctx context.Context, c docker.Cmd, stdout, stderr io.Writer) (int, error) {
-	cmd := exec.CommandContext(ctx, c.Argv[0], c.Argv[1:]...)
-	cmd.Env = append(os.Environ(), c.Env...)
-	cmd.Dir, cmd.Stdin, cmd.Stdout, cmd.Stderr = c.Dir, c.Stdin, stdout, stderr
-	err := cmd.Run()
-	if ctx.Err() != nil {
-		return -1, ctx.Err()
-	}
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
-		return exitErr.ExitCode(), nil
-	}
-	return 0, err
-}
 
 // isolateGit skips the test without git, and keeps the user's git config
 // and any enclosing repository out of it. In their place it puts a global
@@ -129,7 +103,7 @@ func TestBareCloneResolveAndFetch(t *testing.T) {
 	up.git("switch", "--quiet", "main")
 	up.git("branch", "light", featureHead) // same name as a tag
 
-	c := git.New(execRunner{})
+	c := git.New(&docker.ExecRunner{})
 	cache := t.TempDir()
 	bare := filepath.Join(cache, "git", "upstream.git")
 	if err := c.EnsureBare(ctx, up.dir, bare); err != nil {
@@ -195,7 +169,7 @@ func TestLsRemote(t *testing.T) {
 	up.git("tag", "--annotate", "--message", "release", "v1.0")
 	up.git("tag", "light")
 
-	refs, err := git.New(execRunner{}).LsRemote(context.Background(), up.dir)
+	refs, err := git.New(&docker.ExecRunner{}).LsRemote(context.Background(), up.dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +188,7 @@ func cloneAt(t *testing.T, up *upstream) (bare, sha string) {
 	t.Helper()
 	sha = up.commit("snapshot")
 	bare = filepath.Join(t.TempDir(), "r.git")
-	if err := git.New(execRunner{}).EnsureBare(context.Background(), up.dir, bare); err != nil {
+	if err := git.New(&docker.ExecRunner{}).EnsureBare(context.Background(), up.dir, bare); err != nil {
 		t.Fatal(err)
 	}
 	return bare, sha
@@ -222,7 +196,7 @@ func cloneAt(t *testing.T, up *upstream) (bare, sha string) {
 
 func archiveTo(t *testing.T, bare, sha string) (string, error) {
 	t.Helper()
-	rc, err := git.New(execRunner{}).Archive(context.Background(), bare, sha)
+	rc, err := git.New(&docker.ExecRunner{}).Archive(context.Background(), bare, sha)
 	if err != nil {
 		t.Fatal(err)
 	}

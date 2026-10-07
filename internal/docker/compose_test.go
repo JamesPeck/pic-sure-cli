@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -645,7 +644,7 @@ services:
 	writeFile(t, filepath.Join(dir, ".env"), "COMPOSE_PROJECT_NAME=hijacked\nTAG=from-dotenv\n")
 	ctx := context.Background()
 
-	c, err := docker.NewCompose(execRunner{}, dir, func() []string { return []string{"TAG=from-env"} })
+	c, err := docker.NewCompose(&docker.ExecRunner{}, dir, func() []string { return []string{"TAG=from-env"} })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -672,32 +671,4 @@ services:
 	if _, err := c.Config(ctx, true); err == nil || !strings.Contains(err.Error(), "TAG is required") {
 		t.Errorf("config --quiet without TAG: err = %v, want the required-variable error (.env must be ignored)", err)
 	}
-}
-
-// execRunner is a minimal real Runner for TestComposeAgainstRealCompose. It
-// drops the user's COMPOSE_* variables, as Compose relies on the production
-// runner to do.
-type execRunner struct{}
-
-func (execRunner) Run(ctx context.Context, c docker.Cmd) (docker.Result, error) {
-	var stdout, stderr bytes.Buffer
-	code, err := execRunner{}.Stream(ctx, c, &stdout, &stderr)
-	return docker.Result{Stdout: stdout.Bytes(), Stderr: stderr.Bytes(), ExitCode: code}, err
-}
-
-func (execRunner) Stream(ctx context.Context, c docker.Cmd, stdout, stderr io.Writer) (int, error) {
-	cmd := exec.CommandContext(ctx, c.Argv[0], c.Argv[1:]...)
-	for _, kv := range os.Environ() {
-		if !strings.HasPrefix(kv, "COMPOSE_") {
-			cmd.Env = append(cmd.Env, kv)
-		}
-	}
-	cmd.Env = append(cmd.Env, c.Env...)
-	cmd.Dir, cmd.Stdin, cmd.Stdout, cmd.Stderr = c.Dir, c.Stdin, stdout, stderr
-	err := cmd.Run()
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
-		return exitErr.ExitCode(), nil
-	}
-	return 0, err
 }

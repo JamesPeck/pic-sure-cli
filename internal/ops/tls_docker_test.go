@@ -1,12 +1,9 @@
 package ops_test
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"errors"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,26 +18,6 @@ import (
 	"github.com/JamesPeck/pic-sure-cli/internal/pki"
 	"github.com/JamesPeck/pic-sure-cli/internal/stack"
 )
-
-// execRunner runs real processes, for the tests that need a daemon.
-type execRunner struct{}
-
-func (r execRunner) Run(ctx context.Context, c docker.Cmd) (docker.Result, error) {
-	var stdout, stderr bytes.Buffer
-	code, err := r.Stream(ctx, c, &stdout, &stderr)
-	return docker.Result{Stdout: stdout.Bytes(), Stderr: stderr.Bytes(), ExitCode: code}, err
-}
-
-func (execRunner) Stream(ctx context.Context, c docker.Cmd, stdout, stderr io.Writer) (int, error) {
-	cmd := exec.CommandContext(ctx, c.Argv[0], c.Argv[1:]...)
-	cmd.Env = append(os.Environ(), c.Env...)
-	cmd.Dir, cmd.Stdin, cmd.Stdout, cmd.Stderr = c.Dir, c.Stdin, stdout, stderr
-	err := cmd.Run()
-	if ee := (*exec.ExitError)(nil); errors.As(err, &ee) {
-		return ee.ExitCode(), nil
-	}
-	return 0, err
-}
 
 // TestTLSStepAgainstDocker fills a real certs volume, in generated mode and
 // then in provided mode, and checks what httpd's uid 2 would find there.
@@ -75,7 +52,7 @@ func TestTLSStepAgainstDocker(t *testing.T) {
 	t.Cleanup(func() { _ = st.Close() })
 	cfg := stack.DefaultConfig()
 	cfg.Name = name
-	d := &ops.Deps{Docker: docker.NewEngine(execRunner{}), Rand: rand.Reader, Clock: ops.SystemClock{}, Sink: events.Discard}
+	d := &ops.Deps{Docker: docker.NewEngine(&docker.ExecRunner{}), Rand: rand.Reader, Clock: ops.SystemClock{}, Sink: events.Discard}
 	applyAndCheck := func() {
 		t.Helper()
 		s := ops.TLSStep(d, st, &cfg)

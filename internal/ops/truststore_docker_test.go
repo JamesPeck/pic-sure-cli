@@ -57,7 +57,7 @@ func TestTruststoreStepWithDocker(t *testing.T) {
 	if err := exec.CommandContext(ctx, "docker", "info").Run(); err != nil {
 		t.Skip("docker daemon unavailable")
 	}
-	r := execRunner{}
+	r := &docker.ExecRunner{}
 	e := docker.NewEngine(r)
 
 	// Everything the test creates is named with this prefix and removed.
