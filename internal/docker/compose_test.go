@@ -184,6 +184,20 @@ func TestComposeStreamsOutput(t *testing.T) {
 	}
 }
 
+func TestComposeLogsSplitsComposesOwnMessages(t *testing.T) {
+	f := fakerunner.New(t)
+	f.On(fakerunner.Glob("docker compose * logs nosuch")).
+		Stdout("hpds-1  | started\n").Stderr("no such service: nosuch\n").Exit(1)
+	var out, errOut bytes.Buffer
+	err := newTestCompose(f).Logs(context.Background(), docker.ComposeLogsOpts{Services: []string{"nosuch"}, Out: &out, Err: &errOut})
+	if err == nil || !strings.Contains(err.Error(), "no such service: nosuch") {
+		t.Errorf("err = %v, want compose's message", err)
+	}
+	if out.String() != "hpds-1  | started\n" || errOut.String() != "no such service: nosuch\n" {
+		t.Errorf("out = %q, err = %q, want the logs and compose's message apart", out.String(), errOut.String())
+	}
+}
+
 func TestComposeVerbFailureCarriesStderr(t *testing.T) {
 	for _, withWriter := range []bool{false, true} {
 		f := fakerunner.New(t)

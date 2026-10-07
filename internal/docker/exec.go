@@ -71,10 +71,11 @@ type ExecRunner struct {
 	// can read from and control the terminal, and gets Ctrl-C from it
 	// directly. Stream hands its writers to the child as they are, without
 	// line buffering, so an *os.File such as the terminal becomes the
-	// child's own stdout or stderr. When ctx ends, only the child gets
-	// SIGTERM, and SIGKILL WaitDelay later; anything it started is left to
-	// it. Stream's guarantees about whole lines and serialized writes
-	// don't hold.
+	// child's own stdout or stderr, and its guarantees about whole lines
+	// and serialized writes don't hold. The runner never signals a
+	// foreground child: Ctrl-C has already reached it, and a second signal
+	// would count as a second Ctrl-C (compose's force-kill). The call waits
+	// for the child to exit, then reports ctx's error if ctx ended first.
 	Foreground bool
 }
 
@@ -120,11 +121,15 @@ func (r *ExecRunner) run(ctx context.Context, c Cmd, stdout, stderr io.Writer) (
 		delay = DefaultWaitDelay
 	}
 
+	if r.Foreground {
+		return r.runForeground(ctx, c, stdout, stderr, delay)
+	}
 	cmd := exec.CommandContext(ctx, c.Argv[0], c.Argv[1:]...)
 	cmd.Env = append(baseEnv(r.environ()), c.Env...)
 	cmd.Dir = c.Dir
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.WaitDelay = delay
 	// Cancel runs on exec's context watcher, which Wait synchronizes with,
 	// so Wait's caller can read cancelled without a lock. The group is
@@ -132,28 +137,17 @@ func (r *ExecRunner) run(ctx context.Context, c Cmd, stdout, stderr io.Writer) (
 	// blocked on a writer after the command has died.
 	var cancelled bool
 	killed := make(chan struct{})
-	if r.Foreground {
-		// exec itself sends SIGKILL WaitDelay after Cancel.
-		close(killed)
-		cmd.Cancel = func() error {
-			err := cmd.Process.Signal(syscall.SIGTERM)
-			cancelled = !errors.Is(err, os.ErrProcessDone)
-			return err
+	cmd.Cancel = func() error {
+		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+		if errors.Is(err, syscall.ESRCH) {
+			return os.ErrProcessDone
 		}
-	} else {
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-		cmd.Cancel = func() error {
-			err := syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
-			if errors.Is(err, syscall.ESRCH) {
-				return os.ErrProcessDone
-			}
-			cancelled = true
-			go func() {
-				killGroupBy(cmd.Process.Pid, time.Now().Add(delay))
-				close(killed)
-			}()
-			return err
-		}
+		cancelled = true
+		go func() {
+			killGroupBy(cmd.Process.Pid, time.Now().Add(delay))
+			close(killed)
+		}()
+		return err
 	}
 
 	r.debug(ctx, "exec", "argv", argv, "dir", c.Dir, "env", envNames(c.Env))
@@ -192,6 +186,39 @@ func (r *ExecRunner) run(ctx context.Context, c Cmd, stdout, stderr io.Writer) (
 		return code, nil
 	default:
 		return code, fmt.Errorf("%s: %w", argv, waitErr)
+	}
+}
+
+// runForeground runs c in the CLI's process group, ignoring ctx until the
+// child exits (see Foreground).
+func (r *ExecRunner) runForeground(ctx context.Context, c Cmd, stdout, stderr io.Writer, delay time.Duration) (int, error) {
+	argv := FormatArgv(c.Argv)
+	if ctx.Err() != nil {
+		return -1, ctxError(ctx, argv)
+	}
+	cmd := exec.Command(c.Argv[0], c.Argv[1:]...)
+	cmd.Env = append(baseEnv(r.environ()), c.Env...)
+	cmd.Dir = c.Dir
+	cmd.Stdin = c.Stdin
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	cmd.WaitDelay = delay // after the exit, for lingering pipes and stdin
+	r.debug(ctx, "exec in the foreground", "argv", argv, "dir", c.Dir, "env", envNames(c.Env))
+	start := time.Now()
+	err := cmd.Run()
+	code := exitCode(cmd.ProcessState)
+	if code == -1 && err != nil {
+		return -1, fmt.Errorf("%s: %w", argv, err)
+	}
+	r.debug(ctx, "exec done", "argv", argv, "exit", code, "elapsed", time.Since(start).Round(time.Millisecond))
+	var exitErr *exec.ExitError
+	switch {
+	case ctx.Err() != nil:
+		return code, ctxError(ctx, argv)
+	case err == nil, errors.As(err, &exitErr), errors.Is(err, exec.ErrWaitDelay):
+		return code, nil
+	default:
+		return code, fmt.Errorf("%s: %w", argv, err)
 	}
 }
 

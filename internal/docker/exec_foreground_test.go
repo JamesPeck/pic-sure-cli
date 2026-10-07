@@ -90,26 +90,26 @@ func TestExecForegroundReadsTheTerminal(t *testing.T) {
 	}
 }
 
-// In the foreground, cancelling sends SIGTERM to the child alone, and the
-// call still returns the context's error.
-func TestExecForegroundCancelSendsSIGTERM(t *testing.T) {
+// A foreground child gets no signal when ctx ends (Ctrl-C has reached it
+// from the terminal already): the call waits for it, then returns the
+// context's error.
+func TestExecForegroundCancelLeavesTheChildAlone(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	r := &docker.ExecRunner{Foreground: true, WaitDelay: time.Minute}
+	r := &docker.ExecRunner{Foreground: true}
 	stdout := writerFunc(func(p []byte) (int, error) {
 		if strings.Contains(string(p), "ready") {
 			cancel()
 		}
 		return len(p), nil
 	})
-	var stderr bytes.Buffer
 
-	code, err := r.Stream(ctx, sh(`trap 'echo cleaned up >&2; exit 7' TERM; echo ready; while :; do sleep 0.05; done`), stdout, &stderr)
+	code, err := r.Stream(ctx, sh(`trap 'exit 1' TERM; echo ready; sleep 0.3; exit 7`), stdout, nil)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}
-	if code != 7 || !strings.Contains(stderr.String(), "cleaned up") {
-		t.Errorf("code %d, stderr %q: the TERM trap did not run", code, stderr.String())
+	if code != 7 {
+		t.Errorf("code %d, want 7: the child was signalled", code)
 	}
 }

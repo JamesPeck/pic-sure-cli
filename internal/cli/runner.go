@@ -11,3 +11,9 @@ import (
 func (a *App) newRunner(log *slog.Logger) docker.Runner {
 	return &docker.ExecRunner{Log: log}
 }
+
+// newForegroundRunner returns the runner for an interactive command, whose
+// child reads the terminal (docker.ExecRunner.Foreground).
+func (a *App) newForegroundRunner(log *slog.Logger) docker.Runner {
+	return &docker.ExecRunner{Log: log, Foreground: true}
+}

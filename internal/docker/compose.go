@@ -137,6 +137,9 @@ type ComposeLogsOpts struct {
 	Tail int
 	// Out receives the logs; nil discards them.
 	Out io.Writer
+	// Err receives compose's own messages (warnings, errors); nil means
+	// Out.
+	Err io.Writer
 }
 
 // PsTimeout bounds Composer.Ps (spec §10.2), so a wedged daemon can't hang
@@ -275,7 +278,11 @@ func (c *Compose) Logs(ctx context.Context, opts ComposeLogsOpts) error {
 	if opts.Tail > 0 {
 		args = append(args, "--tail", strconv.Itoa(opts.Tail))
 	}
-	return c.stream(ctx, opts.Out, false, append(args, opts.Services...))
+	errOut := opts.Err
+	if errOut == nil {
+		errOut = opts.Out
+	}
+	return c.streamTo(ctx, opts.Out, errOut, false, append(args, opts.Services...))
 }
 
 // Run implements Composer. The container gets no TTY (-T), so its output
@@ -404,11 +411,17 @@ func checkComposeEnv(env []string) error {
 // stream runs a verb with its output copied to out and turns a non-zero exit
 // into an *ExitError.
 func (c *Compose) stream(ctx context.Context, out io.Writer, progress bool, args []string) error {
+	return c.streamTo(ctx, out, out, progress, args)
+}
+
+// streamTo is stream with compose's stdout and stderr going to separate
+// writers.
+func (c *Compose) streamTo(ctx context.Context, out, errOut io.Writer, progress bool, args []string) error {
 	cmd, err := c.cmd(progress, args)
 	if err != nil {
 		return err
 	}
-	code, tail, err := streamCmd(ctx, c.Runner, cmd, out, out)
+	code, tail, err := streamCmd(ctx, c.Runner, cmd, out, errOut)
 	if err != nil {
 		return err
 	}

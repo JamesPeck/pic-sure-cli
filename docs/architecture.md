@@ -202,14 +202,17 @@ it.
   logger, so it can log argv. Until the others land, the sink discards
   events.
 
-- `composeverbs.go` (026): `a.stackCompose(runner, st)` is the compose
-  adapter for a command's stack: exit 3 with "run `pic-sure up`" when it
-  isn't rendered, `render.ComposeEnv` from the config and secrets, and
-  `ProgressJSON` under `--json`. `down` and `restart` take the stack lock
-  and run as one step whose `Log` events are compose's output; `logs`
-  writes to stdout (`Log` events under `--json`) and reports Ctrl-C as the
-  signal alone; `compose` runs in the foreground runner without the lock
-  and exits with compose's code.
+- `composeverbs.go` (026): `a.stackCompose(runner, st, readOnly)` is the
+  compose adapter for a command's stack: exit 3 with "run `pic-sure up`"
+  when it isn't rendered, `render.ComposeEnv` from the config and secrets
+  (a read-only command falls back to the defaults when it can't read
+  them, so `ps` and `logs` work on a newer stack), and `ProgressJSON` under
+  `--json`. `down` and `restart` take the stack lock and run as one step
+  whose `Log` events are compose's output. `ps --json` uses status's
+  service shape. `logs` writes the logs to stdout and compose's own
+  messages to stderr (a `logs` step under `--json`), and reports Ctrl-C as
+  the signal alone. `compose` refuses `--json`, holds the stack lock, runs
+  in the foreground runner and exits with compose's code.
 
 | File | Commands | Ticket |
 |---|---|---|
@@ -922,8 +925,10 @@ is ready to use.
   exec hpds sh`). The child stays in the CLI's process group, so it can
   read the terminal and gets Ctrl-C from it, and `Stream` hands it the
   writers as they are (an `*os.File` becomes its stdout), without line
-  buffering. Cancelling sends SIGTERM to the child alone, then SIGKILL
-  `WaitDelay` later.
+  buffering. The runner never signals it: Ctrl-C has reached it from the
+  terminal already, and a second signal would count as a second Ctrl-C
+  (compose's force-kill). The call waits for the child, then returns ctx's
+  error if ctx ended first. `cli.newForegroundRunner` builds one.
 - **Environment.** A child gets only `PATH`, `HOME`, `TERM`,
   `SSH_AUTH_SOCK`, every `DOCKER_*` and `XDG_*` variable, and
   `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`/`ALL_PROXY` in either case from the
@@ -967,7 +972,8 @@ argv. `Compose` implements it over a `Runner`.
   command picks it by output mode: `ProgressJSON` under `--json`, otherwise
   `ProgressPlain` (the zero value).
 - `Up`, `Down`, `Stop`, `Restart`, `Pull` and `Logs` copy compose's
-  output, both streams, to one writer (wrap the sink in
+  output, both streams, to one writer (`Logs` can send compose's stderr to
+  `ComposeLogsOpts.Err` instead) (wrap the sink in
   `events.NewLogWriter`) and return an `*ExitError` carrying compose's
   message when it fails. `Down` always passes `--remove-orphans`.
 - `Run` (`run [--rm] -T`) and `Exec` (`exec -T`) stream stdout and stderr

@@ -47,9 +47,18 @@ exec pic-sure --plain restart hpds psama
 stderr 'Restart hpds, psama'
 grep '--progress plain restart hpds psama$' $WORK/docker.log
 
-# down and restart are gated as mutating: a newer stack is exit 5.
+# down, restart and compose are gated as mutating: a newer stack is exit 5.
 exitcode 5 pic-sure --stack $WORK/newer down
 exitcode 5 pic-sure --stack $WORK/newer restart
+exitcode 5 pic-sure --stack $WORK/newer compose -- ps
+
+# ps and logs are read-only: they run on a newer stack, with a warning,
+# though this CLI can't read its config.
+exec pic-sure --stack $WORK/newer ps
+stderr 'warning: '
+stdout '^hpds +running'
+exec pic-sure --stack $WORK/newer logs hpds
+stdout '^hpds-1  \| started$'
 
 # ps: a table, or one report with --json.
 exec pic-sure ps
@@ -57,16 +66,23 @@ stdout '^SERVICE +STATE +HEALTH +STATUS$'
 stdout '^hpds +running +healthy +Up 2 minutes \(healthy\)$'
 stdout '^psama +exited +- +Exited \(1\) 1 minute ago$'
 exec pic-sure --json ps
-stdout '^\{"schema_version":2,"services":\[\{"ID":"aaa","Name":"demo-hpds-1",.*"Service":"hpds".*"Health":"healthy"'
+stdout '^\{"schema_version":2,"services":\[\{"service":"hpds","container":"demo-hpds-1","state":"running","health":"healthy","status":"Up 2 minutes \(healthy\)","exit_code":0\},\{"service":"psama",'
 ! stdout '"type"'
 grep '--env-file /dev/null ps --all --format json$' $WORK/docker.log
 
-# logs: compose's output on stdout, or log events with --json.
+# logs: the logs on stdout and compose's own messages on stderr, or log
+# events of step logs with --json.
 exec pic-sure logs hpds
 stdout '^hpds-1  \| started$'
+! stderr .
 grep '--env-file /dev/null logs hpds$' $WORK/docker.log
+exitcode 1 pic-sure logs nosuch
+! stdout .
+stderr '^no such service: nosuch$'
 exec pic-sure --json logs -f
+stdout '"type":"step_started","id":"logs"'
 stdout '"type":"log","id":"logs","stream":"stdout","line":"hpds-1  \| started"'
+stdout '"type":"step_done","id":"logs","status":"ok"'
 stdout '"type":"result","ok":true'
 grep '--env-file /dev/null logs --follow$' $WORK/docker.log
 
@@ -80,6 +96,8 @@ exitcode 2 pic-sure compose ps
 stderr 'put -- and then the docker compose arguments'
 exitcode 2 pic-sure compose --
 exitcode 2 pic-sure compose
+exitcode 2 pic-sure --json compose -- ps
+stdout '"exit_code":2'
 
 # Ctrl-C ends logs -f: the follow is cancelled and its docker child killed.
 cd $WORK
@@ -99,6 +117,7 @@ docker compose * --progress json down --remove-orphans => 0 stderr=down.json
 docker compose * restart nosuch => 1 stderr=nosuch.json
 docker compose * --progress plain restart* => 0
 docker compose * ps --all --format json => 0 stdout=ps.json
+docker compose * logs nosuch => 1 stderr=nosuch.txt
 docker compose * logs* => 0 stdout=logs.txt
 docker compose * ps -a => 0 stdout=raw.txt
 docker compose * top => 4
@@ -108,6 +127,8 @@ docker compose * top => 4
 {"id":"Container demo-hpds-1","status":"Removed"}
 -- nosuch.json --
 {"error":true,"message":"no such service: nosuch"}
+-- nosuch.txt --
+no such service: nosuch
 -- ps.json --
 {"ID":"aaa","Name":"demo-hpds-1","Project":"demo","Service":"hpds","State":"running","Status":"Up 2 minutes (healthy)","Health":"healthy","ExitCode":0}
 {"ID":"bbb","Name":"demo-psama-1","Project":"demo","Service":"psama","State":"exited","Status":"Exited (1) 1 minute ago","Health":"","ExitCode":1}
@@ -138,7 +159,7 @@ auth: {mode: open, admin_email: admin@example.com}
 -- unrendered/.pic-sure/state.json --
 {"cli_version": "dev", "schema_version": 1}
 -- newer/pic-sure.yaml --
-schema: 1
+schema: 2
 name: newer
 auth: {mode: open, admin_email: admin@example.com}
 -- newer/.pic-sure/state.json --

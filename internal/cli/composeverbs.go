@@ -1,10 +1,12 @@
 package cli
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -47,7 +49,8 @@ func newRestartCmd(a *App) *cobra.Command {
 }
 
 // composeVerb runs a mutating compose verb under the stack lock, as step id
-// with title, compose's output becoming the step's Log events.
+// with title, compose's output (mostly progress, on stderr) becoming the
+// step's Log events.
 func (a *App) composeVerb(cmd *cobra.Command, id, title string, verb func(*ops.Deps, io.Writer) error) error {
 	st, err := a.openStack(cmd)
 	if err != nil {
@@ -60,28 +63,37 @@ func (a *App) composeVerb(cmd *cobra.Command, id, title string, verb func(*ops.D
 		return err
 	}
 	defer func() { _ = lock.Unlock() }()
-	if d.Compose, err = a.stackCompose(d.Runner, st); err != nil {
+	if d.Compose, err = a.stackCompose(d.Runner, st, false); err != nil {
 		return err
 	}
 
-	d.Sink.Emit(events.StepStarted{ID: id, Title: title})
-	out := events.NewLogWriter(d.Sink, id, events.StreamStderr)
-	err = verb(d, out)
-	_ = out.Close()
-	status := events.StepOK
-	if err != nil {
-		status = events.StepFailed
-	}
-	d.Sink.Emit(events.StepDone{ID: id, Status: status})
+	err = sinkStep(d.Sink, id, title, func(_, errOut io.Writer) error { return verb(d, errOut) })
 	if err != nil {
 		return err
 	}
 	return a.finish(nil, nil)
 }
 
-// psReport is ps's --json report.
+// sinkStep runs fn as step id with title on sink. fn's writers turn
+// subprocess output into the step's Log events.
+func sinkStep(sink events.Sink, id, title string, fn func(out, errOut io.Writer) error) error {
+	sink.Emit(events.StepStarted{ID: id, Title: title})
+	out := events.NewLogWriter(sink, id, events.StreamStdout)
+	errOut := events.NewLogWriter(sink, id, events.StreamStderr)
+	err := fn(out, errOut)
+	_ = out.Close()
+	_ = errOut.Close()
+	status := events.StepOK
+	if err != nil {
+		status = events.StepFailed
+	}
+	sink.Emit(events.StepDone{ID: id, Status: status})
+	return err
+}
+
+// psReport is ps's --json report, in status's shape.
 type psReport struct {
-	Services []docker.ComposeService `json:"services"`
+	Services []ops.StatusService `json:"services"`
 }
 
 func newPsCmd(a *App) *cobra.Command {
@@ -96,25 +108,30 @@ func newPsCmd(a *App) *cobra.Command {
 			}
 			defer func() { _ = st.Close() }()
 			d := a.newDeps()
-			c, err := a.stackCompose(d.Runner, st)
+			c, err := a.stackCompose(d.Runner, st, true)
 			if err != nil {
 				return err
 			}
-			services, err := c.Ps(cmd.Context())
+			ps, err := c.Ps(cmd.Context())
 			if err != nil {
 				return err
 			}
-			report := psReport{Services: services}
-			if report.Services == nil {
-				report.Services = []docker.ComposeService{}
+			report := psReport{Services: []ops.StatusService{}}
+			for _, s := range ps {
+				report.Services = append(report.Services, ops.StatusService{
+					Service: s.Service, Container: s.Name, State: s.State,
+					Health: s.Health, Status: s.Status, ExitCode: s.ExitCode,
+				})
 			}
-			return a.printReport(report, func(w io.Writer) error { return writePs(w, services) })
+			slices.SortFunc(report.Services, func(x, y ops.StatusService) int {
+				return cmp.Or(cmp.Compare(x.Service, y.Service), cmp.Compare(x.Container, y.Container))
+			})
+			return a.printReport(report, func(w io.Writer) error { return writePs(w, report.Services) })
 		},
 	}
 }
 
-// writePs prints the services as a table.
-func writePs(w io.Writer, services []docker.ComposeService) error {
+func writePs(w io.Writer, services []ops.StatusService) error {
 	if len(services) == 0 {
 		_, err := io.WriteString(w, "No containers.\n")
 		return err
@@ -139,8 +156,9 @@ func newLogsCmd(a *App) *cobra.Command {
 	c := &cobra.Command{
 		Use:   "logs [SERVICE]",
 		Short: "Show service logs",
-		Long: `Show service logs (default: every service). With -f, keep following new
-lines until Ctrl-C. With --json, each line is a log event.`,
+		Long: `Show service logs (default: every service) on stdout. With -f, keep
+following new lines until Ctrl-C. With --json, each line is a log event of
+step "logs".`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			follow, _ := cmd.Flags().GetBool("follow")
@@ -150,17 +168,20 @@ lines until Ctrl-C. With --json, each line is a log event.`,
 			}
 			defer func() { _ = st.Close() }()
 			d := a.newDeps()
-			c, err := a.stackCompose(d.Runner, st)
+			c, err := a.stackCompose(d.Runner, st, true)
 			if err != nil {
 				return err
 			}
-			opts := docker.ComposeLogsOpts{Services: args, Follow: follow, Out: a.Stdout}
-			if a.output().mode == modeJSON {
-				lw := events.NewLogWriter(d.Sink, "logs", events.StreamStdout)
-				defer func() { _ = lw.Close() }()
-				opts.Out = lw
+			opts := docker.ComposeLogsOpts{Services: args, Follow: follow, Out: a.Stdout, Err: a.Stderr}
+			if a.output().mode != modeJSON {
+				err = c.Logs(cmd.Context(), opts)
+			} else {
+				err = sinkStep(d.Sink, "logs", "Show service logs", func(out, errOut io.Writer) error {
+					opts.Out, opts.Err = out, errOut
+					return c.Logs(cmd.Context(), opts)
+				})
 			}
-			if err := c.Logs(cmd.Context(), opts); err != nil {
+			if err != nil {
 				if cause := context.Cause(cmd.Context()); cause != nil {
 					// Ctrl-C is how -f ends: report the signal alone.
 					return cause
@@ -180,14 +201,17 @@ func newComposeCmd(a *App) *cobra.Command {
 		Short: "Run docker compose against the rendered stack (escape hatch)",
 		Long: `Run docker compose against the rendered stack, with the same -f files and
 environment the CLI uses. Put -- before the compose arguments. pic-sure
-exits with compose's exit code. It doesn't take the stack lock, so it can
-run alongside other commands; don't change the stack with it while one is
-running.`,
+exits with compose's exit code. It holds the stack lock until compose
+exits, as every command that can change the stack does. Its output is
+compose's own, so --json is refused.`,
 		Example: `  pic-sure compose -- ps -a
   pic-sure compose -- exec hpds sh`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if cmd.ArgsLenAtDash() != 0 || len(args) == 0 {
 				return withUsageHint(exitcode.Usage("put -- and then the docker compose arguments after compose"))
+			}
+			if a.Global.JSON {
+				return exitcode.Usage("compose prints compose's own output, so it takes no --json; pass compose's --format json instead")
 			}
 			st, err := a.openStack(cmd)
 			if err != nil {
@@ -195,14 +219,20 @@ running.`,
 			}
 			defer func() { _ = st.Close() }()
 			d := a.newDeps()
-			// In the foreground, an interactive command can read the
-			// terminal.
-			r := &docker.ExecRunner{Log: d.Log, Foreground: true}
-			c, err := a.stackCompose(r, st)
+			lock, err := a.lockStack(cmd.Context(), cmd, st, d.Sink)
+			if err != nil {
+				return err
+			}
+			defer func() { _ = lock.Unlock() }()
+			c, err := a.stackCompose(a.newForegroundRunner(d.Log), st, false)
 			if err != nil {
 				return err
 			}
 			code, err := c.Passthrough(cmd.Context(), args, a.Stdin, a.Stdout, a.Stderr)
+			if cause := context.Cause(cmd.Context()); cause != nil {
+				// The signal decides the exit code; compose got it too.
+				return cause
+			}
 			if err != nil {
 				return err
 			}
@@ -216,8 +246,9 @@ running.`,
 
 // stackCompose returns the compose adapter for st, with the environment its
 // compose files need (render.ComposeEnv) and the progress format for the
-// output mode. A stack that hasn't been rendered is exit 3.
-func (a *App) stackCompose(r docker.Runner, st *stack.Stack) (*docker.Compose, error) {
+// output mode. A stack that hasn't been rendered is exit 3. For readOnly
+// commands, a config or secrets file this CLI can't read is no error.
+func (a *App) stackCompose(r docker.Runner, st *stack.Stack, readOnly bool) (*docker.Compose, error) {
 	c, err := docker.NewCompose(r, st.Dir, nil)
 	if errors.Is(err, docker.ErrNotRendered) {
 		return nil, exitcode.Precondition("the stack hasn't been rendered yet; run `pic-sure up`")
@@ -225,15 +256,14 @@ func (a *App) stackCompose(r docker.Runner, st *stack.Stack) (*docker.Compose, e
 	if err != nil {
 		return nil, err
 	}
-	cfg, err := st.LoadConfig()
-	if err != nil {
-		return nil, configError(err)
+	env, err := stackComposeEnv(st)
+	if err != nil && readOnly {
+		// ps and logs create no container, so the values matter only to
+		// keep compose from warning that they are unset. They must work
+		// on a stack whose config is invalid or newer (§10.6).
+		def := stack.DefaultConfig()
+		env, err = render.ComposeEnv(&def, &stack.Secrets{})
 	}
-	sec, err := st.LoadSecrets()
-	if err != nil {
-		return nil, err
-	}
-	env, err := render.ComposeEnv(cfg, sec)
 	if err != nil {
 		return nil, err
 	}
@@ -242,4 +272,16 @@ func (a *App) stackCompose(r docker.Runner, st *stack.Stack) (*docker.Compose, e
 		c.Progress = docker.ProgressJSON
 	}
 	return c, nil
+}
+
+func stackComposeEnv(st *stack.Stack) ([]string, error) {
+	cfg, err := st.LoadConfig()
+	if err != nil {
+		return nil, configError(err)
+	}
+	sec, err := st.LoadSecrets()
+	if err != nil {
+		return nil, err
+	}
+	return render.ComposeEnv(cfg, sec)
 }
