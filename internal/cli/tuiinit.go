@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/JamesPeck/pic-sure-cli/internal/cache"
 	"github.com/JamesPeck/pic-sure-cli/internal/events"
 	"github.com/JamesPeck/pic-sure-cli/internal/log"
 	"github.com/JamesPeck/pic-sure-cli/internal/ops"
@@ -97,14 +96,8 @@ var _ io.Writer = (*logEvents)(nil)
 func wizardDefaults(dir string) stack.Config {
 	cfg := stack.DefaultConfig()
 	cfg.Name = suggestName(filepath.Base(dir))
-	var h ops.Host = systemHost{}
-	if root, err := cache.DefaultRoot(); err == nil {
-		if c, err := cache.Open(root, cache.Options{}); err == nil {
-			if reserved, err := ops.ReservedPorts(c, dir); err == nil {
-				h = ops.ReservingHost{Host: h, Reserved: reserved}
-			}
-		}
-	}
+	reserved, _ := reservedInDefaultCache(dir)
+	h := ops.ReservingHost{Host: systemHost{}, Reserved: reserved}
 	hp, sp, err := ops.ChoosePorts(h, 0, 0, false)
 	if err != nil {
 		hp, sp, err = ops.ChoosePorts(h, 0, 0, true)

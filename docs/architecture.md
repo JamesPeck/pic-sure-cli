@@ -271,15 +271,17 @@ it.
   the stack lock, pic-sure.yaml, `EnsureSecrets` with `OpenAuth`, state.json with
   the release and the operation). Then `ops.InitSteps` with `--skip-step`,
   and `initialized_at` once they succeed. A new stack's ports (077): the
-  preconditions' choice only checks there are some; `claimPorts` chooses
-  them again under the cache's `LockPorts`, with `ops.ReservedPorts`
-  (given ports exempt), then writes pic-sure.yaml and registers the stack
-  before unlocking, so concurrent inits choose different ports. If the plan
-  fails with `docker.PortAllocated` on a port init chose itself (not
-  `--http-port`/`--https-port`/their `--set`, not a `--set` dev base, not a
-  resumed stack), `retryPorts` claims new ports avoiding it and runs the
-  plan again from `render`, once. `initRun.host` replaces the system's
-  ports in tests. `r.compose` builds the adapter
+  preconditions choose them with the default cache's `ops.ReservedPorts`
+  only to check there are some; `claimPorts` chooses them again under the
+  cache's `LockPorts`, with the reservations (given ports exempt), then
+  writes pic-sure.yaml and registers the stack before unlocking, so
+  concurrent inits choose different ports. If the plan fails with
+  `docker.PortAllocated` on a port init chose itself, `portRetry` picks
+  what to choose again: a port of a dev block not `--set` moves the block;
+  with `--auto-ports`, an HTTP or HTTPS port not given moves the ports not
+  given. Never on a resumed stack. `retryPorts` claims them avoiding the
+  taken port and runs the plan again from `render`, once. `initRun.host`
+  replaces the system's ports in tests. `r.compose` builds the adapter
   with a lazy env over init's `*Secrets`, so `compose up` sees the token
   seed issued; `up` (035) can copy it. `startRunLog` registers
   `--admin-email` with the redactor before it logs the flags. An
@@ -1180,10 +1182,11 @@ init, and the parts `up` and `update` reuse.
   is the HTTP, HTTPS and dev-block ports that the registry's other stacks
   set in their pic-sure.yaml (a gone or unreadable one counts for
   nothing); `ReservingHost{Host, Reserved}` makes them busy for both
-  choosers, and a busy default that is reserved says "another stack's". `StackNameInUse(ctx, d, name,
-  dir)` finds a container or volume of compose project `name`, or a volume
-  labelled for stack `name`, whose stack-dir label isn't `dir`, and returns
-  the host ports `dir`'s own containers publish.
+  choosers, and a busy default that is reserved says "another stack's".
+  `StackNameInUse(ctx, d, name, dir)` finds a container or volume of
+  compose project `name`, or a volume labelled for stack `name`, whose
+  stack-dir label isn't `dir`, and returns the host ports `dir`'s own
+  containers publish.
 - Doctor's new `DoctorOptions.Config` is init's config, used without a
   `Stack`: `memory` counts its HPDS heap once (a running hpds of a stack of
   that name is taken for it).

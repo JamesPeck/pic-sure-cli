@@ -288,11 +288,56 @@ func TestInitKeepsGivenPorts(t *testing.T) {
 		port  int
 		retry bool
 	}{{8080, false}, {8444, true}, {15013, true}, {15000, false}, {9999, false}} {
-		if _, retry := b.portRetry(taken(tc.port)); retry != tc.retry {
-			t.Errorf("port %d taken: retry %v, want %v", tc.port, retry, tc.retry)
+		if _, choose := b.portRetry(taken(tc.port)); (choose != nil) != tc.retry {
+			t.Errorf("port %d taken: retry %v, want %v", tc.port, choose != nil, tc.retry)
 		}
 	}
-	if _, retry := b.portRetry(errors.New("compose up failed")); retry {
+	if _, choose := b.portRetry(errors.New("compose up failed")); choose != nil {
 		t.Error("retry on an error that isn't a taken port")
+	}
+	// Without --auto-ports init chose 80 and 443, and has no others.
+	c := start("--name", "c")
+	if _, choose := c.portRetry(taken(80)); choose != nil {
+		t.Error("retry on the default port 80 without --auto-ports")
+	}
+
+	// A taken dev port moves only the dev block.
+	port, choose := b.portRetry(taken(15013))
+	if err := b.claimPorts(context.Background(), b.d.Sink, ops.StartStepID, choose, port); err != nil {
+		t.Fatal(err)
+	}
+	if net := b.cfg.Network; net.HTTPPort != 8080 || net.HTTPSPort != 8444 || net.DevPorts.Base != 15030 {
+		t.Errorf("after dev port 15013 was taken: %+v, want 8080/8444 and base 15030", net)
+	}
+	// A taken HTTPS port moves every port init chose, and pic-sure.yaml
+	// has them.
+	port, choose = b.portRetry(taken(8444))
+	if err := b.claimPorts(context.Background(), b.d.Sink, ops.StartStepID, choose, port); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := b.st.LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if net := cfg.Network; net.HTTPPort != 8080 || net.HTTPSPort != 8445 || net.DevPorts.Base != 15010 {
+		t.Errorf("after 8444 was taken, pic-sure.yaml has %+v, want 8080/8445 and base 15010", net)
+	}
+}
+
+// The retry runs init's plan from render, with the --skip-step values
+// that name its steps.
+func TestInitRetryPlanStartsAtRender(t *testing.T) {
+	r, err := newInitRun(t, "", "", "--name", "demo", "--admin-email", "admin@example.com", "--auth-mode", "open")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.a.Global.SkipSteps = []string{"images", ops.StartStepID}
+	r.sec, r.state = &stack.Secrets{}, &stack.State{}
+	plan, skip := r.retryPlan(ops.ConvergeOptions{})
+	if plan[0].ID != ops.RenderStepID || plan[len(plan)-1].ID != ops.StartStepID {
+		t.Errorf("plan runs %s to %s", plan[0].ID, plan[len(plan)-1].ID)
+	}
+	if !slices.Equal(skip, []string{ops.StartStepID}) {
+		t.Errorf("skip = %v", skip)
 	}
 }

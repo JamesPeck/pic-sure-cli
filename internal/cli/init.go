@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -195,6 +196,7 @@ func (r *initRun) run(ctx context.Context) (_ *ops.InitSummary, err error) {
 		// Another init finished the stack while this one waited for it.
 		return a.alreadyInitialized(r.cmd, r.dir)
 	}
+	// claimPorts has registered a new stack; this registers a resumed one.
 	if err := registerStack(ctx, r.cache, r.d.Sink, r.st, r.cfg.Name); err != nil {
 		_ = r.finishOperation(err)
 		return nil, err
@@ -207,8 +209,8 @@ func (r *initRun) run(ctx context.Context) (_ *ops.InitSummary, err error) {
 	}
 	plan := ops.InitSteps(r.d, r.st, r.cfg, r.sec, r.state, opts)
 	err = steps.Run(ctx, r.d.Sink, plan, steps.Options{Skip: a.Global.SkipSteps})
-	if port, ok := r.portRetry(err); ok {
-		err = r.retryPorts(ctx, port, opts)
+	if port, choose := r.portRetry(err); choose != nil {
+		err = r.retryPorts(ctx, port, choose, opts)
 	}
 	if ferr := r.finishOperation(err); err == nil {
 		err = ferr
@@ -687,13 +689,20 @@ func (r *initRun) preconditions(ctx context.Context, sink events.Sink) error {
 		}
 		return nil
 	}
-	if err := r.setPorts(r.portHost(), r.httpPort, r.httpsPort, r.autoPorts); err != nil {
+	// Only a check that there are ports to choose: claimPorts chooses them.
+	reserved, _ := reservedInDefaultCache(r.dir)
+	if err := r.choosePorts(r.reservingHost(reserved)); err != nil {
 		return err
 	}
 	if r.cfg, err = r.doc.Config(); err != nil {
 		return r.flagProblems(err)
 	}
 	return nil
+}
+
+// choosePorts chooses the ports init wasn't given on h.
+func (r *initRun) choosePorts(h ops.Host) error {
+	return r.setPorts(h, r.httpPort, r.httpsPort, r.autoPorts)
 }
 
 // setPorts chooses the ports (§6.5) on host h and sets them in the config
@@ -703,20 +712,26 @@ func (r *initRun) setPorts(h ops.Host, httpPort, httpsPort int, auto bool) error
 	if err != nil {
 		return err
 	}
-	ports := map[string]int{"network.http_port": httpPort, "network.https_port": httpsPort}
-	if _, given := r.setValue("network.dev_ports.base"); !given {
-		base, err := ops.ChooseDevPortsBase(h, httpPort, httpsPort)
-		if err != nil {
-			return err
-		}
-		ports["network.dev_ports.base"] = base
+	if err := r.doc.SetValue("network.http_port", httpPort); err != nil {
+		return err
 	}
-	for key, v := range ports {
-		if err := r.doc.SetValue(key, v); err != nil {
-			return err
-		}
+	if err := r.doc.SetValue("network.https_port", httpsPort); err != nil {
+		return err
 	}
-	return nil
+	if _, given := r.setValue("network.dev_ports.base"); given {
+		return nil
+	}
+	return r.setDevPortsBase(h, httpPort, httpsPort)
+}
+
+// setDevPortsBase chooses dev_ports.base on h, clear of the HTTP and HTTPS
+// ports, and sets it in the config document.
+func (r *initRun) setDevPortsBase(h ops.Host, httpPort, httpsPort int) error {
+	base, err := ops.ChooseDevPortsBase(h, httpPort, httpsPort)
+	if err != nil {
+		return err
+	}
+	return r.doc.SetValue("network.dev_ports.base", base)
 }
 
 // portFlag is a port flag's value, or else its key's --set, 0 when neither
@@ -820,7 +835,7 @@ func (r *initRun) writeConfig(ctx context.Context, sink events.Sink) error {
 		if _, err := os.Stat(st.Path(stack.ConfigFile)); err == nil {
 			return exitcode.Failed("another pic-sure init wrote %s meanwhile; run init again to resume it", st.Path(stack.ConfigFile))
 		}
-		if err := r.claimPorts(ctx, sink); err != nil {
+		if err := r.claimPorts(ctx, sink, initConfig, r.choosePorts); err != nil {
 			return err
 		}
 	}
@@ -861,13 +876,13 @@ func (r *initRun) writeConfig(ctx context.Context, sink events.Sink) error {
 	return nil
 }
 
-// claimPorts chooses a new stack's ports again, now with those of every
-// registered stack reserved and the ports in avoid, then writes
+// claimPorts chooses a new stack's ports again with choose, now with those
+// of every registered stack reserved and the ports in avoid, then writes
 // pic-sure.yaml and registers the stack, all under the cache's port lock,
-// so a concurrent init sees these ports reserved (§6.5). Ports the user
-// gave are kept as given.
-func (r *initRun) claimPorts(ctx context.Context, sink events.Sink, avoid ...int) error {
-	c := r.cache.WithEvents(sink, initConfig)
+// so a concurrent init sees these ports reserved (§6.5). Lock waits are
+// reported under step.
+func (r *initRun) claimPorts(ctx context.Context, sink events.Sink, step string, choose func(ops.Host) error, avoid ...int) error {
+	c := r.cache.WithEvents(sink, step)
 	lock, err := c.LockPorts(ctx)
 	if err != nil {
 		return err
@@ -880,9 +895,7 @@ func (r *initRun) claimPorts(ctx context.Context, sink events.Sink, avoid ...int
 	for _, p := range avoid {
 		reserved[p] = true
 	}
-	delete(reserved, r.httpPort)
-	delete(reserved, r.httpsPort)
-	if err := r.setPorts(ops.ReservingHost{Host: r.portHost(), Reserved: reserved}, r.httpPort, r.httpsPort, r.autoPorts); err != nil {
+	if err := choose(r.reservingHost(reserved)); err != nil {
 		return err
 	}
 	if r.cfg, err = r.doc.Config(); err != nil {
@@ -898,6 +911,29 @@ func (r *initRun) claimPorts(ctx context.Context, sink events.Sink, avoid ...int
 	return c.RegisterStack(ctx, r.st.Dir, r.cfg.Name)
 }
 
+// reservingHost is the host with reserved ports busy too, except the ones
+// the user gave, which are used as given.
+func (r *initRun) reservingHost(reserved map[int]bool) ops.Host {
+	reserved = maps.Clone(reserved)
+	delete(reserved, r.httpPort)
+	delete(reserved, r.httpsPort)
+	return ops.ReservingHost{Host: r.portHost(), Reserved: reserved}
+}
+
+// reservedInDefaultCache is ops.ReservedPorts for the stack in dir from
+// the default cache.
+func reservedInDefaultCache(dir string) (map[int]bool, error) {
+	root, err := cache.DefaultRoot()
+	if err != nil {
+		return nil, err
+	}
+	c, err := cache.Open(root, cache.Options{})
+	if err != nil {
+		return nil, err
+	}
+	return ops.ReservedPorts(c, dir)
+}
+
 func (r *initRun) portHost() ops.Host {
 	if r.host != nil {
 		return r.host
@@ -905,48 +941,52 @@ func (r *initRun) portHost() ops.Host {
 	return systemHost{}
 }
 
-// portRetry reports whether err is the start of a container failing on a
-// port this init chose itself, which another stack or program has taken
-// since: then init chooses again, once. It returns the port.
-func (r *initRun) portRetry(err error) (int, bool) {
+// portRetry decides whether init chooses ports again after err: only when
+// a container couldn't publish a port this init chose itself, which
+// another stack or program has taken since. It returns that port and what
+// to choose again: the dev ports block, or with --auto-ports the HTTP and
+// HTTPS ports not given (and the block with them). Without --auto-ports
+// the only ports to choose are 80 and 443, so there is nothing to retry.
+func (r *initRun) portRetry(err error) (int, func(ops.Host) error) {
 	port := docker.PortAllocated(err)
 	if port == 0 || r.resumed {
-		return 0, false
+		return 0, nil
 	}
-	if _, given := r.setValue("network.dev_ports.base"); !given {
-		base := r.cfg.Network.DevPorts.Base
-		if port >= base && port < base+catalog.DevPortSpan {
-			return port, true
-		}
+	net := r.cfg.Network
+	if _, given := r.setValue("network.dev_ports.base"); !given && port >= net.DevPorts.Base && port < net.DevPorts.Base+catalog.DevPortSpan {
+		return port, func(h ops.Host) error { return r.setDevPortsBase(h, net.HTTPPort, net.HTTPSPort) }
 	}
-	switch port {
-	case r.cfg.Network.HTTPPort:
-		return port, r.httpPort == 0
-	case r.cfg.Network.HTTPSPort:
-		return port, r.httpsPort == 0
+	if r.autoPorts && (port == net.HTTPPort && r.httpPort == 0 || port == net.HTTPSPort && r.httpsPort == 0) {
+		return port, r.choosePorts
 	}
-	return 0, false
+	return 0, nil
 }
 
-// retryPorts chooses new ports avoiding busy, writes them, and runs init's
+// retryPorts chooses again with choose, avoiding busy, and runs init's
 // plan again from the render step.
-func (r *initRun) retryPorts(ctx context.Context, busy int, opts ops.ConvergeOptions) error {
+func (r *initRun) retryPorts(ctx context.Context, busy int, choose func(ops.Host) error, opts ops.ConvergeOptions) error {
 	r.d.Sink.Emit(events.Warning{ID: ops.StartStepID, Text: fmt.Sprintf(
 		"port %d was taken after init chose it; choosing the ports again", busy)})
-	if err := r.claimPorts(ctx, r.d.Sink, busy); err != nil {
+	if err := r.claimPorts(ctx, r.d.Sink, ops.StartStepID, choose, busy); err != nil {
 		return err
 	}
+	plan, skip := r.retryPlan(opts)
+	r.d.Compose = nil
+	return steps.Run(ctx, r.d.Sink, plan, steps.Options{Skip: skip})
+}
+
+// retryPlan is init's plan from the render step, with the --skip-step
+// values that name its steps.
+func (r *initRun) retryPlan(opts ops.ConvergeOptions) ([]steps.Step, []string) {
 	plan := ops.InitSteps(r.d, r.st, r.cfg, r.sec, r.state, opts)
-	i := slices.IndexFunc(plan, func(s steps.Step) bool { return s.ID == ops.RenderStepID })
-	plan = plan[i:]
+	plan = plan[slices.IndexFunc(plan, func(s steps.Step) bool { return s.ID == ops.RenderStepID }):]
 	var skip []string
 	for _, id := range r.a.Global.SkipSteps {
 		if slices.ContainsFunc(plan, func(s steps.Step) bool { return s.ID == id }) {
 			skip = append(skip, id)
 		}
 	}
-	r.d.Compose = nil
-	return steps.Run(ctx, r.d.Sink, plan, steps.Options{Skip: skip})
+	return plan, skip
 }
 
 // compose is the stack's Composer for the steps after render. Its env is

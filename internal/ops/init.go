@@ -369,7 +369,7 @@ func ReservedPorts(c *cache.Cache, dir string) (map[int]bool, error) {
 	dir = filepath.Clean(dir)
 	reserved := map[int]bool{}
 	for _, r := range registry {
-		if r.Dir == "" || r.Dir == dir || !hasCLIDir(r.Dir) {
+		if r.Dir == "" || r.Dir == dir {
 			continue
 		}
 		cfg, err := readConfig(r.Dir)
