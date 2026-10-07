@@ -84,7 +84,7 @@ func cmdJSONLines(ts *testscript.TestScript, neg bool, args []string) {
 	}
 	for i, line := range strings.Split(strings.TrimSuffix(data, "\n"), "\n") {
 		var obj map[string]json.RawMessage
-		if err := json.Unmarshal([]byte(line), &obj); err != nil {
+		if err := json.Unmarshal([]byte(line), &obj); err != nil || obj == nil {
 			ts.Fatalf("%s line %d is not a JSON object: %v\n%s", args[0], i+1, err, line)
 		}
 	}

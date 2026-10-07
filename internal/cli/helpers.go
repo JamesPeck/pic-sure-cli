@@ -23,7 +23,7 @@ func newGroup(use, short string, subs ...*cobra.Command) *cobra.Command {
 		Short: short,
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return exitcode.Usage("%s needs a subcommand", cmd.CommandPath())
+			return withUsageHint(exitcode.Usage("%s needs a subcommand", cmd.CommandPath()))
 		},
 	}
 	g.AddCommand(subs...)

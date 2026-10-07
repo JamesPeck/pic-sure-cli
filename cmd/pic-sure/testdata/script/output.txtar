@@ -9,11 +9,15 @@ stdout -count=1 '^\{'
 stdout '^\{"type":"result","ok":false,"error":\{"exit_code":1,"message":"not implemented \(ticket 035\)"\}\}$'
 stderr '^pic-sure: not implemented \(ticket 035\)$'
 
-# A usage error gets a result too, once --json has been parsed.
+# A usage error gets a result too, even when cobra stops at a bad flag
+# before it reaches --json.
 exitcode 2 pic-sure --json up extra-arg
 jsonlines stdout
 stdout '^\{"type":"result","ok":false,"error":\{"exit_code":2,"message":"unknown command \\"extra-arg\\" for \\"pic-sure up\\""\}\}$'
 stderr '^Run ''pic-sure up --help'' for usage.$'
+exitcode 2 pic-sure up --bogus --json
+jsonlines stdout
+stdout '"exit_code":2,"message":"unknown flag: --bogus"'
 
 # A read-only report is a single object with schema_version 2.
 exec pic-sure version --json

@@ -17,13 +17,20 @@ import (
 //
 // The cli layer emits the Result, so it comes last.
 type NDJSON struct {
-	mu sync.Mutex
-	w  io.Writer
+	mu  sync.Mutex
+	w   io.Writer
+	err error
 }
 
-// NewNDJSON returns an NDJSON renderer writing to w. Write errors are
-// ignored.
+// NewNDJSON returns an NDJSON renderer writing to w.
 func NewNDJSON(w io.Writer) *NDJSON { return &NDJSON{w: w} }
+
+// Err returns the first error writing to w. Emit keeps going after one.
+func (n *NDJSON) Err() error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.err
+}
 
 // Emit writes e as one line. An event that can't be encoded (a Result whose
 // Data holds a channel, say) becomes a warning line, so the output stays
@@ -41,7 +48,9 @@ func (n *NDJSON) Emit(e Event) {
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	_, _ = n.w.Write(line)
+	if _, err := n.w.Write(line); err != nil && n.err == nil {
+		n.err = err
+	}
 }
 
 // typedLine is e's NDJSON line: its JSON object with "type" first.

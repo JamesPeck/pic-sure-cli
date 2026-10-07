@@ -15,7 +15,6 @@ import (
 	"github.com/spf13/cobra"
 	"go.yaml.in/yaml/v3"
 
-	"github.com/JamesPeck/pic-sure-cli/internal/events"
 	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
 	"github.com/JamesPeck/pic-sure-cli/internal/stack"
 )
@@ -91,7 +90,7 @@ func (a *App) configGet(w io.Writer, key string) error {
 	}
 	v, err := cfg.Get(key)
 	if err != nil {
-		return configError(err)
+		return withUsageHint(configError(err))
 	}
 	if a.Global.JSON {
 		return json.NewEncoder(w).Encode(map[string]any{"key": key, "value": v})
@@ -136,7 +135,7 @@ func (a *App) configSet(cmd *cobra.Command, key, value string) error {
 		return configError(err)
 	}
 	if err := doc.Set(key, value); err != nil {
-		return configError(err)
+		return withUsageHint(configError(err))
 	}
 	cfg, err := checkConfigDoc(doc, st.Dir)
 	if err != nil {
@@ -150,8 +149,7 @@ func (a *App) configSet(cmd *cobra.Command, key, value string) error {
 		return err
 	}
 	saved, _ := cfg.Get(key)
-	sink.Emit(events.Result{OK: true, Data: map[string]any{"key": key, "value": saved}})
-	return nil
+	return a.finish(map[string]any{"key": key, "value": saved}, nil)
 }
 
 // checkConfigDoc decodes and validates doc, including the files it names.

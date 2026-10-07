@@ -57,8 +57,8 @@ Commands are already registered, each returning
 constructor in its group's file, for example `newUpCmd` in
 `internal/cli/up.go`: add its flags, and make `RunE` build the dependencies
 with `a.newDeps()`, call the operation, and hand the result to the output
-layer: `return a.finish(report)`, or `a.printReport(report, text)` for a
-read-only report (see `output.go` under internal/cli). Global flags are in
+layer: `return a.finish(report, text)`, or `a.printReport(report, text)`
+for a read-only report (see `output.go` under internal/cli). Global flags are in
 `a.Global`. Then turn the command's testscript
 (`cmd/pic-sure/testdata/script/up.txtar`) into real scenarios.
 
@@ -160,19 +160,33 @@ it.
   command ends. The mode is JSON for `--json`; plain for `--plain`, when
   stdin or stdout isn't a terminal, or when `CI` is set (`CI=false` and
   `CI=0` don't count); and TUI otherwise. TUI renders as plain until
-  ticket 038. `newSink` returns the same sink for the whole run. A
-  command ends in one of three ways:
-  - a streaming command returns `a.finish(report)`, which emits the
-    final `Result` (`--json` prints it last, with `report` as `data`);
+  ticket 038. `newSink` returns the same sink for the whole run. Only
+  `output.go` emits `Result`. A command ends in one of three ways:
+  - a streaming command returns `a.finish(report, text)`. When the
+    command returns nil, the run ends with a success `Result` (`--json`
+    prints it last, with `report` as `data`); in the other modes `text`
+    writes the human summary to stdout. A command that used the sink
+    gets the success `Result` even without `finish`. A signal that
+    arrives before the run ends turns it into a failed one;
   - a read-only command returns `a.printReport(report, text)`, which
-    prints one `schema_version: 2` object with `--json` and calls `text`
-    otherwise;
+    prints one `schema_version: 2` object with `--json`, and no `Result`
+    after it, and calls `text` otherwise;
   - any command returns an error. `reportError` prints `pic-sure: ERR` on
-    stderr in every mode. Unless `finish` or `printReport` already wrote
-    the command's result, it also emits a failed `Result` with the exit
-    code, the message, and the first step whose `StepDone` was `failed`;
-    with `--json` that is the last line on stdout. So `doctor` can print
-    its report and still exit 1 without a second object.
+    stderr in every mode. Unless `printReport` already printed the
+    report, it also emits a failed `Result` with the exit code, the
+    message, and the first step whose `StepDone` was `failed`; with
+    `--json` that is the last line on stdout. So `doctor` can print its
+    report and still exit 1 without a second object. When cobra rejects
+    the command line before reaching `--json`, the arguments are scanned
+    for it, so the result is JSON whatever the flag order.
+
+  A usage error gets the "Run 'CMD --help' for usage." hint when cobra
+  rejected the command line, or when the command wrapped it in
+  `withUsageHint` (a missing subcommand, an unknown key argument). Other
+  usage errors, such as an invalid config file, carry only their message.
+  Output the renderer couldn't write (a full disk) fails the run with
+  exit 1. `help`, `completion` and `--version` print text even with
+  `--json`.
 - `deps.go`: `newDeps` assembles `ops.Deps`. Each field comes from a
   constructor in its owner's file: `runner.go` (003), `output.go` (004, which
   also reports errors), `logging.go` (005), `engine.go` (016, landed) and
@@ -741,7 +755,8 @@ Ticket 004 added the plain and NDJSON renderers, both Sinks:
 - `NewNDJSON(w)` writes each event as one JSON object per line, its JSON
   form with `"type"` first. An event that can't be encoded becomes a
   `warning` line, so the output stays valid NDJSON. A non-finite `Pct` is
-  dropped by both renderers, and plain clamps it to 0–100.
+  dropped by both renderers, and plain clamps it to 0–100. Both keep
+  going after a failed write and report the first error from `Err()`.
 - `WriteReport(w, report)` prints a read-only command's report (`status`,
   `doctor`, `version`) as one object with `"schema_version": 2` first.
   The report must encode as an object and must not set `schema_version`

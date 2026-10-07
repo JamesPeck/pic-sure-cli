@@ -3,6 +3,8 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"strings"
 	"syscall"
 	"testing"
@@ -73,7 +75,7 @@ func jsonLines(t *testing.T, stdout string) []map[string]any {
 	var objs []map[string]any
 	for _, line := range strings.Split(strings.TrimSuffix(stdout, "\n"), "\n") {
 		var obj map[string]any
-		if err := json.Unmarshal([]byte(line), &obj); err != nil {
+		if err := json.Unmarshal([]byte(line), &obj); err != nil || obj == nil {
 			t.Fatalf("stdout line %q is not a JSON object: %v", line, err)
 		}
 		objs = append(objs, obj)
@@ -90,6 +92,8 @@ func TestJSONFailureIsAResultLine(t *testing.T) {
 		{[]string{"up", "--json"}, 1, "not implemented (ticket 035)"},
 		{[]string{"--json", "up", "extra-arg"}, 2, `unknown command "extra-arg" for "pic-sure up"`},
 		{[]string{"--json", "--plain", "up"}, 2, "if any flags in the group [json plain] are set none of the others can be; [json plain] were all set"},
+		{[]string{"up", "--bogus", "--json"}, 2, "unknown flag: --bogus"},
+		{[]string{"up", "--bogus", "--json=false", "--json=1"}, 2, "unknown flag: --bogus"},
 	}
 	for _, tt := range tests {
 		t.Run(strings.Join(tt.args, " "), func(t *testing.T) {
@@ -104,7 +108,6 @@ func TestJSONFailureIsAResultLine(t *testing.T) {
 			if len(objs) != 1 || !jsonEqual(objs[0], want) {
 				t.Errorf("stdout = %s, want one line %v", stdout, want)
 			}
-			// stderr still tells a human.
 			if !strings.HasPrefix(stderr.String(), "pic-sure: "+tt.message+"\n") {
 				t.Errorf("stderr = %q", stderr)
 			}
@@ -153,7 +156,7 @@ func streamingUp(a *App, failed bool, err error, data any) func(*cobra.Command, 
 			return err
 		}
 		sink.Emit(events.StepDone{ID: "db", Status: events.StepOK})
-		return a.finish(data)
+		return a.finish(data, nil)
 	}
 }
 
@@ -301,5 +304,109 @@ func TestTUIModeFallsBackToPlain(t *testing.T) {
 	}
 	if _, ok := o.sink.Sink.(*events.Plain); !ok {
 		t.Errorf("TUI mode sink is %T, want the plain renderer", o.sink.Sink)
+	}
+}
+
+func TestJSONRequested(t *testing.T) {
+	tests := []struct {
+		args []string
+		want bool
+	}{
+		{[]string{"up", "--bogus", "--json"}, true},
+		{[]string{"up", "--bogus", "--json=true"}, true},
+		{[]string{"up", "--bogus", "--json", "--json=false"}, false},
+		{[]string{"up", "--bogus", "--json=maybe"}, false},
+		{[]string{"compose", "--bogus", "--", "--json"}, false},
+		{[]string{"up", "--bogus"}, false},
+	}
+	for _, tt := range tests {
+		if got := jsonRequested(tt.args); got != tt.want {
+			t.Errorf("jsonRequested(%q) = %v, want %v", tt.args, got, tt.want)
+		}
+	}
+}
+
+func TestRunEndings(t *testing.T) {
+	t.Run("a signal after finish fails the result", func(t *testing.T) {
+		ctx, cancel := context.WithCancelCause(context.Background())
+		defer cancel(nil)
+		a, stdout, _ := testApp(t)
+		root := withRunE(t, a, []string{"up"}, func(*cobra.Command, []string) error {
+			err := a.finish(map[string]int{"n": 1}, nil)
+			cancel(exitcode.Signaled(syscall.SIGINT))
+			return err
+		})
+		if code := a.execute(ctx, root, []string{"up", "--json"}); code != 130 {
+			t.Errorf("exit = %d", code)
+		}
+		objs := jsonLines(t, stdout.String())
+		if len(objs) != 1 || objs[0]["ok"] != false || !jsonEqual(objs[0]["error"].(map[string]any)["exit_code"], 130) {
+			t.Errorf("stdout = %s", stdout)
+		}
+	})
+	t.Run("a command that never calls finish still gets a result", func(t *testing.T) {
+		a, stdout, _ := testApp(t)
+		root := withRunE(t, a, []string{"up"}, func(*cobra.Command, []string) error {
+			a.newDeps().Sink.Emit(events.Warning{Text: "w"})
+			return nil
+		})
+		if code := a.execute(context.Background(), root, []string{"up", "--json"}); code != 0 {
+			t.Errorf("exit = %d", code)
+		}
+		if got, want := stdout.String(), `{"type":"warning","text":"w"}`+"\n"+`{"type":"result","ok":true}`+"\n"; got != want {
+			t.Errorf("stdout = %q, want %q", got, want)
+		}
+	})
+	t.Run("finish prints the text summary outside JSON mode", func(t *testing.T) {
+		a, stdout, stderr := testApp(t)
+		root := withRunE(t, a, []string{"up"}, func(*cobra.Command, []string) error {
+			return a.finish(map[string]int{"n": 1}, func(w io.Writer) error {
+				_, err := io.WriteString(w, "up at https://localhost:8443\n")
+				return err
+			})
+		})
+		if code := a.execute(context.Background(), root, []string{"up"}); code != 0 {
+			t.Errorf("exit = %d", code)
+		}
+		if stdout.String() != "up at https://localhost:8443\n" || stderr.Len() != 0 {
+			t.Errorf("stdout %q, stderr %q", stdout, stderr)
+		}
+	})
+	t.Run("output that can't be written fails the run", func(t *testing.T) {
+		a, _, stderr := testApp(t)
+		a.Stdout = failingWriter{}
+		root := withRunE(t, a, []string{"up"}, streamingUp(a, false, nil, nil))
+		if code := a.execute(context.Background(), root, []string{"up", "--json"}); code != exitcode.CodeFailed {
+			t.Errorf("exit = %d", code)
+		}
+		if got := stderr.String(); got != "pic-sure: writing output: disk full\n" {
+			t.Errorf("stderr = %q", got)
+		}
+	})
+}
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("disk full") }
+
+func TestUsageHint(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		hint bool
+	}{
+		{"marked by the command", withUsageHint(exitcode.Usage("nope: unknown config key")), true},
+		{"not marked", exitcode.Usage("pic-sure.yaml: line 4: bad port"), false},
+		{"marked, not a usage error", withUsageHint(exitcode.Failed("boom")), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a, _, stderr := testApp(t)
+			root := withRunE(t, a, []string{"up"}, func(*cobra.Command, []string) error { return tt.err })
+			a.execute(context.Background(), root, []string{"up"})
+			if got := strings.Contains(stderr.String(), "Run 'pic-sure up --help' for usage."); got != tt.hint {
+				t.Errorf("hint = %v, want %v; stderr %q", got, tt.hint, stderr)
+			}
+		})
 	}
 }

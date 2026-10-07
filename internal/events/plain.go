@@ -11,8 +11,7 @@ import (
 
 // PlainOptions configures a Plain renderer.
 type PlainOptions struct {
-	// Color wraps each status marker in an ANSI colour. The cli layer turns
-	// it off for NO_COLOR, TERM=dumb and output that isn't a terminal.
+	// Color wraps each status marker in an ANSI colour.
 	Color bool
 	// Now is the timestamp source; nil means time.Now.
 	Now func() time.Time
@@ -35,10 +34,10 @@ type Plain struct {
 	color  bool
 	now    func() time.Time
 	titles map[string]string // step ID → title, from StepStarted
+	err    error
 }
 
 // NewPlain returns a Plain renderer writing to w, which is usually stderr.
-// Write errors are ignored.
 func NewPlain(w io.Writer, opts PlainOptions) *Plain {
 	now := opts.Now
 	if now == nil {
@@ -126,7 +125,16 @@ func (p *Plain) line(mark, sgr, text string) {
 		b.WriteString(s)
 		b.WriteByte('\n')
 	}
-	_, _ = io.WriteString(p.w, b.String())
+	if _, err := io.WriteString(p.w, b.String()); err != nil && p.err == nil {
+		p.err = err
+	}
+}
+
+// Err returns the first error writing to w. Emit keeps going after one.
+func (p *Plain) Err() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.err
 }
 
 // finitePct returns *pct when it is set and finite. A NaN or infinite

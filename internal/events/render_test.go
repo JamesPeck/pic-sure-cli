@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"flag"
+	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -246,6 +248,31 @@ func TestEventsHaveNoTypeField(t *testing.T) {
 		}
 		if _, ok := fields["type"]; ok {
 			t.Errorf("%s has a type field", e.Type())
+		}
+	}
+}
+
+type failingWriter struct{ calls int }
+
+func (w *failingWriter) Write([]byte) (int, error) {
+	w.calls++
+	return 0, fmt.Errorf("write %d failed", w.calls)
+}
+
+func TestRenderersKeepTheFirstWriteError(t *testing.T) {
+	type renderer interface {
+		Sink
+		Err() error
+	}
+	for name, newRenderer := range map[string]func(io.Writer) renderer{
+		"plain":  func(w io.Writer) renderer { return NewPlain(w, PlainOptions{}) },
+		"ndjson": func(w io.Writer) renderer { return NewNDJSON(w) },
+	} {
+		w := &failingWriter{}
+		r := newRenderer(w)
+		render(r, recorded()[:2])
+		if w.calls != 2 || r.Err() == nil || r.Err().Error() != "write 1 failed" {
+			t.Errorf("%s: %d writes, Err() = %v; want 2 writes and the first error", name, w.calls, r.Err())
 		}
 	}
 }

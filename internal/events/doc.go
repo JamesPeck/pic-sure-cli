@@ -4,8 +4,9 @@
 //
 // Ticket 001 owns the types and the Sink contract. Ticket 004 owns the
 // plain (plain.go: timestamped stderr) and NDJSON (ndjson.go: --json
-// stdout, and WriteReport for single-object reports) renderers; ticket 038
-// adds the TUI renderer in internal/tui.
+// stdout) renderers, and WriteReport (ndjson.go), which prints a read-only
+// command's single JSON object; ticket 038 adds the TUI renderer in
+// internal/tui.
 //
 // Who emits what: the step engine (internal/steps) emits StepStarted and
 // StepDone; an operation's steps emit Progress, Log and Warning; the cli

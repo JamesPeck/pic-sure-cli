@@ -2,10 +2,12 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/mattn/go-isatty"
@@ -19,8 +21,7 @@ import (
 type outputMode int
 
 const (
-	// modeTUI is the TUI renderer, for a terminal. Until ticket 038 adds
-	// it, TUI mode renders like plain.
+	// modeTUI is the TUI renderer, for a terminal.
 	modeTUI outputMode = iota
 	// modePlain is timestamped lines on stderr.
 	modePlain
@@ -28,9 +29,8 @@ const (
 	modeJSON
 )
 
-// selectMode picks the output mode: JSON for --json, plain for --plain, no
-// terminal (stdin and stdout both, as for prompting) or a CI environment,
-// and the TUI otherwise.
+// selectMode picks the output mode (spec §10.3). terminal is whether stdin
+// and stdout are both terminals.
 func selectMode(g GlobalOptions, terminal bool, getenv func(string) string) outputMode {
 	switch {
 	case g.JSON:
@@ -53,30 +53,29 @@ func inCI(getenv func(string) string) bool {
 	return err != nil || on
 }
 
-// useColor reports whether plain output to a writer that is (or isn't) a
-// terminal may use colour: not when NO_COLOR is set to anything
-// (https://no-color.org) or TERM is dumb.
+// useColor reports whether plain output may use colour. NO_COLOR turns it
+// off whatever its value (https://no-color.org).
 func useColor(terminal bool, getenv func(string) string) bool {
 	return terminal && getenv("NO_COLOR") == "" && getenv("TERM") != "dumb"
 }
 
-// isTerminalWriter reports whether w is a terminal.
 func isTerminalWriter(w io.Writer) bool {
 	f, ok := w.(*os.File)
 	return ok && isatty.IsTerminal(f.Fd())
 }
 
-// output is one command run's output: its mode, its event sink, and
-// whether the command has already emitted its Result or printed its report.
-// App.output creates it on first use: when the command first needs its
-// sink, or when its error is reported.
+// output is one command run's output. App.output creates it on first use:
+// when the command first needs its sink, or when its error is reported.
 type output struct {
-	mode  outputMode
-	sink  *stepTracker
+	mode outputMode
+	sink *runSink
+	// report is finish's report: the data of the success Result.
+	report any
+	// final is set once the run's Result is emitted or its report printed,
+	// so the run never writes a second one.
 	final bool
 }
 
-// output returns the run's output, creating it on first use.
 func (a *App) output() *output {
 	if a.out == nil {
 		mode := selectMode(a.Global, a.IsTerminal(), os.Getenv)
@@ -89,7 +88,7 @@ func (a *App) output() *output {
 				Color: useColor(isTerminalWriter(a.Stderr), os.Getenv),
 			})
 		}
-		a.out = &output{mode: mode, sink: &stepTracker{Sink: sink}}
+		a.out = &output{mode: mode, sink: &runSink{Sink: sink}}
 	}
 	return a.out
 }
@@ -99,29 +98,32 @@ func (a *App) output() *output {
 // the operation's events through the same renderer.
 func (a *App) newSink() events.Sink { return a.output().sink }
 
-// finish reports a command's success by emitting the final Result with
-// data, the command's report (nil if it has none); --json prints it as the
-// last line on stdout. A command that streams events ends with
-// `return a.finish(report)`.
-func (a *App) finish(data any) error {
+// finish records a streaming command's report. If the command then returns
+// nil, the run ends with a success Result carrying it, which --json prints
+// as the last line on stdout. In the other modes, text (if not nil) writes
+// the human summary to stdout now. A command ends with
+// `return a.finish(report, text)`.
+func (a *App) finish(report any, text func(io.Writer) error) error {
 	o := a.output()
-	if o.mode == modeJSON && data != nil {
-		// Encode first, so a report that can't be encoded fails the command
+	if o.mode == modeJSON {
+		// Encode now, so a report that can't be encoded fails the command
 		// instead of producing a successful result without its data.
-		if _, err := json.Marshal(data); err != nil {
+		if _, err := json.Marshal(report); err != nil {
 			return exitcode.Failed("encoding the result: %w", err)
 		}
 	}
-	o.sink.Emit(events.Result{OK: true, Data: data})
-	o.final = true
-	return nil
+	o.report = report
+	if o.mode == modeJSON || text == nil {
+		return nil
+	}
+	return text(a.Stdout)
 }
 
 // printReport prints a read-only command's report (status, doctor,
 // version): with --json, report as one JSON object with schema_version 2 on
-// stdout; otherwise the text that text writes to stdout. A command that
-// prints a report and then fails (doctor with a failing check) gets no
-// result line after it.
+// stdout; otherwise the text that text writes to stdout. No Result follows
+// the JSON report, even if the command then fails (doctor with a failing
+// check).
 func (a *App) printReport(report any, text func(io.Writer) error) error {
 	o := a.output()
 	if o.mode != modeJSON {
@@ -134,11 +136,31 @@ func (a *App) printReport(report any, text func(io.Writer) error) error {
 	return nil
 }
 
-// reportError tells the user why cmd failed: "pic-sure: <err>" on stderr,
-// with a usage hint for a usage error. Unless the command already wrote its
-// result or report, it also emits a failed Result, which --json prints as
-// the last line on stdout: the exit code, the message, and the first step
-// that failed.
+// succeed ends a run whose command returned nil. A run that used the output
+// layer gets its success Result, unless it printed a report; help and
+// completion, which never touch it, print only their text. Output the
+// renderer couldn't write fails the run.
+func (a *App) succeed() error {
+	o := a.out
+	if o == nil {
+		return nil
+	}
+	if !o.final {
+		o.final = true
+		o.sink.Emit(events.Result{OK: true, Data: o.report})
+	}
+	if err := o.sink.writeErr(); err != nil {
+		return exitcode.Failed("writing output: %w", err)
+	}
+	return nil
+}
+
+// reportError tells the user why cmd failed: "pic-sure: <err>" on stderr.
+// Unless the run already ended with a Result or a report, it also emits a
+// failed Result, which --json prints as the last line on stdout: the exit
+// code, the message, and the first step that failed. A usage error gets the
+// "Run --help" hint when the command line itself was wrong: cobra rejected
+// it, or the command marked its error with withUsageHint.
 func (a *App) reportError(cmd *cobra.Command, err error) {
 	code := exitcode.FromError(err)
 	if o := a.output(); !o.final {
@@ -150,33 +172,70 @@ func (a *App) reportError(cmd *cobra.Command, err error) {
 		}})
 	}
 	_, _ = fmt.Fprintf(a.Stderr, "pic-sure: %v\n", err)
-	if code == exitcode.CodeUsage && cmd != nil {
+	var hint usageHint
+	if code == exitcode.CodeUsage && cmd != nil && (!a.running || errors.As(err, &hint)) {
 		_, _ = fmt.Fprintf(a.Stderr, "Run '%s --help' for usage.\n", cmd.CommandPath())
 	}
 }
 
-// stepTracker passes events through to Sink and remembers the first step
-// that failed, for the failed Result.
-type stepTracker struct {
+// withUsageHint marks a usage error that a command raised about its own
+// command line (a missing subcommand, an unknown key argument), so it gets
+// the "Run --help" hint. Other usage errors, such as an invalid config
+// file, don't.
+func withUsageHint(err error) error { return usageHint{err} }
+
+type usageHint struct{ error }
+
+func (h usageHint) Unwrap() error { return h.error }
+
+// jsonRequested reports whether args ask for --json, for a command line
+// cobra rejected before it parsed that flag. It stops at "--", and the last
+// --json or --json=BOOL wins, as in pflag.
+func jsonRequested(args []string) bool {
+	on := false
+	for _, arg := range args {
+		if arg == "--" {
+			break
+		}
+		if arg == "--json" {
+			on = true
+		} else if v, ok := strings.CutPrefix(arg, "--json="); ok {
+			on, _ = strconv.ParseBool(v)
+		}
+	}
+	return on
+}
+
+// runSink is the run's sink: the renderer, plus the first step that failed
+// (for the failed Result) and the renderer's write error.
+type runSink struct {
 	events.Sink
 
 	mu     sync.Mutex
 	failed string
 }
 
-func (t *stepTracker) Emit(e events.Event) {
+func (s *runSink) Emit(e events.Event) {
 	if d, ok := e.(events.StepDone); ok && d.Status == events.StepFailed {
-		t.mu.Lock()
-		if t.failed == "" {
-			t.failed = d.ID
+		s.mu.Lock()
+		if s.failed == "" {
+			s.failed = d.ID
 		}
-		t.mu.Unlock()
+		s.mu.Unlock()
 	}
-	t.Sink.Emit(e)
+	s.Sink.Emit(e)
 }
 
-func (t *stepTracker) failedStep() string {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.failed
+func (s *runSink) failedStep() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.failed
+}
+
+// writeErr is the renderer's first write error, if it keeps one.
+func (s *runSink) writeErr() error {
+	if r, ok := s.Sink.(interface{ Err() error }); ok {
+		return r.Err()
+	}
+	return nil
 }
