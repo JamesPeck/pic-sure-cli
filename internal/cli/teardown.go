@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -102,7 +103,7 @@ func (a *App) teardown(cmd *cobra.Command, opts ops.TeardownOptions) error {
 		// For --prune-images, and to drop the stack from the cache's
 		// registry; without --prune-images a cache that can't be opened
 		// only leaves a stale entry, which prune forgets.
-		if opts.Cache, err = openTeardownCache(cmd); err != nil {
+		if opts.Cache, err = openTeardownCache(cmd, opts.PruneImages); err != nil {
 			if opts.PruneImages {
 				return err
 			}
@@ -124,10 +125,15 @@ func (a *App) teardown(cmd *cobra.Command, opts ops.TeardownOptions) error {
 	return a.finish(report, func(w io.Writer) error { return writeDestroySummary(w, st.Dir, report) })
 }
 
-func openTeardownCache(cmd *cobra.Command) (*cache.Cache, error) {
+// openTeardownCache opens the default cache. Unless create, a cache that
+// doesn't exist yet has no registry to update, and isn't created.
+func openTeardownCache(cmd *cobra.Command, create bool) (*cache.Cache, error) {
 	root, err := cache.DefaultRoot()
 	if err != nil {
 		return nil, err
+	}
+	if _, err := os.Stat(root); !create && errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
 	}
 	return cache.Open(root, cache.Options{Holder: cmd.CommandPath(), LockTimeout: pruneLockTimeout})
 }

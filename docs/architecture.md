@@ -311,18 +311,18 @@ it.
 - `teardown.go` (056): `reset [--keep-db]` and `destroy [--prune-images]`.
   Both open the stack with `openStackUnlogged` (openStack without the run
   log, so a refusal writes nothing) and read the config (exit 2 if
-  invalid), then `confirmName`: `--yes`
-  consents; otherwise, when `canPrompt`, the user types the stack name on
-  stdin (anything else is exit 4), and without a terminal it is exit 4
-  before anything changes. `--json` and `--non-interactive` are no
-  consent. Then the run log, and under the stack lock the Composer from
-  `teardownCompose`, which, unlike `stackCompose`, gives a never-rendered
-  stack none (a nil `docker.Composer`) and a stack whose secrets.yaml is
-  missing or unreadable empty secrets, so a half-made stack can still be
-  torn down. Then `ops.Reset` or `ops.Destroy`. destroy opens the
-  default cache with `pruneLockTimeout`, for `--prune-images` and the
-  stack registry; without `--prune-images` a cache it can't open is only
-  a warning.
+  invalid), then `confirmName`: `--yes` consents; otherwise, when
+  `canPrompt`, the user types the stack name on stdin (anything else is
+  exit 4), and without a terminal it is exit 4 before anything changes.
+  `--json` and `--non-interactive` are no consent. Then the run log, and
+  under the stack lock the Composer from `teardownCompose`, which, unlike
+  `stackCompose`, gives a never-rendered stack none (a nil
+  `docker.Composer`) and a stack whose secrets.yaml is missing or
+  unreadable empty secrets, so a half-made stack can still be torn down.
+  Then `ops.Reset` or `ops.Destroy`. destroy opens the default cache with
+  `pruneLockTimeout`, for `--prune-images` and the stack registry; without
+  `--prune-images` it doesn't create a missing cache, and one it can't open
+  is only a warning.
 
 | File | Commands | Ticket |
 |---|---|---|
@@ -447,18 +447,19 @@ A directory is a stack when it holds `pic-sure.yaml` and `.pic-sure/`.
 - **Removal for destroy (056).** `RemoveCreated()` removes the manifest's
   paths deepest first with `Remove`, `pic-sure.yaml` after the rest (and
   not after a failure, so a failed run leaves a stack destroy can open
-  again), then the lock, the manifest and `.pic-sure/` together, only when
-  nothing else is in `.pic-sure/` (the lock goes last so no other command
-  can create and take a new one meanwhile), then the stack dir when `"."` is recorded and
-  it is empty (rmdir). A recorded directory that still holds anything, a
-  path under a symlink and one whose kind changed are kept and reported.
-  WriteFile temp files whose target is a recorded path are removed first.
-  `RemoveReport` lists what went, what was kept, and the stack dir's
-  remaining top-level entries. Because destroy deletes `.pic-sure/lock`
-  while holding it, a command already waiting on that file would get the
-  flock on the deleted inode, so `Lock` checks, once it has the flock, that its open
-  file is still `.pic-sure/lock`; a command that waited on a destroyed
-  stack fails with exit 3 wrapping `ErrNotFound`.
+  again). Then the lock, last so no other command can create and take a
+  new one meanwhile, and then the manifest and `.pic-sure/` together, only
+  when nothing else is in `.pic-sure/`; then the stack dir when `"."` is
+  recorded and it is empty (rmdir). A recorded directory that still holds
+  anything, a path under a symlink and one whose kind changed are kept and
+  reported. WriteFile temp files whose target is a recorded path are
+  removed first. `RemoveReport` lists what went, what was kept, and the
+  stack dir's remaining top-level entries. A command already waiting on
+  the lock destroy deletes would get the flock on the deleted inode, so
+  `Lock` checks, once it has the flock, that its open file is still
+  `.pic-sure/lock`; a command that waited on a destroyed stack fails with
+  exit 3 wrapping `ErrNotFound`. `openStackUnlogged` (cli) is openStack
+  without the run log.
 - **Labels.** `st.Labels(name)` returns `org.hms-dbmi.picsure.stack=<name>`
   and `org.hms-dbmi.picsure.stack-dir=<Dir>` (`LabelStack`,
   `LabelStackDir`). `st.VolumeLabels(name, key)` adds compose's
@@ -1167,7 +1168,8 @@ whose `com.docker.compose.volume` is a catalog `SharedData` or
   every such volume, then (`dev-images`) the `dev-<name>-*` tags of the
   built images, then (`files`) `st.RemoveCreated()`, warning for each
   kept path, and, once that succeeded, `Cache.UnregisterStack` (073) when
-  `Cache` is set. With `PruneImages` a `prune` step runs `PruneCache`'s body
+  `Cache` is set; failing that is a warning, as prune forgets a stale
+  entry. With `PruneImages` a `prune` step runs `PruneCache`'s body
   with `PruneOptions.CommitImagesOnly`: commit-tagged images only, under
   `LockPrune`, by §7.1's rules, once the stack's state and labelled
   resources are gone. `TeardownReport` is the `--json` data.

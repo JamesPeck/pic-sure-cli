@@ -177,36 +177,43 @@ func TestRemoveCreatedKeepsTheManifestWhileCLIDirHoldsOtherFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []Entry{{Path: CLIDir, Type: EntryDir}, {Path: ManifestFile, Type: EntryFile}, {Path: LockFile, Type: EntryFile}}; !slices.Equal(m.Entries, want) {
+	// The lock goes anyway, so nothing waiting for it carries on here.
+	if want := []Entry{{Path: CLIDir, Type: EntryDir}, {Path: ManifestFile, Type: EntryFile}}; !slices.Equal(m.Entries, want) {
 		t.Errorf("manifest = %v, want %v", m.Entries, want)
 	}
 }
 
 func TestLockFailsWhenTheStackIsDestroyedWhileWaiting(t *testing.T) {
-	s := newStack(t)
-	populate(t, s)
-	held, err := s.Lock(context.Background(), LockOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := make(chan error, 1)
-	waiting := make(chan struct{})
-	go func() {
-		_, err := s.Lock(context.Background(), LockOptions{Wait: true, OnWait: func(string) { close(waiting) }})
-		got <- err
-	}()
-	<-waiting // it has the old lock file open
-	if _, err := s.RemoveCreated(); err != nil {
-		t.Fatal(err)
-	}
-	_ = held.Unlock()
-	select {
-	case err := <-got:
-		if !errors.Is(err, ErrNotFound) {
-			t.Errorf("waiter: err = %v, want ErrNotFound", err)
+	for _, keepCLIDir := range []bool{false, true} {
+		s := newStack(t)
+		populate(t, s)
+		if keepCLIDir {
+			// Something not pic-sure's keeps .pic-sure/ and its manifest.
+			writeOperatorFile(t, s, ".pic-sure/mine")
 		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("the waiter never returned")
+		held, err := s.Lock(context.Background(), LockOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := make(chan error, 1)
+		waiting := make(chan struct{})
+		go func() {
+			_, err := s.Lock(context.Background(), LockOptions{Wait: true, OnWait: func(string) { close(waiting) }})
+			got <- err
+		}()
+		<-waiting // it has the old lock file open
+		if _, err := s.RemoveCreated(); err != nil {
+			t.Fatal(err)
+		}
+		_ = held.Unlock()
+		select {
+		case err := <-got:
+			if !errors.Is(err, ErrNotFound) {
+				t.Errorf("keepCLIDir=%v: waiter: err = %v, want ErrNotFound", keepCLIDir, err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("keepCLIDir=%v: the waiter never returned", keepCLIDir)
+		}
 	}
 }
 

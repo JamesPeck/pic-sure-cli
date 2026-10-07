@@ -94,7 +94,7 @@ func (s *Stack) RemoveCreated() (RemoveReport, error) {
 		return r, fmt.Errorf("couldn't remove %s", strings.Join(failed, "; "))
 	}
 
-	cliDirGone, err := s.removeCLIDir(&r)
+	cliDirGone, err := s.removeCLIDir(m, &r)
 	if err != nil {
 		return r, err
 	}
@@ -150,36 +150,46 @@ func (s *Stack) removeTemps(m Manifest, r *RemoveReport) error {
 	return nil
 }
 
-// removeCLIDir removes the lock, the manifest and .pic-sure/ when nothing
-// else is left in .pic-sure/, and reports whether it did. The lock goes
-// this late so no other command can take a new one while destroy runs.
-func (s *Stack) removeCLIDir(r *RemoveReport) (bool, error) {
+// removeCLIDir removes the lock, then the manifest and .pic-sure/ when
+// nothing else is left in .pic-sure/, and reports whether .pic-sure/ went.
+// The lock goes this late so no other command can take a new one while
+// destroy runs, and goes even when .pic-sure/ stays, so a command waiting
+// for it fails (see Lock) instead of running on a stack without its config.
+func (s *Stack) removeCLIDir(m Manifest, r *RemoveReport) (bool, error) {
 	if s.noSymlinks(CLIDir) != nil {
 		r.Kept = append(r.Kept, CLIDir)
 		return false, nil
+	}
+	if m.Has(LockFile) {
+		_, lerr := s.root.Lstat(filepath.FromSlash(LockFile))
+		switch err := s.Remove(LockFile); {
+		case err == nil:
+			if lerr == nil {
+				r.Removed = append(r.Removed, LockFile)
+			}
+		case errors.Is(err, ErrNotCreated):
+			r.Kept = append(r.Kept, LockFile)
+		default:
+			return false, err
+		}
 	}
 	names, err := s.readDir(CLIDir)
 	if err != nil {
 		return false, err
 	}
 	for _, de := range names {
-		if de.Name() != path.Base(ManifestFile) && de.Name() != path.Base(LockFile) {
+		if de.Name() != path.Base(ManifestFile) {
 			r.Kept = append(r.Kept, CLIDir)
 			return false, nil
 		}
 	}
-	for _, f := range []string{LockFile, ManifestFile} {
-		switch err := s.root.Remove(filepath.FromSlash(f)); {
-		case err == nil:
-			r.Removed = append(r.Removed, f)
-		case !errors.Is(err, fs.ErrNotExist):
-			return false, err
-		}
+	if err := s.root.Remove(filepath.FromSlash(ManifestFile)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return false, err
 	}
 	if err := s.root.Remove(CLIDir); err != nil {
 		return false, err
 	}
-	r.Removed = append(r.Removed, CLIDir)
+	r.Removed = append(r.Removed, ManifestFile, CLIDir)
 	return true, nil
 }
 

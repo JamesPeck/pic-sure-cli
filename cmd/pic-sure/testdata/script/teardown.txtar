@@ -61,7 +61,7 @@ exists overrides/10-local.yaml
 # Now there's no stack here.
 exitcode 3 pic-sure --yes destroy
 
-# A stack init left before rendering, without secrets.yaml: no compose
+# A stack init left before rendering: no compose
 # down, and the files still go.
 rm $WORK/docker.log
 exec pic-sure --plain --yes --stack $WORK/half destroy
@@ -70,9 +70,17 @@ stderr 'the stack was never rendered'
 grep '^docker volume ls -q --filter label=org.hms-dbmi.picsure.stack=half ' $WORK/docker.log
 ! exists $WORK/half
 
+# A rendered stack whose secrets.yaml can't be read: a warning, and compose
+# down runs with empty secrets.
+rm $WORK/docker.log
+exec pic-sure --plain --yes --stack $WORK/badsec reset
+stderr 'warning: compose down runs without the stack''s secrets'
+grep 'down --remove-orphans$' $WORK/docker.log
+
 -- docker.scenario --
 docker volume ls -q --filter label=org.hms-dbmi.picsure.stack=demo => 0
 docker volume ls -q --filter label=org.hms-dbmi.picsure.stack=half* => 0
+docker volume ls -q --filter label=org.hms-dbmi.picsure.stack=badsec* => 0
 docker compose * down --remove-orphans => 0
 docker volume ls -q --filter label=org.hms-dbmi.picsure.stack=demo * => 0 stdout=vols.txt
 docker volume inspect * => 0 stdout=vols.json
@@ -130,3 +138,13 @@ auth: {mode: open, admin_email: admin@example.com}
   {"path": "pic-sure.yaml", "type": "file"},
   {"path": ".pic-sure/state.json", "type": "file"}
 ]}
+-- badsec/pic-sure.yaml --
+schema: 1
+name: badsec
+auth: {mode: open, admin_email: admin@example.com}
+-- badsec/.pic-sure/state.json --
+{"cli_version": "dev", "schema_version": 1}
+-- badsec/.pic-sure/secrets.yaml --
+db_root_password: [not, a, string
+-- badsec/.pic-sure/render/compose.yaml --
+services: {}

@@ -126,7 +126,12 @@ func Destroy(ctx context.Context, d *Deps, st *stack.Stack, opts TeardownOptions
 				if err != nil || opts.Cache == nil {
 					return err
 				}
-				return opts.Cache.UnregisterStack(st.Dir)
+				// The stack is gone either way; a stale entry is one prune
+				// forgets.
+				if err := opts.Cache.UnregisterStack(st.Dir); err != nil {
+					sink.Emit(events.Warning{ID: StepFiles, Text: "couldn't drop the stack from the cache's registry: " + err.Error()})
+				}
+				return nil
 			},
 		},
 	}
@@ -223,8 +228,12 @@ func warnMoved(ctx context.Context, d *Deps, sink events.Sink, st *stack.Stack, 
 		return
 	}
 	for _, v := range vols {
-		if dir := v.Labels[stack.LabelStackDir]; dir != st.Dir {
-			sink.Emit(events.Warning{ID: StepVolumes, Text: fmt.Sprintf("left volume %s alone: it is labelled for stack %s in %q, not this directory", v.Name, name, dir)})
+		switch dir := v.Labels[stack.LabelStackDir]; dir {
+		case st.Dir:
+		case "":
+			sink.Emit(events.Warning{ID: StepVolumes, Text: fmt.Sprintf("left volume %s alone: it is labelled for stack %s but has no %s label", v.Name, name, stack.LabelStackDir)})
+		default:
+			sink.Emit(events.Warning{ID: StepVolumes, Text: fmt.Sprintf("left volume %s alone: it is labelled for stack %s in %s, not this directory", v.Name, name, dir)})
 		}
 	}
 }
