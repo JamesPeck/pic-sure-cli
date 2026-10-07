@@ -42,10 +42,11 @@ print-lint-version:
 # What CI runs. The PTY tests in smoke/ run as part of `test`.
 check: fmt-check vet lint test
 
-# CI's Linux-only compose validation: docker compose config --quiet over
-# every render golden. Fails instead of skipping without docker compose.
+# CI's Linux-only compose validation: the render tests, whose compose checks
+# run docker compose config --quiet over every golden and fail instead of
+# skipping without docker compose.
 compose-check:
-	PICSURE_REQUIRE_COMPOSE=1 $(GO) test -count=1 -run '^(TestGoldensComposeConfig|TestComposeConfigAccepts)$$' -v ./internal/render
+	PICSURE_REQUIRE_COMPOSE=1 $(GO) test -count=1 ./internal/render
 
 clean:
 	rm -rf bin dist
