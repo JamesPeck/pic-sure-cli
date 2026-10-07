@@ -70,6 +70,8 @@ func Images() []Image {
 		{Name: "flyway", Ref: "flyway/flyway:10"},
 		// Helper containers that work on volumes.
 		{Name: "alpine", Ref: "alpine:3.23"},
+		// The dictionary operations' HTTP client on the data network (§9.6).
+		{Name: "curl", Ref: "curlimages/curl:8.20.0"},
 		// The reactor build container (§7.2 step 2).
 		{Name: "maven", Ref: "maven:3-amazoncorretto-25"},
 		// httpd-hmr's Vite server, tagged <.nvmrc version>-alpine3.23.

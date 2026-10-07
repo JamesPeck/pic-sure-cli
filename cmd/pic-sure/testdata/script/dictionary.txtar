@@ -1,13 +1,61 @@
-# Not implemented yet: exit 1, naming ticket 044.
-exitcode 1 pic-sure dictionary hydrate
-stderr '^pic-sure: not implemented \(ticket 044\)$'
-! stdout .
-exitcode 1 pic-sure dictionary load-csv
-stderr '^pic-sure: not implemented \(ticket 044\)$'
-! stdout .
-exitcode 1 pic-sure dictionary load-facets
-stderr '^pic-sure: not implemented \(ticket 044\)$'
-! stdout .
-exitcode 1 pic-sure dictionary weights
-stderr '^pic-sure: not implemented \(ticket 044\)$'
-! stdout .
+# Required flags and input files are checked before anything else: exit 2.
+exitcode 2 pic-sure dictionary load-csv --datasets datasets.csv
+stderr 'required flag\(s\) "concepts" not set'
+exitcode 2 pic-sure dictionary load-facets --categories c.csv --facets f.csv
+exitcode 2 pic-sure --stack stack dictionary load-csv --datasets missing.csv --concepts datasets.csv
+stderr '^pic-sure: --datasets: stat .*missing.csv: no such file or directory$'
+exitcode 2 pic-sure --stack stack dictionary weights --weights stack
+stderr '^pic-sure: --weights: .*stack is not a file$'
+exitcode 2 pic-sure --stack stack dictionary hydrate --heap 0
+stderr 'positive number'
+
+# A bad input file is a usage error before docker is asked anything.
+exitcode 2 pic-sure --stack ready dictionary load-csv --datasets datasets.csv --concepts datasets.csv --clear
+stderr 'is not a zip archive'
+! exists docker.log
+
+# --skip-step takes the command's own step IDs.
+exitcode 2 pic-sure --stack stack dictionary hydrate --skip-step weights
+stderr 'it can skip columnmeta, hydrate, dictionary-refresh'
+exitcode 2 pic-sure --stack stack dictionary load-csv --datasets datasets.csv --concepts datasets.csv --skip-step dictionary-clear
+stderr 'it can skip datasets, concepts, dictionary-refresh'
+
+# No stack: exit 3.
+exitcode 3 pic-sure dictionary hydrate
+stderr 'no pic-sure stack found'
+
+# A stack that init never finished: exit 3, pointing at init.
+exitcode 3 pic-sure --stack stack dictionary weights
+stderr 'isn''t initialised; run `pic-sure init'
+
+# On an initialised stack whose dictionary-db isn't up: exit 3, pointing
+# at up, and the failed step is named.
+exitcode 3 pic-sure --stack ready --json dictionary hydrate
+stdout '"type":"step_done","id":"columnmeta","status":"failed"'
+stdout 'dictionary-db isn''t running and healthy; run `pic-sure up`'
+
+-- docker.scenario --
+docker compose * ps --all --format json dictionary-db => 0
+-- datasets.csv --
+ref,full_name,abbreviation,description
+phs1,One,O,first
+-- stack/pic-sure.yaml --
+schema: 1
+name: demo
+auth: {mode: open, admin_email: admin@example.com}
+-- stack/.pic-sure/state.json --
+{"cli_version": "dev", "schema_version": 1}
+-- stack/.pic-sure/secrets.yaml --
+dictionary_db_password: synthetic-dictionary-password
+-- stack/.pic-sure/render/compose.yaml --
+services: {}
+-- ready/pic-sure.yaml --
+schema: 1
+name: demo
+auth: {mode: open, admin_email: admin@example.com}
+-- ready/.pic-sure/state.json --
+{"cli_version": "dev", "schema_version": 1, "initialized_at": "2026-10-07T12:00:00Z", "images": {"pic-sure-hpds-etl": "658e340e3cfc"}}
+-- ready/.pic-sure/secrets.yaml --
+dictionary_db_password: synthetic-dictionary-password
+-- ready/.pic-sure/render/compose.yaml --
+services: {}
