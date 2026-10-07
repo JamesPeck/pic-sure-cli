@@ -10,7 +10,7 @@
 #   curl -fsSL .../install.sh | bash -s -- --version v2.0.0
 #
 # Usage:
-#   install.sh                      # newest v2.x.y release → ~/.local/bin
+#   install.sh                      # newest stable v2.x.y release → ~/.local/bin
 #   install.sh --bin-dir /usr/local/bin
 #   install.sh --version v2.0.0
 #   install.sh --repo OWNER/NAME    # override the GitHub repository
@@ -43,7 +43,7 @@ Install the pic-sure CLI (v2).
 
 Usage: install.sh [--version vX.Y.Z] [--bin-dir DIR] [--repo OWNER/NAME]
 
-  --version   release tag to install (default: the newest v2.x.y release)
+  --version   release tag to install (default: the newest stable v2.x.y release)
   --bin-dir   where to put the binary (default: ~/.local/bin)
   --repo      GitHub repository to install from (default: JamesPeck/pic-sure-cli)
 EOF
@@ -128,7 +128,7 @@ if [ -z "$VERSION" ]; then
     fetch "$API_URL/repos/$REPO/releases?per_page=100&page=$page" "$TMP/page.json" \
       || fail "could not list releases of $REPO; pass --version vX.Y.Z to choose one"
     cat "$TMP/page.json" >>"$TMP/releases.json"
-    [ "$(grep -o '"tag_name":' "$TMP/page.json" | wc -l)" -ge 100 ] || break
+    [ "$(grep -o '"tag_name":' "$TMP/page.json" | grep -c .)" -ge 100 ] || break
   done
   VERSION="$(grep -oE '"(tag_name|prerelease)": *("[^"]*"|true|false)' "$TMP/releases.json" \
     | awk -F'"' '$2 == "tag_name" { tag = $4 } $2 == "prerelease" && $3 ~ /false/ { print tag }' \

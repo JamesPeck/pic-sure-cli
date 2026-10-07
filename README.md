@@ -37,7 +37,7 @@ command reference applies to both.
 curl -fsSL https://raw.githubusercontent.com/JamesPeck/pic-sure-cli/v2/install.sh | bash
 # or choose the destination or version:
 #   install.sh --bin-dir /usr/local/bin     (default: ~/.local/bin)
-#   install.sh --version v2.0.0             (default: the newest v2.x.y)
+#   install.sh --version v2.0.0             (default: the newest stable v2.x.y)
 ```
 
 The installer detects `uname -s`/`-m`, downloads the release plus

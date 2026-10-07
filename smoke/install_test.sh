@@ -42,12 +42,19 @@ EOF
 chmod +x "$WORK/cosign/cosign"
 
 # The served tree: /gh/<repo>/releases/download/<tag>/... and
-# /api/repos/<repo>/releases (the query string is ignored).
+# /api/repos/<repo>/releases?...page=N, served from releases.N.
 WWW="$WORK/www"
 REL="$WWW/gh/$REPO/releases/download"
-mkdir -p "$WWW/api/repos/$REPO"
-# Compact, like the API, with nested objects; v2.11.0 is marked prerelease.
-cat >"$WWW/api/repos/$REPO/releases" <<'EOF'
+API="$WWW/api/repos/$REPO"
+mkdir -p "$API"
+# A full first page of v3 releases, so the v2 ones are on page 2. Compact,
+# like the API, with nested objects; v2.11.0 is marked prerelease.
+{
+  printf '['
+  for i in $(seq 0 99); do printf '{"tag_name":"v3.0.%s","prerelease":false},' "$i"; done
+  printf '{"tag_name":"v3.1.0","prerelease":false}]\n'
+} >"$API/releases.1"
+cat >"$API/releases.2" <<'EOF'
 [{"author":{"login":"x"},"tag_name":"v3.0.0","draft":false,"prerelease":false,"assets":[{"uploader":{"login":"x"}}]},{"tag_name":"v2.11.0","prerelease":true,"assets":[]},{"tag_name":"v2.10.0-rc.1","prerelease":true},{"tag_name":"v2.9.1","prerelease":false},{"tag_name":"v2.10.0","prerelease":false},{"tag_name":"v1.4.0","prerelease":false}]
 EOF
 
@@ -63,10 +70,22 @@ release v2.10.0
 release v2.11.0
 
 port="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
-python3 -m http.server "$port" --bind 127.0.0.1 --directory "$WWW" >"$WORK/server.log" 2>&1 &
+cat >"$WORK/server.py" <<'EOF'
+import http.server, sys, urllib.parse
+
+class Handler(http.server.SimpleHTTPRequestHandler):
+    def translate_path(self, path):
+        url = urllib.parse.urlsplit(path)
+        page = urllib.parse.parse_qs(url.query).get("page")
+        return super().translate_path(url.path + ("." + page[0] if page else ""))
+
+http.server.ThreadingHTTPServer(("127.0.0.1", int(sys.argv[1])),
+    lambda *a: Handler(*a, directory=sys.argv[2])).serve_forever()
+EOF
+python3 -I "$WORK/server.py" "$port" "$WWW" >"$WORK/server.log" 2>&1 &
 server=$!
 for _ in $(seq 50); do
-  curl -fs "http://127.0.0.1:$port/api/repos/$REPO/releases" >/dev/null 2>&1 && break
+  curl -fs "http://127.0.0.1:$port/api/repos/$REPO/releases?page=1" >/dev/null 2>&1 && break
   sleep 0.1
 done
 
