@@ -9,5 +9,5 @@ func diskFree(path string) (uint64, error) {
 	if err := unix.Statfs(path, &st); err != nil {
 		return 0, err
 	}
-	return uint64(st.Bavail) * uint64(st.Bsize), nil //nolint:unconvert // the field types differ by OS
+	return st.Bavail * uint64(st.Bsize), nil
 }

@@ -693,20 +693,24 @@ preconditions (034) can call it with no `Stack` and `Building: true`.
   from `docker info`'s plugin list. `disk-docker` runs `df` in a
   throwaway, uniquely named `--rm --network none` alpine container, whose
   root file system is on Docker's data root wherever the daemon runs, and
-  removes it again. `memory` sums the last `-Xmx` of every running
-  stack's HPDS (`docker ps` by the stack label and compose service) plus
-  this stack's when it isn't running, against `docker info`'s `MemTotal`.
+  removes it again; it only warns when alpine isn't pulled, so plain
+  doctor never downloads. `memory` sums the last `-Xmx` of every running
+  stack's HPDS (`docker ps` by the stack label and compose service)
+  against `docker info`'s `MemTotal` (fail when over), plus this stack's
+  when it isn't running (only a warning, since `-Xmx` is a ceiling).
   `arm64-images` inspects only the pinned images already pulled.
-- With a `Stack`: `config`, `compose-config` (`d.Compose.Config(quiet)`;
+- With a `Stack`: `config` (including `CheckFiles`), `compose-config` (`d.Compose.Config(quiet)`;
   a warning before the first render, from `ComposeErr`), `overrides`
-  (`overrides/*.yml`, which the adapter ignores), `ports` (free, or
-  published by this stack per `compose ps`; the dev ports too when dev
+  (`overrides/*.yml`, which the adapter ignores), `ports` (busy only when
+  binding says `EADDRINUSE`, on the wildcard address or loopback; a busy
+  port published by this stack per `compose ps` is fine; the dev ports too when dev
   services are on), `auth0` (tenant, client ID and the client secret
   unless open mode) and `proxy` (warns on an http-only proxy and on
   credentials psama can't use, §9.10).
 - `Network`: `network-github`, `-maven-central`, `-npm-registry`,
-  `-alpine-cdn` (an HTTP HEAD through the stack's proxy; any status but 407
-  counts) and `-release-control` (`git ls-remote` with the proxy env).
+  `-alpine-cdn` (an HTTP HEAD through the stack's proxy; any status counts,
+  but a 407 or a refused CONNECT is a failure naming credentials) and `-release-control` (`git ls-remote` with the proxy env).
+  The repo URL's user info is masked in messages.
   With a proxy, `network-docker-pull` pulls alpine and on failure puts the
   runtime's daemon proxy instructions in `Detail` (D36).
 - `Host` is the seam for PATH lookups, free disk, port binding and HTTP;

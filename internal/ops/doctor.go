@@ -42,8 +42,10 @@ const (
 // need, for the memory check's warning.
 const hpdsOverheadBytes = 4 << 30
 
-// probeTimeout bounds each network probe and the disk probe container.
-const probeTimeout = 20 * time.Second
+const (
+	probeTimeout = 20 * time.Second
+	pullTimeout  = 2 * time.Minute
+)
 
 // CheckStatus is a check's outcome.
 type CheckStatus string
@@ -72,8 +74,17 @@ type DoctorReport struct {
 }
 
 // Failed reports whether any check failed.
-func (r *DoctorReport) Failed() bool {
-	return slices.ContainsFunc(r.Checks, func(c Check) bool { return c.Status == CheckFail })
+func (r *DoctorReport) Failed() bool { return r.Count(CheckFail) > 0 }
+
+// Count returns how many checks have status s.
+func (r *DoctorReport) Count(s CheckStatus) int {
+	n := 0
+	for _, c := range r.Checks {
+		if c.Status == s {
+			n++
+		}
+	}
+	return n
 }
 
 // Host is what doctor asks of the host besides Docker and git. The cli
@@ -183,8 +194,6 @@ func (c *doctor) proxy() *netproxy.Proxy {
 	return p
 }
 
-// ---- host and Docker ----
-
 func (c *doctor) host(ctx context.Context) {
 	c.dockerCLIChecks(ctx)
 	c.gitCheck()
@@ -240,8 +249,9 @@ func (c *doctor) pluginCheck(name, plugin, min string, required bool) {
 	}
 	if version == "" {
 		if len(c.info.ClientInfo.Plugins) == 0 && !c.daemonOK {
-			// docker info printed nothing usable, so we can't tell.
-			c.add(name, bad, "couldn't read the docker %s plugin's version from docker info", plugin)
+			// docker info printed nothing usable, so we can't tell; the
+			// docker-daemon check has already failed.
+			c.add(name, CheckWarn, "couldn't read the docker %s plugin's version from docker info", plugin)
 			return
 		}
 		c.add(name, bad, "docker %s isn't installed; pic-sure needs %s or later", plugin, min)
@@ -296,7 +306,7 @@ const (
 )
 
 func (c *doctor) runtimeCheck(ctx context.Context) {
-	c.runtime = detectRuntime(c.info, c.serverComponents(ctx))
+	c.runtime = detectRuntime(c.info, c.serverVersion(ctx))
 	where := c.info.ClientInfo.Context
 	if where == "" {
 		where = "default"
@@ -308,19 +318,25 @@ func (c *doctor) runtimeCheck(ctx context.Context) {
 	c.add("docker-runtime", CheckOK, "%s (context %s)", c.runtime, where)
 }
 
-func (c *doctor) serverComponents(ctx context.Context) []docker.Component {
+// serverVersion is the daemon's half of docker version, or nil.
+func (c *doctor) serverVersion(ctx context.Context) *docker.ServerVersion {
 	v, err := c.d.Docker.Version(ctx)
-	if err != nil || v.Server == nil {
+	if err != nil {
 		return nil
 	}
-	return append(v.Server.Components, docker.Component{Name: v.Server.Platform.Name})
+	return v.Server
 }
 
-func detectRuntime(info docker.Info, components []docker.Component) string {
+func detectRuntime(info docker.Info, server *docker.ServerVersion) string {
 	has := func(s, sub string) bool { return strings.Contains(strings.ToLower(s), sub) }
-	for _, comp := range components {
-		if has(comp.Name, "podman") {
+	if server != nil {
+		if has(server.Platform.Name, "podman") {
 			return RuntimePodman
+		}
+		for _, comp := range server.Components {
+			if has(comp.Name, "podman") {
+				return RuntimePodman
+			}
 		}
 	}
 	switch {
@@ -373,8 +389,18 @@ func gib(n uint64) string { return fmt.Sprintf("%.1f GiB", float64(n)/(1<<30)) }
 // dockerDiskCheck measures the free space of Docker's data root from inside
 // a throwaway container, whose root file system lives there. That works the
 // same whether the daemon runs here or in a VM.
+// It uses the pinned alpine only when it is already pulled, so plain doctor
+// never downloads anything.
 func (c *doctor) dockerDiskCheck(ctx context.Context) {
 	ref := imageRef("alpine")
+	switch ok, err := c.d.Docker.ImageExists(ctx, ref); {
+	case err != nil:
+		c.add("disk-docker", CheckWarn, "couldn't measure Docker's free space: %v", err)
+		return
+	case !ok:
+		c.add("disk-docker", CheckWarn, "Docker's free space not measured: %s isn't pulled yet (`docker pull %s`, or run doctor again after `pic-sure up`)", ref, ref)
+		return
+	}
 	name, err := docker.UniqueName("pic-sure-doctor", c.d.Rand)
 	if err != nil {
 		c.add("disk-docker", CheckWarn, "couldn't measure Docker's free space: %v", err)
@@ -435,7 +461,6 @@ func imageRef(name string) string {
 
 // hpdsContainer is the part of `docker inspect` the memory check reads.
 type hpdsContainer struct {
-	Name   string
 	Config struct {
 		Env    []string
 		Labels map[string]string
@@ -455,12 +480,12 @@ func (c *doctor) memoryCheck(ctx context.Context) {
 		c.add("memory", CheckWarn, "couldn't list running HPDS containers: %v", err)
 		return
 	}
-	var total int64
+	var runningTotal int64
 	var parts []string
 	thisRunning := false
 	for _, h := range running {
 		heap := maxHeap(envValue(h.Config.Env, "JAVA_OPTS"))
-		total += heap
+		runningTotal += heap
 		owner := h.Config.Labels[stack.LabelStack]
 		if c.opts.Stack != nil && h.Config.Labels[stack.LabelStackDir] == c.opts.Stack.Dir {
 			thisRunning = true
@@ -468,6 +493,7 @@ func (c *doctor) memoryCheck(ctx context.Context) {
 		}
 		parts = append(parts, fmt.Sprintf("%s %s", owner, gib(uint64(heap))))
 	}
+	total := runningTotal
 	if c.cfg != nil && !thisRunning {
 		heap := maxHeap(c.hpdsJavaOpts())
 		total += heap
@@ -478,10 +504,16 @@ func (c *doctor) memoryCheck(ctx context.Context) {
 		return
 	}
 	summary := fmt.Sprintf("Docker has %s; HPDS heaps total %s (%s)", gib(uint64(mem)), gib(uint64(total)), strings.Join(parts, ", "))
+	const help = "Give Docker more memory (Docker Desktop: Settings > Resources) or lower hpds.java_opts' -Xmx."
 	switch {
+	case runningTotal > mem:
+		// Running heaps can grow past what Docker has, and the kernel then
+		// kills a container.
+		c.add("memory", CheckFail, "%s", summary).Detail = help
 	case total > mem:
-		c.add("memory", CheckFail, "%s", summary).Detail =
-			"Give Docker more memory (Docker Desktop: Settings > Resources) or lower hpds.java_opts' -Xmx."
+		// -Xmx is a ceiling, not a reservation, so a stack that isn't up
+		// yet only warns.
+		c.add("memory", CheckWarn, "%s, more than Docker has", summary).Detail = help
 	case total+hpdsOverheadBytes > mem:
 		c.add("memory", CheckWarn, "%s, leaving under %s for the other services", summary, gib(hpdsOverheadBytes))
 	default:
@@ -564,13 +596,18 @@ func (c *doctor) archCheck(ctx context.Context) {
 		if img.Ref == "" || !strings.Contains(img.Ref, ":") {
 			continue
 		}
-		res, err := c.d.Runner.Run(ctx, docker.Cmd{Argv: []string{"docker", "image", "inspect", "--format", "{{.Architecture}}", img.Ref}})
+		argv := []string{"docker", "image", "inspect", "--format", "{{.Architecture}}", img.Ref}
+		res, err := c.d.Runner.Run(ctx, docker.Cmd{Argv: argv})
 		if err != nil {
 			c.add("arm64-images", CheckWarn, "couldn't inspect %s: %v", img.Ref, err)
 			return
 		}
 		if res.ExitCode != 0 {
-			continue // not pulled
+			if strings.Contains(strings.ToLower(string(res.Stderr)), "no such image") {
+				continue // not pulled
+			}
+			c.add("arm64-images", CheckWarn, "couldn't inspect %s: %v", img.Ref, &docker.ExitError{Argv: argv, ExitCode: res.ExitCode, Stderr: res.Stderr})
+			return
 		}
 		checked = append(checked, img.Ref)
 		if a := strings.TrimSpace(string(res.Stdout)); a != "arm64" {
@@ -588,13 +625,13 @@ func (c *doctor) archCheck(ctx context.Context) {
 	}
 }
 
-// ---- stack ----
-
 func (c *doctor) stack(ctx context.Context) {
 	st := c.opts.Stack
 	switch {
 	case c.cfgErr != nil:
 		c.add("config", CheckFail, "%v", c.cfgErr)
+	case c.cfg.CheckFiles(st.Dir) != nil:
+		c.add("config", CheckFail, "%v", c.cfg.CheckFiles(st.Dir))
 	default:
 		c.add("config", CheckOK, "%s is valid", st.Path("pic-sure.yaml"))
 	}
@@ -746,8 +783,6 @@ func (c *doctor) proxyCheck() {
 	c.add("proxy", CheckOK, "http=%s https=%s", redactURL(p.HTTP), redactURL(p.HTTPS))
 }
 
-// ---- network ----
-
 func (c *doctor) network(ctx context.Context) {
 	p := c.proxy()
 	for _, t := range networkTargets {
@@ -779,6 +814,9 @@ func (c *doctor) reach(ctx context.Context, name, rawURL string, p *netproxy.Pro
 	defer cancel()
 	status, err := c.opts.Host.Reach(ctx, rawURL, p.ProxyURL)
 	switch {
+	case err != nil && strings.Contains(err.Error(), http.StatusText(http.StatusProxyAuthRequired)):
+		// Go reports a refused https CONNECT as an error with the status text.
+		c.add(name, CheckFail, "the proxy wants credentials for %s (HTTP 407)", rawURL)
 	case err != nil:
 		c.add(name, CheckFail, "can't reach %s %s: %v", rawURL, via, err)
 	case status == http.StatusProxyAuthRequired:
@@ -794,13 +832,19 @@ func (c *doctor) releaseControlCheck(ctx context.Context, p *netproxy.Proxy) {
 		repo = c.cfg.Release.Repo
 	}
 	via := via(p, repo)
+	// A repo URL can carry a token, as a user name or a password.
+	shown := repo
+	if u, err := url.Parse(repo); err == nil && u.User != nil {
+		u.User = url.User("xxxxx")
+		shown = u.String()
+	}
 	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
 	if _, err := c.d.Git.WithEnv(p.Env()...).LsRemote(ctx, repo); err != nil {
-		c.add("network-release-control", CheckFail, "git can't list %s %s: %v", repo, via, err)
+		c.add("network-release-control", CheckFail, "git can't list %s %s: %s", shown, via, strings.ReplaceAll(err.Error(), repo, shown))
 		return
 	}
-	c.add("network-release-control", CheckOK, "git listed %s %s", repo, via)
+	c.add("network-release-control", CheckOK, "git listed %s %s", shown, via)
 }
 
 // pullCheck pulls a small image, because the daemon's proxy settings are
@@ -811,6 +855,8 @@ func (c *doctor) pullCheck(ctx context.Context) {
 		return
 	}
 	ref := imageRef("alpine")
+	ctx, cancel := context.WithTimeout(ctx, pullTimeout)
+	defer cancel()
 	if err := c.d.Docker.Pull(ctx, ref, io.Discard); err != nil {
 		c.add("network-docker-pull", CheckFail, "the Docker daemon can't pull %s: %v", ref, err).Detail = c.daemonProxyHelp()
 		return

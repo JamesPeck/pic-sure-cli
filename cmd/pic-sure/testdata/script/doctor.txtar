@@ -46,6 +46,7 @@ stderr 'no pic-sure stack found'
 -- docker.scenario --
 docker info --format json => 0 stdout=info.json
 docker version --format json => 0 stdout=version.json
+docker image inspect alpine:* => 0 stdout=image.json
 docker run * df -Pk / => 0 stdout=df.txt
 docker rm -v -f pic-sure-doctor-* => 0
 docker ps * => 0
@@ -58,6 +59,8 @@ docker image inspect * => 1
 {"ServerVersion":"28.5.1","OperatingSystem":"Docker Desktop","OSType":"linux","Architecture":"x86_64","MemTotal":17179869184,"DockerRootDir":"/var/lib/docker","ClientInfo":{"Context":"desktop-linux","Plugins":[{"Name":"compose","Version":"v2.20.3"},{"Name":"buildx","Version":"v0.17.1"}]}}
 -- version.json --
 {"Client":{"Version":"28.5.1"},"Server":{"Platform":{"Name":"Docker Desktop 4.48.0"},"Version":"28.5.1"}}
+-- image.json --
+[{"Id":"sha256:a1"}]
 -- df.txt --
 Filesystem 1024-blocks Used Available Capacity Mounted on
 overlay 200000000 1000 104857600 1% /

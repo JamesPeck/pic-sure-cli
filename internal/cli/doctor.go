@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/cache"
 	"github.com/JamesPeck/pic-sure-cli/internal/docker"
@@ -62,7 +63,7 @@ func (a *App) doctor(cmd *cobra.Command, network bool) error {
 		return err
 	}
 	if report.Failed() {
-		return exitcode.Failed("doctor: %d check(s) failed", countStatus(report, ops.CheckFail))
+		return exitcode.Failed("doctor: %d check(s) failed", report.Count(ops.CheckFail))
 	}
 	return nil
 }
@@ -76,16 +77,6 @@ func newStackCompose(r docker.Runner, st *stack.Stack) (docker.Composer, error) 
 		return nil, err
 	}
 	return c, nil
-}
-
-func countStatus(r *ops.DoctorReport, s ops.CheckStatus) int {
-	n := 0
-	for _, c := range r.Checks {
-		if c.Status == s {
-			n++
-		}
-	}
-	return n
 }
 
 var doctorMarks = map[ops.CheckStatus]string{ops.CheckOK: "[ OK ]", ops.CheckWarn: "[WARN]", ops.CheckFail: "[FAIL]"}
@@ -105,7 +96,7 @@ func writeDoctorText(w io.Writer, r *ops.DoctorReport) error {
 		}
 	}
 	fmt.Fprintf(&b, "%d ok, %d warnings, %d failed\n",
-		countStatus(r, ops.CheckOK), countStatus(r, ops.CheckWarn), countStatus(r, ops.CheckFail))
+		r.Count(ops.CheckOK), r.Count(ops.CheckWarn), r.Count(ops.CheckFail))
 	_, err := io.WriteString(w, b.String())
 	return err
 }
@@ -130,12 +121,20 @@ func (systemHost) DiskFree(path string) (uint64, error) {
 	}
 }
 
+// PortFree reports a port busy only when binding it says so. Binding the
+// wildcard address alone misses a loopback listener on macOS, so it tries
+// 127.0.0.1 too. Any other error, such as EACCES for a port below 1024 on
+// Linux, which Docker can still publish, counts as free.
 func (systemHost) PortFree(port int) bool {
-	l, err := net.Listen("tcp", ":"+strconv.Itoa(port))
-	if err != nil {
-		return false
+	for _, host := range []string{"", "127.0.0.1"} {
+		l, err := net.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(port)))
+		if errors.Is(err, syscall.EADDRINUSE) {
+			return false
+		}
+		if err == nil {
+			_ = l.Close()
+		}
 	}
-	_ = l.Close()
 	return true
 }
 

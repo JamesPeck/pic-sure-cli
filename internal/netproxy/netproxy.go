@@ -82,9 +82,9 @@ func CatalogServices() []string {
 // port and optional user info, with nothing after the host but "/". The
 // result has only those parts, and the port filled in (80 when missing).
 // An https:// URL is refused, because the JVM and Maven can only speak
-// plain HTTP to a proxy, and it is usually a misspelling of http://. An empty s means no proxy: nil and no error.
-// Errors show the URL with its password redacted, and are phrased to
-// follow the config key.
+// plain HTTP to a proxy, and it is usually a misspelling of http://. An
+// empty s means no proxy: nil and no error. Errors show the URL with its
+// password redacted, and are phrased to follow the config key.
 func ParseURL(s string) (*url.URL, error) {
 	if s == "" {
 		return nil, nil

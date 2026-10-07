@@ -123,6 +123,7 @@ func (e *doctorEnv) run() *ops.DoctorReport {
 	e.t.Helper()
 	e.f.On(fakerunner.Exact("docker", "info", "--format", "json")).Stdout(jsonOf(e.t, e.info))
 	e.f.On(fakerunner.Exact("docker", "version", "--format", "json")).Stdout(jsonOf(e.t, e.version))
+	e.f.On(fakerunner.Glob("docker image inspect alpine:*")).Stdout(`[{"Id":"sha256:a1"}]`)
 	e.f.On(fakerunner.Glob("docker run * df -Pk /")).Stdout(fmt.Sprintf(
 		"Filesystem 1024-blocks Used Available Capacity Mounted on\noverlay 200000000 1000 %d 1%% /\n", e.dfAvail))
 	e.f.On(fakerunner.Glob("docker rm -v -f pic-sure-doctor-*")).Exit(1).Stderr("Error response from daemon: No such container: x\n")
@@ -320,6 +321,12 @@ func TestDoctorDisk(t *testing.T) {
 		e.host.diskErr = errors.New("statfs: boom")
 		wantCheck(t, e.run(), "disk-cache", ops.CheckWarn, "statfs: boom")
 	})
+	t.Run("alpine not pulled", func(t *testing.T) {
+		e := newDoctorEnv(t)
+		e.f.On(fakerunner.Glob("docker image inspect alpine:*")).Exit(1).Stderr("Error response from daemon: No such image: alpine:3.23\n")
+		wantCheck(t, e.run(), "disk-docker", ops.CheckWarn, "isn't pulled yet")
+		e.f.AssertNotCalled(fakerunner.Glob("docker run *"))
+	})
 	t.Run("probe fails", func(t *testing.T) {
 		e := newDoctorEnv(t)
 		e.f.On(fakerunner.Glob("docker run * df -Pk /")).Exit(125).Stderr("docker: Error response from daemon: pull access denied\n")
@@ -374,6 +381,11 @@ func TestDoctorMemory(t *testing.T) {
 		e.stack(t, func(c *stack.Config) { c.HPDS.JavaOpts = "-Xmx16g" })
 		wantCheck(t, e.run(), "memory", ops.CheckWarn, "this stack 16.0 GiB when up")
 	})
+	t.Run("this stack over when down only warns", func(t *testing.T) {
+		e := newDoctorEnv(t)
+		e.stack(t, func(c *stack.Config) { c.HPDS.JavaOpts = "-Xmx20g" })
+		wantCheck(t, e.run(), "memory", ops.CheckWarn, "this stack 20.0 GiB when up), more than Docker has")
+	})
 	t.Run("this stack counted once when up", func(t *testing.T) {
 		e := newDoctorEnv(t)
 		st := e.stack(t, func(c *stack.Config) { c.HPDS.JavaOpts = "-Xmx16g" })
@@ -387,7 +399,7 @@ func TestDoctorArm64Images(t *testing.T) {
 	t.Run("amd64 daemon", func(t *testing.T) {
 		e := newDoctorEnv(t)
 		wantCheck(t, e.run(), "arm64-images", ops.CheckOK, "not an arm64 daemon")
-		e.f.AssertNotCalled(fakerunner.Glob("docker image inspect *"))
+		e.f.AssertNotCalled(fakerunner.Glob("docker image inspect --format *"))
 	})
 	t.Run("emulated image", func(t *testing.T) {
 		e := newDoctorEnv(t)
@@ -398,6 +410,12 @@ func TestDoctorArm64Images(t *testing.T) {
 		if strings.Contains(c.Message, "alpine") {
 			t.Errorf("message names the arm64 image: %q", c.Message)
 		}
+	})
+	t.Run("inspect fails", func(t *testing.T) {
+		e := newDoctorEnv(t)
+		e.info.Architecture = "aarch64"
+		e.f.On(fakerunner.Glob("docker image inspect --format {{.Architecture}} mysql:*")).Exit(1).Stderr("permission denied while trying to connect to the Docker daemon socket\n")
+		wantCheck(t, e.run(), "arm64-images", ops.CheckWarn, "couldn't inspect mysql:8.0: docker image inspect")
 	})
 	t.Run("native", func(t *testing.T) {
 		e := newDoctorEnv(t)
@@ -484,6 +502,12 @@ func TestDoctorStackConfigInvalid(t *testing.T) {
 	for _, name := range []string{"ports", "auth0", "proxy"} {
 		noCheck(t, r, name)
 	}
+}
+
+func TestDoctorStackConfigMissingFile(t *testing.T) {
+	e := newDoctorEnv(t)
+	e.stack(t, func(c *stack.Config) { c.TLS.Mode = stack.TLSProvided })
+	wantCheck(t, e.run(), "config", ops.CheckFail, "server.crt")
 }
 
 func TestDoctorStackCompose(t *testing.T) {
@@ -633,6 +657,10 @@ func TestDoctorNetwork(t *testing.T) {
 		})
 		e.host.reach = func(u string) (int, error) {
 			if strings.Contains(u, "maven") {
+				// What Go's transport returns when the proxy refuses CONNECT.
+				return 0, errors.New("Proxy Authentication Required")
+			}
+			if strings.Contains(u, "npmjs") {
 				return http.StatusProxyAuthRequired, nil
 			}
 			return http.StatusOK, nil
@@ -640,7 +668,8 @@ func TestDoctorNetwork(t *testing.T) {
 		e.git.err = errors.New("Could not resolve host")
 		r := e.run()
 		wantCheck(t, r, "network-github", ops.CheckOK, "through the proxy")
-		wantCheck(t, r, "network-maven-central", ops.CheckFail, "HTTP 407")
+		wantCheck(t, r, "network-maven-central", ops.CheckFail, "the proxy wants credentials for https://repo.maven.apache.org/maven2/ (HTTP 407)")
+		wantCheck(t, r, "network-npm-registry", ops.CheckFail, "HTTP 407")
 		wantCheck(t, r, "network-release-control", ops.CheckFail, "git.example.org/release-control through the proxy: Could not resolve host")
 		wantCheck(t, r, "network-docker-pull", ops.CheckOK, "pulled alpine:")
 		if len(e.host.proxied) != 4 {
@@ -648,6 +677,16 @@ func TestDoctorNetwork(t *testing.T) {
 		}
 		if !strings.Contains(strings.Join(e.git.env, " "), "HTTPS_PROXY=http://proxy:3128") {
 			t.Errorf("git env %v", e.git.env)
+		}
+	})
+	t.Run("repo token redacted", func(t *testing.T) {
+		e := newDoctorEnv(t)
+		e.opts.Network = true
+		e.stack(t, func(c *stack.Config) { c.Release.Repo = "https://ghp_s3cret@git.example.org/rc.git" })
+		e.git.err = errors.New("git ls-remote https://ghp_s3cret@git.example.org/rc.git exited 128")
+		c := wantCheck(t, e.run(), "network-release-control", ops.CheckFail, "https://xxxxx@git.example.org/rc.git directly: git ls-remote https://xxxxx@")
+		if strings.Contains(c.Message, "s3cret") {
+			t.Errorf("message leaks the token: %q", c.Message)
 		}
 	})
 	t.Run("http-only proxy leaves https direct", func(t *testing.T) {
