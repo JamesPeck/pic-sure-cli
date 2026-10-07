@@ -9,6 +9,8 @@ import (
 	"os"
 	"syscall"
 	"time"
+
+	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
 )
 
 // ErrLocked is wrapped by the error Lock returns when another command holds
@@ -59,6 +61,10 @@ func (s *Stack) Lock(ctx context.Context, opts LockOptions) (*Lock, error) {
 	for {
 		err := flock(f, syscall.LOCK_EX|syscall.LOCK_NB)
 		if err == nil {
+			if err := s.stillLockFile(f); err != nil {
+				_ = f.Close()
+				return nil, err
+			}
 			break
 		}
 		if !errors.Is(err, syscall.EWOULDBLOCK) {
@@ -97,6 +103,21 @@ func (l *Lock) Unlock() error {
 	err := l.f.Close()  // closing releases the flock
 	l.f = nil
 	return err
+}
+
+// stillLockFile fails if f is no longer .pic-sure/lock: destroy removed the
+// stack while this command waited, and the flock it got is on the deleted
+// file.
+func (s *Stack) stillLockFile(f *os.File) error {
+	held, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	cur, err := s.root.Lstat(LockFile)
+	if err == nil && os.SameFile(held, cur) {
+		return nil
+	}
+	return exitcode.Precondition("%w: the stack in %s was destroyed while this command waited for its lock", ErrNotFound, s.Dir)
 }
 
 // openLockFile opens .pic-sure/lock, creating and recording it the first

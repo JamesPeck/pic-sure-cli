@@ -1,13 +1,103 @@
-# Not implemented yet: exit 1, naming ticket 056.
-exitcode 1 pic-sure reset
-stderr '^pic-sure: not implemented \(ticket 056\)$'
-! stdout .
-exitcode 1 pic-sure reset --keep-db
-stderr '^pic-sure: not implemented \(ticket 056\)$'
-! stdout .
-exitcode 1 pic-sure destroy
-stderr '^pic-sure: not implemented \(ticket 056\)$'
-! stdout .
-exitcode 1 pic-sure destroy --prune-images
-stderr '^pic-sure: not implemented \(ticket 056\)$'
-! stdout .
+# Both need a stack: exit 3.
+exitcode 3 pic-sure reset
+stderr 'no pic-sure stack found'
+exitcode 3 pic-sure destroy
+
+cd stack
+
+# Without a terminal and without --yes: exit 4, before docker is asked
+# anything or a file changes. --json and --non-interactive are no consent.
+exitcode 4 pic-sure reset
+stderr '^pic-sure: pic-sure reset needs confirmation: pass --yes, or run it on a terminal and type the stack name. Nothing was changed.$'
+exitcode 4 pic-sure --non-interactive reset --keep-db
+exitcode 4 pic-sure destroy
+exitcode 4 pic-sure --json destroy --prune-images
+stdout '"type":"result","ok":false,"error":\{"exit_code":4,'
+! exists $WORK/docker.log
+exists pic-sure.yaml
+exists .pic-sure/state.json
+
+# reset --yes: compose down, then the stack's labelled data volumes; the
+# logs volume, the config and the secrets stay.
+exec pic-sure --plain --yes reset
+grep 'down --remove-orphans$' $WORK/docker.log
+grep '^docker volume ls -q --filter label=org.hms-dbmi.picsure.stack=demo --filter label=org.hms-dbmi.picsure.stack-dir=.*/stack$' $WORK/docker.log
+grep '^docker volume rm demo_hpds-data$' $WORK/docker.log
+grep '^docker volume rm demo_picsure-db-data$' $WORK/docker.log
+! grep 'volume rm demo_hpds-logs' $WORK/docker.log
+stdout '^Reset stack demo: removed 2 volumes.$'
+stdout '^Kept demo_hpds-logs.$'
+exists pic-sure.yaml
+exists .pic-sure/secrets.yaml
+
+# --keep-db keeps the database.
+rm $WORK/docker.log
+exec pic-sure --yes --json reset --keep-db
+grep '^docker volume rm demo_hpds-data$' $WORK/docker.log
+! grep 'volume rm demo_picsure-db-data' $WORK/docker.log
+stdout '"type":"result","ok":true,"data":\{"stack":"demo","volumes":\["demo_hpds-data"\],"kept_volumes":\["demo_hpds-logs","demo_picsure-db-data"\]\}'
+
+# destroy --yes: every labelled volume, the dev images of this stack, and
+# the files pic-sure created. The operator's files survive and are listed.
+rm $WORK/docker.log
+exec pic-sure --plain --yes destroy
+grep '^docker volume rm demo_hpds-logs$' $WORK/docker.log
+grep '^docker image rm hms-dbmi/pic-sure-psama:dev-demo-0123456789ab$' $WORK/docker.log
+! grep 'image rm hms-dbmi/pic-sure-psama:dev-demo2' $WORK/docker.log
+! grep 'image rm hms-dbmi/pic-sure-hpds:0123456789ab' $WORK/docker.log
+stdout '^Destroyed stack demo: removed 3 volumes and 1 dev image, and [0-9]+ paths.$'
+stdout '^Left in .*/stack:$'
+stdout '^  notes.txt$'
+stdout '^  overrides/$'
+! exists pic-sure.yaml
+! exists .pic-sure
+exists notes.txt
+exists overrides/10-local.yaml
+
+# Now there's no stack here.
+exitcode 3 pic-sure --yes destroy
+
+-- docker.scenario --
+docker compose * down --remove-orphans => 0
+docker volume ls -q --filter label=org.hms-dbmi.picsure.stack=demo * => 0 stdout=vols.txt
+docker volume inspect * => 0 stdout=vols.json
+docker volume rm * => 0
+docker image ls --filter reference=hms-dbmi/* * => 0 stdout=images.txt
+docker image inspect * => 0 stdout=images.json
+docker image rm * => 0
+-- vols.txt --
+demo_hpds-data
+demo_hpds-logs
+demo_picsure-db-data
+-- vols.json --
+[{"Name":"demo_hpds-data","Labels":{"com.docker.compose.volume":"hpds-data"}},{"Name":"demo_hpds-logs","Labels":{"com.docker.compose.volume":"hpds-logs"}},{"Name":"demo_picsure-db-data","Labels":{"com.docker.compose.volume":"picsure-db-data"}}]
+-- images.txt --
+hms-dbmi/pic-sure-hpds:0123456789ab
+hms-dbmi/pic-sure-psama:dev-demo-0123456789ab
+hms-dbmi/pic-sure-psama:dev-demo2-0123456789ab
+-- images.json --
+[{"Id":"sha256:a","RepoTags":["hms-dbmi/pic-sure-hpds:0123456789ab"]},{"Id":"sha256:b","RepoTags":["hms-dbmi/pic-sure-psama:dev-demo-0123456789ab"]},{"Id":"sha256:c","RepoTags":["hms-dbmi/pic-sure-psama:dev-demo2-0123456789ab"]}]
+-- stack/pic-sure.yaml --
+schema: 1
+name: demo
+auth: {mode: open, admin_email: admin@example.com}
+-- stack/notes.txt --
+the operator's
+-- stack/overrides/10-local.yaml --
+services: {}
+-- stack/.pic-sure/state.json --
+{"cli_version": "dev", "schema_version": 1, "initialized_at": "2026-10-07T00:00:00Z"}
+-- stack/.pic-sure/secrets.yaml --
+db_root_password: rootpw
+-- stack/.pic-sure/render/compose.yaml --
+services: {}
+-- stack/.pic-sure/manifest.json --
+{"version": 1, "entries": [
+  {"path": ".pic-sure", "type": "dir"},
+  {"path": ".pic-sure/manifest.json", "type": "file"},
+  {"path": "pic-sure.yaml", "type": "file"},
+  {"path": ".pic-sure/state.json", "type": "file"},
+  {"path": ".pic-sure/secrets.yaml", "type": "file"},
+  {"path": ".pic-sure/render", "type": "dir"},
+  {"path": ".pic-sure/render/compose.yaml", "type": "file"}
+]}

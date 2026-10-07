@@ -397,6 +397,9 @@ type PruneOptions struct {
 	// registry entries that can't be read. In-use and recent items are
 	// never removed.
 	Force bool
+	// CommitImagesOnly limits the prune to commit-tagged images (destroy
+	// --prune-images).
+	CommitImagesOnly bool
 }
 
 // PruneReport is `cache prune`'s report.
@@ -435,25 +438,35 @@ func PruneCache(ctx context.Context, d *Deps, c *cache.Cache, opts PruneOptions)
 		ID:    StepPrune,
 		Title: "Prune the cache",
 		Apply: func(ctx context.Context, sink events.Sink) error {
-			if !opts.DryRun {
-				lock, err := c.LockPrune(ctx)
-				if errors.Is(err, cache.ErrLockTimeout) {
-					return fmt.Errorf("a build is using the cache; prune again when it's done: %w", err)
-				}
-				if err != nil {
-					return err
-				}
-				defer func() { _ = lock.Unlock() }()
+			r, err := pruneCache(ctx, d, c, sink, opts)
+			if r != nil {
+				*report = *r
 			}
-			inv, err := CacheInventory(ctx, d, c, opts.CacheOptions)
-			if err != nil {
-				return err
-			}
-			report.CacheReport = *inv
-			return prune(ctx, d, c, sink, opts, report)
+			return err
 		},
 	}
 	return report, steps.Run(ctx, d.Sink, []steps.Step{step}, steps.Options{})
+}
+
+// pruneCache is PruneCache's step, reporting on sink as the caller's step.
+func pruneCache(ctx context.Context, d *Deps, c *cache.Cache, sink events.Sink, opts PruneOptions) (*PruneReport, error) {
+	report := &PruneReport{DryRun: opts.DryRun, Removed: []CacheItem{}}
+	if !opts.DryRun {
+		lock, err := c.LockPrune(ctx)
+		if errors.Is(err, cache.ErrLockTimeout) {
+			return report, fmt.Errorf("a build is using the cache; prune again when it's done: %w", err)
+		}
+		if err != nil {
+			return report, err
+		}
+		defer func() { _ = lock.Unlock() }()
+	}
+	inv, err := CacheInventory(ctx, d, c, opts.CacheOptions)
+	if err != nil {
+		return report, err
+	}
+	report.CacheReport = *inv
+	return report, prune(ctx, d, c, sink, opts, report)
 }
 
 func prune(ctx context.Context, d *Deps, c *cache.Cache, sink events.Sink, opts PruneOptions, report *PruneReport) error {
@@ -487,6 +500,11 @@ func prune(ctx context.Context, d *Deps, c *cache.Cache, sink events.Sink, opts 
 			}
 		default:
 			continue
+		}
+		if opts.CommitImagesOnly {
+			if devStack, _ := cachedImage(it.Name); it.image == nil || devStack != "" {
+				continue
+			}
 		}
 		if err := ctx.Err(); err != nil {
 			return err

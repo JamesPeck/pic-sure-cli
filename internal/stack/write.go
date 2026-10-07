@@ -12,7 +12,8 @@ import (
 	"syscall"
 )
 
-// ErrNotCreated is returned by Remove for a path the manifest doesn't list.
+// ErrNotCreated is returned by Remove for a path the manifest doesn't list,
+// or that is no longer what the CLI created there.
 var ErrNotCreated = errors.New("not created by pic-sure")
 
 // WriteFile atomically replaces the file rel (a slash-separated path inside
@@ -126,9 +127,9 @@ func (s *Stack) CreateFile(rel string, perm fs.FileMode) (*os.File, error) {
 // Remove deletes rel, a file or empty directory the CLI created, and drops
 // it from the manifest. A recorded path that is already gone is just
 // dropped. A path the manifest doesn't list is refused with ErrNotCreated,
-// and so is one that is no longer the kind of thing the CLI created there,
-// or that lies under a symlinked directory. A symlink is removed, not its
-// target.
+// and so is one that is no longer the kind of thing the CLI created there.
+// One under a symlinked directory is refused with an error naming the
+// symlink. A symlink is removed, not its target.
 func (s *Stack) Remove(rel string) error {
 	p, err := local(rel)
 	if err != nil {

@@ -53,7 +53,7 @@ var specCommands = map[string]string{
 	"shared-data publish": "050", "shared-data list": "050", "shared-data remove": "050",
 	"dev list": "052", "dev on": "052", "dev off": "052",
 	"db bootstrap": "",
-	"reset":        "056", "destroy": "056",
+	"reset":        "", "destroy": "",
 	"cache list": "", "cache prune": "",
 	"self-update":    "",
 	"support-bundle": "059",
