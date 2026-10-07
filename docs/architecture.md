@@ -248,13 +248,15 @@ it.
   COMPONENT=PATH`, the gate's `--self-update` and `--ignore-cli-version`,
   and `--set KEY=VALUE` (072) for any non-secret key, through
   `ConfigDoc.Set` after the flags; a key a flag also sets must get the same
-  value, and a `--set` port or `network.dev_ports.base` is used as given. Usage problems are exit 2 naming the flag, before
-  docker is asked anything: a client secret under `jwt.MinSecretLen`, a
+  value, and a `--set` port or `network.dev_ports.base` is used as given.
+  Usage problems are exit 2 naming the flag, before docker is asked
+  anything: a client secret under `jwt.MinSecretLen`, a
   `--skip-step` that isn't in `ops.InitStepIDs(cfg)`, shared HPDS data
   (until 051), `--self-update` with a stdin flag. A DIR whose state.json
   has `initialized_at` gets "already initialised" and exit 0; a DIR with a
   `pic-sure.yaml` is resumed with that config as it is (config flags are
-  ignored with a warning; a `--set` that would change it is exit 2). Then three unskippable steps run:
+  ignored with a warning; a `--set` that would change it is exit 2). Then
+  three unskippable steps run:
   `preconditions` (doctor's host checks with the new config, `memory` only
   a warning; `ops.StackNameInUse`; on a new stack `ops.ChoosePorts` and
   `ChooseDevPortsBase`, on a resumed one its ports must be free or its own;

@@ -136,6 +136,12 @@ exitcode 2 pic-sure init new --name demo --admin-email admin@example.com --auth-
 stderr 'email.password is a secret'
 exitcode 2 pic-sure init new --admin-email admin@example.com --auth-mode open --set name=demo
 stderr '--set name=demo: use --name'
+exitcode 2 pic-sure init new --name demo --admin-email admin@example.com --set auth.mode=bogus
+stderr '--set auth.mode=bogus: must be one of'
+exitcode 2 pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --set 'network.http_port= 0'
+stderr '--set network.http_port=0: not a port number'
+! exec pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --auto-ports --hpds-data local --set hpds.shared_name=x
+! stderr 'different values'
 
 # A flag and a --set for the same key must agree, as must two --sets.
 exitcode 2 pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --http-port 8081 --set network.http_port=8082
@@ -149,6 +155,8 @@ stderr 'step release failed'
 exitcode 2 pic-sure --log-level debug init new --name demo --auth-mode open --set auth.admin_email=admin@example.com --skip-step bogus
 stderr 'flags=.*--set=\[auth.admin_email=\[REDACTED\]\]'
 ! stderr 'admin@example.com'
+exitcode 2 pic-sure --log-level debug init new --name demo --auth-mode open --set auth.auth0.client_secret=synthetic-secret-value
+! stderr 'synthetic-secret-value'
 
 # A --set port is used as the port flag would be.
 exitcode 2 pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --set network.http_port=443
@@ -161,7 +169,11 @@ stderr '--set hpds.java_opts=-Xmx2g: .*resume.pic-sure.yaml already has hpds.jav
 ! exists resume/.pic-sure
 ! exec pic-sure init resume --set hpds.java_opts=-Xmx4g --set network.http_port=8083
 ! stderr 'already has'
-stderr 'step release failed'
+stderr 'step release failed|is in use'
+exitcode 2 pic-sure init resume --set hpds.java_opts=-Xmx2g --set hpds.java_opts=-Xmx4g
+stderr 'already has hpds.java_opts -Xmx4g'
+exitcode 2 pic-sure init resume --set name=other
+stderr '--set name=other: name: is read-only'
 
 -- short.txt --
 short

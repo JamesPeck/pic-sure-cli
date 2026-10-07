@@ -46,14 +46,16 @@ func (a *App) startRunLog(cmd *cobra.Command, args []string) {
 	})
 	var flags []string
 	cmd.Flags().Visit(func(f *pflag.Flag) {
-		// init's admin email is personal data, redacted like a secret.
+		// init's admin email is personal data, redacted like a secret. So is
+		// a secret given to --set, which init refuses only later.
 		if f.Name == "admin-email" {
 			log.RegisterSecrets(f.Value.String())
 		}
 		if sv, ok := f.Value.(pflag.SliceValue); ok && f.Name == "set" {
 			for _, kv := range sv.GetSlice() {
-				if email, ok := strings.CutPrefix(kv, "auth.admin_email="); ok {
-					log.RegisterSecrets(email)
+				key, v, _ := strings.Cut(kv, "=")
+				if field, _ := stack.LookupField(key); field.Secret || field.Flag == "admin-email" {
+					log.RegisterSecrets(v)
 				}
 			}
 		}

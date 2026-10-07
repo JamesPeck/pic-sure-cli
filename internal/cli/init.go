@@ -49,18 +49,16 @@ release, write pic-sure.yaml and the secrets, build the images, install the
 TLS certificate, render the compose file, set up and migrate the database,
 seed it, install the HPDS key and start the services.
 
-Every config flag sets the pic-sure.yaml key its help names, and
---set KEY=VALUE sets any other key, such as --set hpds.java_opts=-Xmx2g.
-Secrets are
-read from stdin only (--auth0-client-secret-stdin, --db-root-password-stdin;
-with both, one per line in that order). Ports not given are 80 and 443,
-which must be free; --auto-ports takes the first free pair from 8080/8443
-instead.
+Every config flag sets the pic-sure.yaml key its help names, and --set
+KEY=VALUE sets any non-secret key, such as --set hpds.java_opts=-Xmx2g.
+Secrets are read from stdin only (--auth0-client-secret-stdin,
+--db-root-password-stdin; with both, one per line in that order). Ports not
+given are 80 and 443, which must be free; --auto-ports takes the first free
+pair from 8080/8443 instead.
 
 A DIR that already has a pic-sure.yaml is resumed: its config is used as it
-is, a --set that would change it is an error, and the steps already done are
-skipped. On a stack init has finished it
-does nothing.`,
+is, a --set that would change it is an error, and the steps already done
+are skipped. On a stack init has finished it does nothing.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: a.initStack,
 	}
@@ -256,7 +254,7 @@ func (r *initRun) readConfig() error {
 			return err
 		}
 		flagKeys[f.Key] = "--" + f.Flag
-		if f.Flag == "hpds-data" {
+		if f.Flag == "hpds-data" && strings.HasPrefix(v, string(stack.HPDSShared)+":") {
 			flagKeys["hpds.shared_name"] = "--" + f.Flag
 		}
 	}
@@ -294,7 +292,7 @@ func (r *initRun) readConfig() error {
 		return err
 	}
 	if r.cfg, err = r.doc.Config(); err != nil {
-		return flagProblems(err)
+		return r.flagProblems(err)
 	}
 	return refuseShared(r.cfg)
 }
@@ -302,9 +300,8 @@ func (r *initRun) readConfig() error {
 // initSet is one --set KEY=VALUE.
 type initSet struct{ arg, key, value string }
 
-// parseSets splits the --set flags and refuses the keys init sets another
-// way. The key's lookup and the value's parsing are config set's, when the
-// value is set.
+// parseSets splits the --set flags and refuses the secrets, which init
+// reads from stdin. ConfigDoc.Set, config set's parser, checks the rest.
 func parseSets(flags *pflag.FlagSet) ([]initSet, error) {
 	args, _ := flags.GetStringArray("set")
 	var sets []initSet
@@ -319,8 +316,6 @@ func parseSets(flags *pflag.FlagSet) ([]initSet, error) {
 			return nil, exitcode.Usage("--set %s: %s is a secret; give it on stdin with --%s", key, key, f.Flag)
 		case f.Secret:
 			return nil, exitcode.Usage("--set %s: %s is a secret, kept in .pic-sure/secrets.yaml; init can't set it", key, key)
-		case f.Key == "name":
-			return nil, exitcode.Usage("--set %s: use --name", arg)
 		}
 		sets = append(sets, initSet{arg: arg, key: key, value: value})
 	}
@@ -331,6 +326,9 @@ func parseSets(flags *pflag.FlagSet) ([]initSet, error) {
 // or an earlier --set also sets must get the same value from each.
 func (r *initRun) applySets(flagKeys map[string]string) error {
 	for _, s := range r.sets {
+		if s.key == "name" {
+			return exitcode.Usage("--set %s: use --name", s.arg)
+		}
 		before, _ := r.doc.Raw(s.key)
 		if err := r.doc.Set(s.key, s.value); err != nil {
 			return exitcode.Usage("--set %s: %v", s.arg, err)
@@ -348,23 +346,18 @@ func (r *initRun) applySets(flagKeys map[string]string) error {
 // checkResumedSets refuses a --set that would change the config a resumed
 // init uses as it is.
 func (r *initRun) checkResumedSets(data []byte) error {
-	if len(r.sets) == 0 {
-		return nil
-	}
-	probe, err := stack.ParseConfigDoc(data)
-	if err != nil {
-		return configError(err)
-	}
 	for _, s := range r.sets {
+		probe, err := stack.ParseConfigDoc(data)
+		if err != nil {
+			return configError(err)
+		}
 		if err := probe.Set(s.key, s.value); err != nil {
 			return exitcode.Usage("--set %s: %v", s.arg, err)
 		}
-	}
-	cfg, err := probe.Config()
-	if err != nil {
-		return exitcode.Usage("--set: %v", err)
-	}
-	for _, s := range r.sets {
+		cfg, err := probe.Config()
+		if err != nil {
+			return exitcode.Usage("--set %s: %v", s.arg, err)
+		}
 		was, _ := r.cfg.Get(s.key)
 		if now, _ := cfg.Get(s.key); !reflect.DeepEqual(was, now) {
 			return exitcode.Usage("--set %s: %s already has %s %v, and init resumes with it as it is; change it there first",
@@ -439,15 +432,17 @@ func componentNames() []string {
 }
 
 // flagProblems turns the config's validation problems into a usage error
-// that names init's flag for each key that has one.
-func flagProblems(err error) error {
+// that names the --set or init's flag for each key that has one.
+func (r *initRun) flagProblems(err error) error {
 	var ce *stack.ConfigError
 	if !errors.As(err, &ce) {
 		return configError(err)
 	}
 	var msgs []string
 	for _, p := range ce.Problems {
-		if f, ok := stack.LookupField(p.Path); ok && f.Flag != "" {
+		if v, ok := r.setValue(p.Path); ok {
+			msgs = append(msgs, fmt.Sprintf("--set %s=%s: %s", p.Path, v, p.Msg))
+		} else if f, ok := stack.LookupField(p.Path); ok && f.Flag != "" {
 			msgs = append(msgs, fmt.Sprintf("--%s: %s", f.Flag, p.Msg))
 		} else {
 			msgs = append(msgs, fmt.Sprintf("%s: %s", p.Path, p.Msg))
@@ -576,7 +571,7 @@ func (r *initRun) preconditions(ctx context.Context, sink events.Sink) error {
 		return err
 	}
 	if r.cfg, err = r.doc.Config(); err != nil {
-		return flagProblems(err)
+		return r.flagProblems(err)
 	}
 	return nil
 }
@@ -608,18 +603,21 @@ func (r *initRun) setPorts(h ops.Host, httpPort, httpsPort int, auto bool) error
 // is given.
 func (r *initRun) portFlag(name, key string) (int, error) {
 	flags := r.cmd.Flags()
-	v, _ := flags.GetString(name)
-	arg := "--" + name + " " + v
 	if !flags.Changed(name) {
-		var given bool
-		if v, given = r.setValue(key); !given {
+		if _, given := r.setValue(key); !given {
 			return 0, nil
 		}
-		arg = "--set " + key + "=" + v
+		// applySets has parsed it into the config.
+		v, _ := r.doc.Raw(key)
+		if p, _ := v.(int); p >= 1 && p <= 65535 {
+			return p, nil
+		}
+		return 0, exitcode.Usage("--set %s=%v: not a port number", key, v)
 	}
+	v, _ := flags.GetString(name)
 	p, err := strconv.Atoi(v)
 	if err != nil || p < 1 || p > 65535 {
-		return 0, exitcode.Usage("%s: not a port number", arg)
+		return 0, exitcode.Usage("--%s %s: not a port number", name, v)
 	}
 	return p, nil
 }
