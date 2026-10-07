@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 
@@ -47,46 +46,47 @@ func newSelfUpdateCmd(a *App) *cobra.Command {
 var _ release.SelfUpdater = (*selfupdate.Updater)(nil)
 
 // newSelfUpdater returns the Updater for this run: the self-update command's,
-// and the compatibility gate's (release.GateOptions.Updater) in init and
-// update, which pass their stack's proxy.ProxyURL.
-func (a *App) newSelfUpdater(proxy func(*http.Request) (*url.URL, error), sink events.Sink, step string) *selfupdate.Updater {
+// and the compatibility gate's (release.GateOptions.Updater), which init and
+// update are to build with their config's proxy. A nil or disabled proxy
+// means the environment's (HTTPS_PROXY and so on).
+func (a *App) newSelfUpdater(proxy *netproxy.Proxy, sink events.Sink, step string) *selfupdate.Updater {
+	proxyURL := http.ProxyFromEnvironment
+	if proxy != nil && proxy.Enabled() {
+		proxyURL = proxy.ProxyURL
+	}
 	return &selfupdate.Updater{
 		Current:      a.Info.Version,
 		APIBase:      os.Getenv(releaseAPIEnv),
-		Proxy:        proxy,
+		Proxy:        proxyURL,
 		VerifyBundle: selfupdate.CosignVerifier(a.newRunner(a.newLogger()), selfupdate.DefaultRepo, exec.LookPath),
 		Sink:         sink,
 		Step:         step,
 	}
 }
 
-// selfUpdateProxy is the proxy of the stack self-update runs in, if any,
-// else the environment's (HTTPS_PROXY and so on). A stack whose config
-// doesn't load falls back to the environment with a warning: an old
-// pic-sure may need updating precisely because it can't read the config.
-func (a *App) selfUpdateProxy(sink events.Sink) func(*http.Request) (*url.URL, error) {
+// selfUpdateProxy is the proxy of the stack self-update runs in, or nil
+// outside a stack. A stack whose config doesn't load gets nil and a warning:
+// an old pic-sure may need updating precisely because it can't read the
+// config.
+func (a *App) selfUpdateProxy(sink events.Sink) *netproxy.Proxy {
 	cwd, err := os.Getwd()
 	if err != nil {
-		return http.ProxyFromEnvironment
+		return nil
 	}
 	dir, err := stack.Find(a.Global.Stack, cwd)
 	if err != nil {
-		return http.ProxyFromEnvironment
+		return nil
 	}
 	p, err := stackProxy(dir)
 	if err != nil {
 		sink.Emit(events.Warning{ID: "self-update", Text: fmt.Sprintf(
 			"using the environment's proxy settings, not the stack's: %v", err)})
-		return http.ProxyFromEnvironment
+		return nil
 	}
-	if p == nil {
-		return http.ProxyFromEnvironment
-	}
-	return p.ProxyURL
+	return p
 }
 
-// stackProxy resolves the proxy block of the stack in dir; nil when it sets
-// none.
+// stackProxy resolves the proxy block of the stack in dir.
 func stackProxy(dir string) (*netproxy.Proxy, error) {
 	st, err := stack.Open(dir)
 	if err != nil {
@@ -97,10 +97,7 @@ func stackProxy(dir string) (*netproxy.Proxy, error) {
 	if err != nil {
 		return nil, err
 	}
-	if cfg.Proxy.HTTP == "" && cfg.Proxy.HTTPS == "" {
-		return nil, nil
-	}
-	return netproxy.New(netproxy.Config{HTTP: cfg.Proxy.HTTP, HTTPS: cfg.Proxy.HTTPS, NoProxy: cfg.Proxy.NoProxy}, netproxy.CatalogServices())
+	return netproxy.New(netproxy.Config(cfg.Proxy), netproxy.CatalogServices())
 }
 
 // writeSelfUpdate is the human summary.

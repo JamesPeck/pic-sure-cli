@@ -1358,10 +1358,11 @@ The package imports only the catalog.
 
 Ticket 060. `selfupdate.Updater` replaces the running binary with a GitHub
 release (§8, D12). The cli builds it with `a.newSelfUpdater(proxyURL, sink,
-step)` (`internal/cli/selfupdate.go`): `init` and `update` pass their
-config's `netproxy` `ProxyURL` and set it as `release.GateOptions.Updater`.
-The `self-update` command uses the proxy of the stack it runs in, or the
-environment's when there is none. `PIC_SURE_RELEASE_API` replaces the
+step)` (`internal/cli/selfupdate.go`); `init` and `update` (034, 036) are
+to build it with their config's `*netproxy.Proxy` and set it as
+`release.GateOptions.Updater`. The `self-update` command uses the proxy of
+the stack it runs in. Without a stack, or when the stack sets no proxy, it
+uses the environment's (`HTTPS_PROXY` and so on). `PIC_SURE_RELEASE_API` replaces the
 GitHub API root (mirrors, tests).
 
 - `Install(ctx, version)` (the command): refuse a binary it mustn't replace
@@ -1378,7 +1379,9 @@ GitHub API root (mirrors, tests).
   downgrades.
 - Signatures: with a `checksums.txt.sigstore.json` asset and cosign on PATH,
   `CosignVerifier` runs `cosign verify-blob`, accepting only a keyless
-  signature from the repo's `release.yml` on a tag; failure is exit 1.
+  signature from the repo's `release.yml` for the release's own tag, so an
+  older release's signed assets can't pass for a newer one; failure is
+  exit 1.
   Without cosign or without a bundle the update warns and relies on the
   checksum. `RequireSignature` makes both errors; set it once releases are
   signed.
@@ -1390,7 +1393,8 @@ GitHub API root (mirrors, tests).
   anything else that needs one. A refusal is exit 5 here. A second
   `SelfUpdate` in a re-executed process is exit 5 rather than a loop.
 - HTTP errors name the asset or release, never a URL, so proxy credentials
-  can't reach a message.
+  can't reach a message. A request that receives nothing for a minute is
+  abandoned. Cancellation is checked again before the rename and the exec.
 
 ## internal/events
 

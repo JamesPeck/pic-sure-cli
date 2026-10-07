@@ -34,8 +34,8 @@ type GateOptions struct {
 	// Confirm asks the user a yes/no question. Set it only when the
 	// command may prompt (a TTY); nil means no TTY.
 	Confirm func(ctx context.Context, question string) (bool, error)
-	// Updater replaces the binary. Nil (before 060) makes a newer PSCLI
-	// exit 5 with instructions.
+	// Updater replaces the binary. Nil makes a newer PSCLI exit 5 with
+	// instructions.
 	Updater SelfUpdater
 	// Command is the command line to retry with, for messages, such as
 	// "pic-sure update".

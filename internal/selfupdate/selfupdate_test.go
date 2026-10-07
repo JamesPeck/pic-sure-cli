@@ -10,15 +10,19 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/JamesPeck/pic-sure-cli/internal/docker/fakerunner"
 	"github.com/JamesPeck/pic-sure-cli/internal/events"
 	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
 )
@@ -402,14 +406,14 @@ func TestInstallSignature(t *testing.T) {
 	tests := []struct {
 		name    string
 		signed  bool
-		verify  func(context.Context, string, string) error
+		verify  func(context.Context, string, string, string) error
 		require bool
 		want    string
 		code    int
 		substr  string
 	}{
-		{name: "verified", signed: true, verify: func(context.Context, string, string) error { return nil }, want: SignatureVerified},
-		{name: "bad signature", signed: true, verify: func(context.Context, string, string) error { return errBad },
+		{name: "verified", signed: true, verify: func(context.Context, string, string, string) error { return nil }, want: SignatureVerified},
+		{name: "bad signature", signed: true, verify: func(context.Context, string, string, string) error { return errBad },
 			code: exitcode.CodeFailed, substr: "the signature of checksums.txt doesn't verify: bad signature"},
 		{name: "no cosign", signed: true, want: SignatureUnverified},
 		{name: "no cosign, required", signed: true, require: true, code: exitcode.CodePrecondition, substr: "cosign isn't installed"},
@@ -425,12 +429,15 @@ func TestInstallSignature(t *testing.T) {
 			u := newUpdater(newFakeGitHub(t, "v2.1.0", rel), exe, nil)
 			var gotBundle string
 			if tt.verify != nil {
-				u.VerifyBundle = func(ctx context.Context, sums, bundle string) error {
+				u.VerifyBundle = func(ctx context.Context, tag, sums, bundle string) error {
+					if tag != "v2.1.0" {
+						t.Errorf("verified the signature for tag %q, want v2.1.0", tag)
+					}
 					if readFile(t, sums) != string(rel.files[ChecksumsName]) {
 						t.Errorf("verified %s, want the downloaded checksums.txt", sums)
 					}
 					gotBundle = readFile(t, bundle)
-					return tt.verify(ctx, sums, bundle)
+					return tt.verify(ctx, tag, sums, bundle)
 				}
 			}
 			u.RequireSignature = tt.require
@@ -499,4 +506,87 @@ func TestSelfUpdateRefusals(t *testing.T) {
 		err := u.SelfUpdate(context.Background(), "v2.2.0")
 		wantCode(t, err, exitcode.CodeIncompatible, "updated itself to v2.1.0 and re-ran, but this release still needs pic-sure v2.2.0")
 	})
+}
+
+func TestCosignVerifier(t *testing.T) {
+	if v := CosignVerifier(fakerunner.New(t), DefaultRepo, func(string) (string, error) { return "", exec.ErrNotFound }); v != nil {
+		t.Error("CosignVerifier without cosign on PATH isn't nil")
+	}
+	f := fakerunner.New(t)
+	f.On(fakerunner.Exact("cosign", "verify-blob", "--bundle", "/tmp/b.json",
+		"--certificate-identity", "https://github.com/JamesPeck/pic-sure-cli/.github/workflows/release.yml@refs/tags/v2.1.0",
+		"--certificate-oidc-issuer", "https://token.actions.githubusercontent.com", "/tmp/checksums.txt")).Exit(1).Stderr("no matching signatures")
+	v := CosignVerifier(f, DefaultRepo, func(string) (string, error) { return "/usr/local/bin/cosign", nil })
+	if err := v(context.Background(), "v2.1.0", "/tmp/checksums.txt", "/tmp/b.json"); err == nil || !strings.Contains(err.Error(), "no matching signatures") {
+		t.Errorf("verify = %v, want cosign's failure", err)
+	}
+}
+
+// cancelAfter is a RoundTripper that buffers the response for a request whose
+// path ends in suffix and then calls cancel, so the download completes but
+// the context is done.
+type cancelAfter struct {
+	suffix string
+	cancel context.CancelFunc
+}
+
+func (c cancelAfter) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := http.DefaultTransport.RoundTrip(req)
+	if err != nil || !strings.HasSuffix(req.URL.Path, c.suffix) {
+		return resp, err
+	}
+	var buf bytes.Buffer
+	_, err = buf.ReadFrom(resp.Body)
+	_ = resp.Body.Close()
+	resp.Body = io.NopCloser(&buf)
+	c.cancel()
+	return resp, err
+}
+
+func TestInstallStopsWhenCancelledAfterDownloading(t *testing.T) {
+	g := newFakeGitHub(t, "v2.1.0", newFakeRelease(t, "v2.1.0"))
+	exe := installed(t, "")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	u := newUpdater(g, exe, nil)
+	u.Client = &http.Client{Transport: cancelAfter{suffix: ".tar.gz", cancel: cancel}}
+	u.Getenv = func(string) string { return "" }
+	u.Exec = func(string, []string, []string) error { t.Fatal("exec'd after cancellation"); return nil }
+	if err := u.SelfUpdate(ctx, "v2.1.0"); !errors.Is(err, context.Canceled) {
+		t.Errorf("SelfUpdate = %v, want context.Canceled", err)
+	}
+	if got := readFile(t, exe); got != "old" {
+		t.Errorf("binary = %q after cancellation, want it untouched", got)
+	}
+}
+
+func TestDownloadAbandonsAStalledServer(t *testing.T) {
+	old := stallTimeout
+	stallTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { stallTimeout = old })
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "100")
+		_, _ = w.Write([]byte("partial"))
+		w.(http.Flusher).Flush()
+		<-release
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(release) })
+	u := &Updater{Current: "v2.0.0"}
+	_, err := u.download(context.Background(), asset{Name: "pic-sure_linux_amd64.tar.gz", URL: srv.URL}, filepath.Join(t.TempDir(), "a"), maxArchive)
+	if !errors.Is(err, errStalled) {
+		t.Errorf("download = %v, want %v", err, errStalled)
+	}
+}
+
+func TestErrorsDontShowProxyCredentials(t *testing.T) {
+	g := newFakeGitHub(t, "v2.1.0", newFakeRelease(t, "v2.1.0"))
+	u := newUpdater(g, installed(t, ""), nil)
+	u.APIBase = "http://api.github.invalid"
+	u.Proxy = http.ProxyURL(&url.URL{Scheme: "http", User: url.UserPassword("me", "s3cret"), Host: "127.0.0.1:1"})
+	_, err := u.Install(context.Background(), "v2.1.0")
+	if err == nil || strings.Contains(err.Error(), "s3cret") || strings.Contains(err.Error(), "http://") {
+		t.Errorf("Install = %v, want a failure naming neither the proxy's password nor a URL", err)
+	}
 }

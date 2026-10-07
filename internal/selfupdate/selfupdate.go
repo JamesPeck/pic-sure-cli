@@ -8,11 +8,9 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/docker"
 	"github.com/JamesPeck/pic-sure-cli/internal/events"
@@ -20,7 +18,7 @@ import (
 	"github.com/JamesPeck/pic-sure-cli/internal/stack"
 )
 
-// The release contract with the release pipeline (ticket 061).
+// What the release pipeline publishes, and where.
 const (
 	DefaultRepo = "JamesPeck/pic-sure-cli"
 	DefaultAPI  = "https://api.github.com"
@@ -68,9 +66,9 @@ type Updater struct {
 	Executable string
 	// GOOS and GOARCH pick the archive; the running platform when empty.
 	GOOS, GOARCH string
-	// VerifyBundle checks bundle, the cosign signature of checksums. Nil
-	// means cosign isn't available.
-	VerifyBundle func(ctx context.Context, checksums, bundle string) error
+	// VerifyBundle checks bundle, the cosign signature of release tag's
+	// checksums. Nil means cosign isn't available.
+	VerifyBundle func(ctx context.Context, tag, checksums, bundle string) error
 	// RequireSignature refuses a release that isn't signed, or whose
 	// signature can't be checked.
 	RequireSignature bool
@@ -163,6 +161,11 @@ func (u *Updater) Install(ctx context.Context, version string) (*Result, error) 
 		return nil, exitcode.Failed("%s doesn't match its SHA-256 in %s (got %s, want %s); not installing it",
 			archive.Name, ChecksumsName, got, want)
 	}
+	// Past this point nothing checks ctx, so a cancelled update must stop
+	// here rather than replace the binary.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if err := replace(t, archivePath); err != nil {
 		return nil, err
 	}
@@ -199,6 +202,9 @@ func (u *Updater) SelfUpdate(ctx context.Context, version string) error {
 		env = os.Environ()
 	}
 	env = append(env[:len(env):len(env)], ReexecEnv+"="+res.To)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	exec := u.Exec
 	if exec == nil {
 		exec = syscall.Exec
@@ -232,7 +238,7 @@ func (u *Updater) verifySignature(ctx context.Context, rel *release, sums, dir s
 	if _, err := u.download(ctx, b, bundle, maxMetadata); err != nil {
 		return "", err
 	}
-	if err := u.VerifyBundle(ctx, sums, bundle); err != nil {
+	if err := u.VerifyBundle(ctx, rel.Tag, sums, bundle); err != nil {
 		return "", exitcode.Failed("pic-sure release %s: the signature of %s doesn't verify: %v; not installing it",
 			rel.Tag, ChecksumsName, err)
 	}
@@ -275,18 +281,18 @@ func replace(t target, archive string) error {
 
 // CosignVerifier returns an Updater.VerifyBundle that runs `cosign
 // verify-blob` with runner, accepting only a keyless signature made by
-// repo's release workflow for a tag. It returns nil when cosign isn't on
+// repo's release workflow for that very tag, so one release's signed
+// assets can't pass for another's. It returns nil when cosign isn't on
 // PATH.
-func CosignVerifier(runner docker.Runner, repo string, lookPath func(string) (string, error)) func(context.Context, string, string) error {
+func CosignVerifier(runner docker.Runner, repo string, lookPath func(string) (string, error)) func(context.Context, string, string, string) error {
 	if _, err := lookPath("cosign"); err != nil {
 		return nil
 	}
-	identity := "^https://github.com/" + regexp.QuoteMeta(repo) + `/\.github/workflows/release\.yml@refs/tags/`
-	return func(ctx context.Context, checksums, bundle string) error {
+	return func(ctx context.Context, tag, checksums, bundle string) error {
 		_, err := docker.RunChecked(ctx, runner, docker.Cmd{Argv: []string{
 			"cosign", "verify-blob",
 			"--bundle", bundle,
-			"--certificate-identity-regexp", identity,
+			"--certificate-identity", "https://github.com/" + repo + "/.github/workflows/release.yml@refs/tags/" + tag,
 			"--certificate-oidc-issuer", "https://token.actions.githubusercontent.com",
 			checksums,
 		}})
@@ -308,7 +314,6 @@ func (u *Updater) client() *http.Client {
 	}
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.Proxy = u.Proxy
-	tr.ResponseHeaderTimeout = time.Minute
 	return &http.Client{Transport: tr}
 }
 

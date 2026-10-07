@@ -16,6 +16,7 @@ import (
 	"os"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
 )
@@ -64,6 +65,10 @@ func (u *Updater) resolve(ctx context.Context, version string) (*release, error)
 	if status == http.StatusNotFound {
 		return nil, exitcode.Precondition("%s doesn't exist on github.com/%s", what, u.repo())
 	}
+	if status == http.StatusForbidden || status == http.StatusTooManyRequests {
+		return nil, exitcode.Failed("looking up %s: GitHub answered HTTP %d, probably its rate limit "+
+			"for unauthenticated requests; try again later", what, status)
+	}
 	if status != http.StatusOK {
 		return nil, exitcode.Failed("looking up %s: GitHub answered HTTP %d", what, status)
 	}
@@ -105,21 +110,59 @@ func (u *Updater) download(ctx context.Context, a asset, dst string, limit int64
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
+// stallTimeout is how long a request may go without receiving anything
+// before it is abandoned.
+var stallTimeout = time.Minute
+
+var errStalled = errors.New("the server stopped sending data")
+
 // get sends a GET through the Updater's client. The caller closes the body.
 // Errors name neither the URL nor the proxy, so no credential reaches a
 // message.
 func (u *Updater) get(ctx context.Context, rawURL, accept string) (io.ReadCloser, int, error) {
+	ctx, cancel := context.WithCancelCause(ctx)
+	timer := time.AfterFunc(stallTimeout, func() { cancel(errStalled) })
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
-	if err != nil {
-		return nil, 0, withoutURL(err)
+	if err == nil {
+		req.Header.Set("Accept", accept)
+		req.Header.Set("User-Agent", "pic-sure/"+u.Current)
+		var resp *http.Response
+		if resp, err = u.client().Do(req); err == nil {
+			return &watchedBody{ReadCloser: resp.Body, ctx: ctx, cancel: cancel, timer: timer}, resp.StatusCode, nil
+		}
 	}
-	req.Header.Set("Accept", accept)
-	req.Header.Set("User-Agent", "pic-sure/"+u.Current)
-	resp, err := u.client().Do(req)
-	if err != nil {
-		return nil, 0, withoutURL(err)
+	timer.Stop()
+	cancel(nil)
+	if errors.Is(context.Cause(ctx), errStalled) {
+		return nil, 0, errStalled
 	}
-	return resp.Body, resp.StatusCode, nil
+	return nil, 0, withoutURL(err)
+}
+
+// watchedBody is a response body whose request is cancelled when no data
+// arrives for stallTimeout.
+type watchedBody struct {
+	io.ReadCloser
+	ctx    context.Context
+	cancel context.CancelCauseFunc
+	timer  *time.Timer
+}
+
+func (b *watchedBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if n > 0 {
+		b.timer.Reset(stallTimeout)
+	}
+	if err != nil && errors.Is(context.Cause(b.ctx), errStalled) {
+		err = errStalled
+	}
+	return n, err
+}
+
+func (b *watchedBody) Close() error {
+	b.timer.Stop()
+	b.cancel(nil)
+	return b.ReadCloser.Close()
 }
 
 // withoutURL drops the URL a *url.Error adds to its cause.
