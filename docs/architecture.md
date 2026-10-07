@@ -646,12 +646,14 @@ components, image tags and last operation, and the token expiry from
 secrets.yaml; it asks docker only `image inspect` per built image with a
 recorded tag, or its dev build's tag while a dev variant runs it (each
 with `docker.PsTimeout`, stopping at the first docker failure), and
-`compose ps`. It
-takes no lock, writes nothing and never fetches release-control. A section
-it can't read carries an error string instead of failing, so the command
-exits 0. The command leaves `Deps.Compose` nil for an unrendered stack and
+`compose ps`. It takes no lock, writes nothing and never fetches
+release-control. A section it can't read carries an error string instead
+of failing, so the command exits 0. The command leaves `Deps.Compose` nil for an unrendered stack and
 builds it with no env, since `ps` needs no secret. Migrations are
-`unknown` until 032 adds its check; `--deep` is 037.
+`unknown` until 032 adds its check; `--deep` is 037. 027 added
+`VersionCheck.MigrationErr` (a config schema older than every migration)
+and `render.HMROrigin` (httpd-hmr's Vite origin, which status prints for
+Auth0) for it.
 
 ## internal/steps
 

@@ -95,6 +95,10 @@ func newVersionCheck(stackCLI string, stackSchema, configSchema int, configOK bo
 	return v
 }
 
+// MigrationErr is why the config's schema can't be migrated to this
+// pic-sure's (it is older than every migration), or nil.
+func (v *VersionCheck) MigrationErr() error { return v.planErr }
+
 // Newer reports whether a newer pic-sure than this one rendered the stack:
 // state.json or pic-sure.yaml has a schema above Schema, or cli_version is
 // a later version than CLI. Versions that CompareVersions can't order,

@@ -301,12 +301,13 @@ func TestStatusReportsTimesInUTC(t *testing.T) {
 	east := time.FixedZone("EDT", -4*3600)
 	state := &stack.State{}
 	state.StartOperation("up", statusNow.In(east))
+	state.FinishOperation(nil, statusNow.Add(time.Minute).In(east))
 	if err := st.SaveState(state); err != nil {
 		t.Fatal(err)
 	}
 	r := ops.Status(context.Background(), statusDeps(t, fakerunner.New(t), st), st, statusOpts())
-	if r.LastOperation == nil || r.LastOperation.StartedAt.Location() != time.UTC || !r.LastOperation.FinishedAt.IsZero() {
-		t.Errorf("last operation = %+v, want UTC and no finish", r.LastOperation)
+	if op := r.LastOperation; op == nil || op.StartedAt.Location() != time.UTC || op.FinishedAt.Location() != time.UTC {
+		t.Errorf("last operation = %+v, want UTC", r.LastOperation)
 	}
 }
 
@@ -315,20 +316,21 @@ func TestStatusChecksImagesWithATimeout(t *testing.T) {
 	saveStatusState(t, st)
 	f := fakerunner.New(t)
 	f.On(fakerunner.Glob("docker image inspect *")).Do(func(ctx context.Context, _ fakerunner.Call) (docker.Result, error) {
-		if _, ok := ctx.Deadline(); !ok {
-			t.Error("image inspect has no deadline")
+		if dl, ok := ctx.Deadline(); !ok || time.Until(dl) > docker.PsTimeout {
+			t.Errorf("image inspect deadline %v, %v; want within %s", dl, ok, docker.PsTimeout)
 		}
 		return docker.Result{Stdout: []byte(`[{"Id":"sha256:1"}]`)}, nil
 	})
 	f.On(fakerunner.Glob("docker compose *"))
 	ops.Status(context.Background(), statusDeps(t, f, st), st, statusOpts())
+	f.AssertCalled(fakerunner.Glob("docker image inspect *"))
 }
 
 func TestStatusFollowsDevVariants(t *testing.T) {
 	src := t.TempDir()
 	st := newStatusStack(t, statusConfig+"dev: {services: [hpds, httpd-hmr]}\ncomponents: {frontend: {source: "+src+"}}\n")
 	state := &stack.State{
-		Images:    map[string]string{"pic-sure-hpds": "111111111111", "pic-sure-gateway": "111111111111"},
+		Images:    map[string]string{"pic-sure-hpds": "111111111111", "pic-sure-gateway": "111111111111", "pic-sure-httpd": "333333333333"},
 		DevImages: map[string]string{"pic-sure-hpds": "dev-demo-222222222222"},
 	}
 	if err := st.SaveState(state); err != nil {
@@ -346,6 +348,10 @@ func TestStatusFollowsDevVariants(t *testing.T) {
 		case "pic-sure-hpds":
 			if !img.Dev || img.Ref != "hms-dbmi/pic-sure-hpds:dev-demo-222222222222" {
 				t.Errorf("hpds = %+v, want the dev build", img)
+			}
+		case "pic-sure-httpd":
+			if !img.Dev || img.Ref != "" || img.Present != nil {
+				t.Errorf("httpd = %+v, want replaced by httpd-hmr", img)
 			}
 		case "pic-sure-gateway":
 			if img.Dev || img.Ref != "hms-dbmi/pic-sure-gateway:111111111111" {

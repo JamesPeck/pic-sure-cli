@@ -49,7 +49,7 @@ an `omitted` field is left out when empty.
 | `images[].component` | string | The component it is built from. |
 | `images[].ref` | string | `repository:tag` the stack runs: the tag state.json records, or the dev build's tag when `dev` is true; empty when none is recorded. |
 | `images[].present` | bool or null | Whether docker has the image; null when unknown (no recorded tag, or docker failed). |
-| `images[].dev` | bool | A dev variant in `dev.services` runs the image's local build (§7.3). |
+| `images[].dev` | bool | A dev variant in `dev.services` replaces the image: with its local build (§7.3), or, with an empty `ref`, with a third-party image (`httpd-hmr` runs `node` instead of `pic-sure-httpd`). |
 | `images_error` | string, omitted | Why image presence couldn't be checked, usually an unreachable daemon. |
 | `services` | array | Containers from `docker compose ps`, sorted by service. An empty list is unknown, not down: see `services_error`. |
 | `services[].service` | string | The compose service. |

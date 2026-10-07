@@ -220,10 +220,14 @@ func addDev(in Input, d *templateData, extra map[string][]string) error {
 			return err
 		}
 		d.FrontendEnv = ViteEnv(cfg)
-		d.FrontendEnv["VITE_ORIGIN"] = "http://localhost:" + strconv.Itoa(port)
+		d.FrontendEnv["VITE_ORIGIN"] = HMROrigin(port)
 	}
 	return nil
 }
+
+// HMROrigin is the origin httpd-hmr's Vite server serves the frontend on,
+// given its host port.
+func HMROrigin(port int) string { return "http://localhost:" + strconv.Itoa(port) }
 
 // images returns the reference of every catalog image the stack has a tag
 // for, plus the pinned third-party ones.

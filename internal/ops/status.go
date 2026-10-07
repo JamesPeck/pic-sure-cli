@@ -3,6 +3,7 @@ package ops
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"net"
 	"slices"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/JamesPeck/pic-sure-cli/internal/catalog"
 	"github.com/JamesPeck/pic-sure-cli/internal/docker"
+	"github.com/JamesPeck/pic-sure-cli/internal/render"
 	"github.com/JamesPeck/pic-sure-cli/internal/stack"
 )
 
@@ -129,8 +131,9 @@ type StatusImage struct {
 	Ref string `json:"ref"`
 	// Present is null when unknown: no recorded tag, or docker failed.
 	Present *bool `json:"present"`
-	// Dev is set when a dev variant runs the image, so Ref is the local
-	// build's tag (§7.3).
+	// Dev is set when a dev variant replaces the image: Ref is then the
+	// local build's tag (§7.3), or empty for a variant that runs a
+	// third-party image instead (httpd-hmr runs node).
 	Dev bool `json:"dev"`
 }
 
@@ -274,11 +277,10 @@ func statusVersions(r *StatusReport, st *stack.Stack, opts StatusOptions) {
 	for _, m := range v.Pending {
 		r.Versions.PendingMigrations = append(r.Versions.PendingMigrations, m.Summary)
 	}
-	_, migrateErr := v.Gate(stack.Migrating)
 	switch {
 	case v.Newer():
 		r.Versions.Gate = GateStackNewer
-	case migrateErr != nil:
+	case v.MigrationErr() != nil:
 		r.Versions.Gate = GateUnsupportedSchema
 	case len(v.Pending) > 0:
 		r.Versions.Gate = GateMigrationsPending
@@ -298,10 +300,14 @@ func statusImages(ctx context.Context, d *Deps, r *StatusReport, state *stack.St
 		if !img.Built() {
 			continue
 		}
-		si := StatusImage{Name: img.Name, Component: img.Component, Dev: dev[img.Name]}
+		built, isDev := dev[img.Name]
+		si := StatusImage{Name: img.Name, Component: img.Component, Dev: isDev}
 		tag := state.Images[img.Name]
-		if si.Dev {
+		switch {
+		case isDev && built:
 			tag = state.DevImages[img.Name]
+		case isDev:
+			tag = ""
 		}
 		if tag != "" {
 			si.Ref = img.Repository() + ":" + tag
@@ -309,6 +315,9 @@ func statusImages(ctx context.Context, d *Deps, r *StatusReport, state *stack.St
 		if si.Ref != "" && r.ImagesError == "" {
 			ictx, cancel := context.WithTimeout(ctx, docker.PsTimeout)
 			ok, err := d.Docker.ImageExists(ictx, si.Ref)
+			if ctx.Err() == nil && errors.Is(ictx.Err(), context.DeadlineExceeded) {
+				err = fmt.Errorf("docker image inspect did not finish within %s", docker.PsTimeout)
+			}
 			cancel()
 			if err != nil {
 				r.ImagesError = err.Error()
@@ -320,8 +329,9 @@ func statusImages(ctx context.Context, d *Deps, r *StatusReport, state *stack.St
 	}
 }
 
-// devImages are the images that the config's dev variants build locally,
-// as render picks them.
+// devImages are the images that the config's dev variants replace, mapped
+// to whether the variant runs the image's local build (true) or a
+// third-party image (false), as render picks them.
 func devImages(cfg *stack.Config) map[string]bool {
 	images := map[string]bool{}
 	if cfg == nil {
@@ -329,12 +339,12 @@ func devImages(cfg *stack.Config) map[string]bool {
 	}
 	for _, name := range cfg.Dev.Services {
 		v, ok := catalog.LookupDevVariant(name)
-		if !ok || v.Image != "" {
+		if !ok {
 			continue
 		}
 		for _, svc := range v.Services {
 			if s, ok := catalog.LookupService(svc); ok {
-				images[s.Image] = true
+				images[s.Image] = v.Image == ""
 			}
 		}
 	}
@@ -401,8 +411,7 @@ func auth0URLs(cfg *stack.Config) *StatusAuth0 {
 		WebOrigin:   origin,
 	}
 	if v, ok := catalog.LookupDevVariant("httpd-hmr"); ok && slices.Contains(cfg.Dev.Services, v.Name) {
-		// render's VITE_ORIGIN for httpd-hmr.
-		dev := "http://localhost:" + strconv.Itoa(cfg.Network.DevPorts.Base+v.Port)
+		dev := render.HMROrigin(cfg.Network.DevPorts.Base + v.Port)
 		a.DevCallbackURL, a.DevLogoutURL, a.DevWebOrigin = dev+"/login/loading/", dev, dev
 	}
 	return a

@@ -119,7 +119,10 @@ func writeStatus(w io.Writer, r *ops.StatusReport) error {
 		case img.Present != nil:
 			state = "missing"
 		}
-		if img.Dev {
+		switch {
+		case img.Dev && img.Ref == "":
+			state = "replaced by a dev variant"
+		case img.Dev:
 			state += " (dev build)"
 		}
 		fmt.Fprintf(&b, "  %-28s %s\n", img.Name, state)
@@ -166,7 +169,7 @@ func writeStatus(w io.Writer, r *ops.StatusReport) error {
 		line("Token", "expires %s", t.ExpiresAt.Format(time.RFC3339))
 	}
 	if op := r.LastOperation; op != nil {
-		line("Last op", "%s, %s, started %s", op.Name, op.Status, op.StartedAt.UTC().Format(time.RFC3339))
+		line("Last op", "%s, %s, started %s", op.Name, op.Status, op.StartedAt.Format(time.RFC3339))
 	}
 
 	if au := r.Auth0; au != nil {
