@@ -88,7 +88,7 @@ func (a *App) output() *output {
 		var sink events.Sink
 		switch {
 		case mode == modeJSON:
-			sink = events.NewNDJSON(a.Stdout)
+			sink = events.NewNDJSON(a.stdout())
 		case mode == modeTUI && isTerminalWriter(a.Stderr) && os.Getenv("TERM") != "dumb":
 			o.tui = progress.NewRenderer(progress.RendererOptions{
 				Animations: tui.AnimationsEnabled(a.Global.NoAnimations, os.Getenv),
@@ -104,7 +104,7 @@ func (a *App) output() *output {
 			a.tuiOut.Store(o.tui)
 			sink = o.tui
 		default:
-			sink = events.NewPlain(a.Stderr, events.PlainOptions{
+			sink = events.NewPlain(a.stderr(), events.PlainOptions{
 				Color: useColor(isTerminalWriter(a.Stderr), os.Getenv),
 			})
 		}
@@ -146,7 +146,7 @@ func (a *App) finish(report any, text func(io.Writer) error) error {
 		return nil
 	}
 	o.endTUI()
-	return text(a.Stdout)
+	return text(a.stdout())
 }
 
 // printReport prints a read-only command's report (status, doctor,
@@ -158,9 +158,9 @@ func (a *App) printReport(report any, text func(io.Writer) error) error {
 	o := a.output()
 	if o.mode != modeJSON {
 		o.endTUI()
-		return text(a.Stdout)
+		return text(a.stdout())
 	}
-	if err := events.WriteReport(a.Stdout, report); err != nil {
+	if err := events.WriteReport(a.stdout(), report); err != nil {
 		return exitcode.Failed("%w", err)
 	}
 	o.final = true
@@ -207,10 +207,10 @@ func (a *App) reportError(cmd *cobra.Command, err error) {
 			Step:     o.sink.failedStep(),
 		}})
 	}
-	_, _ = fmt.Fprintf(a.Stderr, "pic-sure: %s\n", msg)
+	_, _ = fmt.Fprintf(a.stderr(), "pic-sure: %s\n", msg)
 	var hint usageHint
 	if code == exitcode.CodeUsage && cmd != nil && (!a.running || errors.As(err, &hint)) {
-		_, _ = fmt.Fprintf(a.Stderr, "Run '%s --help' for usage.\n", cmd.CommandPath())
+		_, _ = fmt.Fprintf(a.stderr(), "Run '%s --help' for usage.\n", cmd.CommandPath())
 	}
 }
 

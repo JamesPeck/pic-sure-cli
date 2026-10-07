@@ -1,0 +1,46 @@
+# A reader that goes away (| head -n1) ends logs -f: pic-sure exits 141,
+# with the cause on stderr rather than killed by SIGPIPE, and its docker child is stopped.
+chmod 755 bin/docker
+env PATH=$WORK/bin${:}$PATH
+
+exec sh -c '{ pic-sure --stack stack logs -f 2> err; echo $? > code; } | head -n1'
+stdout '^hpds-1  \| line$'
+exec cat code
+stdout '^141$'
+exec cat err
+stdout '^pic-sure: interrupted \(broken pipe\)$'
+exec sh -c '! kill -0 "$(cat follow.pid)" 2>/dev/null'
+
+rm follow.pid
+exec sh -c '{ pic-sure --stack stack --json logs -f 2> err; echo $? > code; } | head -n1'
+stdout '"type":"step_started","id":"logs"'
+exec cat code
+stdout '^141$'
+exec cat err
+stdout '^pic-sure: interrupted \(broken pipe\)$'
+exec sh -c '! kill -0 "$(cat follow.pid)" 2>/dev/null'
+
+# compose passthrough hands compose the pipe itself, and compose gets the
+# default SIGPIPE, so it dies of it and pic-sure exits with its 141.
+rm follow.pid
+exec sh -c '{ pic-sure --stack stack compose -- logs -f 2> err; echo $? > code; } | head -n1'
+stdout '^hpds-1  \| line$'
+exec cat code
+stdout '^141$'
+
+-- bin/docker --
+#!/bin/sh
+echo $$ > "$HOME/follow.pid"
+exec yes 'hpds-1  | line'
+-- stack/pic-sure.yaml --
+schema: 1
+name: demo
+auth: {mode: open, admin_email: admin@example.com}
+-- stack/.pic-sure/state.json --
+{"cli_version": "dev", "schema_version": 1}
+-- stack/.pic-sure/secrets.yaml --
+db_root_password: rootpw
+-- stack/.pic-sure/render/compose.yaml --
+services: {}
+-- stack/overrides/10-local.yaml --
+services: {}

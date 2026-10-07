@@ -78,7 +78,7 @@ func (w logStderr) Write(b []byte) (int, error) {
 	if r := w.a.tuiOut.Load(); r != nil {
 		return r.Write(b)
 	}
-	return w.a.Stderr.Write(b)
+	return w.a.stderr().Write(b)
 }
 
 // runLogStore is the stack as log.Run uses it: a run log is the CLI's if

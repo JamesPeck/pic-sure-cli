@@ -29,6 +29,14 @@ func main() {
 // command exits 128+N; a second signal gets the default action and kills
 // the process at once (spec §10.5).
 //
+// SIGPIPE is caught too, on a channel nobody reads, so that a write to a
+// closed stdout or stderr fails with EPIPE instead of killing the process;
+// the cli layer then cancels the command with SIGPIPE as the cause. It has
+// a channel of its own because a broken pipe to a subprocess's stdin
+// raises SIGPIPE as well, and that must not cancel the command. Caught
+// signals reset to their default on exec, so subprocesses still die of
+// SIGPIPE.
+//
 // This is signal.NotifyContext done by hand: NotifyContext's cancellation
 // cause names the signal only as text, and the exit code needs its number.
 func run(args []string) int {
@@ -38,6 +46,7 @@ func run(args []string) int {
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(sigs)
+	signal.Notify(make(chan os.Signal, 1), syscall.SIGPIPE)
 	go func() {
 		select {
 		case sig := <-sigs:

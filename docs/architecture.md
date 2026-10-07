@@ -116,7 +116,10 @@ func TestUpStartsTheDatabaseBeforeMigrating(t *testing.T) {
 Ticket 001. `main` turns the first SIGINT or SIGTERM into a context
 cancellation whose cause is `exitcode.Signaled(sig)`, so the command can run
 its deferred cleanups and then exit 128+N. A second signal gets the default
-action and kills the process at once. It then calls `cli.Execute`. The
+action and kills the process at once. SIGPIPE is caught on a channel of
+its own (068), so a write to a closed stdout or stderr fails with EPIPE
+instead of killing the process; subprocesses still get the default
+SIGPIPE. It then calls `cli.Execute`. The
 version variables are set with `-ldflags` (see the Makefile).
 
 `main_test.go` is the testscript harness. It registers the binary as
@@ -197,6 +200,14 @@ it.
   Output the renderer couldn't write (a full disk) fails the run with
   exit 1. `help`, `completion` and `--version` print text even with
   `--json`.
+- `pipe.go` (068): `a.stdout()` and `a.stderr()` are the streams for what
+  the CLI writes itself: the renderers, reports, log records, warnings
+  and `logs`. The first write that fails with EPIPE (`| head` went away)
+  cancels the command with cause `exitcode.Signaled(SIGPIPE)`, so it runs
+  its cleanups and exits 141, and later writes to that stream are
+  dropped. A subprocess that takes over the terminal (`compose`, `config
+  edit`) gets the raw `a.Stdout`/`a.Stderr`, and so does the TUI, whose
+  stderr is a terminal.
 - `deps.go`: `newDeps` assembles `ops.Deps`. Each field comes from a
   constructor in its owner's file: `runner.go` (003), `output.go` (004, which
   also reports errors), `logging.go` (005, landed), `engine.go` (016,

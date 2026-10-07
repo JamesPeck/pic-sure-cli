@@ -252,7 +252,7 @@ func (a *App) configEdit(cmd *cobra.Command) error {
 			if problem != nil {
 				return exitcode.Usage("%w\n%s is unchanged", problem, stack.ConfigFile)
 			}
-			_, err := fmt.Fprintf(a.Stderr, "%s is unchanged\n", stack.ConfigFile)
+			_, err := fmt.Fprintf(a.stderr(), "%s is unchanged\n", stack.ConfigFile)
 			return err
 		}
 		content = edited

@@ -103,5 +103,5 @@ func (a *App) gate(cmd *cobra.Command, st *stack.Stack) error {
 
 // warnStderr goes to stderr because stdout may carry --json output.
 func (a *App) warnStderr(format string, args ...any) {
-	_, _ = fmt.Fprintf(a.Stderr, "pic-sure: warning: "+format+"\n", args...)
+	_, _ = fmt.Fprintf(a.stderr(), "pic-sure: warning: "+format+"\n", args...)
 }

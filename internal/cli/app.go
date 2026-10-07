@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"sync/atomic"
+	"syscall"
 
 	"github.com/spf13/cobra"
 
@@ -60,6 +61,9 @@ type App struct {
 	// TUI renderer calls it when the user confirms Ctrl-C, which the
 	// terminal delivers as a key rather than a signal while it runs.
 	interrupt func()
+	// outW and errW are Stdout and Stderr behind a pipeWriter (pipe.go),
+	// which cancels the command when the reader goes away.
+	outW, errW *pipeWriter
 }
 
 // NewApp returns an App wired to the process's streams and terminal.
@@ -98,10 +102,13 @@ func (a *App) execute(ctx context.Context, root *cobra.Command, args []string) i
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 	a.interrupt = func() { cancel(exitcode.Signaled(os.Interrupt)) }
+	broken := func() { cancel(exitcode.Signaled(syscall.SIGPIPE)) }
+	a.outW = &pipeWriter{w: a.Stdout, broken: broken}
+	a.errW = &pipeWriter{w: a.Stderr, broken: broken}
 	root.SetArgs(args)
 	root.SetIn(a.Stdin)
-	root.SetOut(a.Stdout)
-	root.SetErr(a.Stderr)
+	root.SetOut(a.outW)
+	root.SetErr(a.errW)
 
 	cmd, err := root.ExecuteContextC(ctx)
 	defer func() { a.endRunLog(err) }()

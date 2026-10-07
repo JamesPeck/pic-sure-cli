@@ -162,7 +162,7 @@ step "logs".`,
 			if err != nil {
 				return err
 			}
-			opts := docker.ComposeLogsOpts{Services: args, Follow: follow, Out: a.Stdout, Err: a.Stderr}
+			opts := docker.ComposeLogsOpts{Services: args, Follow: follow, Out: a.stdout(), Err: a.stderr()}
 			if a.output().mode != modeJSON {
 				err = c.Logs(cmd.Context(), opts)
 			} else {
