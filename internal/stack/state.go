@@ -23,6 +23,9 @@ type State struct {
 	Components map[string]Component `json:"components,omitempty"`
 	// Images maps each image name to the tag the stack runs.
 	Images map[string]string `json:"images,omitempty"`
+	// DevImages maps the image of each service in an enabled dev variant to
+	// the tag of its local build (§7.3), dev-<stack>-<sha12>[-dirty].
+	DevImages map[string]string `json:"dev_images,omitempty"`
 	// TLS is what the TLS step last copied into the certs volume.
 	TLS *TLSInstall `json:"tls,omitempty"`
 	// Truststore is what the truststore step last built in the truststore

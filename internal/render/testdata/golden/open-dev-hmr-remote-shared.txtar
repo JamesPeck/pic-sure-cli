@@ -1,0 +1,681 @@
+-- compose.yaml --
+# PIC-SURE All-in-One stack, rendered by pic-sure. Do not edit: pic-sure
+# re-renders this file. Put changes in overrides/*.yaml in the stack directory.
+#
+# Values from the stack's config are written in literally. Secrets are
+# ${NAME} references that pic-sure fills in from secrets.yaml on every compose
+# call, so run raw compose commands as `pic-sure compose -- ARGS`.
+name: "golden"
+services:
+  # HTTPD, replaced by the Vite dev server of dev on httpd-hmr.
+  httpd:
+    image: "node:24.19.0-alpine3.23"
+    restart: always
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+    ports:
+      - "127.0.0.1:15006:3000"
+    volumes:
+      - type: bind
+        source: "/stacks/PIC-SURE-Frontend"
+        target: /app
+        bind: {create_host_path: false}
+      - frontend-node-modules:/app/node_modules
+      - type: bind
+        source: "/stacks/golden/.pic-sure/render/files/httpd/vite.config.dev.ts"
+        target: /app/vite.config.aio.ts
+        bind: {create_host_path: false}
+        read_only: true
+    environment:
+      GATEWAY_DOCS_ENABLED: "true"
+      LOGGING_API_KEY: ${LOGGING_API_KEY}
+      LOGGING_SERVICE_URL: http://pic-sure-logging/
+      NODE_ENV: development
+      "VITE_API_CONFIG_BRANDING": "ui:branding"
+      "VITE_API_CONFIG_FEATURES": "ui:featureFlag"
+      "VITE_API_CONFIG_SETTINGS": "ui:setting"
+      "VITE_AUTH0_TENANT": "avillachlab"
+      "VITE_AUTH_PROVIDER_MODULE_GOOGLE": "true"
+      "VITE_AUTH_PROVIDER_MODULE_GOOGLE_CLIENTID": "golden-client-id"
+      "VITE_AUTH_PROVIDER_MODULE_GOOGLE_CONNECTION": "google-oauth2"
+      "VITE_AUTH_PROVIDER_MODULE_GOOGLE_DESCRIPTION": "Login"
+      "VITE_AUTH_PROVIDER_MODULE_GOOGLE_TYPE": "AUTH0"
+      "VITE_CONFIG_MODE": "override"
+      "VITE_DISCOVER": "true"
+      "VITE_ENABLE_TOS": "false"
+      "VITE_ENFORCE_TOS_ACCEPT": "false"
+      "VITE_OPEN": "true"
+      "VITE_OPEN_EXPLORER": "false"
+      "VITE_ORIGIN": "http://localhost:15006"
+      "VITE_THEME": "picsure"
+    networks:
+      - public
+      - app # reaches gateway and psama for reverse proxying
+    depends_on:
+      gateway:
+        condition: service_started
+      psama:
+        condition: service_started
+    # The Vite server's own page.
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    working_dir: /app
+    command: sh -c "npm install -g pnpm@10.24.0 && pnpm config set store-dir /pnpm-store && pnpm install && pnpm dev --config vite.config.aio.ts"
+  # Gateway: the PIC-SURE API front door (Spring Cloud Gateway). Routes
+  # /logging, /dictionary, /visualization, /hpds and /operations and runs the
+  # PSAMA introspection auth chain in front of them. The aio Spring profile
+  # supplies the service DNS defaults, so only secrets and toggles are set here.
+  gateway:
+    image: "hms-dbmi/pic-sure-gateway:abc123def456"
+    restart: always
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+    environment:
+      JAVA_OPTS: "-Xms512m -Xmx2g"
+      SPRING_PROFILE: aio
+      TOKEN_INTROSPECTION_TOKEN: ${PICSURE_INTROSPECTION_TOKEN}
+      QUERY_SERVICE_INTERNAL_TOKEN: ${QUERY_SERVICE_INTERNAL_TOKEN}
+      GATEWAY_OPEN_ACCESS_ENABLED: "true"
+      GATEWAY_DOCS_ENABLED: "true"
+      # Actuator, gated by X-Application-Token.
+      PICSURE_APPLICATION_TOKEN: ${PICSURE_APPLICATION_TOKEN}
+      PICSURE_ACTUATOR_EXPOSURE: health
+      PICSURE_ACTUATOR_DETAILS: when_authorized
+      LOGGING_API_KEY: ${LOGGING_API_KEY}
+      LOGGING_SERVICE_URL: http://pic-sure-logging/
+    networks:
+      - app
+      - query # /system/status deep-health probes hpds directly
+    depends_on:
+      psama:
+        condition: service_started
+      pic-sure-operations-service:
+        condition: service_started
+      pic-sure-hpds-query-service:
+        condition: service_started
+    # Liveness, not the deep aggregate: /actuator/health folds in the
+    # downstream contributor, so an empty HPDS or dictionary would mark the
+    # gateway itself unhealthy. Deep, cross-service health is /system/status.
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/actuator/health/liveness"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+  # Operations service: owns the picsure schema (queries, datasets,
+  # configuration).
+  pic-sure-operations-service:
+    image: "hms-dbmi/pic-sure-operations-service:abc123def456"
+    restart: always
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+    environment:
+      JAVA_OPTS: "-Xms512m -Xmx2g"
+      SPRING_DATASOURCE_URL: "jdbc:mysql://db.example.org:3307/picsure?useUnicode=true&characterEncoding=UTF-8&autoReconnect=true&autoReconnectForPools=true&serverTimezone=UTC"
+      SPRING_DATASOURCE_USERNAME: picsure
+      SPRING_DATASOURCE_PASSWORD: ${DB_PICSURE_PASSWORD}
+      # Shared secret checked by InternalTokenFilter on /internal/**.
+      QUERY_SERVICE_INTERNAL_TOKEN: ${QUERY_SERVICE_INTERNAL_TOKEN}
+      PICSURE_APPLICATION_TOKEN: ${PICSURE_APPLICATION_TOKEN}
+      PICSURE_ACTUATOR_EXPOSURE: health
+      PICSURE_ACTUATOR_DETAILS: when_authorized
+      LOGGING_API_KEY: ${LOGGING_API_KEY}
+      LOGGING_SERVICE_URL: http://pic-sure-logging/
+    networks:
+      - app
+    # Deep probe: the shallow aggregate stays open without the application
+    # token and folds in the datasource, so a broken picsure schema turns it
+    # 503. Context path is /operations.
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/operations/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+  # HPDS query service: the only service allowed to reach HPDS.
+  pic-sure-hpds-query-service:
+    image: "hms-dbmi/pic-sure-hpds-query-service:abc123def456"
+    restart: always
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+    environment:
+      JAVA_OPTS: "-Xms512m -Xmx2g"
+      # One HPDS instance, so the auth and open backends are the same.
+      HPDS_AUTH_URL: http://hpds:8080/PIC-SURE
+      HPDS_OPEN_URL: http://hpds:8080/PIC-SURE
+      # Query state lives in the operations service; this one owns no database.
+      OPERATIONS_SERVICE_URL: http://pic-sure-operations-service:8080
+      CONSENT_BASED_AUTHORIZATION_ENABLED: "false"
+      PSAMA_URL: http://psama:8090
+      QUERY_SERVICE_INTERNAL_TOKEN: ${QUERY_SERVICE_INTERNAL_TOKEN}
+      # Open-path aggregation and obfuscation.
+      VISUALIZATION_URL: http://visualization
+      AGGREGATE_OBFUSCATION_THRESHOLD: "10"
+      AGGREGATE_OBFUSCATION_VARIANCE: "3"
+      AGGREGATE_OBFUSCATION_SALT: ${AGGREGATE_OBFUSCATION_SALT}
+      PICSURE_APPLICATION_TOKEN: ${PICSURE_APPLICATION_TOKEN}
+      PICSURE_ACTUATOR_EXPOSURE: health
+      PICSURE_ACTUATOR_DETAILS: when_authorized
+    networks:
+      - app
+      - query
+    depends_on:
+      hpds:
+        condition: service_started
+    # Liveness: the only deep indicator is HPDS's own, which is DOWN on a
+    # fresh install with no data. Cross-service truth is the gateway's
+    # /system/status.
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/actuator/health/liveness"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+  # PSAMA: the auth micro-app.
+  psama:
+    image: "hms-dbmi/pic-sure-psama:abc123def456"
+    restart: always
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+    volumes:
+      - psama-logs:/var/log
+    environment:
+      JAVA_OPTS: "-Xms2g -Xmx4g -XX:MetaspaceSize=96M -XX:MaxMetaspaceSize=256m -Djava.net.preferIPv4Stack=true"
+      DATASOURCE_URL: "jdbc:mysql://db.example.org:3307/auth?useUnicode=true&characterEncoding=UTF-8&autoReconnect=true&autoReconnectForPools=true&serverTimezone=UTC"
+      DATASOURCE_USERNAME: auth
+      DATASOURCE_PASSWORD: ${DB_AUTH_PASSWORD}
+      APPLICATION_CLIENT_SECRET: ${AUTH0_CLIENT_SECRET}
+      # Must stay false: pic-sure signs the introspection token with the
+      # secret as is.
+      APPLICATION_CLIENT_SECRET_IS_BASE_64: "false"
+      AUTH0_IDP_PROVIDER_IS_ENABLED: "true"
+      AUTH0_HOST: "https://avillachlab.auth0.com/"
+      OPEN_IDP_PROVIDER_IS_ENABLED: "true"
+      ENABLE_PUBLIC_ACCESS: "false"
+      CONSENT_BASED_AUTHORIZATION_ENABLED: "false"
+      STACK_SPECIFIC_APPLICATION_ID: ${PICSURE_APPLICATION_ID}
+      TOKEN_EXPIRATION_TIME: "3600000"
+      LONG_TERM_TOKEN_EXPIRATION_TIME: "2592000000"
+      EMAIL_ADDRESS: "ops@example.org"
+      EMAIL_PASSWORD: ${EMAIL_PASSWORD}
+      TOS_ENABLED: "false"
+      SYSTEM_NAME: PIC-SURE All-in-one
+      AUTH0_DENIED_EMAIL_ENABLED: "false"
+      PICSURE_ACTUATOR_EXPOSURE: health
+      LOGGING_API_KEY: ${LOGGING_API_KEY}
+      LOGGING_SERVICE_URL: http://pic-sure-logging/
+    networks:
+      - app
+    # Shallow, unauthenticated /auth/actuator/health. Its aggregate includes
+    # the datasource, so a broken DB turns the probe into a 503. 127.0.0.1, not
+    # localhost: JAVA_OPTS sets preferIPv4Stack, so busybox wget's first (IPv6)
+    # candidate for localhost is refused.
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8090/auth/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+  # HPDS: the High Performance Data Store. Its data volumes come from the
+  # local-hpds or shared-hpds fragment.
+  hpds:
+    image: "hms-dbmi/pic-sure-hpds:abc123def456"
+    restart: always
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+    environment:
+      JAVA_OPTS: "-XX:+UseParallelGC -XX:SurvivorRatio=250 -Xms1g -Xmx16g"
+      SPRING_PROFILES_ACTIVE: "genomic"
+      # 0 disables data export; 2000 enables it.
+      ID_BATCH_SIZE: "2000"
+      CACHE_SIZE: "1500"
+      SMALL_TASK_THREADS: "1"
+      LARGE_TASK_THREADS: "1"
+      SMALL_JOB_LIMIT: "100"
+      ALL_IDS_CONCEPT: NONE
+      ID_CUBE_NAME: NONE
+      ENABLE_FILE_SHARING: "true"
+      VCF_EXCERPT_ENABLED: "true"
+      HPDS_GENOMIC_DATA_DIRECTORY: /opt/local/hpds/all/
+      HPDS_GENOMIC_PROCESSOR_IMPL: localPatientDistributed
+      # HPDS defaults this to true, which rejects V3 queries that carry no
+      # authorizationFilters, the normal shape of AIO queries.
+      hpds.requireAuthorizationFilter: "false"
+      PICSURE_ACTUATOR_EXPOSURE: health
+      LOGGING_API_KEY: ${LOGGING_API_KEY}
+      LOGGING_SERVICE_URL: http://pic-sure-logging/
+    networks:
+      - query
+    # Liveness, not the deep aggregate: HPDS reports DOWN whenever no data is
+    # loaded, the normal state of a fresh install. HPDS starts slowly and may
+    # crash-loop without data (especially with the bch-dev profile), hence the
+    # long start_period.
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/actuator/health/liveness"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 300s
+    depends_on:
+      hpds-genomic-seed:
+        condition: service_completed_successfully
+    volumes:
+      - shared-hpds-data:/opt/local/hpds:ro
+      - hpds-genomic-copy:/opt/local/hpds/all
+      - hpds-csv:/usr/local/docker-config/hpds_csv
+      - hpds-query-results:/gic_query_results
+      - hpds-logs:/var/log
+  # Visualization: the chart and histogram service.
+  visualization:
+    image: "hms-dbmi/pic-sure-visualization:abc123def456"
+    restart: always
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+    volumes:
+      - visualization-logs:/var/log
+    environment:
+      JAVA_OPTS: "-Xms512m -Xmx1g"
+      SERVER_PORT: "80"
+      # Its only route to HPDS is the query service.
+      HPDS_QUERY_SERVICE_URL: http://pic-sure-hpds-query-service:8080
+      CHART_MAX_CATEGORIES: "7"
+      REST_TEMPLATE_CONNECT_TIMEOUT: "5000"
+      REST_TEMPLATE_READ_TIMEOUT: "30000"
+      PICSURE_ACTUATOR_EXPOSURE: health
+      LOGGING_API_KEY: ${LOGGING_API_KEY}
+      LOGGING_SERVICE_URL: http://pic-sure-logging/
+    networks:
+      - app
+    depends_on:
+      pic-sure-hpds-query-service:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "sh", "-c", "wget -q --spider http://localhost/actuator/health 2>/dev/null"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+  # Dictionary API.
+  dictionary-api:
+    image: "hms-dbmi/pic-sure-dictionary-api:abc123def456"
+    restart: always
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+    environment:
+      POSTGRES_HOST: dictionary-db
+      POSTGRES_DB: dictionary
+      POSTGRES_USER: picsure
+      POSTGRES_PASSWORD: ${DB_DICTIONARY_PASSWORD}
+      PICSURE_ACTUATOR_EXPOSURE: health
+      LOGGING_API_KEY: ${LOGGING_API_KEY}
+      LOGGING_SERVICE_URL: http://pic-sure-logging/
+    volumes:
+      - dictionary-logs:/var/log
+    networks:
+      - app
+      - data
+    depends_on:
+      dictionary-db:
+        condition: service_healthy
+    # The shallow actuator aggregate, which includes the Postgres datasource.
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+  # Dictionary dump (aggregate).
+  dictionary-dump:
+    image: "hms-dbmi/pic-sure-dictionary-dump:abc123def456"
+    restart: always
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+    environment:
+      POSTGRES_HOST: dictionary-db
+      POSTGRES_DB: dictionary
+      POSTGRES_USER: picsure
+      POSTGRES_PASSWORD: ${DB_DICTIONARY_PASSWORD}
+    volumes:
+      - dictionary-logs:/var/log
+    networks:
+      - data
+    depends_on:
+      dictionary-db:
+        condition: service_healthy
+  # PostgreSQL for the dictionary. Always local, even with a remote MySQL.
+  dictionary-db:
+    image: "postgres:16-alpine"
+    restart: always
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+    environment:
+      POSTGRES_DB: dictionary
+      POSTGRES_USER: picsure
+      POSTGRES_PASSWORD: ${DB_DICTIONARY_PASSWORD}
+    volumes:
+      - dictionary-db-data:/var/lib/postgresql/data
+      # Baseline DDL; the Flyway migrations build on top of it.
+      - type: bind
+        source: "/home/op/.cache/pic-sure/src/pic-sure/0123456789abcdef0123456789abcdef01234567/services/picsure-dictionary/db/schema.sql"
+        target: /docker-entrypoint-initdb.d/schema.sql
+        bind: {create_host_path: false}
+        read_only: true
+    networks:
+      - data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U picsure -d dictionary"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+  # Flyway one-shots. pic-sure runs them with `compose run --rm` once the
+  # databases are up and before it starts the services that use the schemas.
+  # The migrate profile keeps a plain `compose up` from starting them.
+  #
+  # flyway-init runs four passes: auth core, picsure core, then the
+  # project-specific picsure and auth migrations.
+  flyway-init:
+    image: "flyway/flyway:10"
+    profiles: [migrate]
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+    entrypoint: ["bash", "/scripts/run-migrations.sh"]
+    volumes:
+      - type: bind
+        source: "/stacks/golden/.pic-sure/render/files/flyway/run-migrations.sh"
+        target: /scripts/run-migrations.sh
+        bind: {create_host_path: false}
+        read_only: true
+      - type: bind
+        source: "/home/op/.cache/pic-sure/src/pic-sure/0123456789abcdef0123456789abcdef01234567/services/pic-sure-auth-microapp/pic-sure-auth-db/db/sql"
+        target: /migrations/auth
+        bind: {create_host_path: false}
+        read_only: true
+      - type: bind
+        source: "/home/op/.cache/pic-sure/src/pic-sure/0123456789abcdef0123456789abcdef01234567/services/pic-sure-operations-service/db/sql"
+        target: /migrations/picsure
+        bind: {create_host_path: false}
+        read_only: true
+      - type: bind
+        source: "/home/op/.cache/pic-sure/src/PIC-SURE-Migrations/89abcdef0123456789abcdef0123456789abcdef/Baseline/auth"
+        target: /migrations/custom/auth
+        bind: {create_host_path: false}
+        read_only: true
+      - type: bind
+        source: "/home/op/.cache/pic-sure/src/PIC-SURE-Migrations/89abcdef0123456789abcdef0123456789abcdef/Baseline/picsure"
+        target: /migrations/custom/picsure
+        bind: {create_host_path: false}
+        read_only: true
+    environment:
+      DB_HOST: "db.example.org"
+      DB_PORT: "3307"
+      DB_ROOT_USER: "admin"
+      DB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      # `compose run -e FLYWAY_ACTION=repair` (or check) overrides it.
+      FLYWAY_ACTION: migrate
+      PICSURE_APPLICATION_ID: ${PICSURE_APPLICATION_ID}
+      PICSURE_RESOURCE_ID: ${PICSURE_RESOURCE_ID}
+      PICSURE_VIZ_RESOURCE_ID: ${PICSURE_VIZ_RESOURCE_ID}
+      # Covers a remote DB that is slow to accept connections.
+      FLYWAY_CONNECT_RETRIES: "30"
+    networks:
+      - app
+    restart: "no"
+  # The dictionary migrations: a separate one-shot because the dictionary
+  # Postgres is on the internal data network, has its own credentials and is
+  # always local.
+  flyway-dictionary-init:
+    image: "flyway/flyway:10"
+    profiles: [migrate]
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+    entrypoint: ["bash", "/scripts/run-dictionary-migrations.sh"]
+    volumes:
+      - type: bind
+        source: "/stacks/golden/.pic-sure/render/files/flyway/run-dictionary-migrations.sh"
+        target: /scripts/run-dictionary-migrations.sh
+        bind: {create_host_path: false}
+        read_only: true
+      - type: bind
+        source: "/home/op/.cache/pic-sure/src/pic-sure/0123456789abcdef0123456789abcdef01234567/services/picsure-dictionary/db/flyway"
+        target: /migrations/dictionary
+        bind: {create_host_path: false}
+        read_only: true
+    environment:
+      POSTGRES_HOST: dictionary-db
+      POSTGRES_DB: dictionary
+      POSTGRES_USER: picsure
+      POSTGRES_PASSWORD: ${DB_DICTIONARY_PASSWORD}
+      FLYWAY_ACTION: migrate
+    networks:
+      - data
+    restart: "no"
+    depends_on:
+      dictionary-db:
+        condition: service_healthy
+  # Logging: the audit event collector.
+  pic-sure-logging:
+    image: "hms-dbmi/pic-sure-logging:abc123def456"
+    restart: always
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+    volumes:
+      - logging-logs:/app/logs
+    environment:
+      LOGGING_API_KEY: ${LOGGING_API_KEY}
+      LOGGING_SERVICE_URL: http://pic-sure-logging
+      APP: pic-sure
+      PLATFORM: all-in-one
+      ENVIRONMENT: production
+      PORT: "80"
+      ALLOWED_ORIGIN: "*"
+    networks:
+      - app
+      - query # hpds is isolated on the query network but still sends audit events
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+  hpds-genomic-seed:
+    image: "alpine:3.23"
+    network_mode: none
+    restart: "no"
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+    volumes:
+      - shared-hpds-genomic:/src:ro
+      - hpds-genomic-copy:/dst
+    # The publisher's .picsure-published marker identifies the set. A copy
+    # of it is written as .picsure-seeded once the whole set is copied, so
+    # restarts skip a finished copy and redo an interrupted one.
+    command:
+      - sh
+      - -c
+      - >-
+        if cmp -s /src/.picsure-published /dst/.picsure-seeded; then exit 0; fi; find /dst -mindepth 1 -delete && cp -a /src/. /dst/ && cp /src/.picsure-published /dst/.picsure-seeded
+networks:
+  # Only httpd joins it.
+  public:
+    driver: bridge
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+  # The app tier. Not internal: PSAMA must reach Auth0.
+  app:
+    driver: bridge
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+  # The dictionary tier, with no route off the host.
+  data:
+    driver: bridge
+    internal: true
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+  # Isolates HPDS from the app tier: only the query service (its query path),
+  # the gateway (/system/status) and logging (audit events) join it.
+  query:
+    driver: bridge
+    internal: true
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+volumes:
+  dictionary-db-data:
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+  hpds-csv:
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+  # Query result files for GIC file sharing.
+  hpds-query-results:
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+  # VCFs and loader output staged by data load-genomic.
+  genomic-staging:
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+  certs:
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+  httpd-logs:
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+  psama-logs:
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+  hpds-logs:
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+  visualization-logs:
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+  dictionary-logs:
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+  logging-logs:
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+  shared-hpds-data:
+    external: true
+    name: "nhanes_hpds-data"
+  shared-hpds-genomic:
+    external: true
+    name: "nhanes_hpds-genomic"
+  hpds-genomic-copy:
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+  frontend-node-modules:
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+-- files/httpd/httpd-vhosts.conf --
+Listen 0.0.0.0:80
+Listen 0.0.0.0:443
+
+##
+##  SSL Global Context
+##
+##  All SSL configuration in this context applies both to
+##  the main server and all SSL-enabled virtual hosts.
+##
+
+#
+#   Some MIME-types for downloading Certificates and CRLs
+#
+AddType application/x-x509-ca-cert .crt
+AddType application/x-pkcs7-crl    .crl
+
+SSLCipherSuite ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES128-SHA256:ECDHE-RSA-AES128-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES256-SHA384:ECDHE-RSA-AES256-SHA384:AES128-GCM-SHA256:AES128-SHA256:AES256-GCM-SHA384:AES256-SHA256
+SSLProxyCipherSuite ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES128-SHA256:ECDHE-RSA-AES128-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES256-SHA384:ECDHE-RSA-AES256-SHA384:AES128-GCM-SHA256:AES128-SHA256:AES256-GCM-SHA384:AES256-SHA256
+
+SSLProtocol all -SSLv2 -SSLv3 -TLSv1 -TLSv1.1
+SSLProxyProtocol all -SSLv2 -SSLv3 -TLSv1 -TLSv1.1
+SSLHonorCipherOrder     off
+SSLSessionTickets       off
+SSLPassPhraseDialog  builtin
+
+SSLSessionCache        "shmcb:${HTTPD_PREFIX}/logs/ssl_scache(512000)"
+SSLSessionCacheTimeout  300
+
+Mutex  "file:${HTTPD_PREFIX}/logs/ssl_mutex"
+
+ServerTokens Prod
+PassEnv GATEWAY_DOCS_ENABLED
+
+<VirtualHost *:80>
+	RewriteEngine On
+	ProxyPreserveHost Off
+    #Dont allow httpd debug methods
+    RewriteCond %{REQUEST_METHOD} ^TRACK [NC,OR]
+    RewriteCond %{REQUEST_METHOD} ^TRACE [NC]
+    RewriteRule .* - [F]
+
+    # Apply the docs switch at every public ingress, including direct PSAMA.
+    RewriteCond %{ENV:GATEWAY_DOCS_ENABLED} !^true$ [NC]
+    RewriteRule ^/(picsure/(openapi|swagger-ui)(/.*)?|psama/v3/api-docs(\.yaml)?(/.*)?)$ - [R=404,L]
+
+	# Handle /picsure/ requests from localhost only
+    RewriteCond %{HTTP_HOST} ^(localhost|127\.0\.0\.1)(:[0-9]+)?$ [NC]
+    RewriteRule ^/picsure/(.*)$ "http://gateway:8080/$1" [P,L]
+
+    # Keep the stack's HTTPS port, which isn't 443 when several stacks share a
+    # host.
+    RewriteRule ^ https://%{SERVER_NAME}:8443/ [L,NE,R=301]
+</VirtualHost>
+
+<VirtualHost _default_:443>
+    ServerName %{SERVER_NAME}
+	ProxyTimeout 300
+    SSLEngine on
+    SSLProxyEngine on
+
+    SSLProxyVerify none
+    SSLProxyCheckPeerCN off
+    SSLProxyCheckPeerName off
+
+     # enable HTTP/2, if available
+    Protocols h2 http/1.1
+
+	SSLCertificateFile "${HTTPD_PREFIX}/cert/server.crt"
+    SSLCertificateKeyFile "${HTTPD_PREFIX}/cert/server.key"
+    SSLCertificateChainFile "${HTTPD_PREFIX}/cert/server.chain"
+
+    # TLS terminates here; internal HTTP hops do not supply this header.
+    Header always set Strict-Transport-Security "max-age=31536000; includeSubdomains; preload"
+
+    # Swagger's upstream viewer uses a static inline initializer. Scope its policy
+    # to that page; the application keeps its nonce-based policy from SvelteKit.
+    Header always set Content-Security-Policy "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'" "expr=-z %{resp:Content-Security-Policy} && %{REQUEST_URI} =~ m#^/picsure/swagger-ui/?$#"
+
+    # Preserve the frontend's nonce policy; use a restrictive floor for responses
+    # without their own CSP, including API responses and Apache errors.
+    Header always set Content-Security-Policy "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; sandbox" "expr=-z %{resp:Content-Security-Policy}"
+    # Replace proxied Server headers; Apache-generated responses retain Apache.
+    Header always set Server "PIC-SURE"
+
+    # A fall back for legacy browsers that don't yet support CSP frame-ancestors.
+    Header always set X-Frame-Options "DENY"
+
+    # Attempt to prevent some MIME-type confusion attacks. There is no perfect solution to this problem.
+    Header always set X-Content-Type-Options "nosniff"
+
+    RewriteEngine On
+    ProxyPreserveHost On
+
+    #Dont allow httpd debug methods
+    RewriteCond %{REQUEST_METHOD} ^TRACK [NC,OR]
+    RewriteCond %{REQUEST_METHOD} ^TRACE [NC]
+    RewriteRule .* - [F]
+
+    # Match the request to /health and return a 200 OK status for AWS ELB health checks
+    RewriteRule ^/picsure/health$ - [R=200,L]
+
+    # Apply the docs switch at every public ingress, including direct PSAMA.
+    RewriteCond %{ENV:GATEWAY_DOCS_ENABLED} !^true$ [NC]
+    RewriteRule ^/(picsure/(openapi|swagger-ui)(/.*)?|psama/v3/api-docs(\.yaml)?(/.*)?)$ - [R=404,L]
+
+    # All /picsure traffic flows through the gateway, whose own route table is
+    # rooted at /operations, /hpds, /dictionary, /visualization and /logging,
+    # so the /picsure prefix is stripped here rather than rewritten.
+    RewriteRule ^/picsure/(.*)$ "http://gateway:8080/$1" [P,L]
+    # PSAMA is proxied direct: the gateway has no /auth route.
+    RewriteRule ^/psama/(.*)$ "http://psama:8090/auth/$1" [P,L]
+    RewriteRule ^/psamaui/login/(.*)$ "http://httpd:3000/login/loading/$1" [P,QSA,L]
+    RewriteRule ^/(.*)$ "http://httpd:3000/$1" [P,L]
+
+    RewriteCond %{DOCUMENT_ROOT}/%{REQUEST_FILENAME} !-f
+    RewriteCond %{DOCUMENT_ROOT}/%{REQUEST_FILENAME} !-d
+
+    RewriteRule ^/static/(.*)$ /static/$1 [L]
+
+    DocumentRoot "${HTTPD_PREFIX}/htdocs"
+
+    LogFormat "%{X-Forwarded-For}i %t %{SSL_PROTOCOL}x %{SSL_CIPHER}x \"%r\" %b" proxy-ssl
+    LogFormat "%h %l %u %t \"%r\" %>s %b \"%{Referer}i\" \"%{User-Agent}i\"" combined
+    LogFormat "%{X-Forwarded-For}i %l %u %t \"%r\" %>s %b \"%{Referer}i\" \"%{User-Agent}i\"" proxy
+    SetEnvIf X-Forwarded-For "^.*\..*\..*\..*" forwarded
+    RequestHeader set X-Forwarded-For "%{REMOTE_ADDR}s" env=!forwarded
+    CustomLog "${HTTPD_PREFIX}/logs/access_log" combined env=!forwarded
+    CustomLog "${HTTPD_PREFIX}/logs/access_log" proxy env=forwarded
+    CustomLog "${HTTPD_PREFIX}/logs/ssl_request_log" proxy-ssl env=forwarded
+    CustomLog "${HTTPD_PREFIX}/logs/ssl_request_log" \
+          "%t %h %{SSL_PROTOCOL}x %{SSL_CIPHER}x \"%r\" %b" env=!forwarded
+    ErrorLog "${HTTPD_PREFIX}/logs/error_log"
+    TransferLog "${HTTPD_PREFIX}/logs/access_log"
+
+    BrowserMatch "MSIE [2-5]" \
+         nokeepalive ssl-unclean-shutdown \
+         downgrade-1.0 force-response-1.0
+</VirtualHost>

@@ -454,7 +454,49 @@ installed. `aio_test.go` checks that the README maps every template and that
 each AIO source still exists in the AIO checkout beside this repo (or
 `PICSURE_AIO_DIR`); it skips without one.
 
-_Ticket 021 documents rendering here._
+**Rendering** (ticket 021, `render.go`).
+
+- `Render(Input)` is pure: from the config, state and stack dir it returns
+  the `[]File` to write under `.pic-sure/render/` (`ComposeFile` first, then
+  `files/*`), each with its path relative to the stack dir and its mode.
+  `Write(st, files)` saves them through the stack (atomic, in the manifest)
+  and removes the files an earlier render wrote that this one didn't, such
+  as `files/maven/settings.xml` (0600, the proxy credentials) once the proxy
+  is off. Callers record `cli_version` and `schema_version` in state.json
+  after a render.
+- `Input`: `StackDir`, `Config`, `State` (image tags from `Images`, node's
+  being the `.nvmrc` tag httpd-hmr needs; dev builds' tags from
+  `DevImages`, keyed by image), `Sources` (the cache tree of each component
+  without a configured `source`; render needs pic-sure and migrations) and
+  `CustomTrust` (the trust dir holds certs). Render does no I/O, so the
+  caller resolves those.
+- Bind sources (the stack dir, sources, a relative `source` resolved
+  against the stack dir) must be absolute without `:` or line breaks; the
+  rendered file is checked again after the merge. A service override for a
+  service this stack's mode doesn't have (`picsure-db` with a remote DB) is
+  skipped; an unknown service, dev variant, missing image tag or dev build
+  is an error.
+- JAVA_OPTS extras, in order: the proxy properties (psama only, the one
+  JVM that calls out), the truststore properties (psama, custom certs) and
+  the JDWP agent (services of a dev variant with a debug port).
+- `ComposeEnv(cfg, secrets)` is the `env` for `docker.NewCompose`: every
+  `secretVars` name, always, plus `proxyVars` when a proxy is set (empty
+  when only one scheme is). `DB_ROOT_PASSWORD` is the local or remote root
+  password by `db.mode`.
+- `ViteEnv(cfg)` is the frontend's `VITE_*` set without `VITE_ORIGIN`: the
+  auth-mode flags, ToS, the Auth0 login module when `client_id` is set,
+  analytics and the theme. httpd-hmr gets it plus `VITE_ORIGIN`; the
+  frontend build (030) bakes it in and hashes it for the image tag.
+
+**Goldens.** `render_test.go` renders 11 stacks that cover every pair of
+auth mode, dev (none, hpds, httpd-hmr), db mode, HPDS data, proxy and
+overrides, plus an everything-on stack and one with dev httpd and custom
+certs. Each is `testdata/golden/<case>.txtar`: compose.yaml and the
+rendered files (the copied ones are only checked to be copies). Regenerate
+with `go test ./internal/render -run TestGoldens -update` and review the
+diff. The test fails if a golden holds any secret value, and runs
+`docker compose config --quiet` on each (with `testdata/overrides.yaml` for
+the override cases) when the docker CLI is installed.
 
 ## internal/catalog
 

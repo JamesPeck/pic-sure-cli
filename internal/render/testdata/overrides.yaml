@@ -1,0 +1,7 @@
+# An operator's overrides/*.yaml, passed to compose after the rendered file.
+services:
+  hpds:
+    labels:
+      com.example.team: data
+    environment:
+      EXTRA_SETTING: "1"
