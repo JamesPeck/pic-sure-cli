@@ -321,33 +321,38 @@ the manifest.
 
 - **`Secret`** is a string type that fmt, slog and encoding/json print as
   `[REDACTED]` (`""` when empty). `string(s)` is the value; YAML encodes
-  the value. **`Secrets`** holds every field of §6.3 as a `Secret` (the
-  introspection token's expiry is a `time.Time`), so printing one shows no
-  value. Don't keep one in an unexported struct field, where fmt can't call
-  its methods.
+  the value. **`Secrets`** holds every secret of §6.3 as a `Secret`; the
+  UUIDs are plain strings and the token expiry a `time.Time`. The local
+  (`DBRootPassword`) and remote (`DBRemoteRootPassword`) MySQL root
+  passwords are separate fields, so changing `db.mode` never passes one off
+  as the other. A struct with `Secret` fields needs a `Format` method like
+  `Secrets.Format` (fmt skips field methods when it reports a bad verb), and
+  none of them belongs in an unexported field.
 - **`EnsureSecrets(d.Rand, EnsureOptions{RemoteDB, Supplied})`** is the
-  step for init and other converging commands. It loads secrets.yaml (or starts
-  empty), stores the operator's `Supplied` secrets, fills every empty
-  generated secret, saves if anything changed, and creates the HPDS key
-  file if there is none. It never replaces a generated secret or an
-  existing key file, even a malformed one. Formats follow the bash: 24
-  `[A-Za-z0-9]` characters for DB passwords, 32-byte hex for the query,
-  application and logging tokens, 16-byte hex for the obfuscation salt,
-  lowercase v4 UUIDs, and 32 hex characters for the HPDS key. With
-  `RemoteDB`, the root password is the operator's and must be stored or
-  supplied; without it, supplying one is an error. A new Auth0 client
-  secret clears `IntrospectionToken`, and the caller issues a new one with
-  `jwt.Introspection`. Generating the token isn't EnsureSecrets' job.
+  step for init and other converging commands. It loads secrets.yaml (or
+  starts empty), stores each `Supplied` operator secret the stack doesn't
+  have yet, fills every empty generated secret, creates the HPDS key file
+  for a new stack, and saves if anything changed. It never replaces a
+  secret: a supplied value that differs from the stored one is exit 2
+  (`secrets rotate` changes secrets). With `RemoteDB` and no remote root
+  password it is exit 3. A key file that is malformed, or missing once
+  secrets.yaml exists, is an error, never replaced. Formats follow the
+  bash: 24 `[A-Za-z0-9]` characters for DB passwords, 32-byte hex for the
+  query, application and logging tokens, 16-byte hex for the obfuscation
+  salt, lowercase v4 UUIDs, and 32 lowercase hex characters for the HPDS
+  key. The introspection token isn't generated: the caller issues it with
+  `jwt.Introspection` and saves it with `SaveSecrets`.
 - `LoadSecrets`/`SaveSecrets` read and write secrets.yaml (`LoadSecrets`
-  wraps `fs.ErrNotExist` before there is one; unknown keys are ignored).
-  `LoadHPDSKey` reads the key and checks it is 32 hex characters.
+  wraps `fs.ErrNotExist` before there is one, ignores unknown keys, and
+  never quotes a value in its errors). `LoadHPDSKey` reads the key and
+  checks it is 32 hex characters.
 - **User-supplied secrets** (Auth0 client secret, remote DB root password,
   email password) come from stdin or a file, never a flag value.
   `ReadUserSecret(r, "--flag-name")` strips one trailing `\n` or `\r\n` and
   returns exit 2, naming the flag, for any other CR or LF, an empty secret,
   or one over 64 KiB.
 - **Redaction.** `LoadSecrets`, `SaveSecrets`, `EnsureSecrets` and
-  `LoadHPDSKey` pass every non-empty value to the function set with
+  `LoadHPDSKey` pass every non-empty secret to the function set with
   `SetSecretRegistrar`. The cli layer sets it to `log.RegisterSecrets`
   (ticket 005; until then it is a TODO in `internal/cli/deps.go`).
 

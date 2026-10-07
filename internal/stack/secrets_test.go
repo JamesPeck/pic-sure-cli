@@ -6,9 +6,12 @@ import (
 	"os"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
 )
 
 const syntheticClientSecret = "synthetic-client-secret-0123456789abcdef"
@@ -19,38 +22,37 @@ func TestEnsureSecretsGenerates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, c := range []struct {
+	generated := []struct {
 		name string
-		v    Secret
+		v    string
 		re   *regexp.Regexp
 	}{
-		{"DBRootPassword", sec.DBRootPassword, passwordRE},
-		{"DBPicsurePassword", sec.DBPicsurePassword, passwordRE},
-		{"DBAuthPassword", sec.DBAuthPassword, passwordRE},
-		{"DBAirflowPassword", sec.DBAirflowPassword, passwordRE},
-		{"DictionaryDBPassword", sec.DictionaryDBPassword, passwordRE},
-		{"QueryServiceInternalToken", sec.QueryServiceInternalToken, hex64RE},
-		{"PicsureApplicationToken", sec.PicsureApplicationToken, hex64RE},
-		{"LoggingAPIKey", sec.LoggingAPIKey, hex64RE},
-		{"AggregateObfuscationSalt", sec.AggregateObfuscationSalt, hex32RE},
+		{"DBRootPassword", string(sec.DBRootPassword), passwordRE},
+		{"DBPicsurePassword", string(sec.DBPicsurePassword), passwordRE},
+		{"DBAuthPassword", string(sec.DBAuthPassword), passwordRE},
+		{"DBAirflowPassword", string(sec.DBAirflowPassword), passwordRE},
+		{"DictionaryDBPassword", string(sec.DictionaryDBPassword), passwordRE},
+		{"QueryServiceInternalToken", string(sec.QueryServiceInternalToken), hex64RE},
+		{"PicsureApplicationToken", string(sec.PicsureApplicationToken), hex64RE},
+		{"LoggingAPIKey", string(sec.LoggingAPIKey), hex64RE},
+		{"AggregateObfuscationSalt", string(sec.AggregateObfuscationSalt), hex32RE},
 		{"ApplicationUUID", sec.ApplicationUUID, uuidV4RE},
 		{"ResourceUUID", sec.ResourceUUID, uuidV4RE},
 		{"VisualizationUUID", sec.VisualizationUUID, uuidV4RE},
-	} {
-		if !c.re.MatchString(string(c.v)) {
+	}
+	seen := map[string]bool{}
+	for _, c := range generated {
+		if !c.re.MatchString(c.v) {
 			t.Errorf("%s = %q, want %s", c.name, c.v, c.re)
 		}
+		if seen[c.v] {
+			t.Errorf("%s: value generated twice", c.name)
+		}
+		seen[c.v] = true
 	}
 	// The operator's secrets and the token aren't generated.
-	if sec.Auth0ClientSecret != "" || sec.EmailPassword != "" || sec.IntrospectionToken != "" || !sec.IntrospectionTokenExpiry.IsZero() {
+	if sec.Auth0ClientSecret != "" || sec.DBRemoteRootPassword != "" || sec.EmailPassword != "" || sec.IntrospectionToken != "" || !sec.IntrospectionTokenExpiry.IsZero() {
 		t.Errorf("generated a secret that isn't generated: %#v", *sec)
-	}
-	seen := map[Secret]bool{}
-	for _, v := range sec.values() {
-		if v != "" && seen[v] {
-			t.Errorf("value %q generated twice", v)
-		}
-		seen[v] = true
 	}
 
 	key, err := s.LoadHPDSKey()
@@ -86,10 +88,7 @@ func TestEnsureSecretsGenerates(t *testing.T) {
 
 func TestEnsureSecretsNeverRegenerates(t *testing.T) {
 	s := newStack(t)
-	pre := &Secrets{DBPicsurePassword: "synthetic-kept-password", LoggingAPIKey: "synthetic-kept-key"}
-	if err := s.SaveSecrets(pre); err != nil {
-		t.Fatal(err)
-	}
+	// A run that died after making the key but before saving secrets.yaml.
 	if err := s.MkdirAll(hpdsKeyDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -97,18 +96,28 @@ func TestEnsureSecretsNeverRegenerates(t *testing.T) {
 	if err := s.WriteFile(HPDSKeyFile, []byte(oldKey+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-
 	first, err := s.EnsureSecrets(seeded(1), EnsureOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.DBPicsurePassword != pre.DBPicsurePassword || first.LoggingAPIKey != pre.LoggingAPIKey {
+	wantContent(t, s.Path(HPDSKeyFile), oldKey+"\n")
+
+	first.DBAuthPassword = ""
+	first.ResourceUUID = ""
+	if err := s.SaveSecrets(first); err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.EnsureSecrets(seeded(2), EnsureOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.DBAuthPassword == "" || second.ResourceUUID == "" {
+		t.Error("EnsureSecrets didn't fill the emptied secrets")
+	}
+	second.DBAuthPassword, second.ResourceUUID = "", ""
+	if !reflect.DeepEqual(first, second) {
 		t.Error("EnsureSecrets replaced a stored secret")
 	}
-	if first.DBAuthPassword == "" || first.ResourceUUID == "" {
-		t.Error("EnsureSecrets didn't fill the empty secrets")
-	}
-	wantContent(t, s.Path(HPDSKeyFile), oldKey+"\n")
 
 	before, err := os.ReadFile(s.Path(SecretsFile))
 	if err != nil {
@@ -118,77 +127,63 @@ func TestEnsureSecretsNeverRegenerates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := s.EnsureSecrets(seeded(2), EnsureOptions{})
-	if err != nil {
+	if _, err := s.EnsureSecrets(seeded(3), EnsureOptions{}); err != nil {
 		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(first, second) {
-		t.Error("a second EnsureSecrets changed the secrets")
 	}
 	wantContent(t, s.Path(SecretsFile), string(before))
 	if fi2, err := os.Stat(s.Path(SecretsFile)); err != nil || !os.SameFile(fi, fi2) {
-		t.Error("a second EnsureSecrets with nothing to do rewrote secrets.yaml")
+		t.Error("an EnsureSecrets with nothing to do rewrote secrets.yaml")
 	}
 	wantContent(t, s.Path(HPDSKeyFile), oldKey+"\n")
 }
 
 func TestEnsureSecretsSupplied(t *testing.T) {
 	s := newStack(t)
-	sec, err := s.EnsureSecrets(seeded(1), EnsureOptions{Supplied: UserSecrets{
-		Auth0ClientSecret: syntheticClientSecret,
-		EmailPassword:     "synthetic-email-password",
-	}})
+	user := UserSecrets{Auth0ClientSecret: syntheticClientSecret, EmailPassword: "synthetic-email-password"}
+	sec, err := s.EnsureSecrets(seeded(1), EnsureOptions{Supplied: user})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sec.Auth0ClientSecret != syntheticClientSecret || sec.EmailPassword != "synthetic-email-password" {
+	if sec.Auth0ClientSecret != user.Auth0ClientSecret || sec.EmailPassword != user.EmailPassword {
 		t.Fatalf("supplied secrets not stored: %#v", *sec)
 	}
 
-	// init issues the token; supplying the same client secret again keeps it.
-	sec.IntrospectionToken = "synthetic.token"
-	sec.IntrospectionTokenExpiry = time.Date(2027, 10, 6, 0, 0, 0, 0, time.UTC)
-	if err := s.SaveSecrets(sec); err != nil {
+	// Supplying the same values again changes nothing.
+	if _, err := s.EnsureSecrets(seeded(2), EnsureOptions{Supplied: user}); err != nil {
 		t.Fatal(err)
-	}
-	sec, err = s.EnsureSecrets(seeded(2), EnsureOptions{Supplied: UserSecrets{Auth0ClientSecret: syntheticClientSecret}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if sec.IntrospectionToken != "synthetic.token" {
-		t.Error("the same client secret cleared the introspection token")
 	}
 
-	// A new client secret replaces the old one and drops the token issued
-	// from it.
-	sec, err = s.EnsureSecrets(seeded(3), EnsureOptions{Supplied: UserSecrets{Auth0ClientSecret: syntheticClientSecret + "-new"}})
+	// A different one is refused: changing a secret is secrets rotate's job.
+	before, err := os.ReadFile(s.Path(SecretsFile))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sec.Auth0ClientSecret != syntheticClientSecret+"-new" || sec.IntrospectionToken != "" || !sec.IntrospectionTokenExpiry.IsZero() {
-		t.Errorf("after a new client secret: %#v", *sec)
+	for _, u := range []UserSecrets{
+		{Auth0ClientSecret: syntheticClientSecret + "-new"},
+		{EmailPassword: "synthetic-other-password"},
+	} {
+		_, err := s.EnsureSecrets(seeded(3), EnsureOptions{Supplied: u})
+		if exitcode.FromError(err) != exitcode.CodeUsage || !strings.Contains(err.Error(), "secrets rotate") {
+			t.Errorf("supplying a different secret: err = %v, want exit 2 naming secrets rotate", err)
+		}
 	}
-	if sec.EmailPassword != "synthetic-email-password" {
-		t.Error("an unsupplied secret was cleared")
-	}
-	if got, err := s.LoadSecrets(); err != nil || !reflect.DeepEqual(got, sec) {
-		t.Errorf("the change wasn't saved: %v", err)
-	}
+	wantContent(t, s.Path(SecretsFile), string(before))
 }
 
 func TestEnsureSecretsRemoteDB(t *testing.T) {
 	s := newStack(t)
-	if _, err := s.EnsureSecrets(seeded(1), EnsureOptions{RemoteDB: true}); err == nil || !strings.Contains(err.Error(), "root password") {
+	_, err := s.EnsureSecrets(seeded(1), EnsureOptions{RemoteDB: true})
+	if exitcode.FromError(err) != exitcode.CodePrecondition || !strings.Contains(err.Error(), "root password") {
 		t.Fatalf("remote DB without a root password: err = %v", err)
 	}
 	wantNotExist(t, s.Path(SecretsFile))
 	wantNotExist(t, s.Path(HPDSKeyFile))
 
-	sec, err := s.EnsureSecrets(seeded(1), EnsureOptions{RemoteDB: true, Supplied: UserSecrets{DBRootPassword: "synthetic-remote-root"}})
+	sec, err := s.EnsureSecrets(seeded(1), EnsureOptions{RemoteDB: true, Supplied: UserSecrets{DBRemoteRootPassword: "synthetic-remote-root"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sec.DBRootPassword != "synthetic-remote-root" || sec.DBAuthPassword == "" {
+	if sec.DBRemoteRootPassword != "synthetic-remote-root" || sec.DBAuthPassword == "" {
 		t.Errorf("remote DB secrets: %#v", *sec)
 	}
 	// Later runs needn't supply it again.
@@ -196,11 +191,15 @@ func TestEnsureSecretsRemoteDB(t *testing.T) {
 		t.Error(err)
 	}
 
+	// A local stack switched to a remote database still needs the remote
+	// server's password: the local one isn't it.
 	local := newStack(t)
-	if _, err := local.EnsureSecrets(seeded(1), EnsureOptions{Supplied: UserSecrets{DBRootPassword: "synthetic-root"}}); err == nil {
-		t.Error("a root password supplied for the local database was accepted")
+	if _, err := local.EnsureSecrets(seeded(1), EnsureOptions{}); err != nil {
+		t.Fatal(err)
 	}
-	wantNotExist(t, local.Path(SecretsFile))
+	if _, err := local.EnsureSecrets(seeded(2), EnsureOptions{RemoteDB: true}); exitcode.FromError(err) != exitcode.CodePrecondition {
+		t.Errorf("local stack switched to remote: err = %v, want exit 3", err)
+	}
 }
 
 func TestEnsureSecretsRandFailureWritesNothing(t *testing.T) {
@@ -213,20 +212,29 @@ func TestEnsureSecretsRandFailureWritesNothing(t *testing.T) {
 	wantNotExist(t, s.Path(HPDSKeyFile))
 }
 
-func TestEnsureSecretsKeepsABadKeyFile(t *testing.T) {
+func TestEnsureSecretsNeverReplacesTheKey(t *testing.T) {
 	s := newStack(t)
-	if err := s.MkdirAll(hpdsKeyDir, 0o700); err != nil {
+	if _, err := s.EnsureSecrets(seeded(1), EnsureOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	for _, bad := range []string{"", "not-a-key\n", strings.Repeat("g", 32)} {
 		if err := s.WriteFile(HPDSKeyFile, []byte(bad), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.EnsureSecrets(seeded(1), EnsureOptions{}); err == nil || !strings.Contains(err.Error(), "not an HPDS key") {
+		if _, err := s.EnsureSecrets(seeded(2), EnsureOptions{}); err == nil || !strings.Contains(err.Error(), "not an HPDS key") {
 			t.Errorf("key file %q: err = %v", bad, err)
 		}
 		wantContent(t, s.Path(HPDSKeyFile), bad)
 	}
+
+	// Data loaded with a lost key would be unreadable under a new one.
+	if err := os.Remove(s.Path(HPDSKeyFile)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.EnsureSecrets(seeded(3), EnsureOptions{}); err == nil || !strings.Contains(err.Error(), "is missing") {
+		t.Errorf("lost key file: err = %v", err)
+	}
+	wantNotExist(t, s.Path(HPDSKeyFile))
 }
 
 func TestLoadSecrets(t *testing.T) {
@@ -272,11 +280,43 @@ func TestLoadSecrets(t *testing.T) {
 		t.Errorf("with an unknown key: %v", err)
 	}
 
-	if err := s.WriteFile(SecretsFile, []byte("db_root_password: [a, b]\n"), 0o600); err != nil {
-		t.Fatal(err)
+	// Errors name the file but never quote a value.
+	for _, bad := range []string{
+		"db_root_password: [a, b]\n",
+		"auth0_client_secret: !!int synthetic-client-secret\n",
+		"introspection_token_expiry: synthetic-client-secret\n",
+		"auth0_client_secret: synthetic-client-secret\n  bad: [\n",
+	} {
+		if err := s.WriteFile(SecretsFile, []byte(bad), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err := s.LoadSecrets()
+		if err == nil || !strings.Contains(err.Error(), s.Path(SecretsFile)) || strings.Contains(err.Error(), "synthetic") {
+			t.Errorf("malformed %q: err = %v", bad, err)
+		}
 	}
-	if _, err := s.LoadSecrets(); err == nil || !strings.Contains(err.Error(), s.Path(SecretsFile)) {
-		t.Errorf("malformed file: err = %v", err)
+}
+
+// TestValuesListsEverySecret keeps values(), which decides what is
+// registered with the redactor, in step with the Secrets fields.
+func TestValuesListsEverySecret(t *testing.T) {
+	var sec Secrets
+	v := reflect.ValueOf(&sec).Elem()
+	var want []string
+	for i := range v.NumField() {
+		if f := v.Field(i); f.Type() == reflect.TypeFor[Secret]() {
+			f.SetString(v.Type().Field(i).Name)
+			want = append(want, v.Type().Field(i).Name)
+		}
+	}
+	var got []string
+	for _, s := range sec.values() {
+		got = append(got, string(s))
+	}
+	slices.Sort(got)
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Errorf("values() = %q, want every Secret field %q", got, want)
 	}
 }
 

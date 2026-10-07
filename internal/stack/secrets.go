@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"go.yaml.in/yaml/v3"
+
+	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
 )
 
 // Files that hold the stack's secrets, both mode 0600 (§6.1).
@@ -20,23 +22,25 @@ const (
 	hpdsKeyDir = CLIDir + "/hpds"
 )
 
-// Secrets is .pic-sure/secrets.yaml (§6.3). Every value is a Secret, so
-// printing a Secrets shows none of them. The UUIDs aren't sensitive, but they
-// live here as the spec has it and are treated the same.
+// Secrets is .pic-sure/secrets.yaml (§6.3). Every secret is a Secret, so
+// printing a Secrets shows none of them. The UUIDs aren't secret and are
+// plain strings.
 //
 // Don't keep a Secrets or *Secrets in an unexported struct field: fmt can't
 // call methods through one, so printing the outer struct would show the
 // values.
 type Secrets struct {
-	// DBRootPassword is the MySQL root password: generated for the local
-	// database, or the operator's for a remote one (db.mode: remote).
-	DBRootPassword       Secret `yaml:"db_root_password"`
+	// DBRootPassword is the local MySQL server's root password
+	// (db.mode: local).
+	DBRootPassword Secret `yaml:"db_root_password"`
+	// DBRemoteRootPassword is the operator's root password for their own
+	// MySQL server (db.mode: remote).
+	DBRemoteRootPassword Secret `yaml:"db_remote_root_password"`
 	DBPicsurePassword    Secret `yaml:"db_picsure_password"`
 	DBAuthPassword       Secret `yaml:"db_auth_password"`
 	DBAirflowPassword    Secret `yaml:"db_airflow_password"`
 	DictionaryDBPassword Secret `yaml:"dictionary_db_password"`
 
-	// Auth0ClientSecret is the operator's Auth0 application secret.
 	Auth0ClientSecret Secret `yaml:"auth0_client_secret"`
 
 	QueryServiceInternalToken Secret `yaml:"query_service_internal_token"`
@@ -50,30 +54,29 @@ type Secrets struct {
 	IntrospectionToken       Secret    `yaml:"introspection_token"`
 	IntrospectionTokenExpiry time.Time `yaml:"introspection_token_expiry,omitempty"`
 
-	ApplicationUUID   Secret `yaml:"application_uuid"`
-	ResourceUUID      Secret `yaml:"resource_uuid"`
-	VisualizationUUID Secret `yaml:"visualization_uuid"`
+	ApplicationUUID   string `yaml:"application_uuid"`
+	ResourceUUID      string `yaml:"resource_uuid"`
+	VisualizationUUID string `yaml:"visualization_uuid"`
 
 	// EmailPassword is the operator's password for email.user.
 	EmailPassword Secret `yaml:"email_password"`
 }
 
-// Format prints sec with every value redacted, whatever the verb. Without
+// Format prints sec with every secret redacted, whatever the verb. Without
 // it, a verb that doesn't suit a struct (%s of a struct holding a *Secrets)
 // makes fmt print the fields without calling their Format.
 func (sec Secrets) Format(f fmt.State, _ rune) {
-	type fields Secrets // without this method
-	_, _ = fmt.Fprintf(f, "%+v", fields(sec))
+	type noFormat Secrets
+	_, _ = fmt.Fprintf(f, "%+v", noFormat(sec))
 }
 
 // values returns every secret in sec, empty ones included.
 func (sec *Secrets) values() []Secret {
 	return []Secret{
-		sec.DBRootPassword, sec.DBPicsurePassword, sec.DBAuthPassword, sec.DBAirflowPassword, sec.DictionaryDBPassword,
+		sec.DBRootPassword, sec.DBRemoteRootPassword, sec.DBPicsurePassword, sec.DBAuthPassword, sec.DBAirflowPassword, sec.DictionaryDBPassword,
 		sec.Auth0ClientSecret,
 		sec.QueryServiceInternalToken, sec.PicsureApplicationToken, sec.LoggingAPIKey, sec.AggregateObfuscationSalt,
 		sec.IntrospectionToken,
-		sec.ApplicationUUID, sec.ResourceUUID, sec.VisualizationUUID,
 		sec.EmailPassword,
 	}
 }
@@ -82,7 +85,7 @@ const secretsHeader = `# This stack's secrets (written by pic-sure; keep this fi
 # Change one with "pic-sure secrets rotate", not by editing this file.
 `
 
-// LoadSecrets reads secrets.yaml and registers every value with the log
+// LoadSecrets reads secrets.yaml and registers every secret with the log
 // redactor (see SetSecretRegistrar). Before the stack has one, the error
 // wraps fs.ErrNotExist. Unknown keys are ignored, so a read-only command of
 // an older CLI can read a newer CLI's file (§10.6).
@@ -91,16 +94,24 @@ func (s *Stack) LoadSecrets() (*Secrets, error) {
 	if err != nil {
 		return nil, err
 	}
-	var sec Secrets
-	if err := yaml.Unmarshal(data, &sec); err != nil {
+	// yaml's syntax errors carry only a position, but its decode errors
+	// quote the value, which here is a secret.
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return nil, fmt.Errorf("reading %s: %w", s.Path(SecretsFile), err)
+	}
+	var sec Secrets
+	if err := doc.Decode(&sec); err != nil {
+		return nil, fmt.Errorf("reading %s: a value isn't a string, or the token expiry isn't a timestamp", s.Path(SecretsFile))
 	}
 	registerSecrets(sec.values()...)
 	return &sec, nil
 }
 
-// SaveSecrets registers sec's values with the log redactor, then atomically
-// writes secrets.yaml with mode 0600.
+// SaveSecrets registers sec's secrets with the log redactor, then
+// atomically writes secrets.yaml with mode 0600. A stack's first
+// secrets.yaml comes from EnsureSecrets, which makes the HPDS key file
+// first.
 func (s *Stack) SaveSecrets(sec *Secrets) error {
 	registerSecrets(sec.values()...)
 	data, err := yaml.Marshal(sec)
@@ -113,83 +124,101 @@ func (s *Stack) SaveSecrets(sec *Secrets) error {
 // UserSecrets are the secrets the operator supplies (§6.3), each read with
 // ReadUserSecret.
 type UserSecrets struct {
-	Auth0ClientSecret Secret
-	// DBRootPassword is the root password of the remote database server
-	// (db.mode: remote).
-	DBRootPassword Secret
-	EmailPassword  Secret
+	Auth0ClientSecret    Secret
+	DBRemoteRootPassword Secret
+	EmailPassword        Secret
+}
+
+// Format prints u with every secret redacted, as Secrets.Format does.
+func (u UserSecrets) Format(f fmt.State, _ rune) {
+	type noFormat UserSecrets
+	_, _ = fmt.Fprintf(f, "%+v", noFormat(u))
 }
 
 // EnsureOptions configures EnsureSecrets.
 type EnsureOptions struct {
 	// RemoteDB is set when the stack uses the operator's own MySQL server
-	// (db.mode: remote), whose root password is then supplied, never
-	// generated.
+	// (db.mode: remote), whose root password must then be stored or
+	// supplied.
 	RemoteDB bool
-	// Supplied holds the secrets the operator gave this run. Each non-empty
-	// one replaces the stored value.
+	// Supplied holds the secrets the operator gave this run.
 	Supplied UserSecrets
 }
 
-// EnsureSecrets gives the stack every secret it needs, for init and any
-// converging command. It loads secrets.yaml (starting empty if there is
-// none), stores the supplied secrets, generates every generated secret that
-// is still empty from rnd (ops.Deps.Rand), and saves the file if anything
-// changed. It never replaces a generated secret (§9.11). A new Auth0 client
-// secret clears the introspection token, so the caller issues one PSAMA can
-// verify. It then creates the HPDS key file if there is none. Every value is
-// registered with the log redactor.
+// Format prints o with every secret redacted, as Secrets.Format does.
+func (o EnsureOptions) Format(f fmt.State, _ rune) {
+	type noFormat EnsureOptions
+	_, _ = fmt.Fprintf(f, "%+v", noFormat(o))
+}
+
+// EnsureSecrets gives the stack every secret it needs, for init and other
+// converging commands. It loads secrets.yaml (starting empty if there is
+// none), stores each supplied secret the stack doesn't have yet, generates
+// every generated secret that is still empty from rnd (ops.Deps.Rand),
+// creates the HPDS key file if this is the stack's first secrets.yaml, and
+// saves secrets.yaml if anything changed. Every secret is registered with
+// the log redactor.
 //
-// It fails before writing anything if RemoteDB is set and no root password
-// is stored or supplied, or if a root password is supplied without RemoteDB.
+// It never replaces a secret (§9.11). A supplied secret that differs from
+// the stored one is an exit-2 error: changing one is `secrets rotate`'s
+// job. It also fails, before writing anything, when RemoteDB is set and
+// there is no remote root password, and when secrets.yaml exists but the
+// HPDS key file doesn't: data loaded with the lost key would be
+// unreadable under a new one.
 func (s *Stack) EnsureSecrets(rnd io.Reader, opts EnsureOptions) (*Secrets, error) {
 	sec, err := s.LoadSecrets()
+	existed := err == nil
 	if errors.Is(err, fs.ErrNotExist) {
 		sec, err = &Secrets{}, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	switch {
-	case !opts.RemoteDB && opts.Supplied.DBRootPassword != "":
-		// The local database was, or will be, created with the generated one.
-		return nil, errors.New("a root password is supplied only for a remote database")
-	case opts.RemoteDB && sec.DBRootPassword == "" && opts.Supplied.DBRootPassword == "":
-		return nil, errors.New("the stack uses a remote database, but no root password was given for it")
-	}
-	changed := sec.supply(opts.Supplied)
-	filled, err := sec.generate(rnd, opts.RemoteDB)
+	supplied, err := sec.supply(opts.Supplied)
 	if err != nil {
 		return nil, err
 	}
-	if changed || filled {
+	if opts.RemoteDB && sec.DBRemoteRootPassword == "" {
+		return nil, exitcode.Precondition("the stack uses a remote database, but no root password was given for it")
+	}
+	filled, err := sec.generate(rnd)
+	if err != nil {
+		return nil, err
+	}
+	// The key goes first, so once secrets.yaml exists a missing key file
+	// was lost rather than never made.
+	if err := s.ensureHPDSKey(rnd, existed); err != nil {
+		return nil, err
+	}
+	if supplied || filled {
 		if err := s.SaveSecrets(sec); err != nil {
 			return nil, err
 		}
 	}
-	if err := s.ensureHPDSKey(rnd); err != nil {
-		return nil, err
-	}
 	return sec, nil
 }
 
-// supply stores the non-empty user secrets in sec and reports whether that
-// changed anything.
-func (sec *Secrets) supply(u UserSecrets) (changed bool) {
-	if u.Auth0ClientSecret != "" && u.Auth0ClientSecret != sec.Auth0ClientSecret {
-		// PSAMA verifies the token with the client secret, so one issued
-		// from the old secret no longer works.
-		sec.IntrospectionToken, sec.IntrospectionTokenExpiry = "", time.Time{}
-	}
-	set := func(f *Secret, v Secret) {
-		if v != "" && v != *f {
-			*f, changed = v, true
+// supply stores each user secret sec doesn't have yet and reports whether
+// it stored any. One that differs from the stored value is an exit-2 error.
+func (sec *Secrets) supply(u UserSecrets) (stored bool, err error) {
+	for _, f := range []struct {
+		name string
+		dst  *Secret
+		v    Secret
+	}{
+		{"Auth0 client secret", &sec.Auth0ClientSecret, u.Auth0ClientSecret},
+		{"remote database root password", &sec.DBRemoteRootPassword, u.DBRemoteRootPassword},
+		{"email password", &sec.EmailPassword, u.EmailPassword},
+	} {
+		switch {
+		case f.v == "" || f.v == *f.dst:
+		case *f.dst == "":
+			*f.dst, stored = f.v, true
+		default:
+			return false, exitcode.Usage("the stack already has a different %s; change it with pic-sure secrets rotate", f.name)
 		}
 	}
-	set(&sec.Auth0ClientSecret, u.Auth0ClientSecret)
-	set(&sec.DBRootPassword, u.DBRootPassword)
-	set(&sec.EmailPassword, u.EmailPassword)
-	return changed
+	return stored, nil
 }
 
 // LoadHPDSKey reads the HPDS encryption key file and registers the key with
@@ -215,18 +244,22 @@ func isHPDSKey(k Secret) bool {
 }
 
 // ensureHPDSKey generates the HPDS key file, mode 0600 in a 0700 directory,
-// unless there is one. A key file that is there but unreadable or malformed
-// is an error, never replaced: data loaded with the old key would be lost.
-func (s *Stack) ensureHPDSKey(rnd io.Reader) error {
+// if there is none. A malformed key file is an error, never replaced, and so
+// is a missing one when mustExist is set: data loaded with the old key would
+// be unreadable under a new one.
+func (s *Stack) ensureHPDSKey(rnd io.Reader, mustExist bool) error {
 	_, err := s.LoadHPDSKey()
-	if !errors.Is(err, fs.ErrNotExist) {
+	switch {
+	case !errors.Is(err, fs.ErrNotExist):
 		return err
+	case mustExist:
+		return fmt.Errorf("%s is missing, but the stack's secrets were made with it; restore it from a backup, or replace it with pic-sure secrets rotate hpds-key", s.Path(HPDSKeyFile))
 	}
 	key, err := hpdsKey(rnd)
 	if err != nil {
 		return err
 	}
-	registerSecrets(key)
+	registerSecrets(Secret(key))
 	if err := s.MkdirAll(hpdsKeyDir, 0o700); err != nil {
 		return err
 	}

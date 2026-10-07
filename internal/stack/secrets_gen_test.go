@@ -28,7 +28,7 @@ func TestGeneratorFormats(t *testing.T) {
 	r := seeded(1)
 	for range 200 {
 		for _, c := range []struct {
-			gen func(io.Reader) (Secret, error)
+			gen func(io.Reader) (string, error)
 			re  *regexp.Regexp
 		}{
 			{password, passwordRE},
@@ -41,7 +41,7 @@ func TestGeneratorFormats(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !c.re.MatchString(string(v)) {
+			if !c.re.MatchString(v) {
 				t.Fatalf("%q doesn't match %s", v, c.re)
 			}
 		}
@@ -55,14 +55,14 @@ func TestPasswordDropsBiasedBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "A9A9" + strings.Repeat("B", 20); string(got) != want {
+	if want := "A9A9" + strings.Repeat("B", 20); got != want {
 		t.Errorf("password = %q, want %q", got, want)
 	}
 }
 
 func TestGeneratorsReportRandFailure(t *testing.T) {
 	boom := errors.New("boom")
-	for _, gen := range []func(io.Reader) (Secret, error){password, hexToken(32), uuidV4} {
+	for _, gen := range []func(io.Reader) (string, error){password, hexToken(32), uuidV4} {
 		if _, err := gen(io.MultiReader(bytes.NewReader([]byte{1, 2}), errReader{boom})); !errors.Is(err, boom) {
 			t.Errorf("err = %v, want boom", err)
 		}

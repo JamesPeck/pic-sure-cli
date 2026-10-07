@@ -70,10 +70,12 @@ func TestReadUserSecret(t *testing.T) {
 // JSON-encoded.
 func TestSecretsNeverPrinted(t *testing.T) {
 	s := newStack(t)
-	sec, err := s.EnsureSecrets(seeded(2), EnsureOptions{Supplied: UserSecrets{
-		Auth0ClientSecret: "synthetic-client-secret-0123456789abcdef",
-		EmailPassword:     "synthetic-email-password",
-	}})
+	opts := EnsureOptions{RemoteDB: true, Supplied: UserSecrets{
+		Auth0ClientSecret:    syntheticClientSecret,
+		DBRemoteRootPassword: "synthetic-remote-root",
+		EmailPassword:        "synthetic-email-password",
+	}}
+	sec, err := s.EnsureSecrets(seeded(2), opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +86,11 @@ func TestSecretsNeverPrinted(t *testing.T) {
 	st.StartOperation("init", time.Date(2026, 10, 6, 0, 0, 0, 0, time.UTC))
 
 	var out strings.Builder
-	for _, v := range []any{sec, *sec, &cfg, cfg, st, *st, sec.DBRootPassword, struct{ S *Secrets }{sec}, struct{ S Secrets }{*sec}} {
+	for _, v := range []any{
+		sec, *sec, struct{ S *Secrets }{sec}, struct{ S Secrets }{*sec},
+		&opts, opts, struct{ O *EnsureOptions }{&opts}, struct{ U *UserSecrets }{&opts.Supplied},
+		&cfg, cfg, st, *st, sec.DBRootPassword,
+	} {
 		for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%q", "%x", "%d"} {
 			fmt.Fprintf(&out, verb+"\n", v)
 		}
@@ -97,7 +103,7 @@ func TestSecretsNeverPrinted(t *testing.T) {
 		fmt.Fprintf(&out, "%s\n", j)
 	}
 	for _, h := range []slog.Handler{slog.NewTextHandler(&out, nil), slog.NewJSONHandler(&out, nil)} {
-		slog.New(h).Info("secrets", "sec", sec, "one", sec.Auth0ClientSecret, "config", &cfg, "state", st)
+		slog.New(h).Info("secrets", "sec", sec, "opts", opts, "one", sec.Auth0ClientSecret, "config", &cfg, "state", st)
 	}
 
 	values := sec.values()

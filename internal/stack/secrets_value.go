@@ -12,9 +12,12 @@ import (
 )
 
 // Secret is a secret value. fmt, slog and encoding/json show a non-empty
-// one as "[REDACTED]" and an empty one as "", so a Secret can't leak into an
-// error message, a log line or --json output by accident. string(s) is the
-// value. YAML encoding uses the value, since it writes secrets.yaml.
+// one as "[REDACTED]" and an empty one as "". string(s) is the value; YAML
+// encoding uses it too, since it writes secrets.yaml.
+//
+// A struct with Secret fields needs a Format method like Secrets.Format.
+// When fmt reports a bad verb, as for %s of a struct holding a pointer to
+// one, it prints the fields without calling their methods.
 type Secret string
 
 // Redacted is what a non-empty Secret prints as.
