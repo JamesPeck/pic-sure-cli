@@ -7,8 +7,8 @@ exitcode 3 pic-sure up
 stderr 'no pic-sure stack found'
 
 # A --skip-step up doesn't have is exit 2, listing the ones it has.
-exitcode 2 pic-sure --stack stack up --skip-step resolve
-stderr '--skip-step resolve: up has no such step; it can skip images, tls, truststore, render, db, migrate, seed, hpds-key, restart, start$'
+exitcode 2 pic-sure --stack stack up --skip-step config
+stderr '--skip-step config: up has no such step; it can skip resolve, images, tls, truststore, render, db, migrate, seed, hpds-key, restart, start$'
 ! exists docker.log
 
 # A stack init hasn't finished is exit 3, pointing at init.

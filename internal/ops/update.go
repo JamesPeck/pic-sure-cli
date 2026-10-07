@@ -59,7 +59,7 @@ var migrationsCheck = MigrationsUpToDate
 // UpdateStepIDs are the IDs of UpdateSteps for a stack with config cfg, in
 // order, so update can check --skip-step before it takes the lock.
 func UpdateStepIDs(cfg *stack.Config) []string {
-	return append([]string{UpdateConfigStepID, UpdateResolveStepID}, UpStepIDs(cfg)...)
+	return append([]string{UpdateConfigStepID, UpdateResolveStepID}, upStepIDs(cfg)...)
 }
 
 // UpdateOptions configure PlanUpdate and UpdateSteps.

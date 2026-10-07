@@ -134,7 +134,7 @@ func ensureCompose(d *Deps, opts ConvergeOptions) error {
 // the release it fetched and gated. It is done when every component without
 // a local source has a release commit.
 func ResolveStep(d *Deps, st *stack.Stack, cfg *stack.Config, state *stack.State, c *cache.Cache) steps.Step {
-	return resolveStep(d, st, cfg, state, c)
+	return resolveStep(d, st, cfg, state, c, unresolved)
 }
 
 // StackTruststoreStep is TruststoreStep for the psama image state.json

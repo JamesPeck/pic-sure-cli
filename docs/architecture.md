@@ -438,8 +438,7 @@ it.
   `dev off` operation and runs `ops.DevSteps` with up's lazy-env Composer. `--json`'s data is
   `{"service", "on", "services", "port", "source"}`. `dev off`'s text says
   the service keeps the source build while the source is set (§7.3), and
-  that unsetting it then takes `build COMPONENT` before `up`, since up's
-  image step doesn't resolve commits.
+  that unsetting it and running `up` returns it to the release images.
 
 | File | Commands | Ticket |
 |---|---|---|
@@ -1194,10 +1193,16 @@ init, and the parts `up` and `update` reuse.
   `PeekState(dir)` reads state.json without opening the stack.
 
 **Up (035, `up.go`).** §9.2. `UpSteps(d, st, cfg, sec, state,
-ConvergeOptions)` is init's plan without `resolve` (the commits are
-recorded), with a `restart` step before `start`: `images`, `tls`,
+ConvergeOptions)` is init's plan with a `restart` step before `start`:
+`resolve`, `images`, `tls`,
 `truststore`, `render`, `db`[, `db-bootstrap`], `migrate`, `seed`,
-`hpds-key`, `restart`, `start`; `UpStepIDs(cfg)` lists the IDs. On a
+`hpds-key`, `restart`, `start`; `UpStepIDs(cfg)` lists the IDs. Its
+`resolve` (079) is build's, limited to the components state.json records
+a local source for that the config no longer sets (`unsetSources`): they
+are resolved at state's recorded release commit (exit 3 if there is none),
+without fetching release-control when the cache has it and without the
+gate, and nothing else moves, so their release images are built or pulled
+and `start` recreates their services (§7.3). On a
 running, current stack every step but `render` and `start` is skipped and
 `compose up` recreates nothing. The TLS and truststore steps don't restart
 their readers, and compose doesn't recreate a container whose rendered

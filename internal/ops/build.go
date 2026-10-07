@@ -104,21 +104,20 @@ func Build(ctx context.Context, d *Deps, st *stack.Stack, cfg *stack.Config, sta
 	// The builds skip what is up to date themselves, and so report every
 	// image.
 	images.Check = nil
-	plan := []steps.Step{resolveStep(d, st, cfg, state, opts.Cache), images}
+	plan := []steps.Step{resolveStep(d, st, cfg, state, opts.Cache, unresolved), images}
 	return report, steps.Run(ctx, d.Sink, plan, steps.Options{Skip: opts.SkipSteps})
 }
 
-// resolveStep resolves the commits of the components without a local
-// source that state.json has no release commit for: never resolved, or last
-// built from a source the config no longer sets. They are resolved at the
-// release commit state.json records, if any, and the other components are
-// left as they are, since moving them is update's business.
-func resolveStep(d *Deps, st *stack.Stack, cfg *stack.Config, state *stack.State, c *cache.Cache) steps.Step {
+// resolveStep resolves the commits of the components that pending lists,
+// such as unresolved's. They are resolved at the release commit state.json
+// records, if any, and the other components are left as they are, since
+// moving them is update's business.
+func resolveStep(d *Deps, st *stack.Stack, cfg *stack.Config, state *stack.State, c *cache.Cache, pending func(*stack.Config, *stack.State) []string) steps.Step {
 	return steps.Step{
 		ID:    ResolveStepID,
 		Title: "Resolve the component commits",
 		Check: func(context.Context) (bool, error) {
-			return len(unresolved(cfg, state)) == 0, nil
+			return len(pending(cfg, state)) == 0, nil
 		},
 		Apply: func(ctx context.Context, sink events.Sink) error {
 			opts := release.Options{Repo: cfg.Release.Repo, Branch: cfg.Release.Branch, Commit: state.Release.Commit}
@@ -128,7 +127,7 @@ func resolveStep(d *Deps, st *stack.Stack, cfg *stack.Config, state *stack.State
 			if state.Release.Commit != "" && state.Release.Repo != "" {
 				opts.Repo = state.Release.Repo
 			}
-			missing := unresolved(cfg, state)
+			missing := pending(cfg, state)
 			rel, err := release.Fetch(ctx, c, d.Git, sink, ResolveStepID, opts)
 			if err != nil {
 				return err
@@ -152,12 +151,25 @@ func resolveStep(d *Deps, st *stack.Stack, cfg *stack.Config, state *stack.State
 }
 
 // unresolved lists the components without a local source whose release
-// commit state.json doesn't record.
+// commit state.json doesn't record: never resolved, or last built from a
+// source the config no longer sets.
 func unresolved(cfg *stack.Config, state *stack.State) []string {
 	var out []string
 	for _, comp := range catalog.Components() {
 		rec := state.Components[comp.Name]
 		if componentSource(cfg, comp.Name) == "" && (rec.Commit == "" || rec.Source != "") {
+			out = append(out, comp.Name)
+		}
+	}
+	return out
+}
+
+// unsetSources lists the components state.json records as built from a
+// local source that the config no longer sets.
+func unsetSources(cfg *stack.Config, state *stack.State) []string {
+	var out []string
+	for _, comp := range catalog.Components() {
+		if componentSource(cfg, comp.Name) == "" && state.Components[comp.Name].Source != "" {
 			out = append(out, comp.Name)
 		}
 	}

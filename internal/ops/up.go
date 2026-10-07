@@ -12,6 +12,7 @@ import (
 
 	"github.com/JamesPeck/pic-sure-cli/internal/docker"
 	"github.com/JamesPeck/pic-sure-cli/internal/events"
+	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
 	"github.com/JamesPeck/pic-sure-cli/internal/render"
 	"github.com/JamesPeck/pic-sure-cli/internal/stack"
 	"github.com/JamesPeck/pic-sure-cli/internal/steps"
@@ -26,6 +27,11 @@ const httpd = "httpd"
 // UpStepIDs are the IDs of UpSteps for a stack with config cfg, in order,
 // so up can check --skip-step before it takes the lock.
 func UpStepIDs(cfg *stack.Config) []string {
+	return append([]string{ResolveStepID}, upStepIDs(cfg)...)
+}
+
+// upStepIDs are the IDs of upSteps.
+func upStepIDs(cfg *stack.Config) []string {
 	ids := []string{ImagesStepID, TLSStepID, TruststoreStepID, RenderStepID, StepDB}
 	if cfg.DB.Mode == stack.DBRemote {
 		ids = append(ids, StepDBBootstrap)
@@ -33,11 +39,17 @@ func UpStepIDs(cfg *stack.Config) []string {
 	return append(ids, StepMigrate, StepSeed, HPDSKeyStepID, RestartStepID, StartStepID)
 }
 
-// UpSteps are §9.2 for an initialised stack: the images (built if
-// missing), TLS and the truststore, a fresh render, then ConvergeSteps
-// with a restart step before start, each skipped when its Check finds it
-// done. On a running stack whose images, files and data are current,
-// `compose up` changes nothing, so up only verifies.
+// UpSteps are §9.2 for an initialised stack: resolve the components whose
+// local source the config no longer sets, the images (built if missing),
+// TLS and the truststore, a fresh render, then ConvergeSteps with a restart
+// step before start, each skipped when its Check finds it done. On a
+// running stack whose images, files and data are current, `compose up`
+// changes nothing, so up only verifies.
+//
+// A component whose source was unset goes back to the release (§7.3): it
+// is resolved at the release commit state.json records, without moving
+// that or any other component, so its release images are built or pulled
+// and start recreates its services on them.
 //
 // Neither the TLS nor the truststore step restarts what reads its volume,
 // and compose doesn't recreate a container whose rendered files changed
@@ -46,7 +58,17 @@ func UpStepIDs(cfg *stack.Config) []string {
 // recorded in state.json's PendingRestarts, and the restart step restarts
 // those that are running before start waits for the stack to be healthy.
 func UpSteps(d *Deps, st *stack.Stack, cfg *stack.Config, sec *stack.Secrets, state *stack.State, opts ConvergeOptions) []steps.Step {
-	return upSteps(d, st, cfg, sec, state, opts, ImagesStep(d, st, cfg, state, ImagesOptions{Cache: opts.Cache}))
+	resolve := resolveStep(d, st, cfg, state, opts.Cache, unsetSources)
+	apply := resolve.Apply
+	resolve.Apply = func(ctx context.Context, sink events.Sink) error {
+		// Resolving without one would move the stack to the branch head.
+		if state.Release.Commit == "" {
+			return exitcode.Precondition("state.json records no release commit; run pic-sure build")
+		}
+		return apply(ctx, sink)
+	}
+	images := ImagesStep(d, st, cfg, state, ImagesOptions{Cache: opts.Cache})
+	return append([]steps.Step{resolve}, upSteps(d, st, cfg, sec, state, opts, images)...)
 }
 
 // upSteps are UpSteps with images as the image step, which update

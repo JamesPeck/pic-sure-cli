@@ -23,7 +23,7 @@ func TestWriteDev(t *testing.T) {
 		{"off with the source set", devReport{Service: "psama", Services: []string{"psama"}, Source: "/src/ps"}, psama,
 			"dev psama is off: psama has no debug port.\n" +
 				"psama still runs the build of components.pic-sure.source (/src/ps), which applies to the whole component.\n" +
-				"To return to the release images: pic-sure config set components.pic-sure.source '' && pic-sure build pic-sure && pic-sure up\n"},
+				"To return to the release images: pic-sure config set components.pic-sure.source '' && pic-sure up\n"},
 	} {
 		var b strings.Builder
 		if err := writeDev(&b, &c.r, c.v); err != nil {

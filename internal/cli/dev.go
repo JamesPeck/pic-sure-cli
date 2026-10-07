@@ -48,8 +48,8 @@ Run it again after changing the source to rebuild and recreate.`,
 			Long: `Remove SERVICE from dev.services, re-render and recreate SERVICE without
 its debug port. While components.<component>.source is set, SERVICE keeps
 running the build of that checkout, since a source applies to the whole
-component. To return to the release images, unset the source, then run
-pic-sure build COMPONENT and pic-sure up.`,
+component. To return to the release images, unset the source and run
+pic-sure up.`,
 			Args: cobra.ExactArgs(1),
 			RunE: func(cmd *cobra.Command, args []string) error { return a.dev(cmd, args[0], false) },
 		},
@@ -228,8 +228,8 @@ func writeDev(w io.Writer, r *devReport, v catalog.DevVariant) error {
 	_, err := fmt.Fprintf(w, "dev %s is off: %s %s no debug port.\n", r.Service, strings.Join(r.Services, ", "), verb(r.Services, "has", "have"))
 	if err == nil && r.Source != "" {
 		_, err = fmt.Fprintf(w, "%s still %s the build of components.%s.source (%s), which applies to the whole component.\n"+
-			"To return to the release images: pic-sure config set components.%s.source '' && pic-sure build %s && pic-sure up\n",
-			strings.Join(r.Services, ", "), verb(r.Services, "runs", "run"), v.Component, r.Source, v.Component, v.Component)
+			"To return to the release images: pic-sure config set components.%s.source '' && pic-sure up\n",
+			strings.Join(r.Services, ", "), verb(r.Services, "runs", "run"), v.Component, r.Source, v.Component)
 	}
 	return err
 }
