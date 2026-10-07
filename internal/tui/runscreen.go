@@ -64,7 +64,7 @@ var (
 )
 
 // runScreen runs init in-process and shows its steps with an embedded
-// progress.Model (ticket 038). Ctrl-C twice cancels it; the gate's
+// progress.Model. Ctrl-C twice cancels it; the gate's
 // question opens a yes/no dialog.
 type runScreen struct {
 	title string
@@ -202,7 +202,7 @@ func (s *runScreen) update(msg tea.Msg) (*runScreen, tea.Cmd) {
 			return s.updateAsk(msg)
 		}
 		if s.finished {
-			if k := msg.String(); k == "enter" || k == "esc" || k == "q" {
+			if k := msg.String(); k == "enter" || k == "esc" || k == "q" || k == "ctrl+c" {
 				return s, func() tea.Msg { return runClosedMsg{} }
 			}
 			return s, nil

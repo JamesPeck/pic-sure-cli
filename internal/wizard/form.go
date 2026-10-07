@@ -3,6 +3,7 @@ package wizard
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -41,17 +42,21 @@ type Form struct {
 	httpsInput  *huh.Input
 	httpsSynced string
 
+	// secrets seeds the secret fields.
+	secrets stack.UserSecrets
+
 	confirmed bool
 
 	Main    *huh.Form
 	Confirm *huh.Form
 }
 
-// NewForm returns the form, opened with base's values. Secrets start
-// empty.
-func NewForm(base stack.Config) *Form {
+// NewForm returns the form, opened with base's values and the secrets in
+// sec.
+func NewForm(base stack.Config, sec stack.UserSecrets) *Form {
 	f := &Form{
 		base:     base,
+		secrets:  sec,
 		vals:     map[string]*string{},
 		seed:     map[string]string{},
 		useProxy: base.Proxy.HTTP != "" || base.Proxy.HTTPS != "",
@@ -87,7 +92,12 @@ func (f *Form) field(it Item) huh.Field {
 		panic("wizard: no config field " + it.Key)
 	}
 	v := ""
-	if !sf.Secret {
+	switch {
+	case it.Key == clientSecretKey:
+		v = string(f.secrets.Auth0ClientSecret)
+	case it.Key == rootPasswordKey:
+		v = string(f.secrets.DBRemoteRootPassword)
+	case !sf.Secret:
 		if got, err := f.base.Get(it.Key); err == nil {
 			v = fmt.Sprint(got)
 		}
@@ -100,7 +110,9 @@ func (f *Form) field(it Item) huh.Field {
 		}
 		return huh.NewSelect[string]().Title(it.Title).Description(sf.Help).Options(opts...).Value(&v)
 	}
-	in := huh.NewInput().Title(it.Title).Description(sf.Help).Value(&v).Validate(f.validator(it.Key))
+	// init's flags read secrets from stdin; the form doesn't.
+	help := strings.TrimSuffix(sf.Help, " Read from stdin.")
+	in := huh.NewInput().Title(it.Title).Description(help).Value(&v).Validate(f.validator(it.Key))
 	if sf.Secret {
 		in = in.EchoMode(huh.EchoModePassword)
 	}
@@ -118,7 +130,8 @@ func (f *Form) Value(key string) string {
 	return ""
 }
 
-// Update passes msg to Main.
+// Update passes msg to Main, then pre-fills the HTTPS proxy
+// (syncHTTPSProxy).
 func (f *Form) Update(msg tea.Msg) tea.Cmd {
 	m, cmd := f.Main.Update(msg)
 	if mf, ok := m.(*huh.Form); ok {
@@ -206,7 +219,29 @@ func (f *Form) result(key, v string) (*stack.ConfigDoc, stack.UserSecrets, error
 			}
 		}
 	}
+	if err := moveDevPorts(doc, f.base.Network.DevPorts.Base, val("network.http_port"), val("network.https_port")); err != nil {
+		return nil, sec, err
+	}
 	return doc, sec, nil
+}
+
+// moveDevPorts moves the dev-port block, which the form doesn't ask for,
+// out of the way of the ports entered, in init's steps of 10. init chooses
+// a free block on the host again anyway.
+func moveDevPorts(doc *stack.ConfigDoc, base int, ports ...string) error {
+	moved := base
+	for clash := true; clash; {
+		clash = false
+		for _, p := range ports {
+			if n, err := strconv.Atoi(p); err == nil && n >= moved && n < moved+stack.DevPortCount {
+				clash, moved = true, moved+10
+			}
+		}
+	}
+	if moved == base {
+		return nil
+	}
+	return doc.SetValue("network.dev_ports.base", moved)
 }
 
 // validator checks key's value in the context of everything else entered:
@@ -254,8 +289,10 @@ func (f *Form) checkSecret(doc *stack.ConfigDoc, sec stack.UserSecrets, key stri
 	return nil
 }
 
-// problemAt is err's problem at key, if it has one. Problems elsewhere are
-// for their own fields to report.
+// problemAt is err's problem at key, if it has one. A problem at another
+// field the form asks for is that field's to report; one at a key the
+// form doesn't ask for is reported here, so it can't surface only on the
+// confirm page.
 func problemAt(err error, key string) error {
 	var ce *stack.ConfigError
 	if !errors.As(err, &ce) {
@@ -266,7 +303,27 @@ func problemAt(err error, key string) error {
 			return errors.New(p.Msg)
 		}
 	}
+	for _, p := range ce.Problems {
+		if !asked(p.Path) {
+			return fmt.Errorf("%s: %s", p.Path, p.Msg)
+		}
+	}
 	return nil
+}
+
+// asked reports whether the form asks for key.
+func asked(key string) bool { return item(key).Key != "" }
+
+// item is the form's item for key, or the zero Item.
+func item(key string) Item {
+	for _, g := range Groups {
+		for _, it := range g.Items {
+			if it.Key == key {
+				return it
+			}
+		}
+	}
+	return Item{}
 }
 
 // Check validates everything entered, as init will.
@@ -280,8 +337,7 @@ func (f *Form) Check() error {
 	}
 	for _, key := range []string{clientSecretKey, rootPasswordKey} {
 		if err := f.checkSecret(doc, sec, key); err != nil {
-			sf, _ := stack.LookupField(key)
-			return fmt.Errorf("--%s: %w", sf.Flag, err)
+			return fmt.Errorf("%s: %w", item(key).Title, err)
 		}
 	}
 	return nil

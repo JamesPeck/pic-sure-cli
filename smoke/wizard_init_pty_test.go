@@ -13,8 +13,8 @@ import (
 // TestWizardCreatesAStackUnderPTY drives the setup wizard to a real stack:
 // a heavy, opt-in test. PICSURE_TUI_INIT_DIR is the stack directory (its
 // base name is the stack name), PICSURE_TUI_INIT_PORTS is "HTTP,HTTPS",
-// and PICSURE_TUI_INIT_CAPTURE, if set, is a file the screens are written
-// to. It needs Docker, and leaves the stack running for the caller to tear
+// PICSURE_TUI_INIT_BRANCH, if set, is the release-control branch, and
+// PICSURE_TUI_INIT_CAPTURE, if set, is a file the screens are written to. It needs Docker, and leaves the stack running for the caller to tear
 // down.
 func TestWizardCreatesAStackUnderPTY(t *testing.T) {
 	dir, ports := os.Getenv("PICSURE_TUI_INIT_DIR"), os.Getenv("PICSURE_TUI_INIT_PORTS")
@@ -90,7 +90,11 @@ func TestWizardCreatesAStackUnderPTY(t *testing.T) {
 	capture("landing", 15*time.Second, "Set up PIC-SURE")
 	step(enter)
 	capture("wizard: stack", 15*time.Second, "Stack name", "esc cancel")
-	step(clear, filepath.Base(dir), enter, clear, "james_mono", enter, enter)
+	step(clear, filepath.Base(dir), enter)
+	if branch := os.Getenv("PICSURE_TUI_INIT_BRANCH"); branch != "" {
+		step(clear, branch)
+	}
+	step(enter, enter)
 	capture("wizard: access", 15*time.Second, "Auth mode")
 	step(down, enter, "admin@example.com", enter)
 	capture("wizard: ports", 15*time.Second, "HTTP port")

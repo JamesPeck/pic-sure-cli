@@ -150,3 +150,41 @@ func TestOpenWizardUsesDefaults(t *testing.T) {
 		t.Errorf("wizard name = %q, want the Defaults one", got)
 	}
 }
+
+// A setup whose init failed before creating the stack reopens with its
+// answers, secrets included; a finished one doesn't.
+func TestFailedSetupKeepsItsAnswers(t *testing.T) {
+	root := t.TempDir()
+	fail := errors.New("the host isn't ready")
+	a := newApp(context.Background(), Options{Root: root, Init: func(context.Context, InitRequest) (InitResult, error) {
+		return InitResult{}, fail
+	}})
+	a.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	cfg := stack.DefaultConfig()
+	cfg.Name = "kept"
+	cfg.Auth.AdminEmail = "admin@example.com"
+	cfg.Auth.Auth0.ClientID = "cid"
+	doc, err := stack.NewConfigDoc(&cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Update(wizardDoneMsg{doc: doc, secrets: stack.UserSecrets{Auth0ClientSecret: "kept-secret"}})
+	<-a.run.done
+	a.run.err = fail
+	a.Update(runClosedMsg{})
+	if !strings.Contains(a.landing.result, "Set up has your answers") {
+		t.Errorf("result = %q", a.landing.result)
+	}
+	a.Update(openWizardMsg{})
+	if a.wizard.wf.Value("name") != "kept" || a.wizard.wf.Value("auth.auth0.client_secret") != "kept-secret" {
+		t.Errorf("the wizard reopened with name %q, secret set %v", a.wizard.wf.Value("name"), a.wizard.wf.Value("auth.auth0.client_secret") != "")
+	}
+
+	a.Update(wizardDoneMsg{doc: doc})
+	<-a.run.done
+	a.run.err = nil
+	a.Update(runClosedMsg{})
+	if a.lastSetup != nil {
+		t.Error("a finished setup was kept")
+	}
+}

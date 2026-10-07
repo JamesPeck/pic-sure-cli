@@ -270,8 +270,9 @@ it.
   seed issued; `up` (035) can copy it. `startRunLog` registers
   `--admin-email` with the redactor before it logs the flags. An
   `initRun`'s leading fields are its options (config, ports, secrets,
-  gate options); `initStack` fills them from the flags, and `run` never
-  reads a flag.
+  gate options); `initStack` fills them from the flags, and `run` reads
+  flags only through `readConfig` and `readSecrets` (the flags path, and a
+  resumed stack's config).
 - `up.go` (035): `up`. Usage problems first: a `--skip-step` not in
   `ops.UpStepIDs(cfg)` is exit 2. Under the stack lock: the config with
   `CheckFiles`; shared HPDS data is exit 2 until 051; a stack without `initialized_at` or without secrets.yaml is

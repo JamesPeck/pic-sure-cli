@@ -11,7 +11,7 @@ func newTestForm(t *testing.T) *Form {
 	t.Helper()
 	base := stack.DefaultConfig()
 	base.Name = "demo"
-	return NewForm(base)
+	return NewForm(base, stack.UserSecrets{})
 }
 
 func set(f *Form, key, v string) { *f.vals[key] = v }
@@ -113,7 +113,7 @@ func TestRemoteDatabaseFieldsApplyOnlyInRemoteMode(t *testing.T) {
 	}
 	set(f, "db.mode", "remote")
 	set(f, rootPasswordKey, "")
-	if err := f.Check(); err == nil || !strings.Contains(err.Error(), "db-root-password-stdin") {
+	if err := f.Check(); err == nil || !strings.Contains(err.Error(), "Admin password: required") {
 		t.Errorf("remote mode without a root password: %v", err)
 	}
 }
@@ -142,7 +142,7 @@ func TestNoProxyClearsTheProxyFields(t *testing.T) {
 	base := stack.DefaultConfig()
 	base.Name = "demo"
 	base.Proxy.HTTP = "http://proxy:3128"
-	f := NewForm(base)
+	f := NewForm(base, stack.UserSecrets{})
 	if !f.useProxy {
 		t.Fatal("a config with a proxy didn't open with \"Use a proxy\"")
 	}
@@ -190,5 +190,42 @@ func TestDirty(t *testing.T) {
 	set(f, "auth.admin_email", "a@example.com")
 	if !f.Dirty() {
 		t.Error("an edited form isn't dirty")
+	}
+}
+
+// A port in the dev-port block, which the form doesn't ask for, moves the
+// block rather than failing on the confirm page.
+func TestPortInTheDevBlockMovesTheBlock(t *testing.T) {
+	f := newTestForm(t)
+	set(f, "auth.mode", "open")
+	set(f, "auth.admin_email", "admin@example.com")
+	set(f, "network.http_port", "15003")
+	if err := f.validator("network.http_port")("15003"); err != nil {
+		t.Fatalf("validator: %v", err)
+	}
+	if err := f.Check(); err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	doc, _, _ := f.Result()
+	cfg, err := doc.Config()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Network.DevPorts.Base != 15010 {
+		t.Errorf("dev base = %d, want 15010", cfg.Network.DevPorts.Base)
+	}
+}
+
+// Secrets can be seeded (reopening a failed setup), and the form's help
+// doesn't send the user to stdin.
+func TestSecretsSeedAndHelp(t *testing.T) {
+	base := stack.DefaultConfig()
+	base.Name = "demo"
+	f := NewForm(base, stack.UserSecrets{Auth0ClientSecret: "seeded-secret"})
+	if got := f.Value(clientSecretKey); got != "seeded-secret" {
+		t.Errorf("client secret = %q", got)
+	}
+	if strings.Contains(f.Main.View(), "stdin") {
+		t.Error("the form's help mentions stdin")
 	}
 }

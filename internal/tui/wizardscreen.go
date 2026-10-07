@@ -50,9 +50,9 @@ type wizardScreen struct {
 	width, height int
 }
 
-// newWizardScreen opens the form with base's values.
-func newWizardScreen(base stack.Config) *wizardScreen {
-	return &wizardScreen{wf: wizard.NewForm(base)}
+// newWizardScreen opens the form with base's values and sec's secrets.
+func newWizardScreen(base stack.Config, sec stack.UserSecrets) *wizardScreen {
+	return &wizardScreen{wf: wizard.NewForm(base, sec)}
 }
 
 func (s *wizardScreen) init() tea.Cmd { return s.wf.Main.Init() }

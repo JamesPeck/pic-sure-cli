@@ -93,7 +93,7 @@ func testWizard(t *testing.T) *wizardScreen {
 	base := stack.DefaultConfig()
 	base.Name = "demo"
 	base.Network.HTTPPort, base.Network.HTTPSPort = 8080, 8443
-	s := newWizardScreen(base)
+	s := newWizardScreen(base, stack.UserSecrets{})
 	s.setSize(100, 60)
 	drive(s, runCmd(s.init())...)
 	return s

@@ -69,7 +69,6 @@ func (s *screen) lineFeed() {
 
 func clamp(v, lo, hi int) int { return max(lo, min(v, hi)) }
 
-// write interprets b.
 func (s *screen) write(b []byte) {
 	for i := 0; i < len(b); {
 		ch := b[i]

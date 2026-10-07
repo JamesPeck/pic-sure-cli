@@ -115,12 +115,46 @@ func TestSuggestName(t *testing.T) {
 	}
 }
 
-func TestWizardDefaultsAreAValidStartingConfig(t *testing.T) {
+func TestWizardDefaultsNameAndPorts(t *testing.T) {
 	cfg := wizardDefaults("/srv/My Stack")
 	if cfg.Name != "my-stack" {
 		t.Errorf("name = %q", cfg.Name)
 	}
 	if cfg.Network.HTTPPort == cfg.Network.HTTPSPort || cfg.Network.HTTPPort == 0 {
 		t.Errorf("ports = %d/%d", cfg.Network.HTTPPort, cfg.Network.HTTPSPort)
+	}
+}
+
+// Building init's command for the TUI doesn't reset the global flags the
+// TUI was started with.
+func TestInitFromTUIKeepsTheGlobalFlags(t *testing.T) {
+	a, _, _ := testApp(t)
+	a.Global.WaitLock = true
+	a.Global.SkipSteps = []string{"no-such-step"}
+	_, err := a.initFromTUI(context.Background(), tui.InitRequest{Dir: t.TempDir(), Config: wizardDoc(t), Sink: &events.Recorder{}})
+	if err == nil || !strings.Contains(err.Error(), "no-such-step") {
+		t.Errorf("err = %v, want the --skip-step refusal", err)
+	}
+	if !a.Global.WaitLock {
+		t.Error("--wait-lock was reset")
+	}
+}
+
+// The TUI's init offers the gate's self-update through its Confirm, and
+// installs without re-running.
+func TestInitFromTUIGateOptions(t *testing.T) {
+	a, _, _ := testApp(t)
+	asked := false
+	r := &initRun{a: a, cfg: &stack.Config{}, installOnly: true, gateCommand: "pic-sure",
+		confirm: func(context.Context, string) (bool, error) { asked = true; return true, nil }}
+	o := r.gateOptions(&events.Recorder{})
+	if _, ok := o.Updater.(installOnly); !ok {
+		t.Errorf("updater = %T, want installOnly", o.Updater)
+	}
+	if o.Confirm == nil || o.Command != "pic-sure" {
+		t.Fatalf("gate options = %+v", o)
+	}
+	if _, _ = o.Confirm(context.Background(), "?"); !asked {
+		t.Error("Confirm isn't the TUI's")
 	}
 }

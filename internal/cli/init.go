@@ -80,9 +80,10 @@ the cache (see cache prune).`,
 	return c
 }
 
-// initRun is one init's state, shared by its steps. The fields before d
-// are its options: initStack fills them from the flags, and the TUI's
-// setup wizard sets them itself (initFromTUI).
+// initRun is one init's state, shared by its steps. initStack sets its
+// options from the flags, and the TUI's setup wizard sets them itself
+// (initFromTUI); run then reads flags only through readConfig and
+// readSecrets.
 type initRun struct {
 	a   *App
 	cmd *cobra.Command
@@ -108,7 +109,7 @@ type initRun struct {
 	gateCommand                  string
 
 	d *ops.Deps
-	// sets are the --set values (072).
+	// sets are the --set values.
 	sets  []initSet
 	cache *cache.Cache
 	proxy *netproxy.Proxy
@@ -675,11 +676,17 @@ func (r *initRun) fetchRelease(ctx context.Context, sink events.Sink) error {
 	if r.rel, err = release.Fetch(ctx, r.cache.WithEvents(sink, initRelease), r.d.Git, sink, initRelease, r.releaseOptions()); err != nil {
 		return err
 	}
-	var updater release.SelfUpdater = r.a.newSelfUpdater(r.proxy, sink, initRelease)
+	return r.rel.Gate(ctx, r.gateOptions(sink))
+}
+
+// gateOptions are the compatibility gate's options for this run.
+func (r *initRun) gateOptions(sink events.Sink) release.GateOptions {
+	u := r.a.newSelfUpdater(r.proxy, sink, initRelease)
+	var updater release.SelfUpdater = u
 	if r.installOnly {
-		updater = installOnly{r.a.newSelfUpdater(r.proxy, sink, initRelease)}
+		updater = installOnly{u}
 	}
-	return r.rel.Gate(ctx, release.GateOptions{
+	return release.GateOptions{
 		CLIVersion:       r.a.Info.Version,
 		Compat:           r.cfg.Release.CLICompat,
 		SelfUpdate:       r.selfUpdate,
@@ -689,7 +696,7 @@ func (r *initRun) fetchRelease(ctx context.Context, sink events.Sink) error {
 		Command:          r.gateCommand,
 		Sink:             sink,
 		Step:             initRelease,
-	})
+	}
 }
 
 // releaseOptions is the release to fetch: the one a resumed stack

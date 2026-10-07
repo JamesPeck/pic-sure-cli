@@ -77,6 +77,9 @@ type app struct {
 	wizard   *wizardScreen
 	load     *loadScreen
 	run      *runScreen
+	// lastSetup is the wizard's last confirmed setup, kept while an init
+	// of it failed before writing the stack, so Set up reopens it.
+	lastSetup *wizardDoneMsg
 }
 
 func newApp(ctx context.Context, o Options) *app {
@@ -172,11 +175,16 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a.openLanding()
 
 	case openWizardMsg:
-		base := stack.DefaultConfig()
+		base, sec := stack.DefaultConfig(), stack.UserSecrets{}
 		if a.opts.Defaults != nil {
 			base = a.opts.Defaults(a.opts.Root)
 		}
-		s := newWizardScreen(base)
+		if a.lastSetup != nil {
+			if cfg, err := a.lastSetup.doc.Config(); err == nil {
+				base, sec = *cfg, a.lastSetup.secrets
+			}
+		}
+		s := newWizardScreen(base, sec)
 		a.landing.stopAnimations()
 		s.setSize(a.width, a.height)
 		a.wizard = s
@@ -194,15 +202,23 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case wizardDoneMsg:
 		// Consent was given at the wizard's confirm-summary.
 		a.wizard = nil
+		a.lastSetup = &msg
 		return a.startInit(InitRequest{Dir: a.opts.Root, Config: msg.doc, Secrets: msg.secrets})
 
 	case resumeSetupMsg:
 		return a.startInit(InitRequest{Dir: a.opts.Root})
 
 	case runClosedMsg:
+		failed := false
 		if a.run != nil {
 			a.run.close()
+			failed = a.run.err != nil
 			a.run = nil
+		}
+		if failed && a.lastSetup != nil && detectStack(a.opts.Root) == noStack {
+			a.landing.result = "setup failed before creating the stack; Set up has your answers"
+		} else {
+			a.lastSetup = nil
 		}
 		return a, a.openLandingCmd()
 

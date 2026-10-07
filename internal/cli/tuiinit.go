@@ -21,7 +21,10 @@ import (
 // the TUI. The compatibility gate offers its self-update through
 // req.Confirm, and then installs the new pic-sure without re-running it.
 func (a *App) initFromTUI(ctx context.Context, req tui.InitRequest) (tui.InitResult, error) {
+	// Registering the global flags again resets a.Global to the defaults.
+	global := a.Global
 	cmd, _, err := newRootCmd(a).Find([]string{"init"})
+	a.Global = global
 	if err != nil {
 		return tui.InitResult{}, err
 	}
