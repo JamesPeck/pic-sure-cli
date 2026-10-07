@@ -45,7 +45,7 @@ var specCommands = map[string]string{
 	"down": "", "restart": "", "ps": "", "logs": "", "compose": "",
 	"status": "", "doctor": "", "update": "", "build": "", "migrate": "",
 	"config show": "", "config get": "", "config set": "", "config edit": "",
-	"secrets rotate":      "058",
+	"secrets rotate":      "",
 	"data demo":           "",
 	"data load-phenotype": "",
 	"data load-genomic":   "",

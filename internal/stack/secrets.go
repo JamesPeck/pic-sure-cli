@@ -293,6 +293,18 @@ func (s *Stack) ensureHPDSKey(rnd io.Reader, mustExist bool) error {
 	case mustExist:
 		return exitcode.Precondition("%s is missing, but the stack's secrets were made with it; restore it from a backup, or replace it with pic-sure secrets rotate hpds-key", s.Path(HPDSKeyFile))
 	}
+	return s.writeHPDSKey(rnd)
+}
+
+// ReplaceHPDSKey writes a new HPDS key file, whether or not there is one,
+// for `secrets rotate hpds-key`. Data encrypted with the old key is
+// unreadable under the new one: the caller must have deleted it.
+func (s *Stack) ReplaceHPDSKey(rnd io.Reader) error {
+	return s.writeHPDSKey(rnd)
+}
+
+// writeHPDSKey writes a new key file, mode 0600 in a 0700 directory.
+func (s *Stack) writeHPDSKey(rnd io.Reader) error {
 	key, err := hpdsKey(rnd)
 	if err != nil {
 		return err

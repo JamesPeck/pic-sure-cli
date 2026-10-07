@@ -321,6 +321,17 @@ it.
   §6.5 would choose now. `startTUI` opens on the stack `stack.Find`
   finds, else on init's directory.
 
+- `secrets.go` (058): `secrets rotate NAME [--discard-data]`. Usage
+  problems first: a NAME not in `ops.RotateNames()` (exit 2, listing them),
+  `--discard-data` with another NAME (exit 2) or without `--yes` (exit 4).
+  A NAME `ops.RotateReadsStdin` (the Auth0 client secret; `db-root` with a
+  remote database) needs `--yes`, since stdin holds the secret
+  (`ReadUserSecret`); any other asks `[y/N]` on a terminal (`confirmYes`)
+  or is exit 4. Then the run log, the stack lock, an initialised stack with
+  secrets.yaml (exit 3, pointing at init) and a render (exit 3, `up`), the
+  Composer from `upCompose` (env computed per call from the `*Secrets` the
+  rotation updates), and `ops.RotateSecret`, recording the `secrets rotate`
+  operation in state.json.
 - `data_phenotype.go` (042): `data load-phenotype --file F [--entry E]
   [--heap MB]`, the load step only (045 adds the dictionary steps, 043
   `--input-dir`). Usage checks first (`--heap` must be positive, and
@@ -1421,6 +1432,42 @@ a warning. Other failures don't stop the rest, and the step then fails
 naming them. `Freed` counts an image's size once, and only when its last
 tag goes. It then forgets the gone stacks' registry entries, and with
 `Force` the unparseable ones (`Forgotten`), still under the prune lock.
+
+**Secret rotation (058, `rotate.go`).** §9.11. `RotateSecret(ctx, d, st,
+cfg, sec, RotateOptions{Name, Value, DiscardData})` returns a
+`RotateReport` (`stack`, `secret`, `restarted`, `discarded_data`,
+`introspection_token_expiry`). The caller holds the stack lock and sets
+`d.Compose` with an env computed from `sec`, which is updated in place once
+secrets.yaml is saved. Steps:
+
+- `rotate-db` (database secrets only): MySQL `ALTER USER` as root
+  (`db-root` changes every `root` account in `mysql.user`; `db-picsure`,
+  `db-auth` and `db-airflow` change `name@'%'`), Postgres `ALTER ROLE
+  picsure` for `dictionary-db`, or `UPDATE auth.application` with a token
+  issued by `jwt.Introspection` for `introspection-token` and
+  `auth0-client-secret`. A local database must be running (exit 3). With a
+  remote database `db-root` is the DBA's: the new password comes from
+  stdin and is only checked to log in, never `ALTER`ed. A failure here
+  leaves secrets.yaml unchanged.
+- `rotate-save`: secrets.yaml (the client secret also clears
+  `auth0_client_secret_generated`). If saving fails the database change is
+  undone. psama, which reads the token from the database, goes into
+  `pending_restarts` first, so a failure later leaves it for `up`.
+- `rotate-restart`: the running services whose `compose config
+  --no-interpolate` references one of the secret's variables (`${VAR}`,
+  `${VAR:-x}`, `$VAR`; `$$` is an escape) are recreated with `compose up -d
+  --wait` (a restart would keep the old env); then psama is restarted if it
+  wasn't recreated. Nothing is re-rendered: the render holds no secret
+  values (§6.4). A failure says to run `up`, whose start step recreates
+  them.
+
+`hpds-key` has its own plan: `hpds-data` (shared data is exit 3; any file in
+`hpds-data` besides the key is loaded data, exit 4 without `DiscardData`),
+`hpds-stop`, `hpds-wipe` (everything but the key), `rotate-save`
+(`st.ReplaceHPDSKey`, after clearing state.json's `hpds_key`), `hpds-key`
+(`HPDSKeyStep`'s Apply) and `hpds-start` (only if hpds was running).
+`volumeHelper` is the alpine helper on a volume that the loader shares. The new values come from
+`stack.GeneratePassword` and `stack.GenerateHexToken`, added here.
 
 **Reset and destroy (056, `teardown.go`).** §9.8. Both run a `down` step
 (compose down; nothing when `d.Compose` is nil, a never-rendered stack)

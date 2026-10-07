@@ -105,3 +105,17 @@ func fill[T ~string](g *filler, f *T, gen func(io.Reader) (string, error)) {
 		*f, g.filled = T(v), true
 	}
 }
+
+// GeneratePassword returns a new database password, in the format
+// EnsureSecrets generates them, for `secrets rotate`.
+func GeneratePassword(r io.Reader) (Secret, error) {
+	v, err := password(r)
+	return Secret(v), err
+}
+
+// GenerateHexToken returns n random bytes as lowercase hex, in the format
+// EnsureSecrets generates the tokens, for `secrets rotate`.
+func GenerateHexToken(r io.Reader, n int) (Secret, error) {
+	v, err := hexToken(n)(r)
+	return Secret(v), err
+}
