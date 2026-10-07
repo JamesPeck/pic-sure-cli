@@ -25,6 +25,8 @@ exitcode 2 pic-sure init new --name Demo! --admin-email admin@example.com --auth
 stderr '--name'
 exitcode 2 pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --hpds-data shared
 stderr '--hpds-data shared: want local or shared:NAME'
+exitcode 2 pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --hpds-data shared:demo-set
+stderr 'init doesn''t support shared HPDS data yet'
 exitcode 2 pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --source hpds=../x
 stderr '--source hpds=../x: want COMPONENT=PATH'
 exitcode 2 pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --http-port eighty
@@ -33,8 +35,20 @@ exitcode 2 pic-sure init new --name demo --admin-email admin@example.com --auth-
 stderr '^pic-sure: --db-root-password-stdin is required when db.mode is remote$'
 exitcode 2 pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --skip-step bogus
 stderr '--skip-step bogus: init has no such step'
+exitcode 2 pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --skip-step db-bootstrap
+stderr '--skip-step db-bootstrap: init has no such step'
 ! exists new
 ! exists docker.log
+
+# The client secret must be long enough for PSAMA's HMAC key.
+stdin short.txt
+exitcode 2 pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --auth0-client-secret-stdin
+stderr '--auth0-client-secret-stdin: the client secret is 5 bytes; PSAMA needs at least 32'
+
+# --self-update re-runs init, which can't read stdin again.
+stdin one-line.txt
+exitcode 2 pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --auth0-client-secret-stdin --self-update
+stderr 'run pic-sure self-update first'
 
 # Stdin holds one secret, read with the shared reader: one trailing newline
 # is stripped, any other line break is exit 2.
@@ -75,6 +89,13 @@ exitcode 1 pic-sure init new --name demo --admin-email admin@example.com --auth-
 stderr 'step release failed'
 ! exists new
 
+# Explicit ports inside the default dev block pass validation: the block
+# moves. (The run fails later, here at the release, or at the ports if the
+# host uses them.)
+! exec pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --http-port 15000 --https-port 15001
+! stderr 'dev'
+! exists new
+
 # On a stack init finished, it does nothing and exits 0.
 exec pic-sure init done
 stdout 'Stack demo in .*done is already initialised; use `pic-sure up` or `pic-sure update`.'
@@ -82,6 +103,8 @@ exec pic-sure --json init done
 stdout '"already_initialized":true'
 stdout '"url":"https://localhost:8443/"'
 
+-- short.txt --
+short
 -- one-line.txt --
 synthetic-client-secret-0123456789abcdef
 -- blank-second.txt --

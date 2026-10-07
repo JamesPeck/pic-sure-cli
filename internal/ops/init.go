@@ -8,6 +8,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -49,11 +51,14 @@ type ConvergeOptions struct {
 	Compose func() (docker.Composer, error)
 }
 
-// InitStepIDs are the IDs of InitSteps, in order, so init can check
-// --skip-step before it creates anything.
-var InitStepIDs = []string{
-	ResolveStepID, ImagesStepID, TLSStepID, TruststoreStepID, RenderStepID,
-	StepDB, StepDBBootstrap, StepMigrate, StepSeed, HPDSKeyStepID, StartStepID,
+// InitStepIDs are the IDs of InitSteps for a stack with config cfg, in
+// order, so init can check --skip-step before it creates anything.
+func InitStepIDs(cfg *stack.Config) []string {
+	ids := []string{ResolveStepID, ImagesStepID, TLSStepID, TruststoreStepID, RenderStepID, StepDB}
+	if cfg.DB.Mode == stack.DBRemote {
+		ids = append(ids, StepDBBootstrap)
+	}
+	return append(ids, StepMigrate, StepSeed, HPDSKeyStepID, StartStepID)
 }
 
 // InitSteps are §9.1 steps 4 to 12, for init once it has written the
@@ -72,8 +77,8 @@ func InitSteps(d *Deps, st *stack.Stack, cfg *stack.Config, sec *stack.Secrets, 
 
 // ConvergeSteps are §9.1 steps 8 to 12, which init, up and update run on a
 // rendered stack: the database (DBSteps: bootstrapped too when it is
-// remote), migrations, seed, the HPDS key, then `compose up -d --wait`. Each gets d.Compose from opts.Compose if it is
-// nil.
+// remote), migrations, seed, the HPDS key, then `compose up -d --wait`.
+// Each gets d.Compose from opts.Compose if it is nil.
 func ConvergeSteps(d *Deps, st *stack.Stack, cfg *stack.Config, sec *stack.Secrets, opts ConvergeOptions) []steps.Step {
 	list := append(DBSteps(d, cfg, sec, DBOptions{}),
 		MigrateStep(d, cfg, sec, MigrateOptions{}),
@@ -133,10 +138,12 @@ func ResolveStep(d *Deps, st *stack.Stack, cfg *stack.Config, state *stack.State
 // records when the step runs, so it can follow the image step in one plan.
 func StackTruststoreStep(d *Deps, st *stack.Stack, cfg *stack.Config, state *stack.State) steps.Step {
 	inner := func() steps.Step { return TruststoreStep(d, st, cfg, psamaImage(state)) }
-	s := inner()
-	s.Check = func(ctx context.Context) (bool, error) { return inner().Check(ctx) }
-	s.Apply = func(ctx context.Context, sink events.Sink) error { return inner().Apply(ctx, sink) }
-	return s
+	return steps.Step{
+		ID:    TruststoreStepID,
+		Title: "Build psama's truststore",
+		Check: func(ctx context.Context) (bool, error) { return inner().Check(ctx) },
+		Apply: func(ctx context.Context, sink events.Sink) error { return inner().Apply(ctx, sink) },
+	}
 }
 
 // psamaImage is the psama image the stack runs: its dev build's while a dev
@@ -243,7 +250,6 @@ func StartServices(cfg *stack.Config) []string {
 	return out
 }
 
-// Port ranges of §6.5.
 const (
 	DefaultHTTPPort   = 80
 	DefaultHTTPSPort  = 443
@@ -256,10 +262,10 @@ const (
 )
 
 // ChoosePorts picks init's HTTP and HTTPS ports (§6.5). A port given (non
-// zero) is used if it is free and is exit 3 otherwise. Without both, 80
-// and 443 are used if free; if not, auto allows the first free pair from
-// 8080/8443, 8081/8444 and so on, and without it busy defaults are exit 3.
-// A port given alone keeps its value while the other is chosen.
+// zero) is used if it is free and is exit 3 otherwise. A port not given is
+// 80 or 443 if free; with auto it is taken instead from the first free pair
+// from 8080/8443, 8081/8444 and so on, and without it a busy default is
+// exit 3.
 func ChoosePorts(h Host, httpPort, httpsPort int, auto bool) (int, int, error) {
 	for _, p := range []struct {
 		flag string
@@ -269,27 +275,30 @@ func ChoosePorts(h Host, httpPort, httpsPort int, auto bool) (int, int, error) {
 			return 0, 0, exitcode.Precondition("port %d (%s) is in use", p.port, p.flag)
 		}
 	}
-	if httpPort != 0 && httpsPort != 0 {
-		return httpPort, httpsPort, nil
-	}
-	free := func(p, given int) bool { return given != 0 || h.PortFree(p) }
-	pick := func(p, given int) int {
-		if given != 0 {
-			return given
+	// pair returns the ports to use given defaults hp and sp, or ok false
+	// when one it would choose is busy or they clash.
+	pair := func(hp, sp int) (int, int, bool) {
+		if httpPort != 0 {
+			hp = httpPort
+		} else if !h.PortFree(hp) {
+			return 0, 0, false
 		}
-		return p
-	}
-	if free(DefaultHTTPPort, httpPort) && free(DefaultHTTPSPort, httpsPort) &&
-		pick(DefaultHTTPPort, httpPort) != pick(DefaultHTTPSPort, httpsPort) {
-		return pick(DefaultHTTPPort, httpPort), pick(DefaultHTTPSPort, httpsPort), nil
+		if httpsPort != 0 {
+			sp = httpsPort
+		} else if !h.PortFree(sp) {
+			return 0, 0, false
+		}
+		return hp, sp, hp != sp
 	}
 	if !auto {
+		if hp, sp, ok := pair(DefaultHTTPPort, DefaultHTTPSPort); ok {
+			return hp, sp, nil
+		}
 		return 0, 0, exitcode.Precondition("the default ports %d and %d aren't both free; pass --http-port and --https-port, or --auto-ports to pick free ones",
-			pick(DefaultHTTPPort, httpPort), pick(DefaultHTTPSPort, httpsPort))
+			DefaultHTTPPort, DefaultHTTPSPort)
 	}
 	for i := range autoPortTries {
-		hp, sp := pick(AutoHTTPPort+i, httpPort), pick(AutoHTTPSPort+i, httpsPort)
-		if hp != sp && free(hp, httpPort) && free(sp, httpsPort) {
+		if hp, sp, ok := pair(AutoHTTPPort+i, AutoHTTPSPort+i); ok {
 			return hp, sp, nil
 		}
 	}
@@ -322,9 +331,9 @@ next:
 // StackNameInUse reports what, if anything, already uses the stack name
 // for a stack other than the one in dir: a container or volume of the
 // compose project of that name, or a volume labelled for that stack, whose
-// stack-dir label isn't dir. "" means the name is free. existing reports
-// whether dir's own stack has containers.
-func StackNameInUse(ctx context.Context, d *Deps, name, dir string) (user string, existing bool, err error) {
+// stack-dir label isn't dir. "" means the name is free. published holds
+// the host ports dir's own stack's containers publish.
+func StackNameInUse(ctx context.Context, d *Deps, name, dir string) (user string, published map[int]bool, err error) {
 	dir = canonicalDir(dir)
 	res, err := docker.RunChecked(ctx, docker.WithTimeout(d.Runner, docker.PsTimeout), docker.Cmd{Argv: []string{
 		"docker", "ps", "--all", "--no-trunc",
@@ -332,36 +341,44 @@ func StackNameInUse(ctx context.Context, d *Deps, name, dir string) (user string
 		"--format", "{{json .}}",
 	}})
 	if err != nil {
-		return "", false, err
+		return "", nil, err
 	}
+	published = map[int]bool{}
 	for line := range strings.Lines(string(res.Stdout)) {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
-		var c struct{ Names, Labels string }
+		var c struct{ Names, Labels, Ports string }
 		if err := json.Unmarshal([]byte(line), &c); err != nil {
-			return "", false, fmt.Errorf("parsing docker ps: %w", err)
+			return "", nil, fmt.Errorf("parsing docker ps: %w", err)
 		}
 		if labelValue(c.Labels, stack.LabelStackDir) != dir {
-			return "container " + c.Names, false, nil
+			return "container " + c.Names, nil, nil
 		}
-		existing = true
+		for _, m := range publishedPort.FindAllStringSubmatch(c.Ports, -1) {
+			p, _ := strconv.Atoi(m[1])
+			published[p] = true
+		}
 	}
 	seen := map[string]bool{}
 	for _, filter := range []string{"com.docker.compose.project=" + name, stack.LabelStack + "=" + name} {
 		vols, err := d.Docker.VolumeList(ctx, filter)
 		if err != nil {
-			return "", false, err
+			return "", nil, err
 		}
 		for _, v := range vols {
 			if !seen[v.Name] && v.Labels[stack.LabelStackDir] != dir {
-				return "volume " + v.Name, existing, nil
+				return "volume " + v.Name, nil, nil
 			}
 			seen[v.Name] = true
 		}
 	}
-	return "", existing, nil
+	return "", published, nil
 }
+
+// publishedPort is a host port in docker ps's Ports column, such as the
+// 8443 of "0.0.0.0:8443->443/tcp".
+var publishedPort = regexp.MustCompile(`:(\d+)->`)
 
 // labelValue reads one label from docker ps's comma-separated KEY=VALUE
 // list. A label value with a comma is cut short; stack-dir values the CLI

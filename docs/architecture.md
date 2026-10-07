@@ -242,23 +242,29 @@ it.
   the run log.
 
 - `init.go` (034): `init [DIR]`. Its flags come from `stack.Fields` (a
-  secret's is a bool that reads stdin through `ReadUserSecret`), plus `--auto-ports` and `--source COMPONENT=PATH`. Usage problems
-  are exit 2 naming the flag, before docker is asked anything. A DIR whose
-  state.json has `initialized_at` gets "already initialised" and exit 0; a
-  DIR with a `pic-sure.yaml` is resumed with that config as it is (config
-  flags are ignored with a warning). Then three unskippable steps run:
-  `preconditions` (doctor's host checks, with `memory` only a warning;
-  `ops.StackNameInUse`; on a new stack `ops.ChoosePorts` and
-  `ChooseDevPortsBase`), `release` (`release.Fetch` at a resumed stack's
-  recorded commit, else the branch head, then `Gate` with
+  secret's is a bool that reads stdin through `ReadUserSecret`; with both
+  `--auth0-client-secret-stdin` and `--db-root-password-stdin`, stdin holds
+  one secret per line, in that order), plus `--auto-ports`, `--source
+  COMPONENT=PATH`, and the gate's `--self-update` and
+  `--ignore-cli-version`. Usage problems are exit 2 naming the flag, before
+  docker is asked anything: a client secret under `jwt.MinSecretLen`, a
+  `--skip-step` that isn't in `ops.InitStepIDs(cfg)`, shared HPDS data
+  (until 051), `--self-update` with a stdin flag. A DIR whose state.json
+  has `initialized_at` gets "already initialised" and exit 0; a DIR with a
+  `pic-sure.yaml` is resumed with that config as it is (config flags are
+  ignored with a warning). Then three unskippable steps run:
+  `preconditions` (doctor's host checks with the new config, `memory` only
+  a warning; `ops.StackNameInUse`; on a new stack `ops.ChoosePorts` and
+  `ChooseDevPortsBase`, on a resumed one its ports must be free or its own;
+  a loopback remote `--db-host` warns), `release` (`release.Fetch` at a
+  resumed stack's recorded commit, else the branch head, then `Gate` with
   `newSelfUpdater`) and `config` (`stack.Create`, the run log, the stack
   lock, pic-sure.yaml, `EnsureSecrets` with `OpenAuth`, state.json with
   the release and the operation). Then `ops.InitSteps` with `--skip-step`,
   and `initialized_at` once they succeed. `r.compose` builds the adapter
   with a lazy env over init's `*Secrets`, so `compose up` sees the token
-  seed issued; `up` (035) can copy it. With both `--auth0-client-secret-stdin`
-  and `--db-root-password-stdin`, stdin holds one secret per line, in that
-  order. A loopback `--db-host` gets a warning with `ops.LoopbackHint`.
+  seed issued; `up` (035) can copy it. `startRunLog` registers
+  `--admin-email` with the redactor before it logs the flags.
 
 | File | Commands | Ticket |
 |---|---|---|
@@ -935,16 +941,17 @@ init, and the parts `up` and `update` reuse.
 - `InitSteps(d, st, cfg, sec, state, ConvergeOptions{Cache, CLIVersion,
   Compose})`: `resolve` (`ResolveStep`, 031's), `images`, `tls`,
   `truststore` (`StackTruststoreStep`, which reads the psama tag from
-  state when it runs), `render`, then `ConvergeSteps`. `InitStepIDs` lists
-  their IDs for checking `--skip-step` early.
+  state when it runs), `render`, then `ConvergeSteps`. `InitStepIDs(cfg)`
+  lists their IDs for checking `--skip-step` early.
 - `RenderStep`, ID `render`, always applies: it renders from a fresh
   state.json (the TLS and truststore steps save it themselves), writes the
   files, records `cli_version` and `schema_version`, copies the state into
   the caller's, and sets `d.Compose` to nil.
 - `ConvergeSteps` are steps 8–12: `DBSteps` (`db`, plus `db-bootstrap` for
-  a remote database), `migrate`, `seed`, `hpds-key` and `start`, each wrapped so it sets `d.Compose` from `opts.Compose` when it
-  is nil. The Composer's env must be computed per call from the
-  `*Secrets` the seed step updates.
+  a remote database), `migrate`, `seed`, `hpds-key` and `start`, each
+  wrapped so it sets `d.Compose` from `opts.Compose` when it is nil. The
+  Composer's env must be computed per call from the `*Secrets` the seed
+  step updates.
 - `StartStep`, ID `start`: `compose up -d --wait` (15 min) for
   `StartServices(cfg)`, the mode's services without the one-shots.
 - `HPDSKeyStep`, ID `hpds-key`: copies `.pic-sure/hpds/encryption_key`
@@ -954,9 +961,13 @@ init, and the parts `up` and `update` reuse.
   `CreatedAt`, so a re-created volume (after `reset`) is keyed again. With
   `hpds.data: shared` it does nothing: the data set carries its key.
 - `ChoosePorts(host, http, https, auto)` and `ChooseDevPortsBase(host,
-  avoid...)` are §6.5's port rules; `StackNameInUse(ctx, d, name, dir)`
-  finds a container or volume of compose project `name`, or a volume
-  labelled for stack `name`, whose stack-dir label isn't `dir`.
+  avoid...)` are §6.5's port rules: a port not given is 80 or 443, or with
+  `auto` the first free pair from 8080/8443. `StackNameInUse(ctx, d, name,
+  dir)` finds a container or volume of compose project `name`, or a volume
+  labelled for stack `name`, whose stack-dir label isn't `dir`, and returns
+  the host ports `dir`'s own containers publish.
+- Doctor's new `DoctorOptions.Config` is init's config before the stack
+  exists, so `memory` counts its HPDS heap.
 - `Summary` is init's report (URL, Auth0 URLs, token expiry, next steps);
   `PeekState(dir)` reads state.json without opening the stack.
 

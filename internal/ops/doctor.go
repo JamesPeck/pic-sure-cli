@@ -117,6 +117,9 @@ type DoctorOptions struct {
 	ComposeErr error
 	// Network adds the reachability checks.
 	Network bool
+	// Config is the config of a stack that doesn't exist yet (init's), for
+	// the memory check, when Stack is nil.
+	Config *stack.Config
 	// Building makes an old or missing buildx a failure, not a warning.
 	// A stack with images.mode build sets it too.
 	Building bool
@@ -140,6 +143,8 @@ func Doctor(ctx context.Context, d *Deps, opts DoctorOptions) *DoctorReport {
 	if opts.Stack != nil {
 		c.report.Stack = opts.Stack.Dir
 		c.loadStack()
+	} else {
+		c.cfg = opts.Config
 	}
 	c.host(ctx)
 	if opts.Stack != nil {

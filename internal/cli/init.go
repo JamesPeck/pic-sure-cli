@@ -21,6 +21,7 @@ import (
 	"github.com/JamesPeck/pic-sure-cli/internal/docker"
 	"github.com/JamesPeck/pic-sure-cli/internal/events"
 	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
+	"github.com/JamesPeck/pic-sure-cli/internal/jwt"
 	"github.com/JamesPeck/pic-sure-cli/internal/log"
 	"github.com/JamesPeck/pic-sure-cli/internal/netproxy"
 	"github.com/JamesPeck/pic-sure-cli/internal/ops"
@@ -67,7 +68,9 @@ does nothing.`,
 			c.Flags().String(f.Flag, "", f.Help+" (sets "+f.Key+")")
 		}
 	}
-	c.Flags().Bool("auto-ports", false, "pick free ports from 8080/8443 when 80 or 443 is busy")
+	c.Flags().Bool("auto-ports", false, "pick free ports from 8080/8443 instead of 80 and 443")
+	c.Flags().Bool("self-update", false, "if the release needs a newer pic-sure, install it and continue (not with a --*-stdin flag)")
+	c.Flags().Bool("ignore-cli-version", false, "go on even if the release was validated with another pic-sure version")
 	c.Flags().StringArray("source", nil, "build `COMPONENT=PATH` from a local checkout (repeatable)")
 	return c
 }
@@ -101,9 +104,6 @@ func (a *App) initStack(cmd *cobra.Command, args []string) (err error) {
 	if err != nil {
 		return err
 	}
-	if err := checkInitSkips(a.Global.SkipSteps); err != nil {
-		return err
-	}
 	r := &initRun{a: a, cmd: cmd, dir: dir}
 	if r.prior, err = ops.PeekState(dir); err != nil {
 		return err
@@ -114,10 +114,13 @@ func (a *App) initStack(cmd *cobra.Command, args []string) (err error) {
 	if err := r.readConfig(); err != nil {
 		return err
 	}
+	log.RegisterSecrets(r.cfg.Auth.AdminEmail)
+	if err := checkInitSkips(r.cfg, a.Global.SkipSteps); err != nil {
+		return err
+	}
 	if err := r.readSecrets(); err != nil {
 		return err
 	}
-	log.RegisterSecrets(r.cfg.Auth.AdminEmail)
 
 	r.d = a.newDeps()
 	defer func() {
@@ -134,9 +137,6 @@ func (a *App) initStack(cmd *cobra.Command, args []string) (err error) {
 		{ID: initConfig, Title: "Write the config and secrets", Apply: r.writeConfig},
 	}
 	if err := steps.Run(ctx, r.d.Sink, prep, steps.Options{}); err != nil {
-		if r.state != nil {
-			_ = r.finishOperation(err)
-		}
 		return err
 	}
 	if r.state == nil {
@@ -160,12 +160,13 @@ func (a *App) initStack(cmd *cobra.Command, args []string) (err error) {
 	return a.finish(summary, func(w io.Writer) error { return writeInitSummary(w, summary) })
 }
 
-// checkInitSkips refuses a --skip-step that names no step of init's plan,
-// before anything is created.
-func checkInitSkips(skips []string) error {
+// checkInitSkips refuses a --skip-step that names no step of init's plan
+// for cfg, before anything is created.
+func checkInitSkips(cfg *stack.Config, skips []string) error {
+	ids := ops.InitStepIDs(cfg)
 	for _, id := range skips {
-		if !slices.Contains(ops.InitStepIDs, id) {
-			return exitcode.Usage("--skip-step %s: init has no such step; it can skip %s", id, strings.Join(ops.InitStepIDs, ", "))
+		if !slices.Contains(ids, id) {
+			return exitcode.Usage("--skip-step %s: init has no such step; it can skip %s", id, strings.Join(ids, ", "))
 		}
 	}
 	return nil
@@ -220,7 +221,7 @@ func (r *initRun) readConfig() error {
 			r.a.warnStderr("%s already has %s, which init uses as it is; ignoring %s",
 				r.dir, stack.ConfigFile, strings.Join(ignored, " "))
 		}
-		return nil
+		return refuseShared(r.cfg)
 	case !errors.Is(err, fs.ErrNotExist):
 		return err
 	}
@@ -254,11 +255,40 @@ func (r *initRun) readConfig() error {
 			return exitcode.Usage("--source %s: %v", s, err)
 		}
 	}
+	// Validation refuses ports inside the dev block, which preconditions
+	// chooses only later; until then use the first block clear of the
+	// ports given.
+	httpPort, err := portFlag(flags, "http-port")
+	if err != nil {
+		return err
+	}
+	httpsPort, err := portFlag(flags, "https-port")
+	if err != nil {
+		return err
+	}
+	base, _ := ops.ChooseDevPortsBase(anyPortFree{}, httpPort, httpsPort)
+	if err := r.doc.SetValue("network.dev_ports.base", base); err != nil {
+		return err
+	}
 	if r.cfg, err = r.doc.Config(); err != nil {
 		return flagProblems(err)
 	}
+	return refuseShared(r.cfg)
+}
+
+// refuseShared refuses shared HPDS data, which init can't set up until
+// ticket 051: render needs the data set's recorded HPDS profile.
+func refuseShared(cfg *stack.Config) error {
+	if cfg.HPDS.Data == stack.HPDSShared {
+		return exitcode.Usage("init doesn't support shared HPDS data yet; use --hpds-data local")
+	}
 	return nil
 }
+
+// anyPortFree is a host whose ports are all free.
+type anyPortFree struct{ systemHost }
+
+func (anyPortFree) PortFree(int) bool { return true }
 
 func (r *initRun) setFlag(f stack.Field, v string) error {
 	if f.Flag == "hpds-data" {
@@ -348,6 +378,9 @@ func (r *initRun) readSecrets() error {
 			inputs = append(inputs, strings.NewReader(l))
 		}
 	}
+	if selfUpdate, _ := r.cmd.Flags().GetBool("self-update"); selfUpdate && len(fields) > 0 {
+		return exitcode.Usage("--self-update re-runs init, which can't read --%s's stdin again; run pic-sure self-update first", fields[0].Flag)
+	}
 	for i, f := range fields {
 		v, err := stack.ReadUserSecret(inputs[i], "--"+f.Flag)
 		if err != nil {
@@ -355,13 +388,18 @@ func (r *initRun) readSecrets() error {
 		}
 		switch f.Key {
 		case "auth.auth0.client_secret":
+			// PSAMA signs the introspection token with it, and refuses a
+			// shorter key.
+			if len(v) < jwt.MinSecretLen {
+				return exitcode.Usage("--%s: the client secret is %d bytes; PSAMA needs at least %d", f.Flag, len(v), jwt.MinSecretLen)
+			}
 			r.supplied.Auth0ClientSecret = v
 		case "db.remote.root_password":
 			r.supplied.DBRemoteRootPassword = v
 		}
 	}
 	if r.resumed {
-		// The stack may have them already; EnsureSecrets checks.
+		// The stack may have them already; writeConfig checks.
 		return nil
 	}
 	for _, f := range stack.Fields {
@@ -375,7 +413,7 @@ func (r *initRun) readSecrets() error {
 // preconditions is §9.1 step 1: everything is checked before anything is
 // written.
 func (r *initRun) preconditions(ctx context.Context, sink events.Sink) error {
-	opts := ops.DoctorOptions{Host: systemHost{}, Building: r.cfg.Images.Mode == stack.ImagesBuild}
+	opts := ops.DoctorOptions{Host: systemHost{}, Config: r.cfg, Building: r.cfg.Images.Mode == stack.ImagesBuild}
 	opts.CacheDir, opts.CacheErr = cache.DefaultRoot()
 	report := ops.Doctor(ctx, r.d, opts)
 	var failed []string
@@ -393,7 +431,7 @@ func (r *initRun) preconditions(ctx context.Context, sink events.Sink) error {
 		return exitcode.Precondition("the host isn't ready:\n  %s\nRun `pic-sure doctor` for details", strings.Join(failed, "\n  "))
 	}
 
-	user, existing, err := ops.StackNameInUse(ctx, r.d, r.cfg.Name, r.dir)
+	user, published, err := ops.StackNameInUse(ctx, r.d, r.cfg.Name, r.dir)
 	if err != nil {
 		return err
 	}
@@ -407,13 +445,11 @@ func (r *initRun) preconditions(ctx context.Context, sink events.Sink) error {
 	}
 
 	if r.resumed {
-		// A resumed stack keeps its ports. They are checked only before
-		// its own containers exist, which would hold them.
-		if !existing {
-			for _, p := range []int{r.cfg.Network.HTTPPort, r.cfg.Network.HTTPSPort} {
-				if !(systemHost{}).PortFree(p) {
-					return exitcode.Precondition("port %d, which %s sets, is in use", p, stack.ConfigFile)
-				}
+		// A resumed stack keeps its ports, which its own containers may
+		// already hold.
+		for _, p := range []int{r.cfg.Network.HTTPPort, r.cfg.Network.HTTPSPort} {
+			if !published[p] && !(systemHost{}).PortFree(p) {
+				return exitcode.Precondition("port %d, which %s sets, is in use", p, stack.ConfigFile)
 			}
 		}
 		return nil
@@ -474,6 +510,26 @@ func (r *initRun) fetchRelease(ctx context.Context, sink events.Sink) error {
 	if r.cache, err = cache.Open(root, cache.Options{Git: r.d.Git, Holder: r.cmd.CommandPath()}); err != nil {
 		return err
 	}
+	if r.rel, err = release.Fetch(ctx, r.cache.WithEvents(sink, initRelease), r.d.Git, sink, initRelease, r.releaseOptions()); err != nil {
+		return err
+	}
+	selfUpdate, _ := r.cmd.Flags().GetBool("self-update")
+	ignore, _ := r.cmd.Flags().GetBool("ignore-cli-version")
+	return r.rel.Gate(ctx, release.GateOptions{
+		CLIVersion:       r.a.Info.Version,
+		Compat:           r.cfg.Release.CLICompat,
+		SelfUpdate:       selfUpdate,
+		IgnoreCLIVersion: ignore,
+		Updater:          r.a.newSelfUpdater(r.proxy, sink, initRelease),
+		Command:          "pic-sure init",
+		Sink:             sink,
+		Step:             initRelease,
+	})
+}
+
+// releaseOptions is the release to fetch: the one a resumed stack
+// recorded, else the head of release.branch.
+func (r *initRun) releaseOptions() release.Options {
 	opts := release.Options{Repo: r.cfg.Release.Repo, Branch: r.cfg.Release.Branch}
 	if r.prior != nil && r.prior.Release.Commit != "" {
 		opts.Commit = r.prior.Release.Commit
@@ -481,17 +537,7 @@ func (r *initRun) fetchRelease(ctx context.Context, sink events.Sink) error {
 			opts.Repo = r.prior.Release.Repo
 		}
 	}
-	if r.rel, err = release.Fetch(ctx, r.cache.WithEvents(sink, initRelease), r.d.Git, sink, initRelease, opts); err != nil {
-		return err
-	}
-	return r.rel.Gate(ctx, release.GateOptions{
-		CLIVersion: r.a.Info.Version,
-		Compat:     r.cfg.Release.CLICompat,
-		Updater:    r.a.newSelfUpdater(r.proxy, sink, initRelease),
-		Command:    "pic-sure init",
-		Sink:       sink,
-		Step:       initRelease,
-	})
+	return opts
 }
 
 // writeConfig is §9.1 step 3: the stack directory, pic-sure.yaml, the
@@ -535,10 +581,12 @@ func (r *initRun) writeConfig(ctx context.Context, sink events.Sink) error {
 	if err != nil {
 		return err
 	}
-	// The compose env is computed on every call (compose); this is where
-	// a problem with it shows.
-	if _, err := render.ComposeEnv(r.cfg, r.sec); err != nil {
-		return err
+	switch {
+	case r.sec.Auth0ClientSecret == "":
+		return exitcode.Usage("--auth0-client-secret-stdin is required: the stack has no Auth0 client secret, and auth.mode is %s", r.cfg.Auth.Mode)
+	case len(r.sec.Auth0ClientSecret) < jwt.MinSecretLen:
+		return exitcode.Precondition("the stack's Auth0 client secret is shorter than the %d bytes PSAMA needs; correct it in %s",
+			jwt.MinSecretLen, st.Path(stack.SecretsFile))
 	}
 
 	state, err := st.LoadState()
@@ -567,7 +615,8 @@ func (r *initRun) writeConfig(ctx context.Context, sink events.Sink) error {
 func (r *initRun) compose() (docker.Composer, error) {
 	cfg, sec := r.cfg, r.sec
 	c, err := docker.NewCompose(r.d.Runner, r.st.Dir, func() []string {
-		// writeConfig checked that it succeeds; only secrets change since.
+		// ComposeEnv fails only on the proxy config, which fetchRelease
+		// has checked.
 		env, _ := render.ComposeEnv(cfg, sec)
 		return env
 	})
@@ -598,12 +647,8 @@ func (r *initRun) finishOperation(runErr error) error {
 func writeInitSummary(w io.Writer, s *ops.InitSummary) error {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Stack %s is up: %s\n", s.Stack, s.URL)
-	if au := s.Auth0; au != nil {
-		if au.Needed {
-			b.WriteString("Register these in the Auth0 application:\n")
-		} else {
-			b.WriteString("Auth0 isn't needed in open mode; to allow login, register these:\n")
-		}
+	if au := s.Auth0; au != nil && au.Needed {
+		b.WriteString("Register these in the Auth0 application:\n")
 		fmt.Fprintf(&b, "  Callback URL: %s\n  Logout URL:   %s\n  Web origin:   %s\n", au.CallbackURL, au.LogoutURL, au.WebOrigin)
 	}
 	if !s.TokenExpiry.IsZero() {

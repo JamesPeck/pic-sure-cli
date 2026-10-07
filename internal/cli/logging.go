@@ -46,6 +46,10 @@ func (a *App) startRunLog(cmd *cobra.Command, args []string) {
 	})
 	var flags []string
 	cmd.Flags().Visit(func(f *pflag.Flag) {
+		if f.Name == "admin-email" {
+			// init's admin email is personal data, redacted like a secret.
+			log.RegisterSecrets(f.Value.String())
+		}
 		flags = append(flags, "--"+f.Name+"="+f.Value.String())
 	})
 	a.runLog.Logger().Debug("pic-sure run",

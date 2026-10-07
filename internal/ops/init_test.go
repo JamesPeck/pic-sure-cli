@@ -2,6 +2,7 @@ package ops_test
 
 import (
 	"context"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -34,13 +35,14 @@ func TestChoosePorts(t *testing.T) {
 		wantCode        int
 	}{
 		{name: "defaults free", wantHTTP: 80, wantS: 443},
-		{name: "defaults free with auto", auto: true, wantHTTP: 80, wantS: 443},
+		{name: "auto skips the defaults", auto: true, busy: []int{8443}, wantHTTP: 8081, wantS: 8444},
 		{name: "busy defaults, no auto", busy: []int{443}, wantCode: exitcode.CodePrecondition},
 		{name: "busy defaults, auto", busy: []int{80, 8080, 8444}, auto: true, wantHTTP: 8082, wantS: 8445},
 		{name: "given and free", http: 8083, https: 8443, busy: []int{80, 443}, wantHTTP: 8083, wantS: 8443},
 		{name: "given and busy", http: 8083, https: 8443, busy: []int{8443}, wantCode: exitcode.CodePrecondition},
 		{name: "one given", https: 9443, wantHTTP: 80, wantS: 9443},
-		{name: "one given, auto", https: 9443, busy: []int{80}, auto: true, wantHTTP: 8080, wantS: 9443},
+		{name: "one given, auto", https: 9443, auto: true, wantHTTP: 8080, wantS: 9443},
+		{name: "one default busy", http: 8083, busy: []int{443}, wantCode: exitcode.CodePrecondition},
 		{name: "one given equal to the other's default", http: 443, wantCode: exitcode.CodePrecondition},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -72,14 +74,15 @@ func TestStackNameInUse(t *testing.T) {
 		t.Fatal(err)
 	}
 	dir := filepath.Join(tmp, "demo")
-	ps := `{"Names":"demo-hpds-1","Labels":"com.docker.compose.project=demo,` + stack.LabelStackDir + `=` + dir + `"}` + "\n"
+	ps := `{"Names":"demo-httpd-1","Ports":"0.0.0.0:8443->443/tcp, [::]:8443->443/tcp, 0.0.0.0:8083->80/tcp",` +
+		`"Labels":"com.docker.compose.project=demo,` + stack.LabelStackDir + `=` + dir + `"}` + "\n"
 	for _, tc := range []struct {
 		name, ps, vols string
 		wantUser       string
-		wantExisting   bool
+		wantPorts      []int
 	}{
 		{name: "free", vols: "[]"},
-		{name: "this stack's", ps: ps, vols: "[]", wantExisting: true},
+		{name: "this stack's", ps: ps, vols: "[]", wantPorts: []int{8083, 8443}},
 		{name: "another project's container", ps: `{"Names":"demo-web-1","Labels":"com.docker.compose.project=demo"}`, vols: "[]", wantUser: "container demo-web-1"},
 		{name: "another stack's volume", vols: `[{"Name":"demo_hpds-data","Labels":{"` + stack.LabelStackDir + `":"/elsewhere"}}]`, wantUser: "volume demo_hpds-data"},
 	} {
@@ -89,9 +92,10 @@ func TestStackNameInUse(t *testing.T) {
 			f.On(fakerunner.Glob("docker volume ls *")).Stdout(volumeLines(t, tc.vols))
 			f.On(fakerunner.Glob("docker volume inspect *")).Stdout(tc.vols)
 			d := &ops.Deps{Runner: f, Docker: docker.NewEngine(f)}
-			user, existing, err := ops.StackNameInUse(context.Background(), d, "demo", dir)
-			if err != nil || user != tc.wantUser || existing != tc.wantExisting {
-				t.Fatalf("got %q, %v, %v; want %q, %v", user, existing, err, tc.wantUser, tc.wantExisting)
+			user, published, err := ops.StackNameInUse(context.Background(), d, "demo", dir)
+			ports := slices.Sorted(maps.Keys(published))
+			if err != nil || user != tc.wantUser || !slices.Equal(ports, tc.wantPorts) {
+				t.Fatalf("got %q, %v, %v; want %q, %v", user, ports, err, tc.wantUser, tc.wantPorts)
 			}
 		})
 	}
@@ -154,12 +158,12 @@ func TestConvergeStepsBuildTheComposerOnce(t *testing.T) {
 	for _, s := range list {
 		ids = append(ids, s.ID)
 	}
-	if want := []string{"db", "migrate", "seed", "hpds-key", "start"}; !slices.Equal(ids, want) {
+	if want := []string{"db", "migrate", "seed", "hpds-key", "start"}; !slices.Equal(ids, want) || !slices.Equal(ops.InitStepIDs(&cfg)[5:], want) {
 		t.Fatalf("ConvergeSteps = %v, want %v", ids, want)
 	}
 	remote := cfg
 	remote.DB.Mode = stack.DBRemote
-	if got := ops.ConvergeSteps(d, st, &remote, &stack.Secrets{}, opts); got[1].ID != "db-bootstrap" {
+	if got := ops.ConvergeSteps(d, st, &remote, &stack.Secrets{}, opts); got[1].ID != "db-bootstrap" || ops.InitStepIDs(&remote)[6] != "db-bootstrap" {
 		t.Errorf("a remote database isn't bootstrapped: second step %s", got[1].ID)
 	}
 	start := list[len(list)-1]
@@ -170,5 +174,24 @@ func TestConvergeStepsBuildTheComposerOnce(t *testing.T) {
 	}
 	if built != 1 {
 		t.Errorf("the Composer was built %d times, want once", built)
+	}
+}
+
+func TestInitStepIDsMatchInitSteps(t *testing.T) {
+	st, err := stack.Create(filepath.Join(t.TempDir(), "demo"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	for _, mode := range []stack.DBMode{stack.DBLocal, stack.DBRemote} {
+		cfg := stack.DefaultConfig()
+		cfg.Name, cfg.DB.Mode = "demo", mode
+		var ids []string
+		for _, s := range ops.InitSteps(&ops.Deps{}, st, &cfg, &stack.Secrets{}, &stack.State{}, ops.ConvergeOptions{}) {
+			ids = append(ids, s.ID)
+		}
+		if want := ops.InitStepIDs(&cfg); !slices.Equal(ids, want) {
+			t.Errorf("db.mode %s: InitSteps %v, InitStepIDs %v", mode, ids, want)
+		}
 	}
 }
