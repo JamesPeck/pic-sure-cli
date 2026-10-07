@@ -149,17 +149,21 @@ func TestGoldenConfigsValidate(t *testing.T) {
 }
 
 func TestGoldens(t *testing.T) {
-	env, err := ComposeEnv(goldenConfig(goldenCases[0]), goldenSecrets())
-	if err != nil {
-		t.Fatal(err)
-	}
 	var secrets []string
-	for _, kv := range env {
-		if _, v, _ := strings.Cut(kv, "="); v != "" {
-			secrets = append(secrets, v)
+	for _, c := range []goldenCase{{}, {remoteDB: true}} { // the local and the remote root password
+		env, err := ComposeEnv(goldenConfig(c), goldenSecrets())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, kv := range env {
+			if _, v, _ := strings.Cut(kv, "="); v != "" {
+				secrets = append(secrets, v)
+			}
 		}
 	}
+	names := map[string]bool{}
 	for _, c := range goldenCases {
+		names[c.name+".txtar"] = true
 		t.Run(c.name, func(t *testing.T) {
 			files, err := Render(goldenInput(c))
 			if err != nil {
@@ -186,6 +190,15 @@ func TestGoldens(t *testing.T) {
 				t.Errorf("%s differs from the render; if the change is intended, rerun with -update", file)
 			}
 		})
+	}
+	entries, err := os.ReadDir(filepath.Join("testdata", "golden"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if !names[e.Name()] {
+			t.Errorf("testdata/golden/%s belongs to no case; delete it", e.Name())
+		}
 	}
 }
 
@@ -384,6 +397,28 @@ func TestRenderValues(t *testing.T) {
 	}
 }
 
+func TestSharedProfile(t *testing.T) {
+	for _, c := range []struct{ configured, recorded, want string }{
+		{"", "genomic", "genomic"},
+		{"other", "genomic", "other"},
+	} {
+		in := goldenInput(goldenCase{sharedHPDS: true})
+		in.Config.HPDS.Profile = c.configured
+		in.SharedProfile = c.recorded
+		files, err := Render(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var f composeFile
+		if err := yaml.Unmarshal(files[0].Data, &f); err != nil {
+			t.Fatal(err)
+		}
+		if got := f.Services["hpds"].Environment["SPRING_PROFILES_ACTIVE"]; got != c.want {
+			t.Errorf("hpds.profile %q, recorded %q: profile %q, want %q", c.configured, c.recorded, got, c.want)
+		}
+	}
+}
+
 func TestViteEnv(t *testing.T) {
 	cfg := stack.DefaultConfig()
 	env := ViteEnv(&cfg)
@@ -426,6 +461,9 @@ func TestRenderRefuses(t *testing.T) {
 		{"unknown service override", func(in *Input) {
 			in.Config.Services = map[string]stack.ServiceOverride{"nope": {JavaOpts: "-Xmx1g"}}
 		}, "services.nope"},
+		{"java_opts nothing reads", func(in *Input) {
+			in.Config.Services = map[string]stack.ServiceOverride{"dictionary-api": {JavaOpts: "-Xmx8g"}}
+		}, "services.dictionary-api.java_opts"},
 		{"no image tag", func(in *Input) { delete(in.State.Images, "pic-sure-gateway") }, "no image pic-sure-gateway"},
 	}
 	for _, c := range cases {

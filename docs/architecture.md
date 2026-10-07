@@ -468,14 +468,16 @@ each AIO source still exists in the AIO checkout beside this repo (or
   being the `.nvmrc` tag httpd-hmr needs; dev builds' tags from
   `DevImages`, keyed by image), `Sources` (the cache tree of each component
   without a configured `source`; render needs pic-sure and migrations) and
-  `CustomTrust` (the trust dir holds certs). Render does no I/O, so the
-  caller resolves those.
+  `CustomTrust` (the trust dir holds certs) and `SharedProfile` (the shared
+  data set's recorded HPDS profile, used when `hpds.profile` is empty).
+  Render does no I/O, so the caller resolves those.
 - Bind sources (the stack dir, sources, a relative `source` resolved
   against the stack dir) must be absolute without `:` or line breaks; the
   rendered file is checked again after the merge. A service override for a
   service this stack's mode doesn't have (`picsure-db` with a remote DB) is
   skipped; an unknown service, dev variant, missing image tag or dev build
-  is an error.
+  is an error, as is `java_opts` for a service that takes no JAVA_OPTS.
+  `services.hpds.java_opts` wins over `hpds.java_opts`.
 - JAVA_OPTS extras, in order: the proxy properties (psama only, the one
   JVM that calls out), the truststore properties (psama, custom certs) and
   the JDWP agent (services of a dev variant with a debug port).

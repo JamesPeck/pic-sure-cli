@@ -41,6 +41,9 @@ type Input struct {
 	Sources map[string]string
 	// CustomTrust says the custom certs directory holds certs (§9.5).
 	CustomTrust bool
+	// SharedProfile is the HPDS profile recorded with the shared data set,
+	// used with hpds.data: shared when hpds.profile is empty.
+	SharedProfile string
 }
 
 // File is one file render produces. Path is relative to the stack dir.
@@ -49,10 +52,6 @@ type File struct {
 	Data []byte
 	Perm fs.FileMode
 }
-
-// proxiedJVMs are the Java services that call out of the stack (psama calls
-// Auth0), so they get the JVM proxy properties (§9.10).
-var proxiedJVMs = []string{"psama"}
 
 // Render produces the stack's compose file, first, and its static files
 // (§6.4). It does no I/O; Write saves the result.
@@ -65,7 +64,7 @@ func Render(in Input) ([]File, error) {
 	if err != nil {
 		return nil, fmt.Errorf("render compose.yaml: %w", err)
 	}
-	if err := checkBinds(compose); err != nil {
+	if err := checkRendered(compose, d); err != nil {
 		return nil, err
 	}
 	out := []File{{Path: ComposeFile, Data: compose, Perm: 0o644}}
@@ -88,7 +87,7 @@ func buildData(in Input) (templateData, catalog.Mode, *netproxy.Proxy, error) {
 		return templateData{}, catalog.Mode{}, nil, errors.New("render: no config or state")
 	}
 	mode := modeOf(cfg, in.CustomTrust)
-	p, err := newProxy(cfg, mode)
+	p, err := newProxy(cfg)
 	if err != nil {
 		return templateData{}, mode, nil, err
 	}
@@ -125,6 +124,9 @@ func buildData(in Input) (templateData, catalog.Mode, *netproxy.Proxy, error) {
 		Proxy:       p.Enabled(),
 		ServiceEnv:  map[string]map[string]string{},
 	}
+	if d.HPDSProfile == "" && mode.SharedHPDS {
+		d.HPDSProfile = in.SharedProfile
+	}
 	if mode.RemoteDB {
 		r := cfg.DB.Remote
 		d.DB = dbTarget{Host: r.Host, Port: r.Port, RootUser: r.RootUser}
@@ -141,9 +143,8 @@ func buildData(in Input) (templateData, catalog.Mode, *netproxy.Proxy, error) {
 
 	extra := map[string][]string{}
 	if p.Enabled() {
-		for _, svc := range proxiedJVMs {
-			extra[svc] = append(extra[svc], p.JVMOpts()...)
-		}
+		// psama is the one Java service that calls out, to Auth0 (§9.10).
+		extra["psama"] = append(extra["psama"], p.JVMOpts()...)
 	}
 	if mode.CustomTrust {
 		extra["psama"] = append(extra["psama"], trustJavaOpts)
@@ -159,7 +160,8 @@ func buildData(in Input) (templateData, catalog.Mode, *netproxy.Proxy, error) {
 	for _, s := range catalog.ServicesIn(mode) {
 		have[s.Name] = true
 	}
-	for name, o := range cfg.Services {
+	for _, name := range slices.Sorted(maps.Keys(cfg.Services)) {
+		o := cfg.Services[name]
 		if _, ok := catalog.LookupService(name); !ok {
 			return d, mode, nil, fmt.Errorf("services.%s: no such service", name)
 		}
@@ -252,10 +254,12 @@ func modeOf(cfg *stack.Config, customTrust bool) catalog.Mode {
 	}
 }
 
-// newProxy resolves the config's proxy for the services of a stack in mode.
-func newProxy(cfg *stack.Config, mode catalog.Mode) (*netproxy.Proxy, error) {
+// newProxy resolves the config's proxy for the stack's services. Render and
+// ComposeEnv both use it, so JAVA_OPTS and NO_PROXY list the same services;
+// custom trust adds no service, so it is left out.
+func newProxy(cfg *stack.Config) (*netproxy.Proxy, error) {
 	var names []string
-	for _, s := range catalog.ServicesIn(mode) {
+	for _, s := range catalog.ServicesIn(modeOf(cfg, false)) {
 		names = append(names, s.Name)
 	}
 	p, err := netproxy.New(netproxy.Config{HTTP: cfg.Proxy.HTTP, HTTPS: cfg.Proxy.HTTPS, NoProxy: cfg.Proxy.NoProxy}, names)
@@ -308,16 +312,24 @@ func checkPathElem(what, s string) error {
 	return nil
 }
 
-// checkBinds checks every bind mount in the rendered compose file, so a
-// template can't introduce a relative or colon-bearing source.
-func checkBinds(compose []byte) error {
+// checkRendered checks the merged compose file: every bind source is
+// absolute and colon-free, so no template can introduce a bad one, and every
+// service with configured java_opts reads JAVA_OPTS, so none is dropped
+// silently.
+func checkRendered(compose []byte, d templateData) error {
 	var f struct {
 		Services map[string]struct {
-			Volumes []yaml.Node
+			Volumes     []yaml.Node
+			Environment map[string]yaml.Node
 		}
 	}
 	if err := yaml.Unmarshal(compose, &f); err != nil {
 		return err
+	}
+	for _, name := range slices.Sorted(maps.Keys(d.JavaOpts)) {
+		if _, ok := f.Services[name].Environment["JAVA_OPTS"]; !ok {
+			return fmt.Errorf("services.%s.java_opts: %s doesn't take JAVA_OPTS", name, name)
+		}
 	}
 	for _, name := range slices.Sorted(maps.Keys(f.Services)) {
 		for _, v := range f.Services[name].Volumes {
@@ -433,8 +445,7 @@ func ComposeEnv(cfg *stack.Config, sec *stack.Secrets) ([]string, error) {
 	for _, name := range secretVars {
 		env = append(env, name+"="+vals[name])
 	}
-	// Custom trust doesn't change the services, so it doesn't matter here.
-	p, err := newProxy(cfg, modeOf(cfg, false))
+	p, err := newProxy(cfg)
 	if err != nil {
 		return nil, err
 	}
