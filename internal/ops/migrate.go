@@ -30,7 +30,6 @@ const (
 	StepMigrate = "migrate"
 )
 
-// The services and Flyway one-shots the steps drive.
 const (
 	picsureDB            = "picsure-db"
 	dictionaryDB         = "dictionary-db"
@@ -38,7 +37,6 @@ const (
 	flywayDictionaryInit = "flyway-dictionary-init"
 )
 
-// Defaults for DBOptions.
 const (
 	DefaultDBTimeout  = 5 * time.Minute
 	DefaultDBInterval = 2 * time.Second
@@ -100,7 +98,7 @@ func (s *dbStep) check(ctx context.Context) (bool, error) {
 	if s.cfg.DB.Mode == stack.DBRemote {
 		return s.probe(ctx, "") == nil, nil
 	}
-	svc, err := s.picsureDB(ctx)
+	svc, err := composeService(ctx, s.d, picsureDB)
 	if err != nil || svc == nil || svc.State != "running" || svc.Health != "healthy" {
 		return false, err
 	}
@@ -122,21 +120,24 @@ func (s *dbStep) apply(ctx context.Context, sink events.Sink) error {
 		return fmt.Errorf("starting %s: %w", picsureDB, err)
 	}
 	sink.Emit(events.Progress{ID: StepDB, Text: "waiting for " + picsureDB + " to be healthy"})
+	wait, cancel := context.WithTimeout(ctx, s.opts.Timeout)
+	defer cancel()
 	var last string // why the last poll wasn't ready
-	for range s.opts.Timeout / s.opts.Interval {
-		svc, err := s.picsureDB(ctx)
+	for {
+		svc, err := composeService(wait, s.d, picsureDB)
 		switch {
 		case err != nil:
-			return err
 		case svc == nil:
 			last = "it has no container"
-		case svc.State == "exited" || svc.State == "dead":
+		// With restart: always, a mysqld that fails at startup is
+		// restarted rather than left exited.
+		case svc.State == "exited" || svc.State == "dead" || svc.State == "restarting":
 			s.logTail(ctx, sink)
-			return fmt.Errorf("%s stopped (exit %d) before it was ready", picsureDB, svc.ExitCode)
+			return fmt.Errorf("%s stopped (%s, exit %d) before it was ready", picsureDB, svc.State, svc.ExitCode)
 		case svc.Health != "healthy":
 			last = fmt.Sprintf("its state is %s, health %q", svc.State, svc.Health)
 		default:
-			err := s.probe(ctx, svc.ID)
+			err = s.probe(wait, svc.ID)
 			if err == nil {
 				return nil
 			}
@@ -147,20 +148,20 @@ func (s *dbStep) apply(ctx context.Context, sink events.Sink) error {
 					"the matching secrets.yaml, or remove the volume if its data is disposable",
 					picsureDB, err, s.volume())
 			}
-			// The entrypoint's temporary server listens only on the socket.
 			last = "it is healthy but doesn't accept TCP connections yet: " + err.Error()
+			err = nil
 		}
-		if err := sleep(ctx, s.opts.Interval); err != nil {
-			return err
+		if err == nil {
+			err = sleep(wait, s.opts.Interval)
+		}
+		if err != nil {
+			if ctx.Err() != nil || wait.Err() == nil {
+				return err
+			}
+			s.logTail(ctx, sink)
+			return fmt.Errorf("%s wasn't ready after %s: %s", picsureDB, s.opts.Timeout, last)
 		}
 	}
-	s.logTail(ctx, sink)
-	return fmt.Errorf("%s wasn't ready after %s: %s", picsureDB, s.opts.Timeout, last)
-}
-
-// picsureDB returns the picsure-db container compose knows about, or nil.
-func (s *dbStep) picsureDB(ctx context.Context) (*docker.ComposeService, error) {
-	return composeService(ctx, s.d, picsureDB)
 }
 
 // probe runs SELECT 1 as root: over TCP inside the container (local), or
@@ -280,9 +281,23 @@ func migrate(ctx context.Context, d *Deps, sink events.Sink, opts MigrateOptions
 	if opts.Action != FlywayMigrate || opts.NoRestart {
 		return nil
 	}
+	// Check skips the step once the histories are current, so a failed
+	// restart wouldn't be retried: warn instead of failing.
+	if err := restartCaches(ctx, d, sink); err != nil {
+		if ctx.Err() != nil {
+			return err
+		}
+		sink.Emit(events.Warning{ID: StepMigrate, Text: "the migrations ran, but restarting the services that cache " +
+			"migrated data failed: " + err.Error() + "; run `pic-sure restart psama dictionary-api`"})
+	}
+	return nil
+}
+
+// restartCaches restarts the running services that cache migrated data.
+func restartCaches(ctx context.Context, d *Deps, sink events.Sink) error {
 	svcs, err := d.Compose.Ps(ctx)
 	if err != nil {
-		return fmt.Errorf("finding the services to restart: %w", err)
+		return err
 	}
 	var restart []string
 	for _, c := range catalog.Services() {
@@ -321,8 +336,11 @@ var historyTables = []historyTable{
 	{flywayInit, "/migrations/picsure", "picsure.flyway_schema_history"},
 	{flywayInit, "/migrations/custom/picsure", "picsure.flyway_custom_schema_history"},
 	{flywayInit, "/migrations/custom/auth", "auth.flyway_custom_schema_history"},
-	{flywayDictionaryInit, "/migrations/dictionary", "public.flyway_schema_history"},
+	{flywayDictionaryInit, "/migrations/dictionary", dictionaryHistory},
 }
+
+// dictionaryHistory is the dictionary's Flyway history, in Postgres.
+const dictionaryHistory = "public.flyway_schema_history"
 
 // MigrationsUpToDate reports whether every Flyway history records every
 // versioned migration in the directories the one-shots mount, with no
@@ -335,40 +353,54 @@ func MigrationsUpToDate(ctx context.Context, d *Deps, cfg *stack.Config, sec *st
 	if err != nil {
 		return false, err
 	}
+	healthy := func(service string) (string, error) {
+		svc, err := composeService(ctx, d, service)
+		if err != nil || svc == nil || svc.State != "running" || svc.Health != "healthy" {
+			return "", err
+		}
+		return svc.ID, nil
+	}
 	var container string
 	if cfg.DB.Mode != stack.DBRemote {
-		svc, err := composeService(ctx, d, picsureDB)
-		if err != nil || svc == nil || svc.State != "running" {
+		if container, err = healthy(picsureDB); container == "" {
 			return false, err
 		}
-		container = svc.ID
 	}
-	dict, err := composeService(ctx, d, dictionaryDB)
-	if err != nil || dict == nil || dict.State != "running" {
+	dict, err := healthy(dictionaryDB)
+	if dict == "" {
 		return false, err
 	}
-	mysqlHist, err := mysqlHistory(ctx, d, mysqlTarget(cfg, sec, container))
+	hist, err := mysqlHistory(ctx, d, mysqlTarget(cfg, sec, container))
 	if err != nil {
 		return false, err
 	}
-	pgHist, err := postgresHistory(ctx, d, sql.PostgresTarget{Container: dict.ID, User: "picsure",
+	pg, err := postgresHistory(ctx, d, sql.PostgresTarget{Container: dict, User: "picsure",
 		Password: string(sec.DictionaryDBPassword), Database: "dictionary"})
 	if err != nil {
 		return false, err
+	}
+	if pg != nil {
+		hist[dictionaryHistory] = pg
 	}
 	for _, h := range historyTables {
 		src := mounts[h.service][h.target]
 		if src == "" {
 			return false, fmt.Errorf("%s mounts nothing at %s", h.service, h.target)
 		}
+		// A source the files can't be listed from (one still holding a
+		// ${VAR}, which compose interpolates only when it runs, or a
+		// missing one) is left to Flyway, which reports what is wrong.
+		if strings.Contains(src, "$") {
+			return false, nil
+		}
 		files, err := migrationVersions(src)
+		if errors.Is(err, fs.ErrNotExist) {
+			return false, nil
+		}
 		if err != nil {
 			return false, err
 		}
-		rows, ok := mysqlHist[h.table]
-		if h.service == flywayDictionaryInit {
-			rows, ok = pgHist, pgHist != nil
-		}
+		rows, ok := hist[h.table]
 		if files == nil || !ok || !historyCovers(rows, files) {
 			return false, nil
 		}
@@ -609,37 +641,14 @@ func MigrateCheck(ctx context.Context, d *Deps, cfg *stack.Config, sec *stack.Se
 		add(MigrateCheckInput{Name: "compose config"})
 	}
 	mounts, err := composeMounts(ctx, d)
-	project := cfg.Components.Migrations.Project
-	dirs := []struct{ name, service, target string }{
-		{"core auth migrations", flywayInit, "/migrations/auth"},
-		{"core picsure migrations", flywayInit, "/migrations/picsure"},
-		{"project picsure migrations (" + project + ")", flywayInit, "/migrations/custom/picsure"},
-		{"project auth migrations (" + project + ")", flywayInit, "/migrations/custom/auth"},
-		{"dictionary migrations", flywayDictionaryInit, "/migrations/dictionary"},
-	}
-	for _, dir := range dirs {
-		in := MigrateCheckInput{Name: dir.name}
-		switch {
-		case err != nil:
-			in.Problem = err.Error()
-		default:
-			in.Path = mounts[dir.service][dir.target]
-			in.Problem = sqlDirProblem(in.Path, dir.service, dir.target)
-		}
-		if in.Problem == "" && strings.HasPrefix(dir.target, "/migrations/custom/") && hasLegacyTokens(in.Path) {
-			r.Warnings = append(r.Warnings, dir.name+" contain legacy Jenkins UUID tokens; Flyway substitutes them in a temporary copy")
-		}
-		add(in)
-	}
-	schema := MigrateCheckInput{Name: "dictionary baseline schema"}
 	if err != nil {
-		schema.Problem = err.Error()
-	} else if schema.Path = mounts[dictionaryDB]["/docker-entrypoint-initdb.d/schema.sql"]; schema.Path == "" {
-		schema.Problem = dictionaryDB + " mounts no schema.sql"
-	} else if fi, err := os.Stat(schema.Path); err != nil || !fi.Mode().IsRegular() {
-		schema.Problem = "not a file"
+		// Without the mounts, there are no paths to check.
+		if r.Inputs[0].OK {
+			add(MigrateCheckInput{Name: "migration mounts", Problem: err.Error()})
+		}
+	} else {
+		checkMounts(r, mounts, cfg.Components.Migrations.Project, add)
 	}
-	add(schema)
 
 	var missing []string
 	for _, u := range []struct{ name, v string }{
@@ -687,6 +696,45 @@ func MigrateCheck(ctx context.Context, d *Deps, cfg *stack.Config, sec *stack.Se
 
 	r.OK = !slices.ContainsFunc(r.Inputs, func(in MigrateCheckInput) bool { return !in.OK })
 	return r
+}
+
+// checkMounts checks the directories and the schema file the one-shots and
+// dictionary-db mount.
+func checkMounts(r *MigrateCheckReport, mounts map[string]map[string]string, project string, add func(MigrateCheckInput)) {
+	dirs := []struct{ name, service, target string }{
+		{"core auth migrations", flywayInit, "/migrations/auth"},
+		{"core picsure migrations", flywayInit, "/migrations/picsure"},
+		{"project picsure migrations (" + project + ")", flywayInit, "/migrations/custom/picsure"},
+		{"project auth migrations (" + project + ")", flywayInit, "/migrations/custom/auth"},
+		{"dictionary migrations", flywayDictionaryInit, "/migrations/dictionary"},
+	}
+	for _, dir := range dirs {
+		in := MigrateCheckInput{Name: dir.name, Path: mounts[dir.service][dir.target]}
+		if strings.Contains(in.Path, "$") {
+			r.Warnings = append(r.Warnings, dir.name+": "+in.Path+" holds a variable compose interpolates only when it runs, so it wasn't checked")
+			add(in)
+			continue
+		}
+		in.Problem = sqlDirProblem(in.Path, dir.service, dir.target)
+		if in.Problem == "" && strings.HasPrefix(dir.target, "/migrations/custom/") && hasLegacyTokens(in.Path) {
+			r.Warnings = append(r.Warnings, dir.name+" contain legacy Jenkins UUID tokens; Flyway substitutes them in a temporary copy")
+		}
+		add(in)
+	}
+	schema := MigrateCheckInput{Name: "dictionary baseline schema", Path: mounts[dictionaryDB]["/docker-entrypoint-initdb.d/schema.sql"]}
+	switch fi, err := os.Stat(schema.Path); {
+	case schema.Path == "":
+		schema.Problem = dictionaryDB + " mounts no schema.sql"
+	case strings.Contains(schema.Path, "$"):
+		r.Warnings = append(r.Warnings, schema.Name+": "+schema.Path+" holds a variable compose interpolates only when it runs, so it wasn't checked")
+	case errors.Is(err, fs.ErrNotExist):
+		schema.Problem = "missing"
+	case err != nil:
+		schema.Problem = err.Error()
+	case !fi.Mode().IsRegular():
+		schema.Problem = "not a file"
+	}
+	add(schema)
 }
 
 // sqlDirProblem says what is wrong with a mounted migrations directory:

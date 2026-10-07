@@ -785,7 +785,9 @@ init, up and update to add, and the `migrate` command.
   while the entrypoint's socket-only temporary server runs. `ERROR 1045`
   fails at once with exit 3, naming the `picsure-db-data` volume: MySQL
   sets the root password only when it initialises an empty volume. A
-  stopped container or the timeout (5 min) shows its last 30 log lines.
+  container that exits or restarts (`restart: always` turns a failed
+  start into restarts), or the timeout (5 min, wall time), shows its last
+  30 log lines.
   Check is a healthy container plus a passing probe. With a remote DB the
   step only probes it; 054 adds bootstrap.
 - `MigrateStep(d, cfg, sec, MigrateOptions{Action, NoRestart})`, ID
@@ -793,7 +795,9 @@ init, up and update to add, and the `migrate` command.
   A non-zero exit fails the step and shows the output's last lines. Repair
   passes `-e FLYWAY_ACTION=repair` (`ComposeRunOpts.Env`, added here) and
   has no Check. After a migrate, the catalog's `RestartAfterMigrate`
-  services (psama, dictionary-api) are restarted if running.
+  services (psama, dictionary-api) are restarted if running; since Check
+  would skip a re-run, a failed restart is a warning naming the command to
+  run, not a failure.
 - `MigrationsUpToDate` is the migrate step's Check, and status's
   `migrations.status`. It reads the one-shots' bind mounts from `compose
   config --no-interpolate` (so overrides count) and lists the `V*__*.sql`
@@ -801,14 +805,18 @@ init, up and update to add, and the `migrate` command.
   checked in `information_schema` first, so a missing table is "not
   migrated", and the dictionary's in Postgres with 014's new
   `QueryPostgres`). Up to date means every file version is recorded, or at
-  or below the pass's baseline, and no row failed. A stopped database, a
-  missing table or an `R__` repeatable migration (no checksum compare)
-  means not up to date, so the step applies and Flyway decides.
+  or below the pass's baseline, and no row failed. A database that isn't
+  running and healthy, a missing table, an `R__` repeatable migration (no
+  checksum compare), or a mount source that is missing or still holds a
+  `${VAR}` (compose interpolates it only when it runs) means not up to
+  date, so the step applies and Flyway decides. Status bounds it at 30 s
+  and skips it for a remote database.
 - `MigrateCheck` is `migrate --check`, ported from AIO's
   `run-migrations.sh --check`: the mounted SQL directories, dictionary-db's
   `schema.sql`, the project UUIDs, the remote DB settings, and `compose
   config --quiet`. It runs nothing but compose config. Legacy Jenkins
-  UUID tokens in the project migrations are a warning.
+  UUID tokens in the project migrations, and a source holding a `${VAR}`,
+  are warnings.
 - `Migrate` runs `[db, migrate]` for the command. `migrate` uses the
   existing render; an unrendered stack is exit 3 ("run `pic-sure up`").
 

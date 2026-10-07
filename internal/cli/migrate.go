@@ -100,7 +100,6 @@ func (a *App) migrate(cmd *cobra.Command, _ []string) error {
 	return a.finish(map[string]any{"action": opts.Action}, nil)
 }
 
-// writeMigrateCheck is the human form of the check.
 func writeMigrateCheck(w io.Writer, r *ops.MigrateCheckReport) error {
 	var b strings.Builder
 	for _, in := range r.Inputs {

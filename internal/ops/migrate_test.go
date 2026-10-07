@@ -122,16 +122,16 @@ func TestDBStepFailsAtOnceOnAccessDenied(t *testing.T) {
 	}
 }
 
-func TestDBStepReportsAStoppedContainerWithItsLogs(t *testing.T) {
+func TestDBStepReportsACrashLoopWithItsLogs(t *testing.T) {
 	f := fakerunner.New(t)
 	f.On(fakerunner.Glob("docker compose * up -d picsure-db"))
-	f.On(fakerunner.Glob("docker compose * ps *")).Stdout(`{"ID":"x","Service":"picsure-db","State":"exited","ExitCode":1}` + "\n")
+	f.On(fakerunner.Glob("docker compose * ps *")).Stdout(`{"ID":"x","Service":"picsure-db","State":"restarting","ExitCode":1}` + "\n")
 	f.On(fakerunner.Glob("docker compose * logs --tail 30 picsure-db")).Stdout("[ERROR] [MY-010119] Aborting\n")
 	d, rec := migrateDeps(f)
 	cfg, sec := migrateConfig()
 
 	err := steps.Run(context.Background(), d.Sink, []steps.Step{ops.DBStep(d, cfg, sec, fastDB)}, steps.Options{})
-	if err == nil || !strings.Contains(err.Error(), "stopped (exit 1)") {
+	if err == nil || !strings.Contains(err.Error(), "stopped (restarting, exit 1)") {
 		t.Fatalf("err %v", err)
 	}
 	if !hasLog(rec, "Aborting") {
@@ -150,6 +150,26 @@ func TestDBStepTimesOut(t *testing.T) {
 	err := steps.Run(context.Background(), d.Sink, []steps.Step{ops.DBStep(d, cfg, sec, fastDB)}, steps.Options{})
 	if err == nil || !strings.Contains(err.Error(), `health "unhealthy"`) {
 		t.Fatalf("err %v", err)
+	}
+}
+
+func TestDBStepTimeoutBoundsAHungProbe(t *testing.T) {
+	f := fakerunner.New(t)
+	f.On(fakerunner.Glob("docker compose * up -d picsure-db"))
+	f.On(fakerunner.Glob("docker compose * ps *")).Stdout(psLine("picsure-db", "running", "healthy"))
+	f.On(fakerunner.Glob("docker compose * logs *"))
+	probe := fakerunner.Glob("docker exec *")
+	f.On(probe).Stdout("0\n").Times(1) // Check's probe
+	f.On(probe).Do(func(ctx context.Context, _ fakerunner.Call) (docker.Result, error) {
+		<-ctx.Done()
+		return docker.Result{}, ctx.Err()
+	})
+	d, _ := migrateDeps(f)
+	cfg, sec := migrateConfig()
+
+	err := steps.Run(context.Background(), d.Sink, []steps.Step{ops.DBStep(d, cfg, sec, fastDB)}, steps.Options{})
+	if err == nil || !strings.Contains(err.Error(), "wasn't ready after 50ms") {
+		t.Fatalf("err %v, want the timeout", err)
 	}
 }
 
@@ -175,16 +195,17 @@ func TestDBStepProbesARemoteDatabase(t *testing.T) {
 // migrationsWorld fakes a stack whose Flyway one-shots mount temp
 // directories, with MySQL and Postgres histories the test sets.
 type migrationsWorld struct {
-	f       *fakerunner.Runner
-	dirs    map[string]string // target → host dir
-	tables  map[string]string // schema.table → rows "version\ttype\tsuccess"
-	pgTable string            // "" for no history table
-	dictUp  bool
+	f          *fakerunner.Runner
+	dirs       map[string]string // target → host dir
+	tables     map[string]string // schema.table → rows "version\ttype\tsuccess"
+	pgTable    string            // "" for no history table
+	dictUp     bool
+	dictHealth string
 }
 
 func newMigrationsWorld(t *testing.T) *migrationsWorld {
 	root := t.TempDir()
-	w := &migrationsWorld{f: fakerunner.New(t), dirs: map[string]string{}, tables: map[string]string{}, dictUp: true}
+	w := &migrationsWorld{f: fakerunner.New(t), dirs: map[string]string{}, tables: map[string]string{}, dictUp: true, dictHealth: "healthy"}
 	for target, files := range map[string][]string{
 		"/migrations/auth":           {"V1__a.sql", "V2__b.sql"},
 		"/migrations/picsure":        {"V1__a.sql", "V1_1__b.sql"},
@@ -223,7 +244,7 @@ func newMigrationsWorld(t *testing.T) *migrationsWorld {
 		if !w.dictUp {
 			return docker.Result{}, nil
 		}
-		return docker.Result{Stdout: []byte(psLine("dictionary-db", "running", "healthy"))}, nil
+		return docker.Result{Stdout: []byte(psLine("dictionary-db", "running", w.dictHealth))}, nil
 	})
 	w.f.On(fakerunner.Glob("docker exec -i -e MYSQL_PWD id-picsure-db mysql *")).Do(func(_ context.Context, c fakerunner.Call) (docker.Result, error) {
 		in := string(c.Stdin)
@@ -288,6 +309,9 @@ func TestMigrationsUpToDate(t *testing.T) {
 		{"a missing history table", func(w *migrationsWorld) { delete(w.tables, "auth.flyway_custom_schema_history") }, false},
 		{"no dictionary history", func(w *migrationsWorld) { w.pgTable = "" }, false},
 		{"dictionary-db not running", func(w *migrationsWorld) { w.dictUp = false }, false},
+		{"dictionary-db still starting", func(w *migrationsWorld) { w.dictHealth = "starting" }, false},
+		{"a source compose interpolates when it runs", func(w *migrationsWorld) { w.dirs["/migrations/custom/auth"] = "/stack/${HOME}/auth" }, false},
+		{"a missing source", func(w *migrationsWorld) { w.dirs["/migrations/picsure"] = "/nonexistent/picsure" }, false},
 		{"a version applied in another spelling", func(w *migrationsWorld) {
 			w.tables["picsure.flyway_schema_history"] = "1.0\tSQL\t1\n01.1\tSQL\t1\n"
 		}, true},
@@ -358,6 +382,28 @@ func TestMigrateRunsBothOneShotsThenRestartsRunningCaches(t *testing.T) {
 		if strings.Contains(strings.Join(c.Argv, " "), "FLYWAY_ACTION") {
 			t.Errorf("a migrate passed FLYWAY_ACTION: %q", c.Argv)
 		}
+	}
+}
+
+func TestMigrateWarnsWhenTheRestartFails(t *testing.T) {
+	f := fakerunner.New(t)
+	f.On(fakerunner.Glob("docker compose * run --rm -T *"))
+	f.On(fakerunner.Glob("docker compose * ps --all --format json")).Stdout(psLine("dictionary-api", "running", "healthy"))
+	f.On(fakerunner.Glob("docker compose * restart dictionary-api")).Exit(1).Stderr("Error response from daemon: oops\n")
+	d, rec := migrateDeps(f)
+	cfg, sec := migrateConfig()
+
+	if err := ops.MigrateStep(d, cfg, sec, ops.MigrateOptions{}).Apply(context.Background(), d.Sink); err != nil {
+		t.Fatalf("err %v, want a warning only", err)
+	}
+	var warned bool
+	for _, e := range rec.Events() {
+		if w, ok := e.(events.Warning); ok && strings.Contains(w.Text, "pic-sure restart psama dictionary-api") {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Error("no warning about the failed restart")
 	}
 }
 
@@ -462,6 +508,24 @@ func TestMigrateCheckReportsAnInvalidComposeConfig(t *testing.T) {
 	r := ops.MigrateCheck(context.Background(), d, cfg, sec)
 	if r.OK || r.Inputs[0].Name != "compose config" || r.Inputs[0].OK {
 		t.Fatalf("report %+v", r)
+	}
+	for _, in := range r.Inputs[1:] {
+		if !in.OK {
+			t.Errorf("input %+v failed too; one cause should be reported once", in)
+		}
+	}
+}
+
+func TestMigrateCheckWarnsAboutASourceWithAVariable(t *testing.T) {
+	w := newMigrationsWorld(t)
+	w.f.On(fakerunner.Glob("docker compose * config --quiet"))
+	w.dirs["/migrations/custom/auth"] = "/stack/${HOME}/auth"
+	d, _ := migrateDeps(w.f)
+	cfg, sec := migrateConfig()
+
+	r := ops.MigrateCheck(context.Background(), d, cfg, sec)
+	if !r.OK || len(r.Warnings) != 1 || !strings.Contains(r.Warnings[0], "${HOME}") {
+		t.Errorf("report %+v, want OK with a warning", r)
 	}
 }
 

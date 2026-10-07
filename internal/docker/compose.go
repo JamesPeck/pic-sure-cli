@@ -113,8 +113,8 @@ type ComposeRunOpts struct {
 	// Env sets variables in the container, as NAME=value entries that
 	// override the service's environment. Each becomes a bare -e NAME with
 	// its value in Cmd.Env, so no value reaches argv. A name the stack's
-	// Env() already sets is refused, since compose would interpolate the
-	// compose files with it too.
+	// Env() already sets is refused: the two would share Cmd.Env, so one
+	// value would silently replace the other.
 	Env []string
 	// Stdout and Stderr receive the container's output, and compose's own
 	// on stderr; nil discards it.
@@ -451,7 +451,8 @@ func (c *Compose) workload(ctx context.Context, progress bool, args []string, st
 	return c.workloadEnv(ctx, progress, args, nil, stdin, stdout, stderr)
 }
 
-// workloadEnv is workload with extra Cmd.Env entries.
+// workloadEnv is workload with extra Cmd.Env entries, refusing any that
+// the stack's Env() already sets.
 func (c *Compose) workloadEnv(ctx context.Context, progress bool, args, env []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
 	cmd, err := c.cmd(progress, args)
 	if err != nil {

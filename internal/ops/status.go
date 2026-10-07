@@ -389,6 +389,10 @@ func StatusServices(ps []docker.ComposeService) []StatusService {
 	return services
 }
 
+// statusMigrationsTimeout bounds the migration check's compose and
+// database calls, so a wedged daemon can't hang status.
+const statusMigrationsTimeout = 30 * time.Second
+
 // statusMigrations checks the Flyway histories when both databases are
 // running. A remote database isn't queried, since status reaches no
 // further than the local daemon.
@@ -412,6 +416,8 @@ func statusMigrations(ctx context.Context, d *Deps, r *StatusReport, st *stack.S
 		r.Migrations.Error = err.Error()
 		return
 	}
+	ctx, cancel := context.WithTimeout(ctx, statusMigrationsTimeout)
+	defer cancel()
 	switch ok, err := MigrationsUpToDate(ctx, d, cfg, sec); {
 	case err != nil:
 		r.Migrations.Error = err.Error()
