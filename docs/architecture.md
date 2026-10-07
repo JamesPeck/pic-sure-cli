@@ -1003,7 +1003,9 @@ preconditions (034) can call it with no `Stack` and `Building: true`.
   but a 407 or a refused CONNECT is a failure naming credentials) and `-release-control` (`git ls-remote` with the proxy env).
   The repo URL's user info is masked in messages.
   With a proxy, `network-docker-pull` pulls alpine and on failure puts the
-  runtime's daemon proxy instructions in `Detail` (D36).
+  runtime's daemon proxy instructions in `Detail` (D36). Docker Desktop's
+  `docker info` always names its internal proxy (`http.docker.internal`),
+  which the detail explains rather than calling it the daemon's proxy.
 - `Host` is the seam for PATH lookups, free disk, port binding and HTTP;
   the cli layer's `systemHost` is the real one.
 
@@ -2723,6 +2725,12 @@ source. `e2e-cache.sh` moves the images init recorded (`E2E_IMAGES_FILE`)
 and the `pic-sure-m2` volume to and from tarballs that actions/cache keeps
 per architecture; the images key carries the release-control commit, and a
 new entry is saved only when init built something.
+
+`e2e-proxy.sh` (055) runs a stack whose proxy is a squid container and
+checks every §9.10 egress path against squid's access log;
+`docs/testing-proxy.md` describes the setup and what each check proves.
+`init_stack` passes extra arguments on to init for it. No workflow runs it
+yet.
 
 ## v1 leftovers
 

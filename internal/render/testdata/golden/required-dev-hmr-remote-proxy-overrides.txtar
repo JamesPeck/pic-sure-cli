@@ -66,9 +66,9 @@ services:
         condition: service_started
     # The Vite server's own page, on IPv4: Vite listens on 0.0.0.0, and
     # localhost is ::1 first. A first install and the first server-side
-    # render can be slow.
+    # render can be slow. -Y off: busybox wget ignores no_proxy.
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3000/"]
+      test: ["CMD", "wget", "-Y", "off", "--spider", "-q", "http://127.0.0.1:3000/"]
       interval: 10s
       timeout: 30s
       retries: 3
@@ -242,9 +242,10 @@ services:
     # Shallow, unauthenticated /auth/actuator/health. Its aggregate includes
     # the datasource, so a broken DB turns the probe into a 503. 127.0.0.1, not
     # localhost: JAVA_OPTS sets preferIPv4Stack, so busybox wget's first (IPv6)
-    # candidate for localhost is refused.
+    # candidate for localhost is refused. -Y off: busybox wget ignores no_proxy,
+    # so with a proxy set it would send the probe to the proxy.
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8090/auth/actuator/health"]
+      test: ["CMD", "wget", "-Y", "off", "-q", "--spider", "http://127.0.0.1:8090/auth/actuator/health"]
       interval: 30s
       timeout: 10s
       retries: 5

@@ -880,14 +880,20 @@ func (c *doctor) daemonProxyHelp() string {
 	p := c.cfg.Proxy
 	httpURL, httpsURL := redactURL(p.HTTP), redactURL(p.HTTPS)
 	current := "The daemon has no proxy configured."
-	if c.info.HTTPProxy != "" || c.info.HTTPSProxy != "" {
+	switch {
+	case c.runtime == RuntimeDockerDesktop && desktopInternalProxy(c.info.HTTPProxy, c.info.HTTPSProxy):
+		// Docker Desktop always reports its own forwarding proxy, which
+		// goes direct unless its settings name an upstream proxy.
+		current = "Docker Desktop sends pulls through its internal proxy (http.docker.internal:3128), which uses the proxy set in its settings, if any."
+	case c.info.HTTPProxy != "" || c.info.HTTPSProxy != "":
 		current = fmt.Sprintf("The daemon's proxy is http=%q https=%q.", c.info.HTTPProxy, c.info.HTTPSProxy)
 	}
 	env := fmt.Sprintf("HTTP_PROXY=%s HTTPS_PROXY=%s NO_PROXY=%s", httpURL, httpsURL, p.NoProxy)
 	var how string
 	switch c.runtime {
 	case RuntimeDockerDesktop:
-		how = "Docker Desktop: Settings > Resources > Proxies, turn on manual proxy configuration, enter the proxy URLs, then Apply & restart."
+		how = fmt.Sprintf("Docker Desktop: Settings > Resources > Proxies, turn on manual proxy configuration, set the web server (HTTP) to %q, "+
+			"the secure web server (HTTPS) to %q and the bypass list to %q, then Apply & restart.", httpURL, httpsURL, p.NoProxy)
 	case RuntimeColima:
 		how = "Colima: run `colima start --edit`, add the variables under `env:` (" + env + "), save, and let Colima restart."
 	case RuntimeOrbStack:
@@ -901,6 +907,22 @@ func (c *doctor) daemonProxyHelp() string {
 			"then run `sudo systemctl daemon-reload && sudo systemctl restart docker`."
 	}
 	return current + "\n" + how
+}
+
+// desktopInternalProxy reports whether docker info's proxy fields name
+// Docker Desktop's built-in proxy rather than one the user configured.
+func desktopInternalProxy(urls ...string) bool {
+	found := false
+	for _, u := range urls {
+		if u == "" {
+			continue
+		}
+		if !strings.Contains(u, "http.docker.internal") {
+			return false
+		}
+		found = true
+	}
+	return found
 }
 
 // redactURL shows a proxy URL with its password hidden.

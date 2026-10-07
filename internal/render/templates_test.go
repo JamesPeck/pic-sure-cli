@@ -113,6 +113,7 @@ type composeFile struct {
 		Ports       []string
 		Volumes     []yaml.Node
 		Environment map[string]string
+		Healthcheck struct{ Test []string }
 	}
 	Networks map[string]struct {
 		Internal bool

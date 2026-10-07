@@ -726,7 +726,7 @@ func TestDoctorNetwork(t *testing.T) {
 	for _, tc := range []struct {
 		runtime, os, ctx, want string
 	}{
-		{"desktop", "Docker Desktop", "desktop-linux", "Settings > Resources > Proxies"},
+		{"desktop", "Docker Desktop", "desktop-linux", `set the web server (HTTP) to "http://u:xxxxx@proxy:3128"`},
 		{"colima", "Ubuntu", "colima", "colima start --edit"},
 		{"orbstack", "OrbStack", "orbstack", "orb config set network_proxy http://u:xxxxx@proxy:3128"},
 		{"engine", "Ubuntu 24.04", "default", "HTTPS_PROXY=http://u:xxxxx@proxy:3128"},
@@ -746,6 +746,31 @@ func TestDoctorNetwork(t *testing.T) {
 			}
 			if strings.Contains(c.Detail, "hunter2") {
 				t.Errorf("detail leaks the password: %q", c.Detail)
+			}
+		})
+	}
+}
+
+func TestDoctorPullFailureNamesTheDaemonProxy(t *testing.T) {
+	for _, tc := range []struct {
+		name, os, ctx, proxy, want string
+	}{
+		// Docker Desktop reports its own forwarding proxy whatever its
+		// settings say, so naming it would mislead.
+		{"desktop internal", "Docker Desktop", "desktop-linux", "http.docker.internal:3128", "Docker Desktop sends pulls through its internal proxy"},
+		{"engine", "Ubuntu 24.04", "default", "http://corp:3128", `The daemon's proxy is http="http://corp:3128"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newDoctorEnv(t)
+			e.opts.Network = true
+			e.info.OperatingSystem, e.info.ClientInfo.Context = tc.os, tc.ctx
+			e.info.HTTPProxy, e.info.HTTPSProxy = tc.proxy, tc.proxy
+			e.version.Server.Platform.Name = ""
+			e.stack(t, func(c *stack.Config) { c.Proxy = stack.Proxy{HTTP: "http://proxy:3128", HTTPS: "http://proxy:3128"} })
+			e.f.On(fakerunner.Glob("docker pull *")).Exit(1).Stderr("Error response from daemon: dial tcp: i/o timeout\n")
+			c := wantCheck(t, e.run(), "network-docker-pull", ops.CheckFail, "i/o timeout")
+			if !strings.Contains(c.Detail, tc.want) {
+				t.Errorf("detail %q, want %q", c.Detail, tc.want)
 			}
 		})
 	}

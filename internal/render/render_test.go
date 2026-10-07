@@ -397,6 +397,33 @@ func TestRenderValues(t *testing.T) {
 	}
 }
 
+// busybox wget ignores no_proxy, so a wget healthcheck in a container that
+// has the proxy variables must turn the proxy off, or the probe goes to the
+// proxy and the service never becomes healthy (found in 055's squid run).
+func TestProxiedHealthchecksSkipTheProxy(t *testing.T) {
+	files, err := Render(goldenInput(goldenCase{proxy: true, dev: []string{"httpd-hmr"}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var f composeFile
+	if err := yaml.Unmarshal(files[0].Data, &f); err != nil {
+		t.Fatal(err)
+	}
+	proxied := 0
+	for name, svc := range f.Services {
+		if svc.Environment["HTTP_PROXY"] == "" {
+			continue
+		}
+		proxied++
+		if test := strings.Join(svc.Healthcheck.Test, " "); strings.Contains(test, "wget") && !strings.Contains(test, "wget -Y off") {
+			t.Errorf("%s: healthcheck %q would go through the proxy", name, test)
+		}
+	}
+	if proxied < 2 {
+		t.Errorf("%d services have the proxy variables, want psama and httpd-hmr at least", proxied)
+	}
+}
+
 func TestSharedProfile(t *testing.T) {
 	for _, c := range []struct{ configured, recorded, want string }{
 		{"", "genomic", "genomic"},
