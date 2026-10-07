@@ -1,0 +1,169 @@
+{
+  "schema_version": 2,
+  "stack": {
+    "name": "demo",
+    "dir": "STACKDIR"
+  },
+  "config": {
+    "valid": true,
+    "problems": []
+  },
+  "versions": {
+    "cli": "2.0.0",
+    "schema": 1,
+    "stack_cli": "2.0.0",
+    "stack_schema": 1,
+    "config_schema": 1,
+    "gate": "ok",
+    "pending_migrations": []
+  },
+  "release": {
+    "repo": "https://github.com/hms-dbmi/pic-sure-release-control",
+    "branch": "james_mono",
+    "commit": "49be6ec0123456789abcdef0123456789abcdef0"
+  },
+  "components": [
+    {
+      "name": "pic-sure",
+      "ref": "v3.1.0",
+      "commit": "1111111111111111111111111111111111111111"
+    },
+    {
+      "name": "frontend",
+      "ref": "main",
+      "commit": "2222222222222222222222222222222222222222"
+    },
+    {
+      "name": "migrations",
+      "ref": "",
+      "commit": ""
+    },
+    {
+      "name": "dictionary-etl",
+      "ref": "",
+      "commit": ""
+    }
+  ],
+  "images": [
+    {
+      "name": "pic-sure-gateway",
+      "component": "pic-sure",
+      "ref": "hms-dbmi/pic-sure-gateway:111111111111",
+      "present": true
+    },
+    {
+      "name": "pic-sure-operations-service",
+      "component": "pic-sure",
+      "ref": "",
+      "present": null
+    },
+    {
+      "name": "pic-sure-hpds-query-service",
+      "component": "pic-sure",
+      "ref": "",
+      "present": null
+    },
+    {
+      "name": "pic-sure-psama",
+      "component": "pic-sure",
+      "ref": "",
+      "present": null
+    },
+    {
+      "name": "pic-sure-hpds",
+      "component": "pic-sure",
+      "ref": "hms-dbmi/pic-sure-hpds:111111111111",
+      "present": false
+    },
+    {
+      "name": "pic-sure-hpds-etl",
+      "component": "pic-sure",
+      "ref": "",
+      "present": null
+    },
+    {
+      "name": "pic-sure-visualization",
+      "component": "pic-sure",
+      "ref": "",
+      "present": null
+    },
+    {
+      "name": "pic-sure-logging",
+      "component": "pic-sure",
+      "ref": "",
+      "present": null
+    },
+    {
+      "name": "pic-sure-dictionary-api",
+      "component": "pic-sure",
+      "ref": "",
+      "present": null
+    },
+    {
+      "name": "pic-sure-dictionary-dump",
+      "component": "pic-sure",
+      "ref": "",
+      "present": null
+    },
+    {
+      "name": "dictionary-weights",
+      "component": "pic-sure",
+      "ref": "",
+      "present": null
+    },
+    {
+      "name": "pic-sure-httpd",
+      "component": "frontend",
+      "ref": "",
+      "present": null
+    },
+    {
+      "name": "dictionary-etl",
+      "component": "dictionary-etl",
+      "ref": "",
+      "present": null
+    }
+  ],
+  "services": [
+    {
+      "service": "gateway",
+      "container": "demo-gateway-1",
+      "state": "exited",
+      "health": "",
+      "status": "Exited (1)",
+      "exit_code": 1
+    },
+    {
+      "service": "psama",
+      "container": "demo-psama-1",
+      "state": "running",
+      "health": "healthy",
+      "status": "Up 2 minutes (healthy)",
+      "exit_code": 0
+    }
+  ],
+  "db": {
+    "mode": "remote",
+    "host": "db.example.com",
+    "port": 3306
+  },
+  "migrations": {
+    "status": "unknown"
+  },
+  "token": {
+    "expires_at": "2026-10-06T11:00:00Z",
+    "expired": true
+  },
+  "auth0": {
+    "needed": true,
+    "callback_url": "https://localhost:8443/login/loading/",
+    "logout_url": "https://localhost:8443",
+    "web_origin": "https://localhost:8443"
+  },
+  "last_operation": {
+    "name": "up",
+    "status": "ok",
+    "started_at": "2026-10-06T11:00:00Z",
+    "finished_at": "2026-10-06T11:10:00Z"
+  }
+}

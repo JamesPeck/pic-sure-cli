@@ -1,7 +1,97 @@
-# Not implemented yet: exit 1, naming ticket 027.
-exitcode 1 pic-sure status
-stderr '^pic-sure: not implemented \(ticket 027\)$'
-! stdout .
-exitcode 1 pic-sure status --deep
-stderr '^pic-sure: not implemented \(ticket 027\)$'
-! stdout .
+# No stack here or above: exit 3.
+exitcode 3 pic-sure status
+stderr 'no pic-sure stack found'
+exitcode 3 pic-sure --json status
+stdout '"exit_code":3'
+
+# --deep is ticket 037.
+exitcode 1 pic-sure --stack stack status --deep
+stderr '^pic-sure: not implemented \(ticket 037\)$'
+
+# A stack status can read: exit 0, one schema_version 2 object. Docker
+# answers nothing here, so image presence and services are unknown, with
+# the reason, and status still exits 0.
+cd stack/sub
+exec pic-sure --json status
+! stderr .
+stdout '^\{"schema_version":2,"stack":\{"name":"demo","dir":".*stack"\},"config":\{"valid":true,"problems":\[\]\},'
+stdout '"versions":\{"cli":"dev","schema":1,"stack_cli":"dev","stack_schema":1,"config_schema":1,"gate":"ok","pending_migrations":\[\]\}'
+stdout '"release":\{"repo":"https://github.com/hms-dbmi/pic-sure-release-control","branch":"james_mono","commit":"49be6ec0123456789abcdef0123456789abcdef0"\}'
+stdout '\{"name":"pic-sure","ref":"v3.1.0","commit":"1111111111111111111111111111111111111111"\}'
+stdout '\{"name":"pic-sure-gateway","component":"pic-sure","ref":"hms-dbmi/pic-sure-gateway:111111111111","present":null\}'
+stdout '"images_error":"[^"]+"'
+stdout '"services":\[\],"services_error":"[^"]+"'
+stdout '"db":\{"mode":"local"\},"migrations":\{"status":"unknown"\}'
+stdout '"token":\{"expires_at":"2030-01-01T00:00:00Z","expired":false\}'
+stdout '"auth0":\{"needed":true,"callback_url":"https://localhost:8443/login/loading/","logout_url":"https://localhost:8443","web_origin":"https://localhost:8443"\}'
+stdout '"last_operation":\{"name":"up","status":"ok",'
+! stdout '"type"'
+
+# The human form.
+exec pic-sure --plain status
+stdout '^Stack: +demo \(.*stack\)$'
+stdout '^Config: +valid$'
+stdout '^Gate: +ok$'
+stdout '^Release: +https://github.com/hms-dbmi/pic-sure-release-control james_mono 49be6ec01234$'
+stdout '^  pic-sure +111111111111 \(v3.1.0\)$'
+stdout '^  migrations +\(not recorded\)$'
+stdout '^  pic-sure-gateway +unknown$'
+stdout '^  pic-sure-psama +no tag recorded$'
+stdout '^  unknown: '
+stdout '^Database: +local$'
+stdout '^Migrations: +unknown$'
+stdout '^Token: +expires 2030-01-01T00:00:00Z$'
+stdout '^  Callback URL: https://localhost:8443/login/loading/$'
+cd $WORK
+
+# An invalid config, no state and an unrendered stack are still exit 0.
+exec pic-sure --stack broken --json status
+stdout '"config":\{"valid":false,"problems":\[\{"path":"network.http_port","line":3,"message":"[^"]+"\}\]\}'
+stdout '"services":\[\],"services_error":"the stack hasn''t been rendered yet; run pic-sure up"'
+stdout '"release":\{"repo":"","branch":"","commit":""\},'
+stdout '"db":null,'
+stdout '"auth0":null,"last_operation":null\}$'
+exec pic-sure --stack broken status
+stdout '^Config: +invalid$'
+stdout '^  - network.http_port \(line 3\): '
+stdout '^Stack CLI: +\(not recorded\)'
+stdout '^Token: +not issued$'
+! stdout Auth0
+
+# A stack rendered by a newer pic-sure: status runs, with the gate's warning
+# on stderr, and reports the gate.
+exec pic-sure --stack newer --json status
+stderr 'warning: this stack uses pic-sure.yaml schema 2'
+stdout '"config":\{"valid":false,"problems":\[\],"error":"[^"]+"\}'
+stdout '"gate":"stack_newer"'
+
+-- stack/sub/.keep --
+-- stack/pic-sure.yaml --
+schema: 1
+name: demo
+network: {https_port: 8443}
+auth: {admin_email: admin@example.com, auth0: {client_id: abc}}
+-- stack/.pic-sure/state.json --
+{
+  "cli_version": "dev",
+  "schema_version": 1,
+  "release": {"repo": "https://github.com/hms-dbmi/pic-sure-release-control", "branch": "james_mono", "commit": "49be6ec0123456789abcdef0123456789abcdef0"},
+  "components": {"pic-sure": {"ref": "v3.1.0", "commit": "1111111111111111111111111111111111111111"}},
+  "images": {"pic-sure-gateway": "111111111111"},
+  "last_operation": {"name": "up", "status": "ok", "started_at": "2026-10-06T11:00:00Z", "finished_at": "2026-10-06T11:10:00Z"}
+}
+-- stack/.pic-sure/secrets.yaml --
+introspection_token_expiry: 2030-01-01T00:00:00Z
+-- stack/.pic-sure/render/compose.yaml --
+services: {}
+-- broken/pic-sure.yaml --
+schema: 1
+name: broken
+network: {http_port: 99999}
+auth: {mode: open, admin_email: admin@example.com}
+-- broken/.pic-sure/.keep --
+-- newer/pic-sure.yaml --
+schema: 2
+name: demo
+-- newer/.pic-sure/state.json --
+{"cli_version": "v9.0.0", "schema_version": 2}

@@ -1,0 +1,351 @@
+package ops
+
+import (
+	"context"
+	"errors"
+	"io/fs"
+	"net"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/JamesPeck/pic-sure-cli/internal/catalog"
+	"github.com/JamesPeck/pic-sure-cli/internal/stack"
+)
+
+// StatusOptions are what Status needs from the cli layer.
+type StatusOptions struct {
+	// CLIVersion is this binary's version, for the version gate.
+	CLIVersion string
+	// Migrations is the config migration registry this binary runs.
+	Migrations stack.Registry
+	// ComposeErr is why the command couldn't build Deps.Compose, when it
+	// is nil for a reason other than a stack that hasn't been rendered.
+	ComposeErr error
+}
+
+// StatusReport is `status --json` (spec §9.9). docs/json-schemas.md
+// documents it; changes within schema_version 2 are additive only. A
+// section that couldn't be read says why in its error field, and status
+// still exits 0.
+type StatusReport struct {
+	Stack    StatusStack    `json:"stack"`
+	Config   StatusConfig   `json:"config"`
+	Versions StatusVersions `json:"versions"`
+	// StateError is why state.json couldn't be read; release, components,
+	// image tags and last_operation are then empty.
+	StateError string            `json:"state_error,omitempty"`
+	Release    StatusRelease     `json:"release"`
+	Components []StatusComponent `json:"components"`
+	Images     []StatusImage     `json:"images"`
+	// ImagesError is why image presence couldn't be checked (usually an
+	// unreachable daemon); present is then null.
+	ImagesError string          `json:"images_error,omitempty"`
+	Services    []StatusService `json:"services"`
+	// ServicesError is why compose ps couldn't run. An empty services list
+	// is unknown, not down: with no error, compose reported no containers.
+	ServicesError string           `json:"services_error,omitempty"`
+	DB            *StatusDB        `json:"db"`
+	Migrations    StatusMigrations `json:"migrations"`
+	Token         StatusToken      `json:"token"`
+	Auth0         *StatusAuth0     `json:"auth0"`
+	LastOperation *stack.Operation `json:"last_operation"`
+}
+
+// StatusStack identifies the stack.
+type StatusStack struct {
+	Name string `json:"name"`
+	Dir  string `json:"dir"`
+}
+
+// StatusConfig is whether pic-sure.yaml is valid.
+type StatusConfig struct {
+	Valid    bool            `json:"valid"`
+	Problems []StatusProblem `json:"problems"`
+	// Error is set when the file couldn't be read or decoded at all, such
+	// as a schema this pic-sure can't read.
+	Error string `json:"error,omitempty"`
+}
+
+// StatusProblem is one config problem.
+type StatusProblem struct {
+	Path    string `json:"path"`
+	Line    int    `json:"line"`
+	Message string `json:"message"`
+}
+
+// Version gate states.
+const (
+	GateOK                = "ok"
+	GateStackNewer        = "stack_newer"
+	GateMigrationsPending = "migrations_pending"
+	GateUnknown           = "unknown"
+)
+
+// StatusVersions is the version gate state (§10.6).
+type StatusVersions struct {
+	CLI          string `json:"cli"`
+	Schema       int    `json:"schema"`
+	StackCLI     string `json:"stack_cli"`
+	StackSchema  int    `json:"stack_schema"`
+	ConfigSchema int    `json:"config_schema"`
+	// Gate is ok, stack_newer, migrations_pending or unknown.
+	Gate string `json:"gate"`
+	// PendingMigrations summarizes the config migrations update would run.
+	PendingMigrations []string `json:"pending_migrations"`
+	Error             string   `json:"error,omitempty"`
+}
+
+// StatusRelease is the release-control commit state.json records.
+type StatusRelease struct {
+	Repo   string `json:"repo"`
+	Branch string `json:"branch"`
+	Commit string `json:"commit"`
+}
+
+// StatusComponent is one component's recorded source commit.
+type StatusComponent struct {
+	Name   string `json:"name"`
+	Ref    string `json:"ref"`
+	Commit string `json:"commit"`
+}
+
+// StatusImage is one built image at the tag the stack runs.
+type StatusImage struct {
+	Name      string `json:"name"`
+	Component string `json:"component"`
+	// Ref is repository:tag, empty when state.json records no tag.
+	Ref string `json:"ref"`
+	// Present is null when unknown: no recorded tag, or docker failed.
+	Present *bool `json:"present"`
+}
+
+// StatusService is one container from compose ps.
+type StatusService struct {
+	Service   string `json:"service"`
+	Container string `json:"container"`
+	State     string `json:"state"`
+	Health    string `json:"health"`
+	Status    string `json:"status"`
+	ExitCode  int    `json:"exit_code"`
+}
+
+// StatusDB is the database mode.
+type StatusDB struct {
+	Mode string `json:"mode"`
+	// Host and Port are set for a remote database.
+	Host string `json:"host,omitempty"`
+	Port int    `json:"port,omitempty"`
+}
+
+// StatusMigrations is the Flyway migration state. Until ticket 032 adds
+// its check, Status is always unknown.
+type StatusMigrations struct {
+	Status string `json:"status"`
+}
+
+// StatusToken is the introspection token's expiry, from secrets.yaml.
+type StatusToken struct {
+	// ExpiresAt is null when no token has been issued.
+	ExpiresAt *time.Time `json:"expires_at"`
+	Expired   bool       `json:"expired"`
+	Error     string     `json:"error,omitempty"`
+}
+
+// StatusAuth0 is what to register in the Auth0 application for this
+// stack's HTTPS origin (D35).
+type StatusAuth0 struct {
+	// Needed is false in open mode, where nobody has to log in.
+	Needed      bool   `json:"needed"`
+	CallbackURL string `json:"callback_url"`
+	LogoutURL   string `json:"logout_url"`
+	WebOrigin   string `json:"web_origin"`
+}
+
+// Status reports on st without changing anything: no lock, no writes, no
+// network beyond the local docker daemon.
+func Status(ctx context.Context, d *Deps, st *stack.Stack, opts StatusOptions) *StatusReport {
+	r := &StatusReport{
+		Stack:      StatusStack{Dir: st.Dir},
+		Migrations: StatusMigrations{Status: "unknown"},
+	}
+	cfg := statusConfig(r, st, opts.Migrations)
+	statusVersions(r, st, opts)
+	state, err := st.LoadState()
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		state = &stack.State{}
+	case err != nil:
+		r.StateError = err.Error()
+		state = &stack.State{}
+	}
+	r.Release = StatusRelease(state.Release)
+	r.LastOperation = state.LastOperation
+	for _, c := range catalog.Components() {
+		rec := state.Components[c.Name]
+		r.Components = append(r.Components, StatusComponent{Name: c.Name, Ref: rec.Ref, Commit: rec.Commit})
+	}
+	statusImages(ctx, d, r, state)
+	statusServices(ctx, d, r, opts.ComposeErr)
+	statusToken(d, r, st)
+	if cfg != nil {
+		r.Stack.Name = cfg.Name
+		r.DB = &StatusDB{Mode: string(cfg.DB.Mode)}
+		if cfg.DB.Mode == stack.DBRemote {
+			r.DB.Host, r.DB.Port = cfg.DB.Remote.Host, cfg.DB.Remote.Port
+		}
+		r.Auth0 = auth0URLs(cfg)
+	}
+	return r
+}
+
+// statusConfig fills in the config section and returns the decoded config,
+// or nil if it can't be decoded. Problems found by CheckFiles leave it
+// usable.
+func statusConfig(r *StatusReport, st *stack.Stack, migrations stack.Registry) *stack.Config {
+	r.Config.Problems = []StatusProblem{}
+	doc, err := st.ReadConfigDoc()
+	if err != nil {
+		configProblems(r, err)
+		return nil
+	}
+	if name, err := doc.Raw("name"); err == nil {
+		if s, ok := name.(string); ok {
+			r.Stack.Name = s
+		}
+	}
+	if _, err := migrations.Migrate(doc); err != nil {
+		configProblems(r, err)
+		return nil
+	}
+	cfg, err := doc.Config()
+	if err != nil {
+		configProblems(r, err)
+		return nil
+	}
+	if err := cfg.CheckFiles(st.Dir); err != nil {
+		configProblems(r, err)
+		return cfg
+	}
+	r.Config.Valid = true
+	return cfg
+}
+
+func configProblems(r *StatusReport, err error) {
+	var ce *stack.ConfigError
+	if !errors.As(err, &ce) {
+		r.Config.Error = err.Error()
+		return
+	}
+	for _, p := range ce.Problems {
+		r.Config.Problems = append(r.Config.Problems, StatusProblem{Path: p.Path, Line: p.Line, Message: p.Msg})
+	}
+}
+
+func statusVersions(r *StatusReport, st *stack.Stack, opts StatusOptions) {
+	r.Versions = StatusVersions{CLI: opts.CLIVersion, Schema: opts.Migrations.Target, Gate: GateUnknown, PendingMigrations: []string{}}
+	v, err := st.CheckVersions(opts.CLIVersion, opts.Migrations)
+	if err != nil {
+		r.Versions.Error = err.Error()
+		return
+	}
+	r.Versions.StackCLI, r.Versions.StackSchema, r.Versions.ConfigSchema = v.StackCLI, v.StackSchema, v.ConfigSchema
+	for _, m := range v.Pending {
+		r.Versions.PendingMigrations = append(r.Versions.PendingMigrations, m.Summary)
+	}
+	switch {
+	case v.Newer():
+		r.Versions.Gate = GateStackNewer
+	case len(v.Pending) > 0:
+		r.Versions.Gate = GateMigrationsPending
+	default:
+		r.Versions.Gate = GateOK
+	}
+}
+
+// statusImages checks each built image at the tag state.json records. The
+// first docker failure stops the checks, since the rest would fail the
+// same way.
+func statusImages(ctx context.Context, d *Deps, r *StatusReport, state *stack.State) {
+	r.Images = []StatusImage{}
+	for _, img := range catalog.Images() {
+		if !img.Built() {
+			continue
+		}
+		si := StatusImage{Name: img.Name, Component: img.Component}
+		if tag := state.Images[img.Name]; tag != "" {
+			si.Ref = img.Repository() + ":" + tag
+		}
+		if si.Ref != "" && r.ImagesError == "" {
+			ok, err := d.Docker.ImageExists(ctx, si.Ref)
+			if err != nil {
+				r.ImagesError = err.Error()
+			} else {
+				si.Present = &ok
+			}
+		}
+		r.Images = append(r.Images, si)
+	}
+}
+
+func statusServices(ctx context.Context, d *Deps, r *StatusReport, composeErr error) {
+	r.Services = []StatusService{}
+	switch {
+	case composeErr != nil:
+		r.ServicesError = composeErr.Error()
+		return
+	case d.Compose == nil:
+		r.ServicesError = "the stack hasn't been rendered yet; run pic-sure up"
+		return
+	}
+	ps, err := d.Compose.Ps(ctx)
+	if err != nil {
+		r.ServicesError = err.Error()
+		return
+	}
+	for _, s := range ps {
+		r.Services = append(r.Services, StatusService{
+			Service: s.Service, Container: s.Name, State: s.State,
+			Health: s.Health, Status: s.Status, ExitCode: s.ExitCode,
+		})
+	}
+	sort.Slice(r.Services, func(i, j int) bool {
+		a, b := r.Services[i], r.Services[j]
+		return a.Service < b.Service || a.Service == b.Service && a.Container < b.Container
+	})
+}
+
+func statusToken(d *Deps, r *StatusReport, st *stack.Stack) {
+	sec, err := st.LoadSecrets()
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return
+	case err != nil:
+		r.Token.Error = err.Error()
+		return
+	}
+	if exp := sec.IntrospectionTokenExpiry; !exp.IsZero() {
+		exp = exp.UTC()
+		r.Token.ExpiresAt = &exp
+		r.Token.Expired = !d.Clock.Now().Before(exp)
+	}
+}
+
+// auth0URLs are the URLs the frontend sends Auth0 for this stack: it logs
+// in through /login/loading/ on its own origin.
+func auth0URLs(cfg *stack.Config) *StatusAuth0 {
+	host := cfg.Network.Hostname
+	if cfg.Network.HTTPSPort != 443 {
+		host = net.JoinHostPort(host, strconv.Itoa(cfg.Network.HTTPSPort))
+	} else if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	origin := "https://" + host
+	return &StatusAuth0{
+		Needed:      cfg.Auth.Mode != stack.AuthOpen,
+		CallbackURL: origin + "/login/loading/",
+		LogoutURL:   origin,
+		WebOrigin:   origin,
+	}
+}
