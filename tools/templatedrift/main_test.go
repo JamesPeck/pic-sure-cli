@@ -32,6 +32,7 @@ func TestParseReadmeErrors(t *testing.T) {
 		"no commit":  "| `a.tmpl` | `a.yml` |\n",
 		"bad source": "AIO commit: `abcdef1`\n\n| `a.tmpl` | a.yml |\n",
 		"no table":   "AIO commit: `abcdef1`\n",
+		"unclosed":   "AIO commit: `abcdef1`\n\n| `a.tmpl | `a.yml` |\n",
 	} {
 		if _, err := ParseReadme([]byte(readme)); err == nil {
 			t.Errorf("%s: no error", name)
@@ -52,6 +53,14 @@ func aioRepo(t *testing.T) (string, string) {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("no git")
+	}
+	// Keep the user's git config (commit signing, say) and any enclosing
+	// repository out of the fixture and the tool.
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	for _, k := range []string{"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"} {
+		t.Setenv(k, "")
+		_ = os.Unsetenv(k)
 	}
 	dir := t.TempDir()
 	git := func(args ...string) string {

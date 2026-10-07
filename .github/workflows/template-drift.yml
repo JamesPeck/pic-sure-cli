@@ -34,7 +34,7 @@ env:
   AIO_REPO: ${{ inputs.repo || 'hms-dbmi/pic-sure-all-in-one' }}
   AIO_BRANCH: ${{ inputs.branch || 'aio-compose' }}
   AIO_COMMIT: ${{ inputs.commit }}
-  ISSUE_TITLE: "Template drift: AIO compose or config changed upstream"
+  ISSUE_TITLE: "Template drift check: AIO compose and config"
 
 jobs:
   drift:
@@ -68,14 +68,15 @@ jobs:
           git init -q "$RUNNER_TEMP/aio"
           git -C "$RUNNER_TEMP/aio" fetch -q --no-tags "$url" "+refs/heads/$AIO_BRANCH:refs/remotes/aio/head" 2> err.txt ||
             fail "the branch couldn't be fetched." err.txt
+          commit="${AIO_COMMIT:-$(sed -nE 's/^AIO commit: .([0-9a-f]+).$/\1/p' internal/render/templates/README.md)}"
           # A full commit ID that isn't on the branch may still be fetchable.
-          if [[ "$AIO_COMMIT" =~ ^[0-9a-f]{40}$ ]] && ! git -C "$RUNNER_TEMP/aio" cat-file -e "$AIO_COMMIT^{commit}" 2> /dev/null; then
-            git -C "$RUNNER_TEMP/aio" fetch -q --no-tags "$url" "$AIO_COMMIT" 2> /dev/null || true
+          if [[ "$commit" =~ ^[0-9a-f]{40}$ ]] && ! git -C "$RUNNER_TEMP/aio" cat-file -e "$commit^{commit}" 2> /dev/null; then
+            git -C "$RUNNER_TEMP/aio" fetch -q --no-tags "$url" "$commit" 2> /dev/null || true
           fi
           go build -o "$RUNNER_TEMP/templatedrift" ./tools/templatedrift 2> err.txt ||
             fail "the drift tool didn't build." err.txt
           args=(-aio "$RUNNER_TEMP/aio" -to refs/remotes/aio/head -name "$AIO_REPO@$AIO_BRANCH")
-          if [ -n "$AIO_COMMIT" ]; then args+=(-from "$AIO_COMMIT"); fi
+          if [ -n "$commit" ]; then args+=(-from "$commit"); fi
           code=0
           "$RUNNER_TEMP/templatedrift" "${args[@]}" > report.md 2> err.txt || code=$?
           case "$code" in
@@ -85,7 +86,7 @@ jobs:
               echo "status=drift" >> "$GITHUB_OUTPUT"
               echo "::warning::AIO compose or config files changed since the templates were ported; see the run summary"
               ;;
-            *) fail "the recorded commit or the branch head isn't available." err.txt ;;
+            *) fail "the drift tool failed." err.txt ;;
           esac
 
       - name: Summary
@@ -108,7 +109,7 @@ jobs:
           STATUS: ${{ steps.diff.outputs.status }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          number="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$ISSUE_TITLE\"" \
+          number="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --author app/github-actions --search "in:title \"$ISSUE_TITLE\"" \
             --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')" || {
             echo "::warning::couldn't search the issues"
             exit 0

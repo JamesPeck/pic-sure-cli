@@ -99,7 +99,11 @@ func ParseReadme(data []byte) (Readme, error) {
 		if len(cells) != 4 || !strings.HasPrefix(strings.TrimSpace(cells[1]), "`") {
 			continue
 		}
-		tmpl := codeSpan.FindStringSubmatch(cells[1])[1]
+		m := codeSpan.FindStringSubmatch(cells[1])
+		if m == nil {
+			return Readme{}, fmt.Errorf("README: table row %q has no template", strings.TrimSpace(line))
+		}
+		tmpl := m[1]
 		srcs := codeSpan.FindAllStringSubmatch(cells[2], -1)
 		if len(srcs) == 0 && strings.TrimSpace(cells[2]) != "none" {
 			return Readme{}, fmt.Errorf("README: %s has neither AIO sources nor \"none\"", tmpl)

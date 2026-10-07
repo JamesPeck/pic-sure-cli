@@ -5,7 +5,7 @@ The stack definition pic-sure embeds (D5) and renders into a stack's
 (`hms-dbmi/pic-sure-all-in-one`, branch `aio-compose`) and changed where v2
 fixes the bash's behaviour (spec §6.4, §13).
 
-AIO commit: `f7ff8b8`
+AIO commit: `f7ff8b8fc8363511f30f788095d48e42df869971`
 
 The drift job (`.github/workflows/template-drift.yml`, ticket 066) runs
 weekly. It diffs each AIO source below, plus any other AIO compose file,
@@ -20,8 +20,10 @@ To catch up with upstream:
    aio-compose` (exit 1 means drift), or read the issue.
 2. Port what applies to the templates, and update the table and the
    deviations below if they changed.
-3. Set the commit above to the head you compared with (`git -C <AIO
-   checkout> rev-parse --short aio-compose`). The next run closes the issue.
+3. Set the commit above to the full ID of the head you compared with (`git
+   -C <AIO checkout> rev-parse aio-compose`). The job can fetch a full ID
+   even after the branch is rewritten, but not a short one. The next run
+   closes the issue.
 
 ## Layout and format
 
