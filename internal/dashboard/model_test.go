@@ -17,6 +17,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/ops"
+	"github.com/JamesPeck/pic-sure-cli/internal/progress"
 )
 
 // fakeBackend answers the dashboard's reads from fields, and records them.
@@ -156,12 +157,43 @@ func update(t *testing.T, m *model, msg tea.Msg) (*model, tea.Cmd) {
 }
 
 // deliverServices runs a services poll and feeds its result, then the log
-// follower's first batch.
+// follower's batches until the fake's lines for the followed service are in.
 func deliverServices(t *testing.T, m *model) *model {
 	t.Helper()
 	m, cmd := update(t, m, pollServices(m.ctx, m.backend)())
-	if cmd != nil {
+	if cmd == nil {
+		return m
+	}
+	b := m.backend.(*fakeBackend)
+	b.mu.Lock()
+	want, failing := b.logs[m.logSvc], b.logErr != nil
+	b.mu.Unlock()
+	if failing || len(want) == 0 {
 		m, _ = update(t, m, cmd())
+		return m
+	}
+	clean := make([]string, 0, len(want))
+	for _, l := range want[max(0, len(want)-maxLogLines):] {
+		clean = append(clean, progress.CleanLine(l))
+	}
+	return readLogs(t, m, cmd, clean...)
+}
+
+// readLogs feeds the log follower's batches until the pane ends with want.
+// A batch holds only the lines already written, so under load the first one
+// can be short.
+func readLogs(t *testing.T, m *model, cmd tea.Cmd, want ...string) *model {
+	t.Helper()
+	deadline := time.After(5 * time.Second)
+	for len(m.logLines) < len(want) || !slices.Equal(m.logLines[len(m.logLines)-len(want):], want) {
+		got := make(chan tea.Msg, 1)
+		go func(c tea.Cmd) { got <- c() }(cmd)
+		select {
+		case msg := <-got:
+			m, cmd = update(t, m, msg)
+		case <-deadline:
+			t.Fatalf("log pane holds %q, want it to end with %q", m.logLines, want)
+		}
 	}
 	return m
 }
@@ -315,7 +347,7 @@ func TestLogFollowerErrorBacksOffAndKeepsScrollback(t *testing.T) {
 	b.logs["hpds"] = []string{"hpds line 2", "hpds line 3"}
 	b.mu.Unlock()
 	m, cmd = update(t, m, logRetryMsg{seq: m.logSeq})
-	m, _ = update(t, m, cmd())
+	m = readLogs(t, m, cmd, "hpds line 2", "hpds line 3")
 	if !slices.Equal(m.logLines, []string{"hpds line 2", "hpds line 3"}) {
 		t.Errorf("after recovery: %q", m.logLines)
 	}
@@ -352,8 +384,8 @@ func TestSelectionFollowsItsServiceAcrossPolls(t *testing.T) {
 	if m.selectedService() != "hpds" || cmd == nil {
 		t.Fatalf("selected %q (cmd %v)", m.selectedService(), cmd != nil)
 	}
-	m, _ = update(t, m, cmd())
-	if m.logSvc != "hpds" || !slices.Contains(m.logLines, "hpds line 2") {
+	m = readLogs(t, m, cmd, "hpds line 1", "hpds line 2")
+	if m.logSvc != "hpds" {
 		t.Errorf("logs follow %q: %q", m.logSvc, m.logLines)
 	}
 }
