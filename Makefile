@@ -5,7 +5,7 @@ COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
 DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS := -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(DATE)
 
-.PHONY: build build-release test fmt-check vet lint print-lint-version check clean
+.PHONY: build build-release test fmt-check vet lint print-lint-version check compose-check clean
 
 build:
 	$(GO) build -ldflags "$(LDFLAGS)" -o $(BIN) ./cmd/pic-sure
@@ -41,6 +41,11 @@ print-lint-version:
 
 # What CI runs. The PTY tests in smoke/ run as part of `test`.
 check: fmt-check vet lint test
+
+# CI's Linux-only compose validation: docker compose config --quiet over
+# every render golden. Fails instead of skipping without docker compose.
+compose-check:
+	PICSURE_REQUIRE_COMPOSE=1 $(GO) test -count=1 -run '^(TestGoldensComposeConfig|TestComposeConfigAccepts)$$' -v ./internal/render
 
 clean:
 	rm -rf bin dist

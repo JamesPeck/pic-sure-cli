@@ -246,12 +246,7 @@ func goldenArchive(t *testing.T, files []File) *txtar.Archive {
 // golden compose file, with the case's overrides file. It needs only the
 // docker CLI, no daemon state.
 func TestGoldensComposeConfig(t *testing.T) {
-	if testing.Short() {
-		t.Skip("short mode")
-	}
-	if err := exec.Command("docker", "compose", "version").Run(); err != nil {
-		t.Skipf("docker compose unavailable: %v", err)
-	}
+	needCompose(t)
 	overrides, err := filepath.Abs(filepath.Join("testdata", "overrides.yaml"))
 	if err != nil {
 		t.Fatal(err)

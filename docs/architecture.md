@@ -499,7 +499,9 @@ rendered files (the copied ones are only checked to be copies). Regenerate
 with `go test ./internal/render -run TestGoldens -update` and review the
 diff. The test fails if a golden holds any secret value, and runs
 `docker compose config --quiet` on each (with `testdata/overrides.yaml` for
-the override cases) when the docker CLI is installed.
+the override cases) when the docker CLI is installed. `make compose-check`
+runs just those compose checks with `PICSURE_REQUIRE_COMPOSE=1`, which
+makes them fail instead of skipping; CI's Linux-only compose job uses it.
 
 ## internal/catalog
 

@@ -563,16 +563,28 @@ func TestEmptyServiceEnvChangesNothing(t *testing.T) {
 	}
 }
 
+// needCompose skips the test in short mode or without the docker CLI and
+// its compose plugin. With PICSURE_REQUIRE_COMPOSE=1, as in CI's compose
+// validation job, it fails instead of skipping.
+func needCompose(t *testing.T) {
+	t.Helper()
+	required := os.Getenv("PICSURE_REQUIRE_COMPOSE") == "1"
+	if testing.Short() && !required {
+		t.Skip("short mode")
+	}
+	if err := exec.Command("docker", "compose", "version").Run(); err != nil {
+		if required {
+			t.Fatalf("docker compose unavailable: %v", err)
+		}
+		t.Skipf("docker compose unavailable: %v", err)
+	}
+}
+
 // TestComposeConfigAccepts runs docker compose config over rendered files,
 // when the docker CLI with the compose plugin is installed. It needs no
 // daemon.
 func TestComposeConfigAccepts(t *testing.T) {
-	if testing.Short() {
-		t.Skip("short mode")
-	}
-	if err := exec.Command("docker", "compose", "version").Run(); err != nil {
-		t.Skipf("docker compose unavailable: %v", err)
-	}
+	needCompose(t)
 	cases := []struct {
 		m     catalog.Mode
 		dev   []string

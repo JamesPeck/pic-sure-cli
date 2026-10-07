@@ -2,19 +2,36 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [v2]
   pull_request:
+    branches: [v2]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  go:
-    name: CLI (test, lint)
-    runs-on: ubuntu-latest
+  check:
+    name: make check (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    # Under CI the PTY smoke test skips unless asked for. The Docker-backed
+    # tests run on Ubuntu and skip on macOS, whose runners have no Docker.
     env:
       PICSURE_PTY_TEST: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
@@ -27,21 +44,73 @@ jobs:
           curl -sSfL "https://raw.githubusercontent.com/golangci/golangci-lint/$version/install.sh" \
             | sh -s -- -b "$(go env GOPATH)/bin" "$version"
 
-      # go.mod/go.sum must match the import graph; catches missing
-      # `go mod tidy` (e.g. direct deps mislabeled // indirect).
+      # go.mod/go.sum must match the import graph; catches a missing
+      # `go mod tidy`.
       - name: Tidy check
         run: |
           go mod tidy
           git diff --exit-code go.mod go.sum
 
-      - name: Check (gofmt, vet, lint, test)
+      - name: Check (gofmt, vet, lint, unit, goldens, testscript)
         run: make check
+
+  compose:
+    name: Compose validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      # The goldens must validate under the oldest compose doctor accepts.
+      # If the runner's compose is older than that, install the fallback.
+      - name: Docker compose at or above doctor's minimum
+        env:
+          FALLBACK_VERSION: v2.29.7
+          FALLBACK_SHA256: 383ce6698cd5d5bbf958d2c8489ed75094e34a77d340404d9f32c4ae9e12baf0
+        run: |
+          min="$(sed -nE 's/^[[:space:]]*MinComposeVersion[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' internal/ops/doctor.go)"
+          if [ -z "$min" ]; then
+            echo "::error::MinComposeVersion not found in internal/ops/doctor.go"
+            exit 1
+          fi
+          older() {
+            have="$(docker compose version --short 2>/dev/null || echo 0)"
+            have="${have#v}"
+            [ "$(printf '%s\n%s\n' "$min" "$have" | sort -V | head -n1)" != "$min" ]
+          }
+          if older; then
+            echo "compose $have is older than $min; installing $FALLBACK_VERSION"
+            dir="$HOME/.docker/cli-plugins"
+            mkdir -p "$dir"
+            curl -sSfL -o "$dir/docker-compose" \
+              "https://github.com/docker/compose/releases/download/$FALLBACK_VERSION/docker-compose-linux-x86_64"
+            echo "$FALLBACK_SHA256  $dir/docker-compose" | sha256sum -c -
+            chmod +x "$dir/docker-compose"
+            if older; then
+              echo "::error::compose $have is still older than $min"
+              exit 1
+            fi
+          fi
+          docker compose version
+
+      - name: docker compose config --quiet on every golden
+        run: make compose-check
 
   shell:
     name: Shell scripts
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Shellcheck
         run: |
