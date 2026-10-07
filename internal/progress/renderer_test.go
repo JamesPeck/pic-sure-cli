@@ -81,3 +81,31 @@ func TestRendererWithoutEventsNeverStarts(t *testing.T) {
 		t.Errorf("output = %q, want only the log line", got)
 	}
 }
+
+// Close hands the terminal back; a later event starts a new program.
+func TestRendererRestartsAfterClose(t *testing.T) {
+	var out syncBuffer
+	r := newTestRenderer(&out)
+	r.Emit(events.StepStarted{ID: "a", Title: "Step A"})
+	r.Emit(events.StepDone{ID: "a", Status: events.StepOK})
+	r.Close()
+	if _, err := out.Write([]byte("[editor]\n")); err != nil {
+		t.Fatal(err)
+	}
+	r.Emit(events.StepStarted{ID: "b", Title: "Step B"})
+	r.Emit(events.StepDone{ID: "b", Status: events.StepOK})
+	r.Emit(events.Result{OK: true})
+	requireOrder(t, ansi.Strip(out.String()), "Step A", "[editor]", "Step B")
+}
+
+func requireOrder(t *testing.T, text string, want ...string) {
+	t.Helper()
+	rest := text
+	for _, w := range want {
+		i := strings.Index(rest, w)
+		if i < 0 {
+			t.Fatalf("missing %q (in order %q):\n%q", w, want, text)
+		}
+		rest = rest[i+len(w):]
+	}
+}

@@ -215,6 +215,9 @@ func (a *App) configEdit(cmd *cobra.Command) error {
 		return err
 	}
 	defer func() { _ = lock.Unlock() }()
+	// Waiting for the lock may have started the TUI; the editor needs the
+	// terminal.
+	a.output().endTUI()
 
 	orig, err := st.ReadFile(stack.ConfigFile)
 	if err != nil {

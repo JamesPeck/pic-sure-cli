@@ -104,7 +104,27 @@ func TestCtrlCCancelsStepsUnderPTY(t *testing.T) {
 	s.waitFor("Press Ctrl-C again to cancel.")
 	s.send("\x03")
 	s.waitExit(130)
-	requireInOrder(t, s.text(), "✗ Build images", "│ cleaning up after cancellation", "pic-sure: ", "build")
+	requireInOrder(t, s.text(), "✗ Build images", "│ cleaning up after cancellation", "pic-sure: stopped at step build")
+}
+
+// A step that ignores cancellation can't trap the user: one more Ctrl-C
+// quits at once, with the terminal restored.
+func TestCtrlCForcesAQuitUnderPTY(t *testing.T) {
+	skipUnlessPTYAllowed(t)
+	s := startPTYEnv(t, t.TempDir(), stepsEnv, "smoke-steps", "--no-animations", "--hang")
+	s.waitFor("ignoring cancellation")
+	s.send("\x03")
+	s.waitFor("Press Ctrl-C again to cancel.")
+	s.send("\x03")
+	s.waitFor("Ctrl-C again to quit now")
+	s.send("\x03")
+	s.waitExit(130)
+	s.mu.Lock()
+	raw := s.output.String()
+	s.mu.Unlock()
+	if !strings.Contains(raw, "\x1b[?25h") {
+		t.Errorf("the cursor wasn't restored; output:\n%q", raw)
+	}
 }
 
 // SIGTERM during a run still exits 143, through the command's context.

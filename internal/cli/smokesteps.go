@@ -20,7 +20,7 @@ func init() { extraCommands = append(extraCommands, newSmokeStepsCmd) }
 // newSmokeStepsCmd is a command that emits step events without Docker, for
 // the PTY smoke tests of the TUI renderer.
 func newSmokeStepsCmd(a *App) *cobra.Command {
-	var fail, wait bool
+	var fail, wait, hang bool
 	cmd := &cobra.Command{
 		Use:    "smoke-steps",
 		Short:  "Run steps that emit events, for smoke tests",
@@ -67,6 +67,10 @@ func newSmokeStepsCmd(a *App) *cobra.Command {
 							return err
 						}
 					}
+					if hang {
+						sink.Emit(events.Progress{ID: "build", Text: "ignoring cancellation"})
+						select {}
+					}
 					if wait {
 						sink.Emit(events.Progress{ID: "build", Text: "waiting for cancellation"})
 						<-ctx.Done()
@@ -94,5 +98,6 @@ func newSmokeStepsCmd(a *App) *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&fail, "fail", false, "fail the build step")
 	cmd.Flags().BoolVar(&wait, "wait", false, "block in the build step until cancelled")
+	cmd.Flags().BoolVar(&hang, "hang", false, "block in the build step for good")
 	return cmd
 }

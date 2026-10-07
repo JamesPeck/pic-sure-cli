@@ -42,8 +42,13 @@ type Options struct {
 	Animations bool
 	// Interrupt is called when the user confirms Ctrl-C. It should cancel
 	// the operation's context; the model keeps rendering the events the
-	// operation emits while it stops.
+	// operation emits while it stops. A further Ctrl-C while it stops is a
+	// force quit: the model sets Forced and quits, as a second SIGINT
+	// would kill the process.
 	Interrupt func()
+	// NoColor strips color from what scrollback prints, which Bubble Tea
+	// writes as is, whatever the program's color profile.
+	NoColor bool
 	// Scrollback prints each finished step above the program with
 	// tea.Println, so a long list stays in the terminal's scrollback and
 	// the live area holds only what is still running. An inline program
@@ -108,14 +113,17 @@ type Model struct {
 	committed int
 	pending   []string
 	printing  bool
-	// Printed is everything scrollback has printed, for tests.
-	Printed []string
+	// printHook sees every print, for tests.
+	printHook func(string)
 
 	spin       spinner.Model
 	width      int
 	confirm    bool
 	confirmSeq int
 	cancelling bool
+	// Forced is set when the user forced a quit while the operation was
+	// stopping.
+	Forced bool
 
 	done    bool
 	ok      bool
@@ -131,13 +139,13 @@ func New(opts Options) Model {
 	}
 }
 
-// Init starts the spinner and asks the terminal for its background, so the
-// palette matches it.
+// Init starts the spinner. It doesn't ask for the terminal's background:
+// a short run could exit before the reply, which the shell would then read.
 func (m Model) Init() tea.Cmd {
 	if m.opts.Animations {
-		return tea.Batch(tea.RequestBackgroundColor, m.spin.Tick)
+		return m.spin.Tick
 	}
-	return tea.RequestBackgroundColor
+	return nil
 }
 
 // Done reports whether the model has had its DoneMsg.
@@ -154,15 +162,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.flush()
 	case printedMsg:
 		m.printing = false
-		if m.done {
-			return m, tea.Quit
+		if cmd := m.flush(); cmd != nil || !m.done {
+			return m, cmd
 		}
-		return m, m.flush()
+		return m, tea.Quit
 	case DoneMsg:
 		m.done, m.ok, m.logPath = true, msg.OK, msg.LogPath
 		m.confirm = false
-		if m.printing || !m.opts.Scrollback {
+		if !m.opts.Scrollback {
 			return m, nil
+		}
+		// Print every row, so none is clipped from a final frame taller
+		// than the terminal; quit once the prints are done.
+		if cmd := m.flush(); cmd != nil || m.printing {
+			return m, cmd
 		}
 		return m, tea.Quit
 	case tea.KeyPressMsg:
@@ -173,8 +186,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
-	case tea.BackgroundColorMsg:
-		styles.SetDarkBackground(msg.IsDark())
 	case spinner.TickMsg:
 		if m.opts.Animations && !m.done {
 			var cmd tea.Cmd
@@ -186,9 +197,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // key handles Ctrl-C: the first press asks to confirm, the second cancels
-// the operation. Any other key withdraws the prompt.
+// the operation, and one more while it stops forces a quit. Any other key
+// withdraws the prompt.
 func (m Model) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	if m.done || m.cancelling {
+	if m.done {
+		return m, nil
+	}
+	if m.cancelling {
+		if msg.String() == "ctrl+c" && m.opts.Scrollback {
+			m.Forced = true
+			return m, tea.Quit
+		}
 		return m, nil
 	}
 	if msg.String() != "ctrl+c" {
@@ -211,7 +230,7 @@ func (m Model) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 func (m *Model) apply(e events.Event) {
 	switch e := e.(type) {
 	case events.StepStarted:
-		r := &row{step: true, id: e.ID, title: e.Title}
+		r := &row{step: true, id: e.ID, title: cleanLine(e.Title)}
 		m.rows = append(m.rows, r)
 		m.byID[e.ID] = r
 	case events.StepDone:
@@ -220,14 +239,15 @@ func (m *Model) apply(e events.Event) {
 		}
 	case events.Progress:
 		r := m.owner(e.ID)
-		r.progress, r.pct = e.Text, e.Pct
+		r.progress, r.pct = cleanLine(e.Text), e.Pct
 	case events.Log:
 		m.owner(e.ID).addLog(cleanLine(e.Line))
 	case events.Warning:
+		text := cleanLine(e.Text)
 		if r := m.byID[e.ID]; r != nil && r.running() {
-			r.warnings = append(r.warnings, e.Text)
+			r.warnings = append(r.warnings, text)
 		} else {
-			m.rows = append(m.rows, &row{title: e.Text})
+			m.rows = append(m.rows, &row{title: text})
 		}
 	}
 }
@@ -246,14 +266,14 @@ func (m *Model) owner(id string) *row {
 	return &m.other
 }
 
-// flush moves finished leading rows to the print queue and starts printing
-// it, in scrollback mode. Only one print is in flight at a time, so lines
-// can't overtake each other.
+// flush moves finished leading rows (every row, once done) to the print
+// queue and starts printing it, in scrollback mode. Only one print is in
+// flight at a time, so lines can't overtake each other.
 func (m *Model) flush() tea.Cmd {
 	if !m.opts.Scrollback {
 		return nil
 	}
-	for m.committed < len(m.rows) && !m.rows[m.committed].running() {
+	for m.committed < len(m.rows) && (m.done || !m.rows[m.committed].running()) {
 		m.pending = append(m.pending, m.renderRow(m.rows[m.committed]))
 		m.committed++
 	}
@@ -261,9 +281,14 @@ func (m *Model) flush() tea.Cmd {
 		return nil
 	}
 	text := strings.Join(m.pending, "\n")
+	if m.opts.NoColor {
+		text = ansi.Strip(text)
+	}
 	m.pending = nil
 	m.printing = true
-	m.Printed = append(m.Printed, text)
+	if m.printHook != nil {
+		m.printHook(text)
+	}
 	return tea.Sequence(tea.Println(text), func() tea.Msg { return printedMsg{} })
 }
 
@@ -295,6 +320,8 @@ func (m Model) View() tea.View {
 	switch {
 	case m.done && !m.ok && m.logPath != "":
 		line(faint.Render("Log file: " + m.logPath))
+	case m.cancelling && m.opts.Scrollback:
+		line(styles.Warn.Render("Cancelling: waiting for the current step to stop… (Ctrl-C again to quit now)"))
 	case m.cancelling:
 		line(styles.Warn.Render("Cancelling: waiting for the current step to stop…"))
 	case m.confirm:
@@ -379,9 +406,9 @@ func lastN(lines []string, n int) []string {
 	return lines
 }
 
-// cleanLine makes a log line safe to draw: the text after its last carriage
+// cleanLine makes event text safe to draw: the text after its last carriage
 // return (a progress bar's final state), with escape sequences and other
-// control characters removed and tabs expanded.
+// control characters (C1 included) removed and tabs expanded.
 func cleanLine(s string) string {
 	s = strings.TrimRight(s, "\r\n")
 	if i := strings.LastIndexByte(s, '\r'); i >= 0 {
@@ -392,7 +419,7 @@ func cleanLine(s string) string {
 		switch {
 		case r == '\t':
 			return ' '
-		case r < 0x20 || r == 0x7f:
+		case r < 0x20 || (r >= 0x7f && r <= 0x9f):
 			return -1
 		}
 		return r

@@ -16,6 +16,9 @@ type RendererOptions struct {
 	// Animations and Interrupt are as in Options.
 	Animations bool
 	Interrupt  func()
+	// Force is called, once the terminal is restored, when the user forces
+	// a quit while the operation stops. It should end the process.
+	Force func()
 	// Input is the terminal the program reads keys from, Output the one it
 	// draws on.
 	Input  io.Reader
@@ -31,6 +34,7 @@ type rendererState int
 const (
 	idle rendererState = iota
 	running
+	ending // waiting for the final frame
 	closed
 )
 
@@ -38,7 +42,8 @@ const (
 // inline Bubble Tea program. The program starts with the first event, so a
 // command that emits nothing never takes over the terminal. A Result event,
 // or Close, ends it and waits until the final frame is drawn, so whatever
-// the caller prints next goes below it.
+// the caller prints next goes below it. After Close a later event starts a
+// new program; after a Result, events are dropped.
 type Renderer struct {
 	opts RendererOptions
 
@@ -61,11 +66,10 @@ func NewRenderer(opts RendererOptions) *Renderer {
 	return &Renderer{opts: opts}
 }
 
-// Emit draws e. A Result ends the program; the model doesn't need its
-// contents beyond OK.
+// Emit draws e. A Result ends the program.
 func (r *Renderer) Emit(e events.Event) {
 	if res, ok := e.(events.Result); ok {
-		r.end(res.OK)
+		r.end(res.OK, closed)
 		return
 	}
 	r.mu.Lock()
@@ -77,8 +81,8 @@ func (r *Renderer) Emit(e events.Event) {
 }
 
 // Close ends the program as a success if it is still running, and waits for
-// it. It is safe to call more than once.
-func (r *Renderer) Close() { r.end(true) }
+// it, so the caller can use the terminal. It is safe to call more than once.
+func (r *Renderer) Close() { r.end(true, idle) }
 
 // Write prints whole lines above the program while it runs, and straight to
 // Output otherwise, so log records written to the same terminal don't tear
@@ -99,6 +103,7 @@ func (r *Renderer) Write(b []byte) (int, error) {
 
 	for _, l := range lines {
 		if !r.send(printMsg{text: l}) {
+			r.waitEnded()
 			if _, err := io.WriteString(r.opts.Output, l+"\n"); err != nil {
 				return 0, err
 			}
@@ -120,16 +125,35 @@ func (r *Renderer) start() {
 		opts = append(opts, tea.WithColorProfile(colorprofile.Ascii))
 	}
 	opts = append(opts, r.testOpts...)
-	m := New(Options{Animations: r.opts.Animations, Interrupt: r.opts.Interrupt, Scrollback: true})
-	r.p = tea.NewProgram(m, opts...)
-	r.done = make(chan struct{})
+	m := New(Options{
+		Animations: r.opts.Animations,
+		Interrupt:  r.opts.Interrupt,
+		NoColor:    r.opts.NoColor,
+		Scrollback: true,
+	})
+	p, done := tea.NewProgram(m, opts...), make(chan struct{})
+	r.p, r.done = p, done
 	r.state = running
 	go func() {
 		// A program that fails to start leaves the run without its
 		// progress display, but the operation still runs and reports.
-		_, _ = r.p.Run()
-		close(r.done)
+		final, _ := p.Run()
+		close(done)
+		if fm, ok := final.(Model); ok && fm.Forced && r.opts.Force != nil {
+			r.opts.Force()
+		}
 	}()
+}
+
+// waitEnded waits for a program that is drawing its final frame, so output
+// written straight to the terminal lands below it.
+func (r *Renderer) waitEnded() {
+	r.mu.RLock()
+	done := r.done
+	r.mu.RUnlock()
+	if done != nil {
+		<-done
+	}
 }
 
 // send delivers msg if the program is running, and reports whether it did.
@@ -143,21 +167,31 @@ func (r *Renderer) send(msg tea.Msg) bool {
 	return true
 }
 
-// end tells the program the run is over and waits for its last frame.
-func (r *Renderer) end(ok bool) {
+// end tells the program the run is over, waits for its last frame, and
+// moves to next: idle, so a later event starts a new program, or closed.
+func (r *Renderer) end(ok bool, next rendererState) {
 	r.mu.Lock()
-	if r.state != running {
-		r.state = closed
-		r.mu.Unlock()
-		return
+	state, p, done := r.state, r.p, r.done
+	if state == running {
+		r.state = ending
 	}
-	r.state = closed
 	r.mu.Unlock()
 
-	msg := DoneMsg{OK: ok}
-	if !ok && r.opts.LogPath != nil {
-		msg.LogPath = r.opts.LogPath()
+	switch state {
+	case running:
+		msg := DoneMsg{OK: ok}
+		if !ok && r.opts.LogPath != nil {
+			msg.LogPath = r.opts.LogPath()
+		}
+		p.Send(msg)
+		<-done
+	case ending:
+		<-done
 	}
-	r.p.Send(msg)
-	<-r.done
+
+	r.mu.Lock()
+	if r.state != closed {
+		r.state = next
+	}
+	r.mu.Unlock()
 }

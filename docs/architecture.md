@@ -1453,36 +1453,45 @@ Ticket 038. The TUI renderer for an operation's events (§10.3).
   `DoneMsg{OK, LogPath}`. It shows each step with a spinner (a static `•`
   without `Options.Animations`), `✓`, `-` (skipped) or `✗`, the step's
   progress text and warnings, the running step's last `LiveTail` (8) log
-  lines, and a failed step's last `FailTail` (20). Log lines lose escape
-  sequences, control characters and everything before a `\r`. A progress or
+  lines, and a failed step's last `FailTail` (20). Event text loses escape
+  sequences, control characters (C1 too) and, in log lines, everything
+  before a `\r`. A progress or
   log event for an ID that isn't a running step goes under the last running
   step, or at the bottom when none runs; a warning no running step owns gets
   its own row. Ctrl-C asks first ("Press Ctrl-C again", withdrawn after 5 s
-  or by another key); the second press calls `Options.Interrupt` once.
+  or by another key); the second press calls `Options.Interrupt` once. In
+  scrollback mode one more Ctrl-C while it stops sets `Forced` and quits,
+  as a second SIGINT kills the process.
 - With `Options.Scrollback` (the inline program), finished leading rows are
   printed above the program with `tea.Println`, one print in flight at a
-  time so order holds, and the live area keeps only what still runs. After
-  `DoneMsg` it quits; the final frame keeps whatever wasn't printed and,
-  after a failure, `Log file: <path>`. Without it (a screen embedding the
+  time so order holds, and the live area keeps only what still runs. On
+  `DoneMsg` it prints every remaining row (so a tall final frame can't clip
+  one), then quits; the final frame holds only `Log file: <path>` after a
+  failure. With `Options.NoColor` the prints are stripped of color, which
+  Bubble Tea doesn't do for them. `Init` doesn't query the terminal's
+  background: a short run could exit before the reply arrives. Without it (a screen embedding the
   model, tickets 039/040/047), `View` keeps every row and `DoneMsg` doesn't
   quit; `Done()` reports it.
 - `Renderer` is an `events.Sink` that runs the model as an inline program
   (not the alt-screen) on the given terminal, with Bubble Tea's signal
   handler off. It starts with the first event, so a command that emits none
-  never touches the terminal. A `Result` ends it (`Close` ends it as a
-  success) and waits for the final frame, so what the caller prints next
-  goes below it; later events are dropped. `Write` is an `io.Writer` that
+  never touches the terminal. A `Result` ends it and waits for the final
+  frame, so what the caller prints next goes below it; later events are
+  dropped. `Close` ends it as a success and hands the terminal back; a
+  later event starts a new program. `Force` is called, after the terminal
+  is restored, when the user forces a quit. `Write` is an `io.Writer` that
   prints whole lines above the frame while it runs and straight to the
-  output otherwise. A program that fails to start leaves the run without a
+  output otherwise, after any final frame. A program that fails to start leaves the run without a
   display; the operation still runs.
 
 **Wiring (`internal/cli`).** `execute` wraps the command's context so the
-renderer's `Interrupt` cancels it with `exitcode.Signaled(os.Interrupt)`:
-while the TUI runs, the terminal is in raw mode and Ctrl-C arrives as a key,
+renderer's `Interrupt` cancels it with `exitcode.Signaled(os.Interrupt)`,
+and its `Force` exits 130 at once: while the TUI runs, the terminal is in raw mode and Ctrl-C arrives as a key,
 not SIGINT, and the run still exits 130 with the step to resume named.
 SIGTERM still cancels through `main`. The renderer draws on stderr, so
 stdout keeps only the command's summary; `finish` and `printReport` end it
-before writing that. The run log's stderr records go through `Write`
+before writing that, and so does `config edit` before starting the editor
+(a `--wait-lock` wait can start it). The run log's stderr records go through `Write`
 (`logStderr`), and `openRunLog` keeps the file's path for the failure
 line. The hidden `smoke-steps` command (`smokesteps.go`, build tag
 `smoketest`, registered through `extraCommands`) emits steps without

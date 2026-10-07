@@ -39,7 +39,15 @@ func evs(es ...events.Event) []tea.Msg {
 
 func view(m Model) string { return ansi.Strip(m.View().Content) }
 
-func printed(m Model) string { return ansi.Strip(strings.Join(m.Printed, "\n")) }
+// recording returns a model that records what it prints.
+func recording(opts Options) (Model, *[]string) {
+	var log []string
+	m := New(opts)
+	m.printHook = func(s string) { log = append(log, s) }
+	return m, &log
+}
+
+func joined(log *[]string) string { return ansi.Strip(strings.Join(*log, "\n")) }
 
 func pct(v float64) *float64 { return &v }
 
@@ -68,10 +76,11 @@ func TestScrollbackPrintsFinishedStepsAndShowsTheRunningOne(t *testing.T) {
 	for i := 1; i <= 12; i++ {
 		es = append(es, events.Log{ID: "build", Stream: "stdout", Line: fmt.Sprintf("maven line %d", i)})
 	}
-	m, _ := drive(t, New(Options{Scrollback: true}), evs(es...)...)
+	m, log := recording(Options{Scrollback: true})
+	m, _ = drive(t, m, evs(es...)...)
 
 	want := "✓ Fetch release-control\n- Install TLS certificates (skipped)\n  ! skipped by --skip-step"
-	if got := printed(m); got != want {
+	if got := joined(log); got != want {
 		t.Errorf("printed:\n%s\nwant:\n%s", got, want)
 	}
 	v := view(m)
@@ -92,7 +101,7 @@ func TestScrollbackPrintsFinishedStepsAndShowsTheRunningOne(t *testing.T) {
 	if v := view(m); v != "" {
 		t.Errorf("a successful run leaves nothing in the live area, got:\n%s", v)
 	}
-	if got := printed(m); !strings.HasSuffix(got, "\n✓ Build images") || strings.Contains(got, "maven") {
+	if got := joined(log); !strings.HasSuffix(got, "\n✓ Build images") || strings.Contains(got, "maven") {
 		t.Errorf("a step that succeeded is printed without its log:\n%s", got)
 	}
 }
@@ -103,11 +112,12 @@ func TestFailureKeepsTheLastLogLinesAndTheLogFile(t *testing.T) {
 		es = append(es, events.Log{ID: "build", Line: fmt.Sprintf("line %d", i)})
 	}
 	es = append(es, events.StepDone{ID: "build", Status: events.StepFailed})
-	m, cmd := drive(t, New(Options{Scrollback: true}), append(evs(es...), DoneMsg{LogPath: "/stack/.pic-sure/logs/cli.log"})...)
+	m, log := recording(Options{Scrollback: true})
+	m, cmd := drive(t, m, append(evs(es...), DoneMsg{LogPath: "/stack/.pic-sure/logs/cli.log"})...)
 	if !isQuit(cmd) {
 		t.Error("a failed run should quit")
 	}
-	got := printed(m)
+	got := joined(log)
 	if !strings.Contains(got, "✗ Build images\n") || strings.Contains(got, "line 10\n") ||
 		!strings.Contains(got, "│ line 11\n") || !strings.HasSuffix(got, "│ line 30") {
 		t.Errorf("a failed step keeps its last %d log lines:\n%s", FailTail, got)
@@ -117,10 +127,10 @@ func TestFailureKeepsTheLastLogLinesAndTheLogFile(t *testing.T) {
 	}
 }
 
-// What is still queued or unprinted when the run ends stays in the final
-// view rather than being lost.
-func TestDoneWhilePrintingWaitsAndKeepsTheRest(t *testing.T) {
-	m := New(Options{Scrollback: true})
+// When the run ends, everything not yet printed is printed after the print
+// in flight, so a final frame taller than the terminal can't clip it.
+func TestDonePrintsTheRestAfterThePrintInFlight(t *testing.T) {
+	m, log := recording(Options{Scrollback: true, NoColor: true})
 	next, _ := m.Update(EventMsg{Event: events.StepStarted{ID: "a", Title: "A"}})
 	next, _ = next.Update(EventMsg{Event: events.StepDone{ID: "a", Status: events.StepOK}})
 	m = next.(Model)
@@ -130,30 +140,36 @@ func TestDoneWhilePrintingWaitsAndKeepsTheRest(t *testing.T) {
 	next, _ = m.Update(printMsg{text: "a log record"})
 	next, _ = next.Update(EventMsg{Event: events.StepStarted{ID: "b", Title: "B"}})
 	next, _ = next.Update(EventMsg{Event: events.StepDone{ID: "b", Status: events.StepFailed}})
-	next, cmd := next.Update(DoneMsg{})
+	next, _ = next.Update(EventMsg{Event: events.StepStarted{ID: "c", Title: "C"}})
+	next, cmd := next.Update(DoneMsg{LogPath: "/l"})
 	if cmd != nil {
-		t.Error("quit before the print in flight finished")
+		t.Error("printed or quit before the print in flight finished")
+	}
+	next, cmd = next.Update(printedMsg{})
+	if cmd == nil || isQuit(cmd) {
+		t.Error("should print the rest once the print in flight finished")
 	}
 	next, cmd = next.Update(printedMsg{})
 	if !isQuit(cmd) {
-		t.Error("should quit once the print in flight finished")
+		t.Error("should quit once everything is printed")
 	}
 	m = next.(Model)
-	if got := printed(m); got != "✓ A" {
-		t.Errorf("printed = %q", got)
+	if got := strings.Join(*log, "\n"); got != "✓ A\na log record\n✗ B\n• C" {
+		t.Errorf("printed %q (NoColor must print no escapes)", got)
 	}
-	if v := view(m); v != "a log record\n✗ B" {
+	if v := view(m); v != "Log file: /l" {
 		t.Errorf("final view = %q", v)
 	}
 }
 
 func TestEmbeddedViewShowsEveryStepAndDoesNotQuit(t *testing.T) {
-	m, cmd := drive(t, New(Options{}), append(evs(initRun...), DoneMsg{OK: true})...)
+	m, log := recording(Options{})
+	m, cmd := drive(t, m, append(evs(initRun...), DoneMsg{OK: true})...)
 	if cmd != nil {
 		t.Error("an embedded model must not quit the host program")
 	}
-	if len(m.Printed) != 0 {
-		t.Errorf("an embedded model printed %q", m.Printed)
+	if len(*log) != 0 {
+		t.Errorf("an embedded model printed %q", *log)
 	}
 	v := view(m)
 	for _, want := range []string{"✓ Fetch release-control", "- Install TLS certificates (skipped)", "• Build images · pic-sure-hpds (42%)"} {
@@ -192,26 +208,31 @@ func TestCtrlCAsksThenInterrupts(t *testing.T) {
 	if interrupts != 1 || !strings.Contains(view(m), "Cancelling") {
 		t.Fatalf("second Ctrl-C should interrupt once; interrupts=%d view:\n%s", interrupts, view(m))
 	}
-	m, _ = drive(t, m, ctrlC, ctrlC)
-	if interrupts != 1 {
-		t.Errorf("Ctrl-C while cancelling interrupted again (%d)", interrupts)
-	}
 
 	// The operation stops: its step fails, and the run ends.
-	m, _ = drive(t, m, EventMsg{Event: events.StepDone{ID: "build", Status: events.StepFailed}}, DoneMsg{LogPath: "/l"})
-	if v := view(m); strings.Contains(v, "Cancelling") || v != "Log file: /l" {
+	stopped, _ := drive(t, m, EventMsg{Event: events.StepDone{ID: "build", Status: events.StepFailed}}, DoneMsg{LogPath: "/l"})
+	if v := view(stopped); v != "Log file: /l" {
 		t.Errorf("final view = %q", v)
+	}
+
+	// Or it doesn't, and another Ctrl-C forces a quit, as a second SIGINT
+	// would.
+	m, cmd = drive(t, m, tea.KeyPressMsg{Code: 'x'})
+	if m.Forced || cmd != nil {
+		t.Error("only Ctrl-C forces a quit")
+	}
+	m, cmd = drive(t, m, ctrlC)
+	if !m.Forced || !isQuit(cmd) || interrupts != 1 {
+		t.Errorf("Ctrl-C while cancelling should force a quit: forced=%v interrupts=%d", m.Forced, interrupts)
 	}
 }
 
 func TestAnimations(t *testing.T) {
-	if cmd := New(Options{}).Init(); cmd == nil {
-		t.Fatal("Init should query the background")
-	} else if _, ok := cmd().(tea.BatchMsg); ok {
+	if New(Options{}).Init() != nil {
 		t.Error("without animations Init should not start the spinner")
 	}
-	if _, ok := New(Options{Animations: true}).Init()().(tea.BatchMsg); !ok {
-		t.Error("with animations Init should start the spinner too")
+	if New(Options{Animations: true}).Init() == nil {
+		t.Error("with animations Init should start the spinner")
 	}
 	m, _ := drive(t, New(Options{Animations: true}), evs(events.StepStarted{ID: "a", Title: "A"})...)
 	if strings.HasPrefix(view(m), "• ") {
@@ -243,6 +264,7 @@ func TestOrphanEventsAndWidth(t *testing.T) {
 func TestCleanLine(t *testing.T) {
 	for in, want := range map[string]string{
 		"plain":                             "plain",
+		"a\u009b31mred":                     "a31mred",
 		"a\tb":                              "a b",
 		"10%\r20%\r":                        "20%",
 		"\x1b[1mbold\x1b[0m\x07":            "bold",

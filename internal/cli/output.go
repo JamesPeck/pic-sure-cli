@@ -93,10 +93,13 @@ func (a *App) output() *output {
 			o.tui = progress.NewRenderer(progress.RendererOptions{
 				Animations: tui.AnimationsEnabled(a.Global.NoAnimations, os.Getenv),
 				Interrupt:  a.interrupt,
-				Input:      a.Stdin,
-				Output:     a.Stderr,
-				NoColor:    os.Getenv("NO_COLOR") != "",
-				LogPath:    func() string { return a.runLogPath },
+				// A forced quit skips the command's cleanups, as main's
+				// default action for a second SIGINT does.
+				Force:   func() { os.Exit(exitcode.CodeInterrupted) },
+				Input:   a.Stdin,
+				Output:  a.Stderr,
+				NoColor: os.Getenv("NO_COLOR") != "",
+				LogPath: func() string { return a.runLogPath },
 			})
 			a.tuiOut.Store(o.tui)
 			sink = o.tui
