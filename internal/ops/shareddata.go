@@ -192,8 +192,7 @@ func (p *publish) check(ctx context.Context, sink events.Sink) error {
 	for _, vol := range []string{p.dstData, p.dstGenomic} {
 		_, err := p.d.Docker.VolumeInspect(ctx, vol)
 		if err == nil {
-			return exitcode.Precondition("volume %s already exists. Data sets are immutable: publish under a new name, "+
-				"or remove this one first with `pic-sure shared-data remove %s`", vol, p.opts.Name)
+			return exitcode.Precondition("volume %s already exists. Data sets are immutable: publish under a new name", vol)
 		}
 		if !errors.Is(err, docker.ErrNotFound) {
 			return err
@@ -226,8 +225,7 @@ func (p *publish) check(ctx context.Context, sink events.Sink) error {
 	}
 	if len(probe.unindexed) > 0 {
 		return exitcode.Precondition("the genomic data in volume %s lacks the indexes HPDS writes on its first start: %s. "+
-			"Start HPDS on it once with hpds.profile %s (`pic-sure data load-genomic --enable-profile`, or set it and run "+
-			"`pic-sure up`), then publish", p.srcGenomic, strings.Join(probe.unindexed, ", "), GenomicProfile)
+			"Start HPDS on it once with its genomic profile (`pic-sure config set hpds.profile %s`, then `pic-sure up`), then publish", p.srcGenomic, strings.Join(probe.unindexed, ", "), GenomicProfile)
 	}
 	if len(probe.partitions) > hpdsMaxPartitions {
 		return exitcode.Precondition("volume %s holds %d genomic partitions (%s), and HPDS starts with at most %d",
