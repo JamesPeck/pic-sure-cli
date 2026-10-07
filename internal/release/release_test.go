@@ -319,6 +319,22 @@ func TestResolveComponents(t *testing.T) {
 		t.Errorf("ran %d fetches, want 3 (none for pic-sure's known sha)", n)
 	}
 
+	// A component with a local source is left out, and its repo isn't
+	// fetched.
+	cfg = stack.Components{}
+	cfg.Frontend.Source = "/src/frontend"
+	w.fetches()
+	local, err := rel.ResolveComponents(context.Background(), w.cache, nil, "release", cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := local[catalog.Frontend]; ok || len(local) != 3 {
+		t.Errorf("with a frontend source, resolved %v; want every component but the frontend", local)
+	}
+	if n := w.fetches(); n != 3 {
+		t.Errorf("ran %d fetches, want 3 (none for the frontend)", n)
+	}
+
 	// The resolved commits are in the cache's clones, so EnsureSource
 	// needs no fetch.
 	if _, err := w.cache.EnsureSource(context.Background(), catalog.Migrations, migTagged); err != nil {

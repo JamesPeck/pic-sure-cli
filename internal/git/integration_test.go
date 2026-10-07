@@ -298,3 +298,38 @@ func TestArchiveOfUnknownCommitFails(t *testing.T) {
 		t.Errorf("err = %v, want git's exit error", err)
 	}
 }
+
+func TestWorkTreeReportsHeadAndChanges(t *testing.T) {
+	isolateGit(t)
+	ctx := context.Background()
+	up := newUpstream(t)
+	up.write("README", "one\n", 0o644)
+	up.write(".gitignore", "target/\n", 0o644)
+	head := up.commit("first")
+	c := git.New(execRunner{})
+
+	check := func(what string, dirty bool) {
+		t.Helper()
+		wt, err := c.WorkTree(ctx, up.dir)
+		if err != nil {
+			t.Fatalf("%s: %v", what, err)
+		}
+		if wt.Head != head || wt.Dirty != dirty {
+			t.Errorf("%s: WorkTree = %+v, want head %s dirty %v", what, wt, head, dirty)
+		}
+	}
+	check("clean", false)
+	up.write("target/out.jar", "x", 0o644)
+	check("an ignored file", false)
+	up.write("new.txt", "x", 0o644)
+	check("an untracked file", true)
+	if err := os.Remove(filepath.Join(up.dir, "new.txt")); err != nil {
+		t.Fatal(err)
+	}
+	up.write("README", "two\n", 0o644)
+	check("a modified file", true)
+
+	if _, err := c.WorkTree(ctx, t.TempDir()); err == nil {
+		t.Error("not a checkout: err = nil")
+	}
+}

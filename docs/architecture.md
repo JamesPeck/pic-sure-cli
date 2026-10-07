@@ -308,7 +308,8 @@ A directory is a stack when it holds `pic-sure.yaml` and `.pic-sure/`.
   drop another's entries.
 - **State.** `LoadState`/`SaveState` for `.pic-sure/state.json`:
   `cli_version`, `schema_version` (the pic-sure.yaml schema it was
-  rendered with), the release commit, component commits, image tags, what
+  rendered with), the release commit, component commits (with the local
+  checkout and dirty flag of one built from a source, 031), image tags, what
   the TLS step installed (`tls`, 024), the last operation and timestamps.
   No secrets. `StartOperation` and
   `FinishOperation` take the time from the caller (`Deps.Clock`).
@@ -719,6 +720,42 @@ preconditions (034) can call it with no `Stack` and `Building: true`.
 - `Host` is the seam for PATH lookups, free disk, port binding and HTTP;
   the cli layer's `systemHost` is the real one.
 
+**Build and the image step (031, `build.go`).** `ImagesStep(d, st, cfg,
+state, ImagesOptions{Cache, Components, Force})`, ID `images`, is §7.2's
+image step for init, up and update. For each selected component (all by
+default; an unknown name is exit 2) it builds, or pulls, the images at
+the commit `state.Components` records (exit 3 if none), through 029's
+`BuildReactor` and 030's `BuildFrontend`/`BuildDictionaryETL`, which skip
+what is up to date. It records each part's commit and tags in `state`
+and saves it as soon as that part is done. Build logs go to
+`BuildLogDir` (`.pic-sure/logs/build/<part>.log`, made through the stack
+so they are in the manifest; each holds that part's last build). `Check`
+is done when every image is present with its labels and recorded, which
+is what `up` needs.
+
+- **Local sources (§7.3).** A component with `components.<c>.source`
+  (relative to the stack) is built from that checkout: `git.WorkTree`
+  gives its HEAD and whether it has changes. Its images are tagged
+  `DevTag` = `dev-<stack>-<sha12>`, plus `-dirty` with changes, when it
+  is always rebuilt (`Force`) and never `Check`-done. state.json records
+  `{commit, source, dirty}` for it and no ref, and its tags in both
+  `images` and, for the images an enabled dev variant builds, `dev_images`.
+  The release's commit for it is not resolved: `ResolveComponents` leaves
+  it out.
+- **Pull mode (§7.4).** Every image but the frontend's (always built,
+  since it bakes in config) is pulled as
+  `<images.registry or DefaultRegistry>/<image>:<ref>`, the ref being the
+  component's build-spec or config ref, and tagged `hms-dbmi/<image>:<ref>`
+  for the rendered compose. An image already present is kept unless
+  `Force`. A failed pull says the images may not be published yet.
+- `Build(ctx, d, st, cfg, state, BuildOptions)` is the `build` command: a
+  `resolve` step, done when state records a commit for every component
+  without a source (otherwise `release.Fetch` on `release.branch`,
+  `ResolveComponents` and `Record`, without the CLI gate), then the image
+  step without its `Check`, so the `BuildReport` lists every selected
+  image as `built`, `pulled` or `up-to-date`. The command holds the stack
+  lock, records the operation in state.json and saves it even on failure.
+
 ## internal/steps
 
 Ticket 011, on the `Step` type and `Run` signature from 001.
@@ -811,7 +848,7 @@ tried in order, and a call that none matches fails the test. Recorded
   client knows (`Client`, `ClientInfo` with the context and plugin versions)
   and an error matching `ErrDaemonUnreachable`.
 - **Images.** `ImageExists`, `ImageID`, `ImageLabels`, `Build(BuildOpts)`
-  (streams output), `Pull`, `RemoveImage`.
+  (streams output), `Pull`, `Tag` (031), `RemoveImage`.
 - **Volumes.** `VolumeCreate(name, labels)` (a no-op if the volume exists,
   whatever its labels), `VolumeInspect`, `VolumeList(labelFilters...)`,
   `VolumeRemove`, and `ContainersUsingVolume`, which includes stopped
@@ -969,6 +1006,9 @@ config.
   ref wraps `ErrUnknownRef`, so a caller can fetch and retry.
 - `LsRemote(url)`: branches and tags at `url` as `[]Ref{Name, SHA}`, with
   annotated tags peeled to their commit.
+- `WorkTree(dir)` (031): a user's checkout, not a managed clone. Its HEAD
+  commit, and `Dirty` when it has modified, staged or untracked (not
+  ignored) files, whatever the user's status settings.
 - `Archive(dir, sha)`: `git archive --format=tar` as an `io.ReadCloser`,
   with files at 0644 or 0755 and no line-ending conversion, whatever the
   user's `tar.umask`, `core.autocrlf` or `core.eol`. A git failure is the
@@ -1065,7 +1105,7 @@ stack mutation:
   equal with a warning, and so is a `PSCLI` that isn't a version.
 - `rel.ResolveComponents(ctx, cache, sink, step, cfg.Components)` resolves
   each component's ref to a commit with `cache.ResolveRef` (see
-  internal/cache):
+  internal/cache), leaving out a component with a local `source` (031):
   `components.<name>.ref` from pic-sure.yaml if set, else the build-spec's
   key, else `main` with a warning. An unknown ref is exit 3. The commits are
   then in the cache's clones, so `EnsureSource` doesn't fetch again.

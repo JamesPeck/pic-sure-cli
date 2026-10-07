@@ -14,7 +14,8 @@ import (
 )
 
 // Client is the git operations the CLI uses. Repositories are bare clones
-// that this package manages; dir is always the bare repository itself.
+// that this package manages; dir is always the bare repository itself,
+// except in WorkTree.
 type Client interface {
 	// EnsureBare makes dir a bare clone of url. A missing dir is cloned,
 	// with every branch and tag, into a temporary sibling that is renamed
@@ -32,6 +33,10 @@ type Client interface {
 	// A tag wins over a branch of the same name. If dir has no such commit,
 	// the error wraps ErrUnknownRef.
 	ResolveRef(ctx context.Context, dir, ref string) (string, error)
+	// WorkTree reports the checked-out commit of the working tree at dir,
+	// a user's checkout rather than a managed clone, and whether it has
+	// changes: modified, staged or untracked (not ignored) files.
+	WorkTree(ctx context.Context, dir string) (WorkTree, error)
 	// LsRemote lists the branches and tags at url without cloning it.
 	LsRemote(ctx context.Context, url string) ([]Ref, error)
 	// Archive streams the tree at sha in dir as a tar archive (`git
@@ -168,6 +173,29 @@ func (c *client) ResolveRef(ctx context.Context, dir, ref string) (string, error
 	default:
 		return "", &docker.ExitError{Argv: cmd.Argv, ExitCode: res.ExitCode, Stderr: res.Stderr}
 	}
+}
+
+// WorkTree is the state of a user's checkout.
+type WorkTree struct {
+	Head  string // the full commit sha HEAD names
+	Dirty bool   // there are uncommitted or untracked changes
+}
+
+func (c *client) WorkTree(ctx context.Context, dir string) (WorkTree, error) {
+	if err := checkArgs(dir); err != nil {
+		return WorkTree{}, err
+	}
+	head, err := c.run(ctx, "-C", dir, "rev-parse", "--verify", "HEAD^{commit}")
+	if err != nil {
+		return WorkTree{}, err
+	}
+	// --untracked-files and --ignore-submodules override the user's
+	// status.showUntrackedFiles and diff.ignoreSubmodules.
+	status, err := c.run(ctx, "-C", dir, "status", "--porcelain", "-z", "--untracked-files=normal", "--ignore-submodules=none")
+	if err != nil {
+		return WorkTree{}, err
+	}
+	return WorkTree{Head: strings.TrimSpace(string(head)), Dirty: len(status) > 0}, nil
 }
 
 func (c *client) LsRemote(ctx context.Context, url string) ([]Ref, error) {

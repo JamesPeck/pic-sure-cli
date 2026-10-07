@@ -177,18 +177,23 @@ func readFile(ctx context.Context, g git.Client, dir, sha, name string) ([]byte,
 // ResolveComponents resolves each component's ref to a commit in its cached
 // clone: the ref pic-sure.yaml sets (components.<name>.ref) if any, else
 // the build-spec's. A component the build-spec doesn't name falls back to
-// main, with a warning. The result is keyed by component name, as
-// state.json's components are.
+// main, with a warning. A component with a local source
+// (components.<name>.source) is left out: its commit is the checkout's
+// (§7.3). The result is keyed by component name, as state.json's
+// components are.
 func (r *Release) ResolveComponents(ctx context.Context, c *cache.Cache, sink events.Sink, step string, cfg stack.Components) (map[string]stack.Component, error) {
-	overrides := map[string]string{
-		catalog.PicSure:       cfg.PicSure.Ref,
-		catalog.Frontend:      cfg.Frontend.Ref,
-		catalog.Migrations:    cfg.Migrations.Ref,
-		catalog.DictionaryETL: cfg.DictionaryETL.Ref,
+	overrides := map[string]stack.ComponentSource{
+		catalog.PicSure:       cfg.PicSure,
+		catalog.Frontend:      cfg.Frontend,
+		catalog.Migrations:    cfg.Migrations.ComponentSource,
+		catalog.DictionaryETL: cfg.DictionaryETL,
 	}
 	out := map[string]stack.Component{}
 	for _, comp := range catalog.Components() {
-		ref := overrides[comp.Name]
+		if overrides[comp.Name].Source != "" {
+			continue
+		}
+		ref := overrides[comp.Name].Ref
 		if ref == "" {
 			var ok bool
 			if ref, ok = r.Spec.Ref(comp.SpecKey); !ok {

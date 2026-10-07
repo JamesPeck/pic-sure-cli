@@ -49,6 +49,8 @@ type Engine interface {
 	// Pull pulls an image, copying docker's progress output to out (nil
 	// discards it). Docker's error message goes in the returned error.
 	Pull(ctx context.Context, ref string, out io.Writer) error
+	// Tag adds the reference dst to the local image src (`docker tag`).
+	Tag(ctx context.Context, src, dst string) error
 	// RemoveImage removes a local image. It fails if a container, even a
 	// stopped one, uses it.
 	RemoveImage(ctx context.Context, ref string) error

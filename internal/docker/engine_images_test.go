@@ -185,3 +185,17 @@ func TestRemoveImage(t *testing.T) {
 		t.Errorf("in use: %v, want docker's conflict", err)
 	}
 }
+
+func TestTag(t *testing.T) {
+	f, e := newEngine(t)
+	f.On(fakerunner.Exact("docker", "tag", "ghcr.io/"+img, img)).Times(1)
+	f.On(fakerunner.Exact("docker", "tag", "ghcr.io/"+img, img)).Stderr(noSuchImage).Exit(1)
+	ctx := context.Background()
+
+	if err := e.Tag(ctx, "ghcr.io/"+img, img); err != nil {
+		t.Errorf("present: %v", err)
+	}
+	if err := e.Tag(ctx, "ghcr.io/"+img, img); !errors.Is(err, docker.ErrNotFound) {
+		t.Errorf("missing source: %v, want ErrNotFound", err)
+	}
+}

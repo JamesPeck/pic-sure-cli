@@ -53,6 +53,12 @@ type Component struct {
 	Ref string `json:"ref,omitempty"`
 	// Commit is the full commit SHA.
 	Commit string `json:"commit"`
+	// Source is the local checkout (components.<name>.source, absolute)
+	// the commit was read from, when the component builds from one (§7.3);
+	// Ref is then empty.
+	Source string `json:"source,omitempty"`
+	// Dirty says the local checkout had uncommitted changes.
+	Dirty bool `json:"dirty,omitempty"`
 }
 
 // TLSInstall identifies the files the TLS step copied into the certs

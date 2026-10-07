@@ -126,6 +126,11 @@ func (e *cliEngine) Pull(ctx context.Context, ref string, out io.Writer) error {
 	return nil
 }
 
+func (e *cliEngine) Tag(ctx context.Context, src, dst string) error {
+	_, err := e.run(ctx, Cmd{Argv: []string{"docker", "tag", src, dst}})
+	return err
+}
+
 func (e *cliEngine) RemoveImage(ctx context.Context, ref string) error {
 	_, err := e.run(ctx, Cmd{Argv: []string{"docker", "image", "rm", ref}})
 	return ignoreNotFound(err)

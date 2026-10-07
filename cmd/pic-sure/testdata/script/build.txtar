@@ -1,7 +1,60 @@
-# Not implemented yet: exit 1, naming ticket 031.
-exitcode 1 pic-sure build
-stderr '^pic-sure: not implemented \(ticket 031\)$'
-! stdout .
-exitcode 1 pic-sure build --force pic-sure frontend
-stderr '^pic-sure: not implemented \(ticket 031\)$'
-! stdout .
+# No stack here or above: exit 3.
+exitcode 3 pic-sure build
+stderr 'no pic-sure stack found'
+
+env XDG_CACHE_HOME=$WORK/cache
+
+# An unknown component is a usage error, and nothing runs.
+exitcode 2 pic-sure --stack stack build hpds
+stderr 'unknown component "hpds"'
+! exists docker.log
+
+# dictionary-etl is up to date at the recorded commit: nothing is built,
+# and the tag is recorded.
+exec pic-sure --stack stack --plain build dictionary-etl
+stdout '^up-to-date +hms-dbmi/dictionary-etl:444444444444$'
+! grep 'docker build' docker.log
+grep '"dictionary-etl": "444444444444"' stack/.pic-sure/state.json
+grep '"name": "build",\s*$' stack/.pic-sure/state.json
+grep '"status": "ok"' stack/.pic-sure/state.json
+
+# --force rebuilds it from the cache's tree, writing the build log.
+exec pic-sure --stack stack --json build --force dictionary-etl
+stdout '"action":"built"'
+grep '^docker build -f .*/src/picsure-dictionary-etl/4444444444444444444444444444444444444444/Dockerfile -t hms-dbmi/dictionary-etl:444444444444 ' docker.log
+exists stack/.pic-sure/logs/build/dictionary-etl.log
+
+# A failing build exits 1, names the step and keeps state.json's record of
+# the failure.
+cp docker-fail.scenario docker.scenario
+exitcode 1 pic-sure --stack stack build --force dictionary-etl
+stderr 'images'
+grep '"status": "failed"' stack/.pic-sure/state.json
+
+-- docker.scenario --
+docker image inspect hms-dbmi/dictionary-etl:444444444444 => 0 stdout=etl.json
+docker build * => 0
+-- docker-fail.scenario --
+docker image inspect hms-dbmi/dictionary-etl:444444444444 => 0 stdout=etl.json
+docker build * => 1 stderr=build-error.txt
+-- build-error.txt --
+ERROR: failed to solve: process "/bin/sh -c make" did not complete successfully
+-- etl.json --
+[{"Id":"sha256:1","Config":{"Labels":{"org.hms-dbmi.picsure.dictionary-etl-src":"4444444444444444444444444444444444444444"}}}]
+-- cache/pic-sure/src/picsure-dictionary-etl/4444444444444444444444444444444444444444/Dockerfile --
+FROM scratch
+-- stack/pic-sure.yaml --
+schema: 1
+name: demo
+auth: {mode: open, admin_email: admin@example.com}
+-- stack/.pic-sure/state.json --
+{
+  "cli_version": "dev",
+  "schema_version": 1,
+  "components": {
+    "pic-sure": {"ref": "v1", "commit": "1111111111111111111111111111111111111111"},
+    "frontend": {"ref": "v2", "commit": "2222222222222222222222222222222222222222"},
+    "migrations": {"ref": "v3", "commit": "3333333333333333333333333333333333333333"},
+    "dictionary-etl": {"ref": "v4", "commit": "4444444444444444444444444444444444444444"}
+  }
+}
