@@ -165,6 +165,8 @@ func (r *rotator) runError(err error) error {
 	}
 	var hint string
 	switch {
+	case r.saveErr != nil:
+		hint = r.saveErr.Error()
 	case r.saved && r.opts.Name == SecretHPDSKey:
 		hint = "the new key is saved; run `pic-sure up` to install it and start hpds"
 	case r.saved:
@@ -214,6 +216,9 @@ type rotator struct {
 	undo   func(context.Context) error
 	// saved is set once secrets.yaml holds the new value.
 	saved bool
+	// saveErr is the save step's failure, which an interruption during
+	// the step would otherwise hide.
+	saveErr error
 
 	hpdsVolume     string
 	hpdsData       bool
@@ -319,7 +324,8 @@ func (r *rotator) plan() []steps.Step {
 // save changes the database, then saves secrets.yaml. Once the database
 // may have changed, an interruption would leave the new value only in
 // memory, so the step runs to the end whatever ctx does.
-func (r *rotator) save(ctx context.Context, sink events.Sink) error {
+func (r *rotator) save(ctx context.Context, sink events.Sink) (err error) {
+	defer func() { r.saveErr = err }()
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rotateSaveTimeout)
 	defer cancel()
 	if r.change != nil {
@@ -447,12 +453,9 @@ func (r *rotator) alterRoot(ctx context.Context) (func(context.Context) error, e
 	if len(accounts) == 0 {
 		return nil, errors.New("the database has no root account")
 	}
+	// One statement, so a failure part-way leaves no account changed.
 	alter := func(ctx context.Context, t sql.MySQLTarget, password stack.Secret) error {
-		var stmts []string
-		for _, a := range accounts {
-			stmts = append(stmts, sql.AlterUserPassword(a, string(password)))
-		}
-		return sql.ExecMySQL(ctx, r.d.Docker, t, stmts...)
+		return sql.ExecMySQL(ctx, r.d.Docker, t, sql.AlterUsersPassword(accounts, string(password)))
 	}
 	if err := alter(ctx, t, r.next.DBRootPassword); err != nil {
 		return nil, fmt.Errorf("changing the root password: %w", err)

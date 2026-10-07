@@ -86,7 +86,17 @@ func (a Account) quoted() string { return QuoteMySQL(a.User) + "@" + QuoteMySQL(
 // AlterUserPassword returns the statement that sets the account's password.
 // It fails on the server if the account does not exist.
 func AlterUserPassword(a Account, password string) string {
-	return "ALTER USER " + a.quoted() + " IDENTIFIED BY " + QuoteMySQL(password)
+	return AlterUsersPassword([]Account{a}, password)
+}
+
+// AlterUsersPassword returns one statement that sets every account's
+// password. The server applies it to all of them or to none.
+func AlterUsersPassword(accounts []Account, password string) string {
+	parts := make([]string, len(accounts))
+	for i, a := range accounts {
+		parts[i] = a.quoted() + " IDENTIFIED BY " + QuoteMySQL(password)
+	}
+	return "ALTER USER " + strings.Join(parts, ", ")
 }
 
 // AppUser is an application account on the picsure-db server. It connects

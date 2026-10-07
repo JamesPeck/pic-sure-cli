@@ -54,6 +54,13 @@ func TestSetApplicationToken(t *testing.T) {
 	}
 }
 
+func TestAlterUsersPassword(t *testing.T) {
+	got := sql.AlterUsersPassword([]sql.Account{{User: "root", Host: "%"}, {User: "root", Host: "localhost"}}, "pw")
+	if want := `ALTER USER 'root'@'%' IDENTIFIED BY 'pw', 'root'@'localhost' IDENTIFIED BY 'pw'`; got != want {
+		t.Errorf("got %s, want %s", got, want)
+	}
+}
+
 func TestAlterUserPassword(t *testing.T) {
 	got := sql.AlterUserPassword(sql.Account{User: "root", Host: "localhost"}, `p'w\`)
 	if want := `ALTER USER 'root'@'localhost' IDENTIFIED BY 'p''w\\'`; got != want {

@@ -62,7 +62,7 @@ var (
 	rotatePsql     = fakerunner.Glob("docker exec -i * id-dictionary-db psql *")
 	rotateUp       = fakerunner.Glob("docker compose * up -d --wait *")
 	rotateRestart  = fakerunner.Glob("docker compose * restart *")
-	alterRE        = regexp.MustCompile(`ALTER USER '([^']*)'@'([^']*)' IDENTIFIED BY '([^']*)'`)
+	alterRE        = regexp.MustCompile(`'([^']*)'@'([^']*)' IDENTIFIED BY '([^']*)'`)
 	rotateRunning  = []string{"httpd", "picsure-db", "pic-sure-operations-service", "psama", "gateway", "dictionary-db", "dictionary-api", "hpds"}
 	rotateTokenSet = regexp.MustCompile(`SET token = '([^']*)'`)
 )
@@ -325,6 +325,26 @@ func TestRotateSignalDuringTheDBChangeStillSaves(t *testing.T) {
 	}
 }
 
+func TestRotateSignalDuringAFailedSaveReportsTheFailure(t *testing.T) {
+	x := newRotateFixture(t)
+	x.breakSecretsFile(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	x.f = fakerunner.New(t)
+	x.f.On(fakerunner.Glob("docker compose * ps --all --format json picsure-db")).Stdout(psLine("picsure-db", "running", "healthy"))
+	x.f.On(rotateMySQL).Do(func(c context.Context, call fakerunner.Call) (docker.Result, error) {
+		res, err := x.mysql(c, call)
+		cancel()
+		return res, err
+	})
+	x.d.Runner, x.d.Docker, x.d.Compose = x.f, docker.NewEngine(x.f), &docker.Compose{Runner: x.f, Files: []string{"/s/c.yaml"}, ProjectDir: "/s"}
+
+	_, err := ops.RotateSecret(ctx, x.d, x.st, x.cfg, x.sec, ops.RotateOptions{Name: ops.SecretDBPicsure})
+	if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "the database change was undone") || strings.Contains(err.Error(), "nothing was changed") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 func TestRotateDBRootChangesEveryRootAccount(t *testing.T) {
 	x := newRotateFixture(t)
 	if _, err := x.rotate(ops.RotateOptions{Name: ops.SecretDBRoot}); err != nil {
@@ -333,6 +353,11 @@ func TestRotateDBRootChangesEveryRootAccount(t *testing.T) {
 	pw := string(x.saved(t).DBRootPassword)
 	if want := []string{"root@%=" + pw, "root@localhost=" + pw}; !slices.Equal(x.alters, want) {
 		t.Errorf("alters = %d, want both root accounts", len(x.alters))
+	}
+	for _, c := range x.f.CallsMatching(rotateMySQL) {
+		if strings.Count(string(c.Stdin), "ALTER USER") > 1 {
+			t.Error("the root accounts should change in one statement")
+		}
 	}
 	if got := x.upServices(); len(got) != 1 || !slices.Equal(got[0], []string{"picsure-db"}) {
 		t.Errorf("compose up for %v, want picsure-db only", got)

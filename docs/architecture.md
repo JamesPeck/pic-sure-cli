@@ -1445,7 +1445,8 @@ caller holds the stack lock and sets `d.Compose` with an env computed from
 - `rotate-save`: the database change, then secrets.yaml, run with
   `context.WithoutCancel` (bounded at 2 minutes) so a signal can't leave
   the new value only in the database. The change is MySQL `ALTER USER` as
-  root (`db-root` changes every `root` account in `mysql.user`;
+  root (`db-root` changes every `root` account in `mysql.user` in one
+  statement, `sql.AlterUsersPassword`;
   `db-picsure`, `db-auth` and `db-airflow` change `name@'%'`), Postgres
   `ALTER ROLE picsure` for `dictionary-db`, or `UPDATE auth.application`
   with a token from `jwt.Introspection` for `introspection-token` and
