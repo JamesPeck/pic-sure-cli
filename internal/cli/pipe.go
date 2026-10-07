@@ -47,3 +47,9 @@ func (a *App) stderr() io.Writer {
 	}
 	return a.errW
 }
+
+// pipeClosed reports whether the run has written to a closed stdout or
+// stderr.
+func (a *App) pipeClosed() bool {
+	return a.outW != nil && a.outW.closed.Load() || a.errW != nil && a.errW.closed.Load()
+}

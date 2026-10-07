@@ -121,7 +121,9 @@ func (a *App) execute(ctx context.Context, root *cobra.Command, args []string) i
 			err = cause
 		}
 	case err == nil:
-		err = a.succeed()
+		if err = a.succeed(); err != nil && a.pipeClosed() {
+			err = exitcode.Signaled(syscall.SIGPIPE)
+		}
 	case !a.running && !errors.As(err, &coded):
 		// cobra may have stopped before it reached --json.
 		a.Global.JSON = jsonRequested(args)
@@ -131,6 +133,10 @@ func (a *App) execute(ctx context.Context, root *cobra.Command, args []string) i
 		return exitcode.CodeOK
 	}
 	a.reportError(cmd, err)
+	if a.pipeClosed() {
+		// Reporting the error was the first write to the closed pipe.
+		err = exitcode.Signaled(syscall.SIGPIPE)
+	}
 	return exitcode.FromError(err)
 }
 

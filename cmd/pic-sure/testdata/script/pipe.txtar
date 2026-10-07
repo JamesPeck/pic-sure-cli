@@ -21,12 +21,14 @@ stdout '^pic-sure: interrupted \(broken pipe\)$'
 exec sh -c '! kill -0 "$(cat follow.pid)" 2>/dev/null'
 
 # compose passthrough hands compose the pipe itself, and compose gets the
-# default SIGPIPE, so it dies of it and pic-sure exits with its 141.
+# default SIGPIPE, so it dies of it and pic-sure exits cleanly with its 141.
 rm follow.pid
 exec sh -c '{ pic-sure --stack stack compose -- logs -f 2> err; echo $? > code; } | head -n1'
 stdout '^hpds-1  \| line$'
 exec cat code
 stdout '^141$'
+exec cat err
+stdout '^pic-sure: docker compose exited 141$'
 
 -- bin/docker --
 #!/bin/sh

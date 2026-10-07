@@ -87,3 +87,27 @@ func TestClosedPipeCancelsTheRun(t *testing.T) {
 		}
 	})
 }
+
+// A closed pipe first met by the run's last writes, its Result or its
+// error, still gives 141.
+func TestClosedPipeAtTheEnd(t *testing.T) {
+	t.Run("the success result", func(t *testing.T) {
+		a, _, _ := testApp(t)
+		a.Stdout = &closedPipe{}
+		root := withRunE(t, a, []string{"up"}, func(*cobra.Command, []string) error { return a.finish(nil, nil) })
+		if code := a.execute(context.Background(), root, []string{"up", "--json"}); code != 141 {
+			t.Errorf("exit = %d, want 141", code)
+		}
+	})
+	t.Run("a usage error", func(t *testing.T) {
+		a, _, stderr := testApp(t)
+		a.Stdout = &closedPipe{}
+		root := withRunE(t, a, []string{"up"}, func(*cobra.Command, []string) error { return nil })
+		if code := a.execute(context.Background(), root, []string{"up", "--json", "--bogus"}); code != 141 {
+			t.Errorf("exit = %d, want 141", code)
+		}
+		if !strings.Contains(stderr.String(), "unknown flag") {
+			t.Errorf("stderr = %q", stderr)
+		}
+	})
+}
