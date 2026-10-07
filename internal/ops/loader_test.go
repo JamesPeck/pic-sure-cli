@@ -148,7 +148,7 @@ func TestLoadPhenotypeRunsTheLoaderBetweenStopAndStart(t *testing.T) {
 		fakerunner.Glob("docker run * demo-hpds-wipe-* sh -c set -eu; cd /data && rm -f allObservationsStore.javabin allObservationsTemp.javabin columnMeta.javabin columnMeta.csv columnMetaErrors.csv .picsure-dataset"),
 		fakerunner.Glob("docker run * demo-hpds-key-*"),
 		fakerunner.Glob("docker run --rm --name demo-hpds-etl-* --user 0:0 --network none * -e HEAPSIZE -e LOADER_NAME -e LOADER_ARGS -v demo_hpds-data:/opt/local/hpds -v "+fx.csv+":/opt/local/hpds/allConcepts.csv:ro hms-dbmi/pic-sure-hpds-etl:abc123abc123"),
-		fakerunner.Glob("docker run -i * demo-hpds-marker-* sh -c set -eu; cat > /data/.picsure-dataset"),
+		fakerunner.Glob("docker run -i * demo-hpds-marker-* sh -c set -eu; rm -f /data/allConcepts.csv; cat > /data/.picsure-dataset"),
 		fakerunner.Glob("docker compose * up -d --wait --wait-timeout 900 hpds"),
 		fakerunner.Glob("docker compose * ps --all --format json hpds"),
 	)

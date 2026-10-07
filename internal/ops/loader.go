@@ -311,9 +311,11 @@ func (l *loader) load(ctx context.Context, sink events.Sink) error {
 		return fmt.Errorf("the HPDS loader exited %d; its output is above and in the run log", code)
 	}
 
-	// Last, so a marker always describes a complete load.
+	// Docker leaves an empty file in the volume where it mounted the CSV;
+	// it isn't HPDS data. The marker comes last, so it always describes a
+	// complete load.
 	marker := strings.NewReader(l.opts.Dataset + "\n")
-	script := "cat > /data/" + DatasetMarker
+	script := "rm -f /data/allConcepts.csv; cat > /data/" + DatasetMarker
 	if err := l.helper(ctx, l.volume(), "hpds-marker", script, marker); err != nil {
 		return fmt.Errorf("writing %s in volume %s: %w", DatasetMarker, l.volume(), err)
 	}
