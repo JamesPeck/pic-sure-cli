@@ -185,13 +185,15 @@ func (c *client) WorkTree(ctx context.Context, dir string) (WorkTree, error) {
 	if err := checkArgs(dir); err != nil {
 		return WorkTree{}, err
 	}
-	head, err := c.run(ctx, "-C", dir, "rev-parse", "--verify", "HEAD^{commit}")
+	// --no-optional-locks keeps status from taking index.lock to refresh
+	// the index, which would collide with the user's own git.
+	head, err := c.run(ctx, "--no-optional-locks", "-C", dir, "rev-parse", "--verify", "HEAD^{commit}")
 	if err != nil {
 		return WorkTree{}, err
 	}
 	// --untracked-files and --ignore-submodules override the user's
 	// status.showUntrackedFiles and diff.ignoreSubmodules.
-	status, err := c.run(ctx, "-C", dir, "status", "--porcelain", "-z", "--untracked-files=normal", "--ignore-submodules=none")
+	status, err := c.run(ctx, "--no-optional-locks", "-C", dir, "status", "--porcelain", "-z", "--untracked-files=normal", "--ignore-submodules=none")
 	if err != nil {
 		return WorkTree{}, err
 	}

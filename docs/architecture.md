@@ -672,6 +672,8 @@ output replaces the copy's `.env` without following a symlink, and the copy
 is removed after the build. Each value is quoted so dotenv and
 dotenv-expand return it unchanged: single quotes (backquotes if it holds a
 `'`), `$` as `\$`; a line break, or both `'` and a backquote, is an error.
+The copy leaves out a root `.git` and `node_modules` (031), which a local
+checkout has and the Dockerfile never copies.
 `BuildDictionaryETL(ctx, d, ImageBuildOptions)` builds
 `hms-dbmi/dictionary-etl:<sha12>` from its tree. Both run under the image's
 `LockImage`, skip when the image exists with matching labels
@@ -724,14 +726,16 @@ preconditions (034) can call it with no `Stack` and `Building: true`.
 state, ImagesOptions{Cache, Components, Force})`, ID `images`, is §7.2's
 image step for init, up and update. For each selected component (all by
 default; an unknown name is exit 2) it builds, or pulls, the images at
-the commit `state.Components` records (exit 3 if none), through 029's
+the release commit `state.Components` records (exit 3 if none, or if it
+was recorded from a source the config no longer sets), through 029's
 `BuildReactor` and 030's `BuildFrontend`/`BuildDictionaryETL`, which skip
-what is up to date. It records each part's commit and tags in `state`
-and saves it as soon as that part is done. Build logs go to
+what is up to date. It also makes sure the cache has the pic-sure and
+migrations trees, which render bind-mounts. It records each part's commit
+and tags in `state` and saves it as soon as that part is done. Build logs go to
 `BuildLogDir` (`.pic-sure/logs/build/<part>.log`, made through the stack
 so they are in the manifest; each holds that part's last build). `Check`
-is done when every image is present with its labels and recorded, which
-is what `up` needs.
+is done when every image is present with its labels and recorded and
+those trees exist, which is what `up` needs.
 
 - **Local sources (§7.3).** A component with `components.<c>.source`
   (relative to the stack) is built from that checkout: `git.WorkTree`
@@ -746,13 +750,17 @@ is what `up` needs.
   since it bakes in config) is pulled as
   `<images.registry or DefaultRegistry>/<image>:<ref>`, the ref being the
   component's build-spec or config ref, and tagged `hms-dbmi/<image>:<ref>`
-  for the rendered compose. An image already present is kept unless
-  `Force`. A failed pull says the images may not be published yet.
+  for the rendered compose. Apply pulls every time, since a ref can be a
+  branch; `Check` only needs the images present. A failed pull says the
+  images may not be published yet. Migrations' ref needn't be a tag.
 - `Build(ctx, d, st, cfg, state, BuildOptions)` is the `build` command: a
-  `resolve` step, done when state records a commit for every component
-  without a source (otherwise `release.Fetch` on `release.branch`,
-  `ResolveComponents` and `Record`, without the CLI gate), then the image
-  step without its `Check`, so the `BuildReport` lists every selected
+  `resolve` step, done when state records a release commit for every
+  component without a source. Otherwise it fetches release-control at
+  state's release commit (the `release.branch` head for a stack with none,
+  which it then records), resolves, and fills in only the missing
+  components, so `build` never moves a recorded commit (that is
+  `update`'s job) and runs no CLI gate. Then the image step without its
+  `Check`, so the `BuildReport` lists every selected
   image as `built`, `pulled` or `up-to-date`. The command holds the stack
   lock, records the operation in state.json and saves it even on failure.
 
@@ -1069,6 +1077,8 @@ command holds a lock.
   waits on it would let two holders in. The locks cover one cache root, but
   images and `pic-sure-m2` belong to the Docker daemon, so two users with
   their own caches on one daemon don't exclude each other.
+- `SourceDir(component, sha)` (031) is where `EnsureSource` keeps that
+  tree, without making it, for a step's `Check`.
 - `FrontendBuildDir(tag)` (030) is `build/frontend-<tag>`, the frontend
   build's copy of its source, not created.
 - `EnsureMavenVolume(ctx, d.Docker)` creates `MavenVolume` (`pic-sure-m2`).

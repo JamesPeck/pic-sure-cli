@@ -21,15 +21,12 @@ import (
 // that exists is complete, and it is never changed afterwards. Don't call
 // EnsureSource while holding the same repository's LockRepo.
 func (c *Cache) EnsureSource(ctx context.Context, component, sha string) (string, error) {
-	comp, ok := catalog.LookupComponent(component)
-	if !ok {
-		return "", fmt.Errorf("cache: unknown component %q", component)
-	}
-	if err := checkSHA(sha); err != nil {
+	dest, err := c.SourceDir(component, sha)
+	if err != nil {
 		return "", err
 	}
+	comp, _ := catalog.LookupComponent(component)
 	repo := comp.RepoName()
-	dest := filepath.Join(c.root, srcDir, repo, sha)
 	if done, err := isDir(dest); done || err != nil {
 		return dest, err
 	}
@@ -63,6 +60,20 @@ func (c *Cache) EnsureSource(ctx context.Context, component, sha string) (string
 		return "", fmt.Errorf("unpacking %s at %s: %w", comp.Repo, sha, err)
 	}
 	return dest, nil
+}
+
+// SourceDir returns where EnsureSource keeps the source tree of the
+// catalog component at commit sha, without making it. The tree is complete
+// if the directory exists.
+func (c *Cache) SourceDir(component, sha string) (string, error) {
+	comp, ok := catalog.LookupComponent(component)
+	if !ok {
+		return "", fmt.Errorf("cache: unknown component %q", component)
+	}
+	if err := checkSHA(sha); err != nil {
+		return "", err
+	}
+	return filepath.Join(c.root, srcDir, comp.RepoName(), sha), nil
 }
 
 // ensureCommit makes bare a clone of comp's repository that has commit sha,

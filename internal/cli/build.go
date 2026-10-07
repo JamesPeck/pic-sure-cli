@@ -40,6 +40,9 @@ func (a *App) build(cmd *cobra.Command, components []string, force bool) (err er
 		return err
 	}
 	defer func() { _ = st.Close() }()
+	if _, err := ops.SelectComponents(components); err != nil {
+		return err
+	}
 	d := a.newDeps()
 	lock, err := a.lockStack(ctx, cmd, st, d.Sink)
 	if err != nil {

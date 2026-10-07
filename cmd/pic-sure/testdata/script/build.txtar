@@ -8,6 +8,7 @@ env XDG_CACHE_HOME=$WORK/cache
 exitcode 2 pic-sure --stack stack build hpds
 stderr 'unknown component "hpds"'
 ! exists docker.log
+! grep '"last_operation"' stack/.pic-sure/state.json
 
 # dictionary-etl is up to date at the recorded commit: nothing is built,
 # and the tag is recorded.
@@ -28,7 +29,7 @@ exists stack/.pic-sure/logs/build/dictionary-etl.log
 # the failure.
 cp docker-fail.scenario docker.scenario
 exitcode 1 pic-sure --stack stack build --force dictionary-etl
-stderr 'images'
+stderr 'step images failed: building hms-dbmi/dictionary-etl:444444444444: .*did not complete successfully'
 grep '"status": "failed"' stack/.pic-sure/state.json
 
 -- docker.scenario --

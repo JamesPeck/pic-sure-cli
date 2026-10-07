@@ -132,6 +132,8 @@ func newImageFixture(t *testing.T) *imageFixture {
 		"Dockerfile":         "FROM scratch\n",
 		"src/routes/page.ts": "export {}\n",
 		".env.example":       "VITE_X=1\n",
+		".git/HEAD":          "ref: refs/heads/main\n",
+		"node_modules/x.js":  "x\n",
 	} {
 		p := filepath.Join(src, filepath.FromSlash(name))
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
@@ -194,6 +196,11 @@ func TestBuildFrontendCopiesTheSourceAndWritesTheEnv(t *testing.T) {
 		}
 		if _, err := os.Stat(filepath.Join(ctxDir, "src", "routes", "page.ts")); err != nil {
 			t.Error(err)
+		}
+		for _, skipped := range []string{".git", "node_modules"} {
+			if _, err := os.Lstat(filepath.Join(ctxDir, skipped)); !os.IsNotExist(err) {
+				t.Errorf("%s copied into the context (%v)", skipped, err)
+			}
 		}
 		sawContext = true
 		return docker.Result{}, nil

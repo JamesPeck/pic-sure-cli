@@ -298,7 +298,10 @@ func imageHasLabels(ctx context.Context, d *Deps, ref string, want map[string]st
 
 // copyTree copies the directory src to dst, which must not exist. It copies
 // regular files with their permission bits, directories at 0755 and
-// symlinks as they are; the cache's trees hold nothing else.
+// symlinks as they are; the cache's trees hold nothing else. A local
+// checkout (§7.3) also has .git and node_modules at its root, which the
+// frontend's Dockerfile never copies, so they are left out: node_modules
+// is large, and .git may hold sockets such as fsmonitor's.
 func copyTree(src, dst string) error {
 	return filepath.WalkDir(src, func(path string, e fs.DirEntry, err error) error {
 		if err != nil {
@@ -307,6 +310,12 @@ func copyTree(src, dst string) error {
 		rel, err := filepath.Rel(src, path)
 		if err != nil {
 			return err
+		}
+		if rel == ".git" || rel == "node_modules" {
+			if e.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 		target := filepath.Join(dst, rel)
 		switch {

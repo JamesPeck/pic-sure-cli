@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -50,7 +51,8 @@ type ImagesOptions struct {
 	// Components limits the step to these components (catalog names).
 	// Empty means all of them.
 	Components []string
-	// Force rebuilds, or re-pulls, every image even if it is up to date.
+	// Force rebuilds every image even if it is up to date. Pull mode pulls
+	// every time anyway.
 	Force bool
 }
 
@@ -81,10 +83,13 @@ type BuiltImage struct {
 type imagePart struct {
 	component string
 	images    []catalog.Image
-	commit    stack.Component // with Source and Dirty for a local checkout
+	comp      stack.Component // with Source and Dirty for a local checkout
 	tag       string
 	pull      bool // pulled from the registry rather than built
 	registry  string
+	// tree says render needs the cache's source tree, for its SQL and
+	// schema bind mounts, whether or not anything is built from it.
+	tree bool
 }
 
 // Build is the build command: it resolves the component commits if
@@ -100,23 +105,24 @@ func Build(ctx context.Context, d *Deps, st *stack.Stack, cfg *stack.Config, sta
 	return report, steps.Run(ctx, d.Sink, plan, steps.Options{Skip: opts.SkipSteps})
 }
 
-// resolveStep resolves the component commits from release-control when
-// state.json doesn't record one for every component without a local source.
+// resolveStep resolves the commits of the components without a local
+// source that state.json has no release commit for: never resolved, or last
+// built from a source the config no longer sets. They are resolved at the
+// release commit state.json records, if any, and the other components are
+// left as they are, since moving them is update's business.
 func resolveStep(d *Deps, st *stack.Stack, cfg *stack.Config, state *stack.State, c *cache.Cache) steps.Step {
 	return steps.Step{
 		ID:    ResolveStepID,
 		Title: "Resolve the component commits",
 		Check: func(context.Context) (bool, error) {
-			for _, comp := range catalog.Components() {
-				if componentSource(cfg, comp.Name) == "" && state.Components[comp.Name].Commit == "" {
-					return false, nil
-				}
-			}
-			return true, nil
+			return len(unresolved(cfg, state)) == 0, nil
 		},
 		Apply: func(ctx context.Context, sink events.Sink) error {
-			rel, err := release.Fetch(ctx, c, d.Git, sink, ResolveStepID,
-				release.Options{Repo: cfg.Release.Repo, Branch: cfg.Release.Branch})
+			opts := release.Options{Repo: cfg.Release.Repo, Branch: cfg.Release.Branch, Commit: state.Release.Commit}
+			if state.Release.Commit != "" && state.Release.Repo != "" {
+				opts.Repo = state.Release.Repo
+			}
+			rel, err := release.Fetch(ctx, c, d.Git, sink, ResolveStepID, opts)
 			if err != nil {
 				return err
 			}
@@ -124,10 +130,31 @@ func resolveStep(d *Deps, st *stack.Stack, cfg *stack.Config, state *stack.State
 			if err != nil {
 				return err
 			}
-			rel.Record(state, comps)
+			if state.Release.Commit == "" {
+				state.Release = stack.Release{Repo: rel.Repo, Branch: rel.Branch, Commit: rel.Commit}
+			}
+			if state.Components == nil {
+				state.Components = map[string]stack.Component{}
+			}
+			for _, name := range unresolved(cfg, state) {
+				state.Components[name] = comps[name]
+			}
 			return st.SaveState(state)
 		},
 	}
+}
+
+// unresolved lists the components without a local source whose release
+// commit state.json doesn't record.
+func unresolved(cfg *stack.Config, state *stack.State) []string {
+	var out []string
+	for _, comp := range catalog.Components() {
+		rec := state.Components[comp.Name]
+		if componentSource(cfg, comp.Name) == "" && (rec.Commit == "" || rec.Source != "") {
+			out = append(out, comp.Name)
+		}
+	}
+	return out
 }
 
 // ImagesStep is §7.2's image step, ID "images", for init, up and update:
@@ -154,7 +181,7 @@ func imagesStep(d *Deps, st *stack.Stack, cfg *stack.Config, state *stack.State,
 				return false, err
 			}
 			for _, p := range parts {
-				if ok, err := p.upToDate(ctx, d, cfg, state); err != nil || !ok {
+				if ok, err := p.upToDate(ctx, d, opts.Cache, cfg, state); err != nil || !ok {
 					return false, err
 				}
 			}
@@ -173,7 +200,7 @@ func imagesStep(d *Deps, st *stack.Stack, cfg *stack.Config, state *stack.State,
 // planImages works out the parts of the selected components. A local
 // source's checkout is read here, so its tag follows its current commit.
 func planImages(ctx context.Context, d *Deps, st *stack.Stack, cfg *stack.Config, state *stack.State, opts ImagesOptions) ([]imagePart, error) {
-	selected, err := selectComponents(opts.Components)
+	selected, err := SelectComponents(opts.Components)
 	if err != nil {
 		return nil, err
 	}
@@ -193,21 +220,26 @@ func planImages(ctx context.Context, d *Deps, st *stack.Stack, cfg *stack.Config
 			if err != nil {
 				return nil, fmt.Errorf("components.%s.source %s: %w", name, src, err)
 			}
-			p.commit = stack.Component{Commit: wt.Head, Source: src, Dirty: wt.Dirty}
+			p.comp = stack.Component{Commit: wt.Head, Source: src, Dirty: wt.Dirty}
 			p.tag = DevTag(cfg.Name, wt.Head, wt.Dirty)
-		} else {
-			p.commit = state.Components[name]
-			if !fullCommit.MatchString(p.commit.Commit) {
-				return nil, exitcode.Precondition("state.json records no %s commit; run pic-sure update", name)
+			if !imageTag.MatchString(p.tag) {
+				return nil, fmt.Errorf("the dev image tag %q is longer than docker allows; use a shorter stack name", p.tag)
 			}
-			p.tag = p.commit.Commit[:12]
+		} else {
+			rec := state.Components[name]
+			if !fullCommit.MatchString(rec.Commit) || rec.Source != "" {
+				return nil, exitcode.Precondition("state.json records no release commit of %s; run pic-sure build", name)
+			}
+			p.comp = stack.Component{Ref: rec.Ref, Commit: rec.Commit}
+			p.tree = name == catalog.PicSure || name == catalog.Migrations
+			p.tag = p.comp.Commit[:12]
 			if name == catalog.Frontend {
 				p.tag += "-" + FrontendConfigHash(render.ViteEnv(cfg))[:8]
 			}
-			if cfg.Images.Mode == stack.ImagesPull && name != catalog.Frontend {
+			if cfg.Images.Mode == stack.ImagesPull && name != catalog.Frontend && len(p.images) > 0 {
 				// The frontend bakes in its config, so it is always built (§7.4).
 				p.pull = true
-				p.tag = p.commit.Ref
+				p.tag = p.comp.Ref
 				if !imageTag.MatchString(p.tag) {
 					return nil, fmt.Errorf("images.mode pull: %s's ref %q is not an image tag", name, p.tag)
 				}
@@ -232,9 +264,10 @@ func DevTag(stackName, commit string, dirty bool) string {
 	return tag
 }
 
-// selectComponents checks names against the catalog; none means every
-// component, in catalog order.
-func selectComponents(names []string) ([]string, error) {
+// SelectComponents checks the build command's component names against the
+// catalog; none means every component, in catalog order. An unknown name is
+// exit 2.
+func SelectComponents(names []string) ([]string, error) {
 	var all []string
 	for _, c := range catalog.Components() {
 		all = append(all, c.Name)
@@ -270,10 +303,20 @@ func componentSource(cfg *stack.Config, name string) string {
 }
 
 // upToDate reports whether every image of p is present and state records
-// it, so the step has nothing to do. A dirty checkout is never up to date.
-func (p imagePart) upToDate(ctx context.Context, d *Deps, cfg *stack.Config, state *stack.State) (bool, error) {
-	if p.commit.Dirty || state.Components[p.component] != p.commit {
+// it, and the source tree render needs exists, so the step has nothing to
+// do. A dirty checkout is never up to date.
+func (p imagePart) upToDate(ctx context.Context, d *Deps, c *cache.Cache, cfg *stack.Config, state *stack.State) (bool, error) {
+	if p.comp.Dirty || state.Components[p.component] != p.comp {
 		return false, nil
+	}
+	if p.tree {
+		dir, err := c.SourceDir(p.component, p.comp.Commit)
+		if err != nil {
+			return false, err
+		}
+		if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+			return false, nil
+		}
 	}
 	tag := p.tag
 	for _, img := range p.images {
@@ -298,13 +341,13 @@ func (p imagePart) upToDate(ctx context.Context, d *Deps, cfg *stack.Config, sta
 		}
 		return true, nil
 	case p.component == catalog.PicSure:
-		return ReactorUpToDate(ctx, d, p.commit.Commit, tag)
+		return ReactorUpToDate(ctx, d, p.comp.Commit, tag)
 	case p.component == catalog.Frontend:
 		return imageHasLabels(ctx, d, p.images[0].Repository()+":"+tag, map[string]string{
-			FrontendSrcLabel: p.commit.Commit, FrontendConfigLabel: FrontendConfigHash(render.ViteEnv(cfg))})
+			FrontendSrcLabel: p.comp.Commit, FrontendConfigLabel: FrontendConfigHash(render.ViteEnv(cfg))})
 	default:
 		return imageHasLabels(ctx, d, p.images[0].Repository()+":"+tag,
-			map[string]string{DictionaryETLSrcLabel: p.commit.Commit})
+			map[string]string{DictionaryETLSrcLabel: p.comp.Commit})
 	}
 }
 
@@ -313,7 +356,7 @@ func (p imagePart) upToDate(ctx context.Context, d *Deps, cfg *stack.Config, sta
 // source, and nothing without a local source.
 func (p imagePart) devImages(cfg *stack.Config, tag string) map[string]string {
 	out := map[string]string{}
-	if p.commit.Source == "" {
+	if p.comp.Source == "" {
 		return out
 	}
 	built := devImages(cfg)
@@ -343,6 +386,11 @@ func buildImages(ctx context.Context, d *Deps, st *stack.Stack, cfg *stack.Confi
 		return err
 	}
 	for _, p := range parts {
+		if p.tree {
+			if _, err := opts.Cache.WithEvents(d.Sink, ImagesStepID).EnsureSource(ctx, p.component, p.comp.Commit); err != nil {
+				return err
+			}
+		}
 		var tag string
 		var built []string
 		var err error
@@ -350,18 +398,18 @@ func buildImages(ctx context.Context, d *Deps, st *stack.Stack, cfg *stack.Confi
 		case len(p.images) == 0:
 			// migrations has no image; only its commit is recorded.
 		case p.pull:
-			tag, built, err = p.pullImages(ctx, d, opts.Force)
+			tag, built, err = p.pullImages(ctx, d)
 		case p.component == catalog.PicSure:
 			var res ReactorResult
 			res, err = BuildReactor(ctx, d, ReactorOptions{
-				Cache: opts.Cache, SHA: p.commit.Commit, Source: p.commit.Source, Tag: p.tag,
-				Proxy: proxy, Force: opts.Force || p.commit.Dirty, LogDir: logDir, Step: ImagesStepID,
+				Cache: opts.Cache, SHA: p.comp.Commit, Source: p.comp.Source, Tag: p.tag,
+				Proxy: proxy, Force: opts.Force || p.comp.Dirty, LogDir: logDir, Step: ImagesStepID,
 			})
 			tag, built = res.Tag, res.Built
 		default:
 			bo := ImageBuildOptions{
-				Cache: opts.Cache, SHA: p.commit.Commit, Source: p.commit.Source, Tag: p.tag,
-				Proxy: proxy, Force: opts.Force || p.commit.Dirty, LogDir: logDir, Step: ImagesStepID,
+				Cache: opts.Cache, SHA: p.comp.Commit, Source: p.comp.Source, Tag: p.tag,
+				Proxy: proxy, Force: opts.Force || p.comp.Dirty, LogDir: logDir, Step: ImagesStepID,
 			}
 			var res ImageBuildResult
 			if p.component == catalog.Frontend {
@@ -383,7 +431,7 @@ func buildImages(ctx context.Context, d *Deps, st *stack.Stack, cfg *stack.Confi
 		}
 		for _, img := range p.images {
 			bi := BuiltImage{Name: img.Name, Component: p.component, Ref: img.Repository() + ":" + tag,
-				Action: ImageUpToDate, Source: p.commit.Source}
+				Action: ImageUpToDate, Source: p.comp.Source}
 			if slices.Contains(built, img.Name) {
 				bi.Action = ImageBuilt
 				if p.pull {
@@ -401,7 +449,7 @@ func (p imagePart) record(state *stack.State, cfg *stack.Config, tag string) {
 	if state.Components == nil {
 		state.Components = map[string]stack.Component{}
 	}
-	state.Components[p.component] = p.commit
+	state.Components[p.component] = p.comp
 	if len(p.images) == 0 {
 		return
 	}
@@ -421,23 +469,13 @@ func (p imagePart) record(state *stack.State, cfg *stack.Config, tag string) {
 	}
 }
 
-// pullImages pulls each image of p from the registry and tags it with the
-// local name the rendered compose file uses. An image already present is
-// kept unless force is set.
-func (p imagePart) pullImages(ctx context.Context, d *Deps, force bool) (string, []string, error) {
+// pullImages pulls each image of p from the registry, every time, since a
+// ref such as a branch name can move, and tags it with the local name the
+// rendered compose file uses.
+func (p imagePart) pullImages(ctx context.Context, d *Deps) (string, []string, error) {
 	var pulled []string
 	for _, img := range p.images {
 		local := img.Repository() + ":" + p.tag
-		if !force {
-			ok, err := d.Docker.ImageExists(ctx, local)
-			if err != nil {
-				return "", nil, err
-			}
-			if ok {
-				progressf(d.Sink, ImagesStepID, "%s is present", local)
-				continue
-			}
-		}
 		remote := p.registry + "/" + img.Name + ":" + p.tag
 		progressf(d.Sink, ImagesStepID, "Pulling %s", remote)
 		if err := d.Docker.Pull(ctx, remote, nil); err != nil {

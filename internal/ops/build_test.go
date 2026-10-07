@@ -1,6 +1,8 @@
 package ops_test
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -54,7 +56,7 @@ func newBuildFixture(t *testing.T) *buildFixture {
 	cfg := stack.DefaultConfig()
 	cfg.Name = "demo"
 	rec := &events.Recorder{}
-	return &buildFixture{
+	x := &buildFixture{
 		t:   t,
 		f:   f,
 		rec: rec,
@@ -71,6 +73,10 @@ func newBuildFixture(t *testing.T) *buildFixture {
 		cache: c,
 		root:  root,
 	}
+	// Render needs these trees, so the step makes sure they exist.
+	x.tree(catalog.PicSure, psSHA)
+	x.tree(catalog.Migrations, migSHA)
+	return x
 }
 
 func (x *buildFixture) feTag() string {
@@ -126,8 +132,8 @@ func (x *buildFixture) checkout(dirty bool) string {
 	if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte("FROM scratch\n"), 0o644); err != nil {
 		x.t.Fatal(err)
 	}
-	x.f.On(fakerunner.Exact("git", "-C", dir, "rev-parse", "--verify", "HEAD^{commit}")).Stdout(localSHA + "\n")
-	status := x.f.On(fakerunner.Glob("git -C " + dir + " status *"))
+	x.f.On(fakerunner.Exact("git", "--no-optional-locks", "-C", dir, "rev-parse", "--verify", "HEAD^{commit}")).Stdout(localSHA + "\n")
+	status := x.f.On(fakerunner.Glob("git --no-optional-locks -C " + dir + " status *"))
 	if dirty {
 		status.Stdout(" M Dockerfile\x00")
 	}
@@ -246,7 +252,8 @@ func TestBuildPullModePullsAllButTheFrontend(t *testing.T) {
 	x.cfg.Images.Mode = stack.ImagesPull
 	x.cfg.Images.Registry = "registry.example.com/mirror/"
 	x.state.Components[catalog.DictionaryETL] = stack.Component{Ref: "v4.0.0", Commit: etlSHA}
-	x.image("hms-dbmi/pic-sure-hpds:v1", nil) // already pulled
+	// Migrations has no image, so its ref needn't be a tag.
+	x.state.Components[catalog.Migrations] = stack.Component{Ref: "feature/schema", Commit: migSHA}
 	x.frontendFresh()
 	x.missing()
 	x.f.On(fakerunner.Glob("docker pull *"))
@@ -258,12 +265,11 @@ func TestBuildPullModePullsAllButTheFrontend(t *testing.T) {
 	}
 	x.f.AssertNotCalled(fakerunner.Glob("docker build *"))
 	x.f.AssertNotCalled(fakerunner.Glob("docker pull *pic-sure-httpd*"))
-	x.f.AssertNotCalled(fakerunner.Glob("docker pull *pic-sure-hpds:*"))
 	x.f.AssertCalled(fakerunner.Exact("docker", "pull", "registry.example.com/mirror/pic-sure-psama:v1"))
 	x.f.AssertCalled(fakerunner.Exact("docker", "tag", "registry.example.com/mirror/pic-sure-psama:v1", "hms-dbmi/pic-sure-psama:v1"))
 	x.f.AssertCalled(fakerunner.Exact("docker", "pull", "registry.example.com/mirror/dictionary-etl:v4.0.0"))
 	got := actions(r)
-	if got["hms-dbmi/pic-sure-psama:v1"] != ops.ImagePulled || got["hms-dbmi/pic-sure-hpds:v1"] != ops.ImageUpToDate ||
+	if got["hms-dbmi/pic-sure-psama:v1"] != ops.ImagePulled || got["hms-dbmi/dictionary-etl:v4.0.0"] != ops.ImagePulled ||
 		got["hms-dbmi/pic-sure-httpd:"+x.feTag()] != ops.ImageUpToDate {
 		t.Errorf("actions = %v", got)
 	}
@@ -389,17 +395,137 @@ func TestImagesStepCheck(t *testing.T) {
 	}
 	x.cfg.Frontend.Theme = theme
 
-	// A dirty checkout is never done.
-	x.cfg.Components.DictionaryETL.Source = x.checkout(true)
+	// The source trees render needs must exist.
+	tree := filepath.Join(x.root, "src", "PIC-SURE-Migrations", migSHA)
+	if err := os.Rename(tree, tree+".away"); err != nil {
+		t.Fatal(err)
+	}
+	if done, _ := ops.ImagesStep(x.d, x.st, x.cfg, x.state, opts).Check(ctx); done {
+		t.Error("no migrations tree: done")
+	}
+	if err := os.Rename(tree+".away", tree); err != nil {
+		t.Fatal(err)
+	}
+
+	// A dirty checkout is never done, even when its image and record are.
+	src := x.checkout(true)
+	x.cfg.Components.DictionaryETL.Source = src
+	dirtyTag := "dev-demo-" + localSHA[:12] + "-dirty"
+	x.etlFresh(dirtyTag, localSHA)
+	x.state.Components[catalog.DictionaryETL] = stack.Component{Commit: localSHA, Source: src, Dirty: true}
+	x.state.Images["dictionary-etl"] = dirtyTag
 	if done, _ := ops.ImagesStep(x.d, x.st, x.cfg, x.state, opts).Check(ctx); done {
 		t.Error("dirty source: done")
 	}
 
-	// Without a recorded commit there is nothing to build from.
+	// Once the source is removed from the config, the commit recorded from
+	// it is no release commit to build.
 	x.cfg.Components.DictionaryETL.Source = ""
+	_, err = ops.ImagesStep(x.d, x.st, x.cfg, x.state, opts).Check(ctx)
+	if exitcode.FromError(err) != exitcode.CodePrecondition {
+		t.Errorf("source removed: %v, want exit 3", err)
+	}
+
+	// Without a recorded commit there is nothing to build from.
 	delete(x.state.Components, catalog.DictionaryETL)
 	_, err = ops.ImagesStep(x.d, x.st, x.cfg, x.state, opts).Check(ctx)
 	if exitcode.FromError(err) != exitcode.CodePrecondition {
 		t.Errorf("no commit: %v, want exit 3", err)
+	}
+}
+
+// releaseControl fakes a release-control clone at commit rel whose
+// build-spec names refs v1 to v4, and component clones that resolve every
+// ref to resolved[component].
+func (x *buildFixture) releaseControl(rel string, resolved map[string]string) {
+	x.t.Helper()
+	var spec bytes.Buffer
+	tw := tar.NewWriter(&spec)
+	body := []byte(`{"application": [
+		{"project_job_git_key": "PSA", "git_hash": "v1"}, {"project_job_git_key": "PSF", "git_hash": "v2"},
+		{"project_job_git_key": "PSM", "git_hash": "v3"}, {"project_job_git_key": "DICTIONARY_ETL", "git_hash": "v4"}]}`)
+	if err := tw.WriteHeader(&tar.Header{Name: "build-spec.json", Mode: 0o644, Size: int64(len(body)), Typeflag: tar.TypeReg}); err != nil {
+		x.t.Fatal(err)
+	}
+	if _, err := tw.Write(body); err != nil {
+		x.t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		x.t.Fatal(err)
+	}
+	dirs := []string{x.cache.ReleaseControlDir()}
+	for name, sha := range resolved {
+		comp, _ := catalog.LookupComponent(name)
+		bare := filepath.Join(x.root, "git", comp.RepoName()+".git")
+		dirs = append(dirs, bare)
+		x.f.On(fakerunner.Glob("git --git-dir=" + bare + " rev-parse *")).Stdout(sha + "\n")
+	}
+	for _, dir := range dirs {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			x.t.Fatal(err)
+		}
+	}
+	rc := x.cache.ReleaseControlDir()
+	x.f.On(fakerunner.Glob("git --git-dir=" + rc + " config remote.origin.url *"))
+	x.f.On(fakerunner.Glob("git --git-dir=" + rc + " rev-parse *")).Stdout(rel + "\n")
+	x.f.On(fakerunner.Glob("git * --git-dir=" + rc + " archive --format=tar " + rel)).Stdout(spec.String())
+	x.f.On(fakerunner.Glob("git --git-dir=* fetch *"))
+}
+
+func TestBuildResolvesOnlyMissingCommitsAtTheRecordedRelease(t *testing.T) {
+	x := newBuildFixture(t)
+	const rel = "5555555555555555555555555555555555555555"
+	x.state.Release = stack.Release{Repo: "https://example.com/rc.git", Branch: "main", Commit: rel}
+	delete(x.state.Components, catalog.Frontend)
+	// Built from a source that pic-sure.yaml no longer sets.
+	x.state.Components[catalog.DictionaryETL] = stack.Component{Commit: localSHA, Source: "/old/etl", Dirty: true}
+	moved := strings.Repeat("9", 40)
+	x.releaseControl(rel, map[string]string{
+		catalog.PicSure: moved, catalog.Frontend: feSHA, catalog.Migrations: moved, catalog.DictionaryETL: moved,
+	})
+	x.frontendFresh()
+
+	if _, err := x.build(ops.ImagesOptions{Components: []string{catalog.Frontend}}); err != nil {
+		t.Fatal(err)
+	}
+	// The pinned release commit is read, not the branch head.
+	x.f.AssertCalled(fakerunner.Glob("git --git-dir=* rev-parse --verify --quiet " + rel + "^{commit}"))
+	x.f.AssertNotCalled(fakerunner.Glob("git --git-dir=*release-control fetch *"))
+	if got := x.state.Components[catalog.Frontend]; got != (stack.Component{Ref: "v2", Commit: feSHA}) {
+		t.Errorf("frontend resolved to %+v", got)
+	}
+	if got := x.state.Components[catalog.PicSure].Commit; got != psSHA {
+		t.Errorf("pic-sure moved to %s; only missing commits are resolved", got)
+	}
+	if got := x.state.Components[catalog.DictionaryETL]; got != (stack.Component{Ref: "v4", Commit: moved}) {
+		t.Errorf("dictionary-etl, formerly from a source, resolved to %+v", got)
+	}
+	if x.state.Release.Commit != rel {
+		t.Errorf("release moved to %s", x.state.Release.Commit)
+	}
+}
+
+func TestBuildResolvesAFreshStackAtTheBranchHead(t *testing.T) {
+	x := newBuildFixture(t)
+	x.state = &stack.State{}
+	const rel = "5555555555555555555555555555555555555555"
+	x.releaseControl(rel, map[string]string{
+		catalog.PicSure: psSHA, catalog.Frontend: feSHA, catalog.Migrations: migSHA, catalog.DictionaryETL: etlSHA,
+	})
+	x.etlFresh(etlSHA[:12], etlSHA)
+
+	if _, err := x.build(ops.ImagesOptions{Components: []string{catalog.DictionaryETL}}); err != nil {
+		t.Fatal(err)
+	}
+	x.f.AssertCalled(fakerunner.Glob("git --git-dir=* rev-parse --verify --quiet refs/heads/" + x.cfg.Release.Branch + "^{commit}"))
+	if x.state.Release.Commit != rel || x.state.Release.Branch != x.cfg.Release.Branch {
+		t.Errorf("release = %+v", x.state.Release)
+	}
+	if len(x.state.Components) != 4 || x.state.Components[catalog.Migrations] != (stack.Component{Ref: "v3", Commit: migSHA}) {
+		t.Errorf("components = %v", x.state.Components)
+	}
+	saved, err := x.st.LoadState()
+	if err != nil || saved.Release.Commit != rel {
+		t.Errorf("saved state %+v, %v", saved, err)
 	}
 }
