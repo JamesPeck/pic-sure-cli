@@ -77,8 +77,9 @@ func TestValidate(t *testing.T) {
 		{"remote fields ignored when local", func(c *Config) { c.DB.Remote = RemoteDB{Host: "db example", Port: 0} }, nil},
 
 		{"shared name required", func(c *Config) { c.HPDS.Data = HPDSShared }, []string{"hpds.shared_name: required when hpds.data is shared"}},
-		{"shared name set", func(c *Config) { c.HPDS.Data, c.HPDS.SharedName = HPDSShared, "nhanes-2026.1" }, nil},
-		{"shared name bad", func(c *Config) { c.HPDS.Data, c.HPDS.SharedName = HPDSShared, "../x" }, []string{`hpds.shared_name: must be letters, digits, '.', - and _, starting with a letter or digit; got "../x"`}},
+		{"shared name set", func(c *Config) { c.HPDS.Data, c.HPDS.SharedName = HPDSShared, "nhanes-2026_1" }, nil},
+		{"shared name bad", func(c *Config) { c.HPDS.Data, c.HPDS.SharedName = HPDSShared, "../x" }, []string{`hpds.shared_name: must be lowercase letters, digits, - and _, starting with a letter or digit, as shared-data publish names a set; got "../x"`}},
+		{"shared name with a dot", func(c *Config) { c.HPDS.Data, c.HPDS.SharedName = HPDSShared, "nhanes.1" }, []string{`hpds.shared_name: must be lowercase letters, digits, - and _, starting with a letter or digit, as shared-data publish names a set; got "nhanes.1"`}},
 		{"java opts with a newline", func(c *Config) { c.HPDS.JavaOpts = "-Xmx1g\n-Xms1g" }, []string{"hpds.java_opts: must not contain control characters"}},
 
 		{"provided tls needs files", func(c *Config) { c.TLS = TLS{Mode: TLSProvided} }, []string{

@@ -1429,8 +1429,13 @@ else empty: what hpds runs with when `hpds.profile` is empty), `.picsure-commit`
 056's `destroy` removes volumes carrying them.
 `ListSharedData(ctx, d)` groups the labelled volumes by set.
 `SharedDataProfile(ctx, d, name)` requires both of a set's volumes,
-labelled as the set's (exit 3 otherwise), and returns its `.hpds-profile`;
-render and init's host check use it for a stack in shared mode.
+labelled as the set's and holding the same `PublishedMarker` (one alpine
+helper reads both read-only; publish labels the volumes before it copies,
+so the marker is what tells a finished set from one still being published
+or left by an interrupted publish), exit 3 otherwise, and returns its
+`.hpds-profile`; render and init's host check use it for a stack in shared
+mode. init's summary suggests `dictionary hydrate` rather than `data demo`
+in shared mode.
 `RemoveSharedData(ctx, d, name)` removes only volumes labelled as that set,
 and refuses (exit 3) while any container, stopped ones too, mounts either.
 

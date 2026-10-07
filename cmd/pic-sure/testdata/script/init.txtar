@@ -26,7 +26,7 @@ stderr '--name'
 exitcode 2 pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --hpds-data shared
 stderr '--hpds-data shared: want local or shared:NAME'
 exitcode 2 pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --hpds-data shared:../set
-stderr 'hpds.shared_name: must be letters'
+stderr '--hpds-data: must be lowercase letters'
 exitcode 2 pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --source hpds=../x
 stderr '--source hpds=../x: want COMPONENT=PATH'
 exitcode 2 pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --http-port eighty
@@ -88,6 +88,12 @@ exitcode 3 pic-sure init new --name demo --admin-email admin@example.com --auth-
 stderr 'the stack name demo is in use by another stack or compose project \(container demo-web-1\)'
 ! exists new
 cp empty.json ps.json
+
+# A shared data set that isn't on the host is exit 3, before anything is
+# fetched or built.
+exitcode 3 pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --auto-ports --hpds-data shared:nhanes
+stderr 'shared data set nhanes isn''t on this Docker host \(no volume nhanes_hpds-data\)'
+! exists new
 
 # A failed release fetch also leaves nothing behind.
 exitcode 1 pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --auto-ports
@@ -233,7 +239,10 @@ docker rm -v -f pic-sure-doctor-* => 0
 docker ps --all --no-trunc --filter * => 0 stdout=ps.json
 docker ps * => 0
 docker volume ls * => 0
+docker volume inspect * => 1 stderr=nosuch.txt
 docker image inspect * => 1
+-- nosuch.txt --
+Error response from daemon: get nhanes_hpds-data: no such volume
 -- ps.json --
 -- empty.json --
 -- ps-other.json --

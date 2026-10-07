@@ -482,15 +482,19 @@ func TestPublishSharedDataProbeScript(t *testing.T) {
 func TestSharedDataProfile(t *testing.T) {
 	set := map[string]string{ops.SharedDataLabel: "x", ops.SharedDataProfileLabel: "bch-dev"}
 	tests := []struct {
-		name  string
-		setup func(*sharedFixture)
-		want  string
+		name   string
+		setup  func(*sharedFixture)
+		helper int // the marker check's exit code
+		want   string
+		code   int
 	}{
-		{"published", nil, ""},
-		{"no genomic volume", func(fx *sharedFixture) { delete(fx.vols, "x_hpds-genomic") }, "shared data set x isn't on this Docker host (no volume x_hpds-genomic)"},
+		{"published", nil, 0, "", 0},
+		{"no genomic volume", func(fx *sharedFixture) { delete(fx.vols, "x_hpds-genomic") }, 0, "shared data set x isn't on this Docker host (no volume x_hpds-genomic)", exitcode.CodePrecondition},
 		{"not a data set", func(fx *sharedFixture) {
 			fx.vols["x_hpds-data"] = map[string]string{stack.LabelStack: "x"}
-		}, "x_hpds-data isn't part of a published data set"},
+		}, 0, "x_hpds-data isn't part of a published data set", exitcode.CodePrecondition},
+		{"publish unfinished", nil, 42, "shared data set x is incomplete", exitcode.CodePrecondition},
+		{"helper fails", nil, 1, "the helper container exited 1", 1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -499,6 +503,8 @@ func TestSharedDataProfile(t *testing.T) {
 			if tt.setup != nil {
 				tt.setup(fx)
 			}
+			fx.f.On(fakerunner.Glob("docker run --rm --name pic-sure-shared-check-* --network none -v x_hpds-data:/d:ro -v x_hpds-genomic:/g:ro alpine:* sh -c *.picsure-published*")).
+				Exit(tt.helper)
 			profile, err := ops.SharedDataProfile(context.Background(), fx.d, "x")
 			if tt.want == "" {
 				if err != nil || profile != "bch-dev" {
@@ -506,8 +512,8 @@ func TestSharedDataProfile(t *testing.T) {
 				}
 				return
 			}
-			if err == nil || !strings.Contains(err.Error(), tt.want) || exitcode.FromError(err) != exitcode.CodePrecondition {
-				t.Fatalf("err = %v, want exit 3 with %q", err, tt.want)
+			if err == nil || !strings.Contains(err.Error(), tt.want) || exitcode.FromError(err) != tt.code {
+				t.Fatalf("err = %v, want exit %d with %q", err, tt.code, tt.want)
 			}
 		})
 	}

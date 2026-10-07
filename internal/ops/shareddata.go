@@ -11,6 +11,7 @@ import (
 	"maps"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -478,9 +479,12 @@ func RemoveSharedData(ctx context.Context, d *Deps, name string) ([]string, erro
 }
 
 // SharedDataProfile checks that data set name is published, both its
-// volumes present and labelled as the set's, and returns the HPDS profile
-// recorded on it: what a stack mounting the set runs with when its
-// hpds.profile is empty.
+// volumes present, labelled as the set's and holding the same
+// PublishedMarker, and returns the HPDS profile recorded on it: what a
+// stack mounting the set runs with when its hpds.profile is empty. Publish
+// labels the volumes before it copies, so only the marker, written last,
+// tells a finished set from one being published or left by an interrupted
+// publish; the genomic seed fails on a set without it.
 func SharedDataProfile(ctx context.Context, d *Deps, name string) (string, error) {
 	data, genomic := sharedVolumes(name)
 	var profile string
@@ -501,5 +505,35 @@ func SharedDataProfile(ctx context.Context, d *Deps, name string) (string, error
 			profile = v.Labels[SharedDataProfileLabel]
 		}
 	}
+	helper, err := docker.UniqueName("pic-sure-shared-check", d.Rand)
+	if err != nil {
+		return "", err
+	}
+	alpine, _ := catalog.LookupImage("alpine")
+	var stderr bytes.Buffer
+	code, err := d.Docker.Run(ctx, docker.RunOpts{
+		Image:   alpine.Ref,
+		Name:    helper,
+		Remove:  true,
+		Network: "none",
+		Mounts:  []docker.Mount{{Source: data, Target: "/d", ReadOnly: true}, {Source: genomic, Target: "/g", ReadOnly: true}},
+		Args: []string{"sh", "-c", `[ -s /d/` + PublishedMarker + ` ] && cmp -s /d/` + PublishedMarker + ` /g/` + PublishedMarker +
+			` || exit ` + strconv.Itoa(unfinishedSetExit)},
+		Stderr: &stderr,
+	})
+	switch {
+	case err != nil:
+		return "", fmt.Errorf("checking shared data set %s: %w", name, err)
+	case code == unfinishedSetExit:
+		return "", exitcode.Precondition("shared data set %s is incomplete: its volumes lack a matching %s, so it is still being "+
+			"published or its publish was interrupted; wait for the publish, or remove the set with `pic-sure shared-data remove %s` "+
+			"and publish it again", name, PublishedMarker, name)
+	case code != 0:
+		return "", fmt.Errorf("checking shared data set %s: the helper container exited %d: %s", name, code, strings.TrimSpace(stderr.String()))
+	}
 	return profile, nil
 }
+
+// unfinishedSetExit is SharedDataProfile's helper's exit code for a set
+// without a matching PublishedMarker.
+const unfinishedSetExit = 42

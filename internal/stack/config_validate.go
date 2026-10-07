@@ -59,7 +59,7 @@ var (
 	// Compose project names, also used for service names.
 	nameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 	// Docker volume names, which shared data set names become part of.
-	sharedNameRE  = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
+	sharedNameRE  = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 	hostLabelRE   = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$`)
 	envNameRE     = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 	projectNameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
@@ -100,7 +100,7 @@ func (c *Config) Validate() error {
 		v.port("db.remote.port", c.DB.Remote.Port)
 	}
 	if c.HPDS.Data == HPDSShared && c.HPDS.SharedName != "" && !sharedNameRE.MatchString(c.HPDS.SharedName) {
-		v.add("hpds.shared_name", "must be letters, digits, '.', - and _, starting with a letter or digit; got %q", c.HPDS.SharedName)
+		v.add("hpds.shared_name", "must be lowercase letters, digits, - and _, starting with a letter or digit, as shared-data publish names a set; got %q", c.HPDS.SharedName)
 	}
 
 	// git takes these as arguments.

@@ -538,6 +538,8 @@ func (r *initRun) flagProblems(err error) error {
 	for _, p := range ce.Problems {
 		if v, ok := r.setValue(p.Path); ok {
 			msgs = append(msgs, fmt.Sprintf("--set %s=%s: %s", p.Path, v, p.Msg))
+		} else if p.Path == "hpds.shared_name" && r.cmd.Flags().Changed("hpds-data") {
+			msgs = append(msgs, fmt.Sprintf("--hpds-data: %s", p.Msg))
 		} else if f, ok := stack.LookupField(p.Path); ok && f.Flag != "" {
 			msgs = append(msgs, fmt.Sprintf("--%s: %s", f.Flag, p.Msg))
 		} else {

@@ -2,6 +2,7 @@ package ops_test
 
 import (
 	"context"
+	"encoding/json"
 	"maps"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"github.com/JamesPeck/pic-sure-cli/internal/events"
 	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
 	"github.com/JamesPeck/pic-sure-cli/internal/ops"
+	"github.com/JamesPeck/pic-sure-cli/internal/render"
 	"github.com/JamesPeck/pic-sure-cli/internal/stack"
 )
 
@@ -194,5 +196,55 @@ func TestInitStepIDsMatchInitSteps(t *testing.T) {
 		if want := ops.InitStepIDs(&cfg); !slices.Equal(ids, want) {
 			t.Errorf("db.mode %s: InitSteps %v, InitStepIDs %v", mode, ids, want)
 		}
+	}
+}
+
+func TestRenderStepTakesTheSharedDataSetsProfile(t *testing.T) {
+	x := newUpdateFixture(t)
+	x.cfg.HPDS.Data, x.cfg.HPDS.SharedName = stack.HPDSShared, "set1"
+	labels := map[string]string{ops.SharedDataLabel: "set1", ops.SharedDataProfileLabel: "bch-dev"}
+	vols := map[string]bool{"set1_hpds-data": true, "set1_hpds-genomic": true}
+	x.f.On(fakerunner.Glob("docker volume inspect *")).Do(func(_ context.Context, c fakerunner.Call) (docker.Result, error) {
+		name := c.Argv[len(c.Argv)-1]
+		if !vols[name] {
+			return docker.Result{Stderr: []byte("Error response from daemon: get " + name + ": no such volume\n"), ExitCode: 1}, nil
+		}
+		out, err := json.Marshal([]map[string]any{{"Name": name, "Labels": labels}})
+		return docker.Result{Stdout: out}, err
+	})
+	x.f.On(fakerunner.Glob("docker run --rm --name pic-sure-shared-check-* *.picsure-published*"))
+	apply := func() error {
+		return ops.RenderStep(x.d, x.st, x.cfg, x.state, ops.ConvergeOptions{Cache: x.cache, Compose: x.compose}).Apply(context.Background(), x.rec)
+	}
+	if err := apply(); err != nil {
+		t.Fatal(err)
+	}
+	compose, err := os.ReadFile(x.st.Path(render.ComposeFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`SPRING_PROFILES_ACTIVE: "bch-dev"`, `name: "set1_hpds-data"`, "shared-hpds-data:/opt/local/hpds:ro"} {
+		if !strings.Contains(string(compose), want) {
+			t.Errorf("compose.yaml lacks %s", want)
+		}
+	}
+
+	// A set that isn't on the host stops the render before it writes.
+	delete(vols, "set1_hpds-genomic")
+	x.cfg.HPDS.Profile = "other"
+	if err := apply(); exitcode.FromError(err) != exitcode.CodePrecondition || !strings.Contains(err.Error(), "no volume set1_hpds-genomic") {
+		t.Fatalf("missing set: %v", err)
+	}
+	if again, _ := os.ReadFile(x.st.Path(render.ComposeFile)); string(again) != string(compose) {
+		t.Error("the failed render rewrote compose.yaml")
+	}
+}
+
+func TestSummaryInSharedModeSuggestsHydrateNotDemo(t *testing.T) {
+	x := newUpdateFixture(t)
+	x.cfg.HPDS.Data, x.cfg.HPDS.SharedName = stack.HPDSShared, "set1"
+	steps := strings.Join(ops.Summary(x.st, x.cfg, nil).NextSteps, "\n")
+	if strings.Contains(steps, "data demo") || !strings.Contains(steps, "dictionary hydrate") {
+		t.Errorf("next steps:\n%s", steps)
 	}
 }

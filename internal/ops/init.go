@@ -464,6 +464,10 @@ func Summary(st *stack.Stack, cfg *stack.Config, sec *stack.Secrets) *InitSummar
 			"pic-sure status       check the stack",
 		},
 	}
+	if cfg.HPDS.Data == stack.HPDSShared {
+		// The loaders refuse a shared set; its dictionary still needs loading.
+		s.NextSteps[0] = "pic-sure dictionary hydrate    load the shared data set's dictionary"
+	}
 	if sec != nil {
 		s.TokenExpiry = sec.IntrospectionTokenExpiry.UTC()
 	}
