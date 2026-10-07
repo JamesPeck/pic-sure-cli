@@ -33,6 +33,8 @@ type dictFixture struct {
 	state *stack.State
 	// curl answers each curl call in turn; the last answer repeats.
 	curl []docker.Result
+	// concepts is the dictionary's concept count after a hydrate.
+	concepts string
 }
 
 func dictPs(service, state, health string) string {
@@ -61,7 +63,7 @@ func newDictFixture(t *testing.T) *dictFixture {
 	cfg.Name = "demo"
 	x := &dictFixture{t: t, f: fakerunner.New(t), rec: &events.Recorder{}, st: st, cfg: &cfg, state: state,
 		sec:  &stack.Secrets{DictionaryDBPassword: dictPassword},
-		curl: []docker.Result{{Stdout: []byte("Success")}}}
+		curl: []docker.Result{{Stdout: []byte("Success")}}, concepts: "12"}
 	x.d = &Deps{Runner: x.f, Docker: docker.NewEngine(x.f), Rand: rand.Reader, Clock: FixedClock(time.Unix(0, 0)), Sink: x.rec,
 		Compose: &docker.Compose{Runner: x.f, Files: []string{"/stack/.pic-sure/render/compose.yaml"}, ProjectDir: "/stack",
 			Env: func() []string { return []string{"DB_DICTIONARY_PASSWORD=" + dictPassword} }}}
@@ -89,9 +91,13 @@ func (x *dictFixture) stackUp() {
 		return r, nil
 	})
 	x.f.On(fakerunner.Glob("docker rm -v -f demo-dictionaryetl-*"))
-	x.f.On(fakerunner.Glob("docker exec -i * id-dictionary-db psql *"))
+	x.f.On(fakerunner.Glob("docker exec -i * id-dictionary-db psql *")).Do(func(_ context.Context, c fakerunner.Call) (docker.Result, error) {
+		if strings.Contains(string(c.Stdin), "count(*) FROM dict.concept_node") {
+			return docker.Result{Stdout: []byte(x.concepts + "\n")}, nil
+		}
+		return docker.Result{}, nil
+	})
 	x.f.On(fakerunner.Glob("docker compose * restart dictionary-api"))
-	x.f.On(fakerunner.Glob("docker compose * up -d --wait --wait-timeout 300 dictionary-api"))
 }
 
 func (x *dictFixture) dict() *Dictionary { return NewDictionary(x.d, x.st, x.cfg, x.sec, x.state) }
@@ -117,12 +123,18 @@ func (x *dictFixture) refreshed() {
 		fakerunner.Glob("docker rm -v -f demo-dictionaryetl-*"),
 		fakerunner.Glob("docker exec -i * id-dictionary-db psql *"),
 		fakerunner.Glob("docker compose * restart dictionary-api"),
-		fakerunner.Glob("docker compose * up -d --wait --wait-timeout 300 dictionary-api"),
+		fakerunner.Glob("docker compose * ps --all --format json dictionary-api"),
 	)
-	touch := x.f.CallsMatching(fakerunner.Glob("docker exec -i * id-dictionary-db psql *"))
-	if len(touch) != 1 || !strings.Contains(string(touch[0].Stdin), "UPDATE dict.update_info SET last_updated = NOW()") {
-		x.t.Errorf("update_info touch = %v", touch)
+	var touches int
+	for _, c := range x.f.CallsMatching(fakerunner.Glob("docker exec -i * id-dictionary-db psql *")) {
+		if strings.Contains(string(c.Stdin), "UPDATE dict.update_info SET last_updated = NOW()") {
+			touches++
+		}
 	}
+	if touches != 1 {
+		x.t.Errorf("update_info touched %d times", touches)
+	}
+	x.f.AssertNotCalled(fakerunner.Glob("docker compose * up *"))
 	state, err := x.st.LoadState()
 	if err != nil {
 		x.t.Fatal(err)
@@ -249,6 +261,15 @@ func TestDictionaryHydrateFailures(t *testing.T) {
 			x.f.On(fakerunner.Glob("docker run * --name demo-columnmeta-* *"))
 			x.curl = []docker.Result{{Stdout: []byte("This task is already running. Skipping execution.")}}
 		}, "didn't hydrate: This task is already running"},
+		{"no concepts", func(x *dictFixture) {
+			x.f.On(fakerunner.Glob("docker run * --name demo-columnmeta-* *"))
+			x.f.On(fakerunner.Glob("docker logs *")).Stdout("ERROR reading /opt/local/hpds/columnMeta.csv\n")
+			x.concepts = "0"
+		}, "dictionary-etl reported success, but the dictionary has no concepts"},
+		{"no columnMeta.csv", func(x *dictFixture) {
+			x.f.On(fakerunner.Glob("docker run * --name demo-columnmeta-check-* *")).Exit(1)
+			x.f.On(fakerunner.Glob("docker run * --name demo-columnmeta-* *"))
+		}, "demo_hpds-data has no columnMeta.csv"},
 		{"http error", func(x *dictFixture) {
 			x.f.On(fakerunner.Glob("docker run * --name demo-columnmeta-* *"))
 			x.curl = []docker.Result{{Stdout: []byte(`{"status":500}`), Stderr: []byte("curl: (22) The requested URL returned error: 500"), ExitCode: 22}}
@@ -268,7 +289,7 @@ func TestDictionaryHydrateFailures(t *testing.T) {
 				x.f.AssertCalled(fakerunner.Glob("docker rm -v -f demo-dictionaryetl-*"))
 			}
 			state, _ := x.st.LoadState()
-			if c.name != "columnmeta fails" && !slices.Contains(state.PendingRestarts, dictionaryAPI) {
+			if c.name != "columnmeta fails" && c.name != "no columnMeta.csv" && !slices.Contains(state.PendingRestarts, dictionaryAPI) {
 				t.Errorf("a failed write left no pending restart: %v", state.PendingRestarts)
 			}
 		})
@@ -386,7 +407,7 @@ func TestDictionaryLoadCSV(t *testing.T) {
 		}
 	}
 	if !slices.ContainsFunc(warnings, func(s string) bool { return strings.Contains(s, `dataset "none" has no concepts`) }) ||
-		!slices.ContainsFunc(warnings, func(s string) bool { return strings.Contains(s, "isn't listing: stray") }) {
+		!slices.ContainsFunc(warnings, func(s string) bool { return strings.Contains(s, `doesn't list: "stray"`) }) {
 		t.Errorf("warnings = %q", warnings)
 	}
 	x.refreshed()

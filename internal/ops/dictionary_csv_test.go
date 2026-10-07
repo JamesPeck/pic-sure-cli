@@ -88,8 +88,15 @@ func TestConceptSplitTrickyRefs(t *testing.T) {
 	if want := []string{"phs1", "phs10", "phs1.v2", "a,b", "empty"}; !reflect.DeepEqual(in.refs, want) {
 		t.Fatalf("refs = %q, want %q", in.refs, want)
 	}
-	if want := []string{"export/concepts_1.csv", "export/concepts_2.csv"}; !reflect.DeepEqual(in.fileNames(), want) {
-		t.Fatalf("files = %q, want %q", in.fileNames(), want)
+	var names []string
+	for _, f := range in.files {
+		names = append(names, f.Name)
+	}
+	if want := []string{"export/concepts_1.csv", "export/concepts_2.csv"}; !reflect.DeepEqual(names, want) {
+		t.Fatalf("files = %q, want %q", names, want)
+	}
+	if bytes.HasPrefix(in.datasets, []byte(bom)) {
+		t.Error("the datasets file is sent with its byte order mark")
 	}
 	if want := map[string]int{"phs1": 1, "phs10": 1, "phs1.v2": 1, "a,b": 1, "other": 1, "phs1xv2": 1}; !reflect.DeepEqual(in.counts, want) {
 		t.Fatalf("counts = %v, want %v", in.counts, want)
@@ -98,12 +105,19 @@ func TestConceptSplitTrickyRefs(t *testing.T) {
 		t.Fatalf("unmatched = %q, want %q", in.unmatched(), want)
 	}
 
+	files, err := in.split(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	split := func(ref string) [][]string {
-		var b bytes.Buffer
-		if err := in.writeDataset(&b, ref); err != nil {
+		if files[ref] == "" {
+			return nil
+		}
+		data, err := os.ReadFile(files[ref])
+		if err != nil {
 			t.Fatal(err)
 		}
-		return readAllCSV(t, b.String())
+		return readAllCSV(t, string(data))
 	}
 	hdr := strings.Split(strings.TrimSuffix(header, "\n"), ",")
 	cases := map[string][][]string{
@@ -111,7 +125,7 @@ func TestConceptSplitTrickyRefs(t *testing.T) {
 		"phs10":   {hdr, {"phs10", "c10", "C ten", "categorical", `\phs10\c10\`, "", `["x"]`}},
 		"phs1.v2": {hdr, {"phs1.v2", "cd", "dotted", "categorical", `\phs1.v2\cd\`, "", ""}},
 		"a,b":     {hdr, {"a,b", "cab", "multi\nline", "categorical", `\ab\`, "", ""}},
-		"empty":   {hdr},
+		"empty":   nil,
 	}
 	for ref, want := range cases {
 		if got := split(ref); !reflect.DeepEqual(got, want) {
@@ -139,13 +153,16 @@ func TestOpenCSVLoadRejectsBadInput(t *testing.T) {
 	cases := []struct {
 		name, datasets, concepts, want string
 	}{
-		{"no ref column", write("noref.csv", "name,x\na,b\n"), okZip, `no "ref" column`},
-		{"no datasets", write("empty.csv", "ref,full_name\n"), okZip, "lists no datasets"},
-		{"empty ref", write("blank.csv", "ref,full_name\n,x\n"), okZip, "empty ref"},
-		{"duplicate ref", write("dup.csv", "ref,full_name\na,x\na,y\n"), okZip, `ref "a" twice`},
+		{"no ref column", write("noref.csv", "name,full_name,abbreviation,description\na,b,c,d\n"), okZip, "lacks the ref column"},
+		{"missing columns", write("short.csv", "ref\nphs1\n"), okZip, "lacks the full_name, abbreviation, description column(s)"},
+		{"no datasets", write("empty.csv", "ref,full_name,abbreviation,description\n"), okZip, "lists no datasets"},
+		{"empty ref", write("blank.csv", "ref,full_name,abbreviation,description\n,x,y,z\n"), okZip, "empty ref"},
+		{"duplicate ref", write("dup.csv", "ref,full_name,abbreviation,description\na,x,y,z\na,y,z,w\n"), okZip, `ref "a" twice`},
+		{"short dataset row", write("ragged.csv", "ref,full_name,abbreviation,description\na,x\n"), okZip, "wrong number of fields"},
 		{"not a zip", good, good, "not a zip"},
 		{"no concepts files", good, writeZip(t, dir, "none.zip", map[string]string{"x.csv": header}, "x.csv"), "no concepts_*.csv"},
-		{"no dataset_ref", good, writeZip(t, dir, "nocol.zip", map[string]string{"concepts_1.csv": "name\nx\n"}, "concepts_1.csv"), `no "dataset_ref" column`},
+		{"no dataset_ref", good, writeZip(t, dir, "nocol.zip", map[string]string{"concepts_1.csv": "name\nx\n"}, "concepts_1.csv"), "lacks the dataset_ref, display"},
+		{"short concept row", good, writeZip(t, dir, "ragged.zip", map[string]string{"concepts_1.csv": header + "phs1,c\n"}, "concepts_1.csv"), "wrong number of fields"},
 		{"headers differ", good, writeZip(t, dir, "differ.zip", map[string]string{
 			"concepts_1.csv": header,
 			"concepts_2.csv": "dataset_ref,name\n",

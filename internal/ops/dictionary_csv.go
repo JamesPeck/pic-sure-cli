@@ -2,6 +2,7 @@ package ops
 
 import (
 	"archive/zip"
+	"bufio"
 	"bytes"
 	"encoding/csv"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
@@ -20,7 +22,8 @@ import (
 // concepts archive, read and checked before anything is sent.
 type csvLoad struct {
 	datasetsPath, conceptsPath string
-	// datasets is the datasets file as given; it is sent unchanged.
+	// datasets is the datasets file without a byte order mark, which the
+	// ETL would take as part of the first header.
 	datasets []byte
 	// refs are the datasets' refs, in file order.
 	refs []string
@@ -51,6 +54,7 @@ func openCSVLoad(datasetsPath, conceptsPath string) (_ *csvLoad, err error) {
 	if in.datasets, err = os.ReadFile(datasetsPath); err != nil {
 		return nil, exitcode.Usage("--datasets: %w", err)
 	}
+	in.datasets = bytes.TrimPrefix(in.datasets, []byte(bom))
 	if in.refs, err = readDatasetRefs(in.datasets); err != nil {
 		return nil, exitcode.Usage("--datasets %s: %w", datasetsPath, err)
 	}
@@ -83,10 +87,30 @@ func openCSVLoad(datasetsPath, conceptsPath string) (_ *csvLoad, err error) {
 	return in, nil
 }
 
-// readDatasetRefs returns the ref column of a datasets file.
+// The columns the ETL requires (DatasetController, ConceptController).
+var (
+	datasetColumns = []string{"ref", "full_name", "abbreviation", "description"}
+	conceptColumns = []string{"dataset_ref", "name", "display", "concept_type", "concept_path", "parent_concept_path"}
+)
+
+// requireColumns checks header has every column in want.
+func requireColumns(header, want []string) error {
+	var missing []string
+	for _, c := range want {
+		if !slices.Contains(header, c) {
+			missing = append(missing, c)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("the header lacks the %s column(s)", strings.Join(missing, ", "))
+	}
+	return nil
+}
+
+// readDatasetRefs returns the ref column of a datasets file. Every row
+// must have as many fields as the header.
 func readDatasetRefs(data []byte) ([]string, error) {
-	r := csv.NewReader(bytes.NewReader(bytes.TrimPrefix(data, []byte(bom))))
-	r.FieldsPerRecord = -1
+	r := csv.NewReader(bytes.NewReader(data))
 	header, err := r.Read()
 	if errors.Is(err, io.EOF) {
 		return nil, errors.New("the file is empty")
@@ -94,10 +118,10 @@ func readDatasetRefs(data []byte) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	col := slices.Index(header, "ref")
-	if col < 0 {
-		return nil, errors.New(`the header has no "ref" column`)
+	if err := requireColumns(header, datasetColumns); err != nil {
+		return nil, err
 	}
+	col := slices.Index(header, "ref")
 	var refs []string
 	for {
 		rec, err := r.Read()
@@ -108,7 +132,7 @@ func readDatasetRefs(data []byte) ([]string, error) {
 			return nil, err
 		}
 		line, _ := r.FieldPos(0)
-		if col >= len(rec) || rec[col] == "" {
+		if rec[col] == "" {
 			return nil, fmt.Errorf("line %d has an empty ref", line)
 		}
 		if slices.Contains(refs, rec[col]) {
@@ -139,7 +163,6 @@ func (in *csvLoad) each(f *zip.File, fn func(rec []string) error) error {
 	}
 	defer func() { _ = rc.Close() }()
 	r := csv.NewReader(rc)
-	r.FieldsPerRecord = -1
 	r.ReuseRecord = true
 	header, err := r.Read()
 	if errors.Is(err, io.EOF) {
@@ -152,9 +175,10 @@ func (in *csvLoad) each(f *zip.File, fn func(rec []string) error) error {
 	switch {
 	case in.header == nil:
 		in.header = slices.Clone(header)
-		if in.refCol = slices.Index(header, "dataset_ref"); in.refCol < 0 {
-			return errors.New(`the header has no "dataset_ref" column`)
+		if err := requireColumns(header, conceptColumns); err != nil {
+			return err
 		}
+		in.refCol = slices.Index(header, "dataset_ref")
 	case !slices.Equal(header, in.header):
 		return fmt.Errorf("the header differs from %s's", in.files[0].Name)
 	}
@@ -166,36 +190,67 @@ func (in *csvLoad) each(f *zip.File, fn func(rec []string) error) error {
 		if err != nil {
 			return err
 		}
-		if in.refCol >= len(rec) {
-			line, _ := r.FieldPos(0)
-			return fmt.Errorf("line %d has no dataset_ref", line)
-		}
 		if err := fn(rec); err != nil {
 			return err
 		}
 	}
 }
 
-// writeDataset writes the header and the concept rows whose dataset_ref is
-// exactly ref, as CSV.
-func (in *csvLoad) writeDataset(w io.Writer, ref string) error {
-	cw := csv.NewWriter(w)
-	if err := cw.Write(in.header); err != nil {
-		return err
+// split writes, in one pass over the concepts files, each listed
+// dataset's rows (dataset_ref exactly its ref) to its own CSV file in dir,
+// with the header, and returns the file of each ref that has rows.
+func (in *csvLoad) split(dir string) (_ map[string]string, err error) {
+	type out struct {
+		f *os.File
+		b *bufio.Writer
+		w *csv.Writer
+	}
+	outs := map[string]*out{}
+	paths := map[string]string{}
+	defer func() {
+		for _, o := range outs {
+			if cerr := o.f.Close(); err == nil {
+				err = cerr
+			}
+		}
+	}()
+	for i, ref := range in.refs {
+		if in.counts[ref] == 0 {
+			continue
+		}
+		p := filepath.Join(dir, fmt.Sprintf("concepts-%d.csv", i))
+		f, err := os.Create(p)
+		if err != nil {
+			return nil, err
+		}
+		o := &out{f: f, b: bufio.NewWriter(f)}
+		o.w = csv.NewWriter(o.b)
+		outs[ref], paths[ref] = o, p
+		if err := o.w.Write(in.header); err != nil {
+			return nil, err
+		}
 	}
 	for _, f := range in.files {
 		err := in.each(f, func(rec []string) error {
-			if rec[in.refCol] != ref {
-				return nil
+			if o := outs[rec[in.refCol]]; o != nil {
+				return o.w.Write(rec)
 			}
-			return cw.Write(rec)
+			return nil
 		})
 		if err != nil {
-			return fmt.Errorf("%s: %w", f.Name, err)
+			return nil, fmt.Errorf("%s: %w", f.Name, err)
 		}
 	}
-	cw.Flush()
-	return cw.Error()
+	for _, o := range outs {
+		o.w.Flush()
+		if err := o.w.Error(); err != nil {
+			return nil, err
+		}
+		if err := o.b.Flush(); err != nil {
+			return nil, err
+		}
+	}
+	return paths, nil
 }
 
 // unmatched returns the dataset_refs of concept rows that name no dataset
@@ -209,14 +264,6 @@ func (in *csvLoad) unmatched() []string {
 	}
 	sort.Strings(out)
 	return out
-}
-
-func (in *csvLoad) fileNames() []string {
-	names := make([]string, len(in.files))
-	for i, f := range in.files {
-		names[i] = f.Name
-	}
-	return names
 }
 
 func (in *csvLoad) Close() error {

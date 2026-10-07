@@ -1124,28 +1124,34 @@ concatenate its step lists with their own and end with one `RefreshStep()`.
   `/actuator/health` reporting `UP`, polled with `docker exec … wget`
   inside the container (120 s); an exit or the timeout shows its last 30
   log lines. dictionary-db must be running and healthy (exit 3, "run
-  `pic-sure up`").
+  `pic-sure up`"); every operation checks that first.
 - **Requests** go from a `--rm` `curlimages/curl` container (catalog
   `curl`) on the data network, the body on stdin, with
   `--fail-with-body`, so a non-2xx answer is an error carrying the body.
 - **Steps.** `HydrateSteps`: `columnmeta` (CreateColumnmetaCSV in the
   hpds-etl image, `--network none`, user 0, `HEAPSIZE` from `--heap`; in
   shared mode only a check that the set has `columnMeta.csv`) and
-  `hydrate` (POST `/load/initialize` with AIO's request, plus
-  `errorDirectory` in shared mode; any answer but `Success` fails).
-  `LoadCSVSteps` reads both inputs first (a usage error before anything
-  is cleared), then `dictionary-clear` (with Clear), `datasets` and
-  `concepts`: the zip's `concepts_*.csv` files, at any depth, in name order,
-  split by exact `dataset_ref` and streamed per dataset, `datasetRef`
-  URL-encoded. `FacetSteps`: `facets`, three PUTs in order.
+  `hydrate` (checks `columnMeta.csv` is there, then POST
+  `/load/initialize` with AIO's request, plus `errorDirectory` in shared
+  mode). The ETL answers `Success` even after a load it only logged as
+  failed, so `hydrate` also fails, showing the ETL's log, when
+  `dict.concept_node` is empty afterwards.
+  `LoadCSVSteps` reads both inputs first, with the ETL's required columns
+  and every row as wide as its header, so a bad file is a usage error
+  before anything is cleared. Then `dictionary-clear` (with Clear),
+  `datasets` (a byte order mark dropped) and `concepts`: the zip's
+  `concepts_*.csv` files, at any depth, in name order, split in one pass
+  by exact `dataset_ref` into a temp dir (`LoadCSVOptions.TempDir`; the cli
+  uses the cache's), then one PUT per dataset, `datasetRef` URL-encoded. `FacetSteps`: `facets`, three PUTs in order.
   `WeightsSteps`: `weights`, the reactor's `dictionary-weights` image with
   the file bind-mounted read-only at `/weights.csv`; the default file is
   the pic-sure tree's (`components.pic-sure.source`, else the cache).
 - **Refresh.** Every step that writes marks dictionary-api in
   `pending_restarts` first. `RefreshStep` (`dictionary-refresh`) removes
   the ETL, touches `dict.update_info` (014's psql client), restarts
-  dictionary-api if it is running and waits for it with `up --wait`, then
-  clears the mark; if it never runs, the next `up` restarts it.
+  dictionary-api if it is running and polls `compose ps` until it is
+  healthy (not `up --wait`, which could recreate it from a newer render),
+  then clears the mark; if it never runs, the next `up` restarts it.
 
 **Cache list and prune (057, `cache.go`).** §7.1's in-use rules.
 `CacheInventory(ctx, d, c, CacheOptions{Stacks})` returns a `CacheReport`:

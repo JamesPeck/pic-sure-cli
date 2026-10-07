@@ -128,6 +128,10 @@ func (x *Dictionary) HydrateSteps(opts HydrateOptions) []steps.Step {
 		ID:    StepHydrate,
 		Title: "Load the dictionary from columnMeta.csv",
 		Apply: func(ctx context.Context, sink events.Sink) error {
+			// The ETL answers "Success" even when it can't read the file.
+			if err := x.checkColumnMeta(ctx, sink, StepHydrate); err != nil {
+				return err
+			}
 			body, err := json.Marshal(req)
 			if err != nil {
 				return err
@@ -141,7 +145,9 @@ func (x *Dictionary) HydrateSteps(opts HydrateOptions) []steps.Step {
 			if strings.TrimSpace(resp) != "Success" {
 				return fmt.Errorf("dictionary-etl didn't hydrate: %s", strings.TrimSpace(resp))
 			}
-			return nil
+			// It also answers "Success" after logging a failed load, so
+			// an empty dictionary is the only sign.
+			return x.requireConcepts(ctx, sink, StepHydrate)
 		},
 	}}
 }
@@ -152,25 +158,12 @@ func (x *Dictionary) columnMeta(opts HydrateOptions) func(context.Context, event
 		if _, err := x.dictionaryDB(ctx); err != nil {
 			return err
 		}
+		if x.shared() {
+			return x.checkColumnMeta(ctx, sink, StepColumnMeta)
+		}
 		vol, err := x.dataVolume(ctx)
 		if err != nil {
 			return err
-		}
-		if x.shared() {
-			alpine, _ := catalog.LookupImage("alpine")
-			code, err := x.run(ctx, sink, StepColumnMeta, docker.RunOpts{
-				Image:   alpine.Ref,
-				Network: "none",
-				Mounts:  []docker.Mount{{Source: vol, Target: "/data", ReadOnly: true}},
-				Args:    []string{"test", "-s", "/data/columnMeta.csv"},
-			}, "columnmeta-check")
-			if err != nil {
-				return err
-			}
-			if code != 0 {
-				return exitcode.Precondition("shared data set %s has no columnMeta.csv; publish it again from a stack that hydrated its dictionary", x.cfg.HPDS.SharedName)
-			}
-			return nil
 		}
 		image, err := x.image(ctx, "pic-sure-hpds-etl")
 		if err != nil {
@@ -205,6 +198,9 @@ func (x *Dictionary) columnMeta(opts HydrateOptions) func(context.Context, event
 type LoadCSVOptions struct {
 	Datasets, Concepts string
 	Clear              bool
+	// TempDir makes the directory the concepts are split into, which is
+	// removed afterwards; nil means os.MkdirTemp in the system's.
+	TempDir func(pattern string) (string, error)
 }
 
 // LoadCSVSteps loads a custom dictionary: with Clear, `dictionary-clear`
@@ -241,17 +237,33 @@ func (x *Dictionary) LoadCSVSteps(opts LoadCSVOptions) ([]steps.Step, error) {
 		Title: "Load the concepts",
 		Apply: func(ctx context.Context, sink events.Sink) error {
 			if refs := in.unmatched(); len(refs) > 0 {
-				sink.Emit(events.Warning{ID: StepConcepts, Text: fmt.Sprintf(
-					"skipping the concepts of datasets %s isn't listing: %s", filepath.Base(in.datasetsPath), strings.Join(refs, ", "))})
+				quoted := make([]string, len(refs))
+				for i, r := range refs {
+					quoted[i] = strconv.Quote(r)
+				}
+				sink.Emit(events.Warning{ID: StepConcepts, Text: fmt.Sprintf("skipping concepts whose dataset_ref %s doesn't list: %s",
+					filepath.Base(in.datasetsPath), strings.Join(quoted, ", "))})
+			}
+			mkdir := opts.TempDir
+			if mkdir == nil {
+				mkdir = func(pattern string) (string, error) { return os.MkdirTemp("", pattern) }
+			}
+			dir, err := mkdir("dictionary-concepts-*")
+			if err != nil {
+				return err
+			}
+			defer func() { _ = os.RemoveAll(dir) }()
+			files, err := in.split(dir)
+			if err != nil {
+				return fmt.Errorf("splitting %s: %w", in.conceptsPath, err)
 			}
 			for _, ref := range in.refs {
-				n := in.counts[ref]
-				if n == 0 {
+				if files[ref] == "" {
 					sink.Emit(events.Warning{ID: StepConcepts, Text: fmt.Sprintf("dataset %q has no concepts", ref)})
 					continue
 				}
-				sink.Emit(events.Progress{ID: StepConcepts, Text: fmt.Sprintf("%s: %d concepts", ref, n)})
-				if err := x.putConcepts(ctx, sink, in, ref); err != nil {
+				sink.Emit(events.Progress{ID: StepConcepts, Text: fmt.Sprintf("%s: %d concepts", ref, in.counts[ref])})
+				if err := x.putFile(ctx, sink, StepConcepts, "/api/concept/csv?datasetRef="+url.QueryEscape(ref), files[ref]); err != nil {
 					return fmt.Errorf("dataset %q: %w", ref, err)
 				}
 			}
@@ -260,13 +272,14 @@ func (x *Dictionary) LoadCSVSteps(opts LoadCSVOptions) ([]steps.Step, error) {
 	}), nil
 }
 
-// putConcepts streams ref's concepts to the ETL, so no split file is
-// written.
-func (x *Dictionary) putConcepts(ctx context.Context, sink events.Sink, in *csvLoad, ref string) error {
-	pr, pw := io.Pipe()
-	go func() { pw.CloseWithError(in.writeDataset(pw, ref)) }()
-	defer func() { _ = pr.Close() }()
-	_, err := x.request(ctx, sink, StepConcepts, "PUT", "/api/concept/csv?datasetRef="+url.QueryEscape(ref), "text/plain", pr)
+// putFile PUTs a CSV file to the ETL.
+func (x *Dictionary) putFile(ctx context.Context, sink events.Sink, step, path, file string) error {
+	f, err := os.Open(file)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+	_, err = x.request(ctx, sink, step, "PUT", path, "text/plain", f)
 	return err
 }
 
@@ -287,14 +300,8 @@ func (x *Dictionary) FacetSteps(opts FacetOptions) []steps.Step {
 				{opts.Facets, "/api/facet/csv"},
 				{opts.Concepts, "/api/facet/concept/csv"},
 			} {
-				f, err := os.Open(put.file)
-				if err != nil {
-					return err
-				}
 				sink.Emit(events.Progress{ID: StepFacets, Text: "loading " + filepath.Base(put.file)})
-				_, err = x.request(ctx, sink, StepFacets, "PUT", put.path, "text/plain", f)
-				_ = f.Close()
-				if err != nil {
+				if err := x.putFile(ctx, sink, StepFacets, put.path, put.file); err != nil {
 					return err
 				}
 			}
@@ -377,8 +384,8 @@ func (x *Dictionary) weightsFile(opts WeightsOptions) (string, error) {
 }
 
 // RefreshStep, ID "dictionary-refresh", ends every dictionary operation:
-// it removes the ETL container, touches dict.update_info, which
-// dictionary-api's clients poll to drop their caches, and restarts
+// it removes the ETL container, touches dict.update_info (the dictionary's
+// last-updated time, which dictionary-dump serves), and restarts
 // dictionary-api if it is running, waiting until it is healthy. The write
 // steps record the restart in state.json's pending_restarts first, so if
 // this step never runs, the next `up` restarts it.
@@ -387,16 +394,14 @@ func (x *Dictionary) RefreshStep() steps.Step {
 		ID:    StepDictionaryRefresh,
 		Title: "Refresh dictionary-api",
 		Apply: func(ctx context.Context, sink events.Sink) error {
-			if err := x.Close(ctx); err != nil {
-				sink.Emit(events.Warning{ID: StepDictionaryRefresh, Text: err.Error()})
-			}
+			// Free the ETL's memory before the restart; a failure here is
+			// retried, and reported, by the caller's deferred Close.
+			_ = x.Close(ctx)
 			db, err := x.dictionaryDB(ctx)
 			if err != nil {
 				return err
 			}
-			err = sql.ExecPostgres(ctx, x.d.Docker, sql.PostgresTarget{Container: db, User: "picsure",
-				Password: string(x.sec.DictionaryDBPassword), Database: "dictionary"},
-				"UPDATE dict.update_info SET last_updated = NOW()")
+			err = sql.ExecPostgres(ctx, x.d.Docker, x.dbTarget(db), "UPDATE dict.update_info SET last_updated = NOW()")
 			if err != nil {
 				return fmt.Errorf("touching dict.update_info: %w", err)
 			}
@@ -408,11 +413,10 @@ func (x *Dictionary) RefreshStep() steps.Step {
 				sink.Emit(events.Progress{ID: StepDictionaryRefresh, Text: "restarting dictionary-api"})
 				out := events.NewLogWriter(sink, StepDictionaryRefresh, events.StreamStderr)
 				err := x.d.Compose.Restart(ctx, out, dictionaryAPI)
-				if err == nil {
-					err = x.d.Compose.Up(ctx, docker.ComposeUpOpts{Services: []string{dictionaryAPI}, Wait: true,
-						WaitTimeout: dictionaryAPIWait, Out: out})
-				}
 				_ = out.Close()
+				if err == nil {
+					err = x.waitAPI(ctx)
+				}
 				if err != nil {
 					return fmt.Errorf("restarting dictionary-api: %w; run `pic-sure restart dictionary-api`", err)
 				}
@@ -635,7 +639,9 @@ func (x *Dictionary) run(ctx context.Context, sink events.Sink, step string, opt
 	code, err := x.d.Docker.Run(ctx, opts)
 	if err != nil {
 		// The container may outlive an interrupted docker run.
-		_ = x.d.Docker.Rm(context.WithoutCancel(ctx), name, true)
+		rmCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+		_ = x.d.Docker.Rm(rmCtx, name, true)
+		cancel()
 		return code, fmt.Errorf("running %s: %w", opts.Image, err)
 	}
 	return code, nil
@@ -735,5 +741,78 @@ func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
-	return s[:n] + "…"
+	return strings.ToValidUTF8(s[:n], "") + "…"
+}
+
+// checkColumnMeta checks the HPDS data volume holds a non-empty
+// columnMeta.csv, mounted read-only.
+func (x *Dictionary) checkColumnMeta(ctx context.Context, sink events.Sink, step string) error {
+	vol, err := x.dataVolume(ctx)
+	if err != nil {
+		return err
+	}
+	alpine, _ := catalog.LookupImage("alpine")
+	code, err := x.run(ctx, sink, step, docker.RunOpts{
+		Image:   alpine.Ref,
+		Network: "none",
+		Mounts:  []docker.Mount{{Source: vol, Target: "/data", ReadOnly: true}},
+		Args:    []string{"test", "-s", "/data/columnMeta.csv"},
+	}, "columnmeta-check")
+	if err != nil {
+		return err
+	}
+	if code == 0 {
+		return nil
+	}
+	if x.shared() {
+		return exitcode.Precondition("shared data set %s has no columnMeta.csv; publish it again from a stack that hydrated its dictionary", x.cfg.HPDS.SharedName)
+	}
+	return exitcode.Precondition("%s has no columnMeta.csv; run the %s step (don't skip it)", vol, StepColumnMeta)
+}
+
+// requireConcepts fails, showing the ETL's log, when the dictionary holds
+// no concepts.
+func (x *Dictionary) requireConcepts(ctx context.Context, sink events.Sink, step string) error {
+	db, err := x.dictionaryDB(ctx)
+	if err != nil {
+		return err
+	}
+	rows, err := sql.QueryPostgres(ctx, x.d.Docker, x.dbTarget(db), "SELECT count(*) FROM dict.concept_node")
+	if err != nil {
+		return fmt.Errorf("counting the dictionary's concepts: %w", err)
+	}
+	if len(rows) == 1 && len(rows[0]) == 1 && rows[0][0] != "0" {
+		return nil
+	}
+	x.logTail(ctx, sink, step)
+	return errors.New("dictionary-etl reported success, but the dictionary has no concepts; its log is above")
+}
+
+// waitAPI waits until dictionary-api is healthy again after its restart.
+// It polls rather than running `compose up --wait`, which would recreate
+// the service if the stack's render had moved on since its last up.
+func (x *Dictionary) waitAPI(ctx context.Context) error {
+	wait, cancel := context.WithTimeout(ctx, dictionaryAPIWait)
+	defer cancel()
+	for {
+		svc, err := composeService(wait, x.d, dictionaryAPI)
+		switch {
+		case err == nil && svc != nil && svc.State == "running" && svc.Health == "healthy":
+			return nil
+		case err == nil && (svc == nil || svc.State == "exited" || svc.State == "dead"):
+			return errors.New("dictionary-api stopped after its restart; see `pic-sure logs dictionary-api`")
+		}
+		select {
+		case <-wait.Done():
+			if ctx.Err() != nil {
+				return context.Cause(ctx)
+			}
+			return fmt.Errorf("dictionary-api wasn't healthy within %s of its restart", dictionaryAPIWait)
+		case <-time.After(dictionaryETLPoll):
+		}
+	}
+}
+
+func (x *Dictionary) dbTarget(container string) sql.PostgresTarget {
+	return sql.PostgresTarget{Container: container, User: "picsure", Password: string(x.sec.DictionaryDBPassword), Database: "dictionary"}
 }
