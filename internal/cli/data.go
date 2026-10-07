@@ -28,14 +28,22 @@ func newDataLoadPhenotypeCmd(a *App) *cobra.Command {
 	c := &cobra.Command{
 		Use:   "load-phenotype (--file F [--entry E] | --input-dir D)",
 		Short: "Load phenotype data into HPDS, then the dictionary",
-		Args:  cobra.NoArgs,
-		RunE:  notImplemented("042"),
+		Long: `Replace the stack's HPDS phenotype data with a CSV in HPDS's allConcepts
+format. --file takes a CSV, or a gzip, tar, tar.gz or zip holding one; an
+archive with several CSVs needs --entry. HPDS is stopped for the load and
+started again once the loader has finished.
+
+The previous load's files are removed before the loader runs, so if it
+fails HPDS stays stopped with no phenotype data: fix the problem and run the
+load again.`,
+		Args: cobra.NoArgs,
+		RunE: a.loadPhenotype,
 	}
 	f := c.Flags()
 	f.String("file", "", "phenotype CSV, or a tar.gz, gzip or zip `FILE` holding one")
 	f.String("entry", "", "the CSV `ENTRY` to load from an archive with several")
 	f.String("input-dir", "", "`DIR` of phenotype files for the sequential loader (ticket 043)")
-	f.Int("heap", 0, "loader JVM heap in `MB`")
+	f.Int("heap", 0, "loader JVM heap in `MB` (default 4096 for --file)")
 	f.String("dictionary", "auto", "dictionary source: auto or custom (ticket 045)")
 	f.Bool("skip-weights", false, "skip recomputing the search weights")
 	c.MarkFlagsMutuallyExclusive("file", "input-dir")

@@ -1,11 +1,74 @@
-# Not implemented yet: exit 1, naming ticket 042.
-exitcode 1 pic-sure data load-phenotype --file pheno.csv
-stderr '^pic-sure: not implemented \(ticket 042\)$'
-! stdout .
+# load-phenotype's refusals, before it changes anything. The load itself is
+# covered by the ops tests and the real runs.
+env XDG_CACHE_HOME=$WORK/cache
+
+# --input-dir is ticket 043.
 exitcode 1 pic-sure data load-phenotype --input-dir phenotypes
-stderr '^pic-sure: not implemented \(ticket 042\)$'
+stderr '^pic-sure: not implemented \(ticket 043\)$'
 
 # Exactly one of --file and --input-dir is required.
 exitcode 2 pic-sure data load-phenotype
 stderr 'at least one of the flags in the group \[file input-dir\] is required'
 exitcode 2 pic-sure data load-phenotype --file a.csv --input-dir d
+
+# The heap is a positive number of MB.
+exitcode 2 pic-sure --stack stack data load-phenotype --file pheno.csv --heap 0
+stderr '--heap must be a positive number of MB, not 0'
+exitcode 2 pic-sure --stack stack data load-phenotype --file pheno.csv --heap 4g
+stderr 'invalid argument "4g" for "--heap"'
+
+# A --skip-step the loader doesn't have is exit 2, listing the ones it has.
+exitcode 2 pic-sure --stack stack data load-phenotype --file pheno.csv --skip-step seed
+stderr '--skip-step seed: load-phenotype has no such step; it can skip hpds-input, hpds-stop, hpds-wipe, hpds-key, hpds-load, hpds-start$'
+
+# No stack: exit 3.
+exitcode 3 pic-sure data load-phenotype --file pheno.csv
+stderr 'no pic-sure stack found'
+
+# A stack using shared HPDS data is read-only: exit 1.
+exitcode 1 pic-sure --stack shared data load-phenotype --file pheno.csv
+stderr 'uses the shared data set "demo-set" \(hpds.data: shared\), which is read-only'
+
+# A stack init hasn't finished is exit 3.
+exitcode 3 pic-sure --stack partial data load-phenotype --file pheno.csv
+stderr 'isn''t initialised; run `pic-sure init .*partial` to finish it'
+
+# An unrendered stack is exit 3.
+exitcode 3 pic-sure --stack stack data load-phenotype --file pheno.csv
+stderr 'run `pic-sure up`'
+
+# A missing file is exit 2.
+mkdir stack/.pic-sure/render
+cp compose.yaml stack/.pic-sure/render/compose.yaml
+exitcode 2 pic-sure --stack stack data load-phenotype --file missing.csv
+stderr 'missing.csv'
+! exists docker.log
+
+-- pheno.csv --
+PATIENT_NUM,CONCEPT_PATH,NUMERIC_VALUE,TEXT_VALUE
+1,\demo\age\,42,
+-- compose.yaml --
+name: demo
+-- stack/pic-sure.yaml --
+schema: 1
+name: demo
+auth: {mode: open, admin_email: admin@example.com}
+-- stack/.pic-sure/state.json --
+{"cli_version": "dev", "schema_version": 1, "initialized_at": "2026-10-07T12:00:00Z"}
+-- stack/.pic-sure/secrets.yaml --
+db_root_password: rootpw
+auth0_client_secret: generated-0123456789abcdef0123456789abcdef
+auth0_client_secret_generated: true
+-- partial/pic-sure.yaml --
+schema: 1
+name: partial
+auth: {mode: open, admin_email: admin@example.com}
+-- partial/.pic-sure/state.json --
+{"cli_version": "dev", "schema_version": 1}
+-- shared/pic-sure.yaml --
+schema: 1
+name: shared
+auth: {mode: open, admin_email: admin@example.com}
+hpds: {data: shared, shared_name: demo-set}
+-- shared/.pic-sure/state.json --
+{"cli_version": "dev", "schema_version": 1, "initialized_at": "2026-10-07T12:00:00Z"}

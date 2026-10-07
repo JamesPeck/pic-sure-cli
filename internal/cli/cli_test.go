@@ -47,7 +47,7 @@ var specCommands = map[string]string{
 	"config show": "", "config get": "", "config set": "", "config edit": "",
 	"secrets rotate":      "058",
 	"data demo":           "046",
-	"data load-phenotype": "042",
+	"data load-phenotype": "",
 	"data load-genomic":   "049",
 	"dictionary hydrate":  "044", "dictionary load-csv": "044", "dictionary load-facets": "044", "dictionary weights": "044",
 	"shared-data publish": "050", "shared-data list": "050", "shared-data remove": "050",

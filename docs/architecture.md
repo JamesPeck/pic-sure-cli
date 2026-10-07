@@ -283,6 +283,16 @@ it.
   version gate is openStack's: pending config migrations are exit 5 ("run
   `pic-sure update`"); §6.2's up prompt isn't implemented.
 
+- `data_phenotype.go` (042): `data load-phenotype --file F [--entry E]
+  [--heap MB]`, the load step only (045 adds the dictionary steps, 043
+  `--input-dir`). Usage checks first (`--heap` must be positive, a
+  `--skip-step` outside `ops.LoaderStepIDs`); under the stack lock, shared
+  HPDS data is exit 1 and an uninitialised stack exit 3; then
+  `phenoinput.Resolve` with the cache's `TempDir` (a missing file or an
+  `*EntryError` is exit 2), and `ops.LoadPhenotype`, recording the `data
+  load-phenotype` operation in state.json. `--json`'s data is
+  `{"dataset": "phenotype:<sha256>"}`.
+
 | File | Commands | Ticket |
 |---|---|---|
 | `init.go` | `init` | 034 |
@@ -1008,6 +1018,46 @@ start service if that can't be read). `restart` restarts the pending services th
 clears them, so `start`'s `--wait` covers the restarted services, and a
 run that fails before then leaves them pending for the next. `bindMounts`
 (migrate.go) is the shared `compose config` parse.
+
+**Phenotype loader (042, `loader.go`).** §9.6's one loader, for `data
+demo` (046) and `data load-phenotype`. `LoadPhenotype(ctx, d, st, cfg,
+state, PhenotypeLoadOptions{CSV, Dataset, HeapMB, LoaderArgs, MkdirTemp,
+Skip})` returns the provenance it wrote. The caller holds the stack lock and
+sets `d.Compose`. `RefuseSharedHPDS(cfg)` is its shared-mode refusal (a
+plain error, exit 1), for a command to call before any slow work. Steps
+(`LoaderStepIDs`):
+
+- `hpds-input`: the loader image from state.json's `images`
+  (`pic-sure-hpds-etl`; exit 3 if unrecorded or missing), the provenance
+  (`Dataset`, or `phenotype:<sha256 of the CSV>` when empty), and whether
+  the daemon sees the CSV: an alpine probe bind-mounts it and compares the
+  size. If it doesn't (a file outside `$HOME` under Colima or Lima shows
+  up as an empty directory), the CSV is copied into a `MkdirTemp` dir (the
+  cache's `TempDir`) and probed again; the copy is removed when the load
+  ends. Nothing has changed if this step fails.
+- `hpds-stop`: `compose stop hpds`.
+- `hpds-wipe`: an alpine helper removes `loaderStaleFiles` (the javabins,
+  columnMeta files and `.picsure-dataset`) from `hpds-data`, keeping
+  `all/` and the key.
+- `hpds-key`: 034's `HPDSKeyStep`.
+- `hpds-load`: `hms-dbmi/pic-sure-hpds-etl:<tag>`, uniquely named, `--rm`,
+  `--user 0:0`, `--network none`, `hpds-data` at `/opt/local/hpds` and the
+  CSV read-only at `/opt/local/hpds/allConcepts.csv`, `HEAPSIZE` (default
+  `DefaultLoaderHeapMB`, 4096), `LOADER_NAME=CSVLoaderNewSearch` and
+  `LOADER_ARGS` (`DemoLoaderArgs`, `ROLLUP`, for demo loads, as AIO's
+  load-demo-data.sh; empty for custom loads, as its etl.sh. The loader
+  ignores `ROLLUP` today, so both load the same). Its output becomes Log
+  events. Then a helper writes `.picsure-dataset` from stdin.
+- `hpds-start`: `compose up -d --wait hpds` (`HPDSStartTimeout`, 15 min),
+  then `compose ps` must say exactly `healthy`.
+
+A failure after `hpds-stop` leaves hpds stopped, and the error says how to
+recover: run the load again (or `up` to start HPDS without data), or, when
+only the start failed, check the logs and run `up`. A load holds no cache
+lock: a plain CSV isn't in the cache, and an extracted or copied one is in
+a fresh `tmp/` dir that prune keeps while it is recent or mounted. A caller
+that reuses an older cache file (046's downloads) must hold `c.LockUse`
+until the loader runs.
 
 **Cache list and prune (057, `cache.go`).** §7.1's in-use rules.
 `CacheInventory(ctx, d, c, CacheOptions{Stacks})` returns a `CacheReport`:
