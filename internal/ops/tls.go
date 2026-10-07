@@ -145,6 +145,22 @@ func (t *tlsStep) apply(ctx context.Context, sink events.Sink) error {
 		return err
 	}
 
+	// Forget the old install before the helper replaces it, so an
+	// interrupted copy isn't taken for the files it was replacing.
+	state, err := t.st.LoadState()
+	if errors.Is(err, fs.ErrNotExist) {
+		state, err = &stack.State{}, nil
+	}
+	if err != nil {
+		return err
+	}
+	if state.TLS != nil {
+		state.TLS = nil
+		if err := t.st.SaveState(state); err != nil {
+			return err
+		}
+	}
+
 	name, err := docker.UniqueName(t.cfg.Name+"-tls", t.d.Rand)
 	if err != nil {
 		return err
@@ -172,13 +188,6 @@ func (t *tlsStep) apply(ctx context.Context, sink events.Sink) error {
 		return fmt.Errorf("copying the TLS files into volume %s: %w", vol.Name, err)
 	}
 
-	state, err := t.st.LoadState()
-	if errors.Is(err, fs.ErrNotExist) {
-		state, err = &stack.State{}, nil
-	}
-	if err != nil {
-		return err
-	}
 	state.TLS = &stack.TLSInstall{Hash: tlsHash(archive), VolumeCreatedAt: vol.CreatedAt}
 	return t.st.SaveState(state)
 }
@@ -258,7 +267,9 @@ func (t *tlsStep) generatedFiles() (files pki.Files, reason string, err error) {
 }
 
 // providedFiles reads the operator's files that the tls block names. With
-// no chain file, the certificate file serves as the chain, as in the bash.
+// no chain file, the certificate file serves as the chain. A blank chain
+// file is refused: httpd won't start on a zero-byte one, and one that is
+// only whitespace holds no chain.
 func (t *tlsStep) providedFiles() (pki.Files, error) {
 	read := func(key, p string) ([]byte, error) {
 		if !filepath.IsAbs(p) {
@@ -283,6 +294,8 @@ func (t *tlsStep) providedFiles() (pki.Files, error) {
 		f.Chain = f.Cert
 	} else if f.Chain, err = read("tls.chain_file", tls.ChainFile); err != nil {
 		return pki.Files{}, err
+	} else if len(bytes.TrimSpace(f.Chain)) == 0 {
+		return pki.Files{}, fmt.Errorf("tls.chain_file: %s is empty; leave chain_file blank if there is no chain", tls.ChainFile)
 	}
 	return f, nil
 }

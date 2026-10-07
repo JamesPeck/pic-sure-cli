@@ -206,8 +206,8 @@ func TestGenerateRejectsHostnamesACertificateCannotName(t *testing.T) {
 	}
 }
 
-// The config validator calls CheckHostname, so it must refuse exactly what
-// Generate refuses, and say why a numeric last label is refused.
+// CheckHostname says why it refuses a numeric last label, which the config
+// validator passes on to the operator.
 func TestCheckHostname(t *testing.T) {
 	t.Parallel()
 	for _, hostname := range []string{"localhost", "PicSure.Example.ORG", "my_host", "10.1.2.3", "fd00::1"} {

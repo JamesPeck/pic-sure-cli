@@ -76,7 +76,7 @@ func TestTLSStepAgainstDocker(t *testing.T) {
 	cfg := stack.DefaultConfig()
 	cfg.Name = name
 	d := &ops.Deps{Docker: docker.NewEngine(execRunner{}), Rand: rand.Reader, Clock: ops.SystemClock{}, Sink: events.Discard}
-	step := func() { // Apply, then require Check to report the step done
+	applyAndCheck := func() {
 		t.Helper()
 		s := ops.TLSStep(d, st, &cfg)
 		if done, err := s.Check(ctx); err != nil || done {
@@ -112,7 +112,7 @@ func TestTLSStepAgainstDocker(t *testing.T) {
 		}
 	}
 
-	step()
+	applyAndCheck()
 	key, err := st.ReadFile(ops.TLSDir + "/server.key")
 	if err != nil {
 		t.Fatal(err)
@@ -143,7 +143,7 @@ func TestTLSStepAgainstDocker(t *testing.T) {
 		}
 	}
 	cfg.TLS.Mode, cfg.Network.Hostname = stack.TLSProvided, "picsure.example.org"
-	step()
+	applyAndCheck()
 	checkVolume(f.Key)
 	if got := inVolume("2:2", "cat", "/certs/server.chain"); got != string(f.Cert) {
 		t.Error("the chain isn't the operator's certificate")

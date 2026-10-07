@@ -409,6 +409,12 @@ func TestTLSStepRefusesUnusableOperatorFiles(t *testing.T) {
 	}{
 		{"missing key", func(t *testing.T, fx *tlsFixture) { fx.cfg.TLS.KeyFile = "certs/tls/nope.key" }, "tls.key_file: open "},
 		{"missing chain", func(t *testing.T, fx *tlsFixture) { fx.cfg.TLS.ChainFile = "nope.pem" }, "tls.chain_file: open "},
+		{"empty chain", func(t *testing.T, fx *tlsFixture) {
+			if err := os.WriteFile(fx.st.Path("empty.pem"), []byte("\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			fx.cfg.TLS.ChainFile = "empty.pem"
+		}, "tls.chain_file: empty.pem is empty"},
 		{"key mismatch", func(t *testing.T, fx *tlsFixture) {
 			other, err := pki.Generate(rand.Reader, "picsure.example.org", t0)
 			if err != nil {
@@ -466,6 +472,25 @@ func TestTLSStepReportsAFailedCopy(t *testing.T) {
 	}
 	if fx.check(t) {
 		t.Error("Check after a failed copy = done")
+	}
+}
+
+// A copy that fails while replacing an install leaves it unrecorded, so
+// restoring the old files doesn't make Check skip the repair.
+func TestTLSStepForgetsAnInstallItFailsToReplace(t *testing.T) {
+	fx := newTLSFixture(t)
+	if err := ops.TLSStep(fx.d, fx.st, fx.cfg).Apply(context.Background(), fx.rec); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(fx.st.Path(ops.TLSDir + "/server.chain")); err != nil {
+		t.Fatal(err)
+	}
+	fx.vol.runExit = 1
+	if err := ops.TLSStep(fx.d, fx.st, fx.cfg).Apply(context.Background(), fx.rec); err == nil {
+		t.Fatal("Apply succeeded")
+	}
+	if state, _ := fx.st.LoadState(); state.TLS != nil {
+		t.Errorf("the replaced install is still recorded: %+v", state.TLS)
 	}
 }
 
