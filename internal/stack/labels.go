@@ -12,3 +12,21 @@ const (
 func (s *Stack) Labels(name string) map[string]string {
 	return map[string]string{LabelStack: name, LabelStackDir: s.Dir}
 }
+
+// Compose's labels on the volumes it creates. A volume without the project
+// label makes compose warn, on every up, that it didn't create it.
+const (
+	LabelComposeProject = "com.docker.compose.project"
+	LabelComposeVolume  = "com.docker.compose.volume"
+)
+
+// VolumeLabels returns the labels for a stack volume the CLI creates before
+// compose does, such as the certs volume: the stack labels plus compose's
+// own, so compose adopts the volume as one it made. key is the volume's
+// name under the compose file's volumes:.
+func (s *Stack) VolumeLabels(name, key string) map[string]string {
+	l := s.Labels(name)
+	l[LabelComposeProject] = name
+	l[LabelComposeVolume] = key
+	return l
+}

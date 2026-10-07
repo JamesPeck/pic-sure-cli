@@ -23,6 +23,8 @@ type State struct {
 	Components map[string]Component `json:"components,omitempty"`
 	// Images maps each image name to the tag the stack runs.
 	Images map[string]string `json:"images,omitempty"`
+	// TLS is what the TLS step last copied into the certs volume.
+	TLS *TLSInstall `json:"tls,omitempty"`
 	// LastOperation is the most recent mutating command.
 	LastOperation *Operation `json:"last_operation,omitempty"`
 	// CreatedAt is when the first operation started.
@@ -45,6 +47,18 @@ type Component struct {
 	Ref string `json:"ref,omitempty"`
 	// Commit is the full commit SHA.
 	Commit string `json:"commit"`
+}
+
+// TLSInstall identifies the files the TLS step copied into the certs
+// volume, so a re-run can tell whether the volume already holds them.
+type TLSInstall struct {
+	// Hash is the hex SHA-256 of what was copied: the file names and
+	// contents, and how they were installed.
+	Hash string `json:"hash"`
+	// VolumeCreatedAt is the volume's creation time, as docker reports it.
+	// A volume re-created since then, say by compose after a `down -v`, is
+	// empty whatever the hash says.
+	VolumeCreatedAt string `json:"volume_created_at"`
 }
 
 // Operation is one run of a mutating command.

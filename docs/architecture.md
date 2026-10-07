@@ -307,8 +307,9 @@ A directory is a stack when it holds `pic-sure.yaml` and `.pic-sure/`.
   drop another's entries.
 - **State.** `LoadState`/`SaveState` for `.pic-sure/state.json`:
   `cli_version`, `schema_version` (the pic-sure.yaml schema it was
-  rendered with), the release commit, component commits, image tags, the
-  last operation and timestamps. No secrets. `StartOperation` and
+  rendered with), the release commit, component commits, image tags, what
+  the TLS step installed (`tls`, 024), the last operation and timestamps.
+  No secrets. `StartOperation` and
   `FinishOperation` take the time from the caller (`Deps.Clock`).
   `LoadState` wraps `fs.ErrNotExist` before init saves it.
 - **Lock.** `Lock(ctx, LockOptions{Wait, Command, OnWait})` takes an flock
@@ -319,7 +320,9 @@ A directory is a stack when it holds `pic-sure.yaml` and `.pic-sure/`.
   goes stale. The cli layer wraps this as `a.lockStack` (`--wait-lock`).
 - **Labels.** `st.Labels(name)` returns `org.hms-dbmi.picsure.stack=<name>`
   and `org.hms-dbmi.picsure.stack-dir=<Dir>` (`LabelStack`,
-  `LabelStackDir`).
+  `LabelStackDir`). `st.VolumeLabels(name, key)` adds compose's
+  `com.docker.compose.project` and `com.docker.compose.volume` for a stack
+  volume a helper creates before compose does (024).
 
 ### Secrets (008)
 
@@ -516,6 +519,23 @@ rendered stack), the git `Client` (`Git`), a `Clock`, `Rand` (an
 `*slog.Logger`. `SystemClock` is the real clock; `FixedClock` is for tests.
 Tickets 016, 017 and 018 filled in `docker.Engine`, `docker.Composer` and
 `git.Client` in their own packages, without editing `Deps`.
+
+**TLS (024, `tls.go`).** `TLSStep(d, st, cfg)` is §9.1 step 6's first half,
+ID `tls`: it fills the stack's `certs` volume with `server.key` (0640),
+`server.crt` and `server.chain` (0644), all owned 2:2 for httpd. Generated
+mode keeps its PEMs in `TLSDir` (`.pic-sure/tls/`, 0600) and makes new ones
+when those are missing, invalid, don't name `network.hostname`, or expire
+within 30 days. Provided mode validates the operator's files with
+`pki.Validate` (warnings become `Warning` events) and copies them; with no
+`chain_file`, the certificate is the chain. The files reach an alpine helper
+(`--network none`) as a tar on stdin, never through a bind mount or argv.
+It creates the volume with `st.VolumeLabels` if compose hasn't, and refuses
+one labelled for another stack. `state.json`'s `tls` records a hash of what
+was copied and the volume's `CreatedAt`; `Check` is done while both match,
+so a changed file, hostname or re-created volume re-copies. An installed
+provided certificate isn't re-validated, so its expiry doesn't block `up`.
+The step doesn't restart httpd: a command that runs it on a live stack
+must restart httpd when the step applied.
 
 ## internal/steps
 
@@ -801,8 +821,10 @@ fills the certs volume (024).
   server-auth key usage. `Files.Chain` is the certificate itself, as the
   bash does. A hostname that isn't an IP or a valid DNS name is an error,
   and so is one whose last label is a number (`10.1.2.300`, `x.0x1f`),
-  which browsers read as an IPv4 address. Pass `Deps.Rand` and
-  `Deps.Clock.Now()`; a fixed `Rand` doesn't make the key deterministic.
+  which browsers read as an IPv4 address. `CheckHostname` is that rule on
+  its own; the config validator applies it to `network.hostname`. Pass
+  `Deps.Rand` and `Deps.Clock.Now()`; a fixed `Rand` doesn't make the key
+  deterministic.
 - `Validate(files, hostname, now) (Report, error)` checks
   `tls.mode: provided` files: the key (PKCS #8, PKCS #1 or SEC 1,
   unencrypted) must be the certificate's, and the certificate must be valid

@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/netproxy"
+	"github.com/JamesPeck/pic-sure-cli/internal/pki"
 )
 
 // Problem is one thing wrong with a config, at a key path.
@@ -79,7 +80,12 @@ func (c *Config) Validate() error {
 	if c.Name != "" && !nameRE.MatchString(c.Name) {
 		v.add("name", "must be lowercase letters, digits, - and _, starting with a letter or digit; got %q", c.Name)
 	}
-	v.hostname("network.hostname", c.Network.Hostname)
+	if v.hostname("network.hostname", c.Network.Hostname) && c.Network.Hostname != "" {
+		// The TLS step must be able to put it in a certificate.
+		if err := pki.CheckHostname(c.Network.Hostname); err != nil {
+			v.add("network.hostname", "%v", err)
+		}
+	}
 	v.ports()
 
 	if c.Auth.AdminEmail != "" {
@@ -249,10 +255,11 @@ func (v *validator) ports() {
 	}
 }
 
-// hostname checks that a non-empty s is a DNS name or an IP address.
-func (v *validator) hostname(path, s string) {
+// hostname checks that a non-empty s is a DNS name or an IP address, and
+// reports whether it is (or is empty).
+func (v *validator) hostname(path, s string) bool {
 	if s == "" || net.ParseIP(s) != nil {
-		return
+		return true
 	}
 	ok := len(s) <= 253
 	for label := range strings.SplitSeq(s, ".") {
@@ -261,6 +268,7 @@ func (v *validator) hostname(path, s string) {
 	if !ok {
 		v.add(path, "want a host name or IP address, got %q", s)
 	}
+	return ok
 }
 
 func (v *validator) notOption(path, s string) {

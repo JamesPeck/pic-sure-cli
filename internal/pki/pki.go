@@ -95,6 +95,9 @@ func Generate(rand io.Reader, hostname string, now time.Time) (Files, error) {
 }
 
 func subjectAltNames(hostname string) ([]string, []net.IP, error) {
+	if err := CheckHostname(hostname); err != nil {
+		return nil, nil, fmt.Errorf("can't make a TLS certificate for this hostname: %w", err)
+	}
 	dnsNames := []string{"localhost"}
 	loopback := net.IPv4(127, 0, 0, 1)
 	ips := []net.IP{loopback}
@@ -104,29 +107,41 @@ func subjectAltNames(hostname string) ([]string, []net.IP, error) {
 		}
 		return dnsNames, ips, nil
 	}
-	name := strings.ToLower(hostname)
-	if !validDNSName(name) {
-		return nil, nil, fmt.Errorf("can't make a TLS certificate for hostname %q: want a DNS name or an IP address", hostname)
-	}
-	if name != "localhost" {
+	if name := strings.ToLower(hostname); name != "localhost" {
 		dnsNames = append(dnsNames, name)
 	}
 	return dnsNames, ips, nil
 }
 
+// CheckHostname returns an error unless Generate can name hostname in a
+// certificate. It must be an IP address or a DNS name: dot-separated labels
+// of letters, digits, hyphens and underscores, none starting or ending with
+// a hyphen. A name whose last label is a number (10.1.2.300, x.0x1f) is
+// refused too, because browsers parse it as an IPv4 address.
+func CheckHostname(hostname string) error {
+	if net.ParseIP(hostname) != nil {
+		return nil
+	}
+	name := strings.ToLower(hostname)
+	labels := strings.Split(name, ".")
+	if last := labels[len(labels)-1]; last != "" && (strings.Trim(last, "0123456789") == "" ||
+		(strings.HasPrefix(last, "0x") && strings.Trim(last[2:], "0123456789abcdef") == "")) {
+		return fmt.Errorf("%q isn't an IP address, and a DNS name can't end in a numeric label, which browsers read as part of an IPv4 address", hostname)
+	}
+	if !validDNSName(name) {
+		return fmt.Errorf("%q is neither a DNS name nor an IP address", hostname)
+	}
+	return nil
+}
+
 // validDNSName reports whether name is a lowercase host name: dot-separated
-// labels of letters, digits, hyphens and underscores, no label starting or
-// ending with a hyphen, and a last label that isn't a number, because
-// browsers parse such a name (10.1.2.300, say) as an IPv4 address.
+// labels of letters, digits, hyphens and underscores, none starting or
+// ending with a hyphen.
 func validDNSName(name string) bool {
 	if name == "" || len(name) > 253 {
 		return false
 	}
 	labels := strings.Split(name, ".")
-	if last := labels[len(labels)-1]; strings.Trim(last, "0123456789") == "" ||
-		(strings.HasPrefix(last, "0x") && strings.Trim(last[2:], "0123456789abcdef") == "") {
-		return false
-	}
 	for _, label := range labels {
 		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
 			return false

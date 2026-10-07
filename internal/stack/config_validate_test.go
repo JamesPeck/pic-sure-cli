@@ -30,6 +30,8 @@ func TestValidate(t *testing.T) {
 		{"hostname with a port", func(c *Config) { c.Network.Hostname = "localhost:8443" }, []string{`network.hostname: want a host name or IP address, got "localhost:8443"`}},
 		{"hostname with underscore", func(c *Config) { c.Network.Hostname = "my_host" }, []string{"network.hostname: want a host name"}},
 		{"hostname empty label", func(c *Config) { c.Network.Hostname = "a..b" }, []string{"network.hostname: want a host name"}},
+		{"hostname ending in a number", func(c *Config) { c.Network.Hostname = "10.1.2.300" }, []string{`network.hostname: "10.1.2.300" isn't an IP address, and a DNS name can't end in a numeric label`}},
+		{"hostname with a hex last label", func(c *Config) { c.Network.Hostname = "picsure.0x1f" }, []string{"network.hostname: \"picsure.0x1f\" isn't an IP address"}},
 		{"http port 0", func(c *Config) { c.Network.HTTPPort = 0 }, []string{"network.http_port: must be a port from 1 to 65535, got 0"}},
 		{"https port too big", func(c *Config) { c.Network.HTTPSPort = 65536 }, []string{"network.https_port: must be a port from 1 to 65535, got 65536"}},
 		{"ports at the limits", func(c *Config) { c.Network.HTTPPort, c.Network.HTTPSPort = 1, 65535 }, nil},
