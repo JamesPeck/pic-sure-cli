@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
-# The proxy e2e (spec §9.10, D27, D36): a stack whose only egress is a squid
-# proxy, with squid's access log as the evidence that each path used it.
-# docs/testing-proxy.md describes the setup and what each check proves.
-# Needs docker, git, go and jq; settings are in scripts/e2e-lib.sh, plus:
+# The proxy e2e (spec §9.10, D27, D36): a stack whose proxy is a squid
+# container, with squid's access log as the evidence that each egress path
+# used it. docs/testing-proxy.md describes the setup and what each check
+# proves. Needs docker, git, go, jq and curl; settings are in
+# scripts/e2e-lib.sh, plus:
 #
 #   E2E_PROXY_HOST   address that both this host and containers reach the
 #                    published squid port on (default: the default bridge's
 #                    gateway on Linux, en0's or en1's address on macOS)
 #   E2E_SQUID_IMAGE  squid image (default: ubuntu/squid, pinned)
-#   E2E_NODE_IMAGE   base image of the build-args probe (default: the
-#                    frontend Dockerfile's node image)
+#   E2E_NODE_IMAGE   base image of the build-args probe (default: the first
+#                    FROM of the stack's frontend Dockerfile)
 
 # shellcheck source=scripts/e2e-lib.sh
 . "$(dirname "$0")/e2e-lib.sh"
@@ -20,7 +21,6 @@ squid="$name-squid"
 internal="$name-internal"
 egress="$name-egress"
 squid_image="${E2E_SQUID_IMAGE:-ubuntu/squid:latest@sha256:6a097f68bae708cedbabd6188d68c7e2e7a38cedd05a176e1cc0ba29e3bbe029}"
-node_image="${E2E_NODE_IMAGE:-node:24.21.0-alpine3.23}"
 
 # A cache of our own, so init's git clones and the demo download really
 # happen (through the proxy) instead of reusing the user's cache. It must
@@ -31,23 +31,28 @@ export XDG_CACHE_HOME="$proxy_cache"
 
 proxy_cleanup() {
 	local rc=$?
-	docker rm -f "$squid" > /dev/null 2>&1
-	docker network rm "$internal" "$egress" > /dev/null 2>&1
-	rm -rf "$proxy_cache"
+	set +e
+	if [ "$rc" -ne 0 ] && [ -n "$E2E_KEEP" ]; then
+		echo "e2e: E2E_KEEP set; left $squid, $internal, $egress and the cache $proxy_cache" >&2
+	else
+		docker rm -f "$squid" > /dev/null 2>&1
+		docker network rm "$internal" "$egress" > /dev/null 2>&1
+		rm -rf "$proxy_cache"
+	fi
 	(exit "$rc")
 	e2e_cleanup
 }
 trap proxy_cleanup EXIT
 
-proxy_host() {
-	if [ -n "${E2E_PROXY_HOST:-}" ]; then
-		echo "$E2E_PROXY_HOST"
-	elif [ "$(uname -s)" = Darwin ]; then
-		ipconfig getifaddr en0 || ipconfig getifaddr en1
+proxy_host="${E2E_PROXY_HOST:-}"
+if [ -z "$proxy_host" ]; then
+	if [ "$(uname -s)" = Darwin ]; then
+		proxy_host="$(ipconfig getifaddr en0 || ipconfig getifaddr en1 || true)"
 	else
-		docker network inspect bridge -f '{{(index .IPAM.Config 0).Gateway}}'
+		proxy_host="$(docker network inspect bridge -f '{{(index .IPAM.Config 0).Gateway}}' || true)"
 	fi
-}
+	[ -n "$proxy_host" ] || fail "can't tell which address containers reach this host on; set E2E_PROXY_HOST"
+fi
 
 squid_log() { docker exec "$squid" cat /var/log/squid/access.log; }
 mark() { squid_log | wc -l | tr -d ' '; }
@@ -71,10 +76,13 @@ tunnelled() {
 say "squid on $egress, dual-homed onto the internal network $internal"
 docker network create "$egress" > /dev/null
 docker network create --internal "$internal" > /dev/null
-docker run -d --name "$squid" --network "$egress" -p 3128 "$squid_image" > /dev/null
+# Published on the proxy address only. squid allows any private-range
+# client, so on macOS, where that is the LAN address, the LAN can use it
+# while the script runs.
+docker run -d --name "$squid" --network "$egress" -p "$proxy_host::3128" "$squid_image" > /dev/null
 docker network connect --alias squid "$internal" "$squid"
 port="$(docker port "$squid" 3128 | head -n 1 | sed 's/.*://')"
-proxy="http://$(proxy_host):$port"
+proxy="http://$proxy_host:$port"
 tries=15
 until curl -fsS -o /dev/null -x "$proxy" https://github.com/; do
 	tries=$((tries - 1))
@@ -83,16 +91,21 @@ until curl -fsS -o /dev/null -x "$proxy" https://github.com/; do
 done
 echo "  proxy: $proxy" >&2
 
+say "git: init clones the release and the sources through the proxy"
+m="$(mark)"
+init_stack "$name" "$dir" --http-proxy "$proxy" --https-proxy "$proxy"
+tunnelled "$m" github.com
+
+frontend="$(jq -r '.components.frontend.commit' "$dir/.pic-sure/state.json")"
+node_image="${E2E_NODE_IMAGE:-$(git --git-dir "$XDG_CACHE_HOME/pic-sure/git/PIC-SURE-Frontend.git" show "$frontend:Dockerfile" |
+	awk '$1 == "FROM" { print $2; exit }')}"
+[ -n "$node_image" ] || fail "no FROM in the frontend Dockerfile at $frontend"
+
 say "control: the internal network has no direct egress"
 if docker run --rm --network "$internal" "$node_image" \
 	wget -q -T 5 -O /dev/null https://registry.npmjs.org/ 2> /dev/null; then
 	fail "a container on $internal reached the internet directly"
 fi
-
-say "git: init clones the release and the sources through the proxy"
-m="$(mark)"
-init_stack "$name" "$dir" --http-proxy "$proxy" --https-proxy "$proxy"
-tunnelled "$m" github.com
 
 say "doctor --network through the proxy"
 m="$(mark)"
@@ -108,8 +121,8 @@ pic --stack "$dir" data demo nhanes --heap "$E2E_LOAD_HEAP_MB"
 tunnelled "$m" raw.githubusercontent.com
 
 say "self-update's release lookup through the CLI's HTTP client"
-# An unknown version fails after the lookup, so nothing is replaced. A
-# copy, because self-update refuses a binary it couldn't replace.
+# An unknown version fails after the lookup, so nothing is replaced. Run
+# a copy anyway: self-update refuses a binary it can't write.
 mkdir -p "$E2E_WORK/self-update"
 cp "$PIC_SURE" "$E2E_WORK/self-update/pic-sure"
 m="$(mark)"
@@ -152,10 +165,10 @@ tunnelled "$m" "$tenant.auth0.com"
 say "Maven: the rendered settings.xml resolves into an empty repo with no direct egress"
 # The same MavenSettings() bytes the reactor build mounts, pointed at squid's
 # name on the internal network.
-sed -e "s#<host>$(proxy_host)</host>#<host>squid</host>#" -e "s#<port>$port</port>#<port>3128</port>#" \
+sed -e "s#<host>$proxy_host</host>#<host>squid</host>#" -e "s#<port>$port</port>#<port>3128</port>#" \
 	"$dir/.pic-sure/render/files/maven/settings.xml" > "$E2E_WORK/settings.xml"
 grep -q '<host>squid</host>' "$E2E_WORK/settings.xml" || fail "settings.xml has no proxy host to rewrite"
-# The reactor's Maven image (catalog "maven").
+# The reactor's Maven image (catalog "maven"); any Maven would do.
 mvn_get=(docker run --rm --network "$internal" -v "$E2E_WORK/settings.xml:/pic-sure/settings.xml:ro"
 	maven:3-amazoncorretto-25 mvn -B -q -Dmaven.repo.local=/tmp/m2 dependency:get
 	-Dartifact=org.apache.commons:commons-lang3:3.17.0)
@@ -203,13 +216,19 @@ chmod +x "$E2E_WORK/shim/docker"
 if PATH="$E2E_WORK/shim:$PATH" pic --stack "$dir" doctor --network --json > "$E2E_WORK/doctor-pull.json"; then
 	fail "doctor passed with a failing pull"
 fi
-jq -e '.checks[] | select(.name == "network-docker-pull") | .status == "fail" and (.detail | test("proxy"; "i"))' \
-	"$E2E_WORK/doctor-pull.json" > /dev/null ||
+# Every runtime's instructions name the proxy URL; Docker Desktop's also
+# name its settings page.
+want="$proxy"
+if [ "$(docker info -f '{{.OperatingSystem}}')" = "Docker Desktop" ]; then want="Settings > Resources > Proxies"; fi
+jq -e --arg proxy "$proxy" --arg want "$want" '.checks[] | select(.name == "network-docker-pull") |
+	.status == "fail" and (.detail | contains($proxy) and contains($want))' "$E2E_WORK/doctor-pull.json" > /dev/null ||
 	fail "network-docker-pull: $(jq -c '.checks[] | select(.name == "network-docker-pull")' "$E2E_WORK/doctor-pull.json")"
 jq -r '.checks[] | select(.name == "network-docker-pull") | .detail' "$E2E_WORK/doctor-pull.json" | sed 's/^/  /' >&2
 
 say "nothing was denied, and nothing local went to the proxy"
-denied="$(squid_log | awk '$4 ~ /DENIED/ || $7 ~ /^http:\/\/(localhost|127\.)/')"
+# Local: a single-label host (the stack's services, localhost) or 127.*.
+denied="$(squid_log | awk '{ h = $7; sub(/^[a-z]+:\/\//, "", h); sub(/[:\/].*/, "", h) }
+	$7 !~ /^error:/ && ($4 ~ /DENIED/ || h !~ /\./ || h ~ /^127\./)')"
 [ -z "$denied" ] || fail "squid denied or saw local requests: $denied"
 
 say "destroy"

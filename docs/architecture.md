@@ -2729,8 +2729,7 @@ new entry is saved only when init built something.
 `e2e-proxy.sh` (055) runs a stack whose proxy is a squid container and
 checks every §9.10 egress path against squid's access log;
 `docs/testing-proxy.md` describes the setup and what each check proves.
-`init_stack` passes extra arguments on to init for it. No workflow runs it
-yet.
+No workflow runs it yet.
 
 ## v1 leftovers
 

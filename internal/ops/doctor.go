@@ -882,8 +882,6 @@ func (c *doctor) daemonProxyHelp() string {
 	current := "The daemon has no proxy configured."
 	switch {
 	case c.runtime == RuntimeDockerDesktop && desktopInternalProxy(c.info.HTTPProxy, c.info.HTTPSProxy):
-		// Docker Desktop always reports its own forwarding proxy, which
-		// goes direct unless its settings name an upstream proxy.
 		current = "Docker Desktop sends pulls through its internal proxy (http.docker.internal:3128), which uses the proxy set in its settings, if any."
 	case c.info.HTTPProxy != "" || c.info.HTTPSProxy != "":
 		current = fmt.Sprintf("The daemon's proxy is http=%q https=%q.", c.info.HTTPProxy, c.info.HTTPSProxy)
@@ -892,8 +890,12 @@ func (c *doctor) daemonProxyHelp() string {
 	var how string
 	switch c.runtime {
 	case RuntimeDockerDesktop:
-		how = fmt.Sprintf("Docker Desktop: Settings > Resources > Proxies, turn on manual proxy configuration, set the web server (HTTP) to %q, "+
-			"the secure web server (HTTPS) to %q and the bypass list to %q, then Apply & restart.", httpURL, httpsURL, p.NoProxy)
+		bypass := ""
+		if p.NoProxy != "" {
+			bypass = ", the bypass list to " + p.NoProxy
+		}
+		how = fmt.Sprintf("Docker Desktop: Settings > Resources > Proxies, turn on manual proxy configuration, set the web server (HTTP) to %s, "+
+			"the secure web server (HTTPS) to %s%s, then Apply & restart.", httpURL, httpsURL, bypass)
 	case RuntimeColima:
 		how = "Colima: run `colima start --edit`, add the variables under `env:` (" + env + "), save, and let Colima restart."
 	case RuntimeOrbStack:

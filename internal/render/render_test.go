@@ -399,7 +399,7 @@ func TestRenderValues(t *testing.T) {
 
 // busybox wget ignores no_proxy, so a wget healthcheck in a container that
 // has the proxy variables must turn the proxy off, or the probe goes to the
-// proxy and the service never becomes healthy (found in 055's squid run).
+// proxy and the service never becomes healthy.
 func TestProxiedHealthchecksSkipTheProxy(t *testing.T) {
 	files, err := Render(goldenInput(goldenCase{proxy: true, dev: []string{"httpd-hmr"}}))
 	if err != nil {

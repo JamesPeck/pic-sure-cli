@@ -11,7 +11,7 @@ scripts/e2e-proxy.sh                 # builds pic-sure from this checkout
 E2E_NAME=my-proxy-test scripts/e2e-proxy.sh
 ```
 
-It needs docker, git, go, jq and curl, and takes about 5 minutes when the
+It needs docker, git, go, jq and curl, and takes about 3 minutes when the
 stack's images are already built. It sources `scripts/e2e-lib.sh`, so the
 `E2E_*` settings documented there apply (stack name, heap sizes, artifacts
 on failure, `E2E_KEEP`). Its own settings are at the top of the script.
@@ -21,7 +21,9 @@ on failure, `E2E_KEEP`). Its own settings are at the top of the script.
 - **squid** (`<name>-squid`, `ubuntu/squid` with its default config, which
   allows the private ranges) runs on its own bridge network
   (`<name>-egress`), which has internet access. Its port 3128 is published
-  on a random host port.
+  on a random port of the proxy address only (below). squid lets any
+  private-range client in, so on macOS, where that address is the LAN
+  address, other machines on the LAN can use it while the script runs.
 - **An internal network** (`<name>-internal`, `docker network create
   --internal`) has no route out. squid is also attached to it, under the
   alias `squid`, so a container there can get out only through squid. The
@@ -41,7 +43,8 @@ on failure, `E2E_KEEP`). Its own settings are at the top of the script.
   Auth0-registered port.
 
 Everything is removed at the end: the stack (`destroy`), squid, both
-networks and the cache directory.
+networks and the cache directory. With `E2E_KEEP=1`, a failed run leaves
+all of it for debugging.
 
 ## What each check proves
 
@@ -53,9 +56,9 @@ networks and the cache directory.
 | CLI's own HTTP | `self-update --to 0.0.1`: the release lookup, which then fails (nothing is replaced) | CONNECT `api.github.com` |
 | JVM runtime (psama → Auth0) | `java` in the psama container, with only the proxy properties from its rendered `JAVA_OPTS`, GETs the tenant's `/.well-known/openid-configuration` | CONNECT `<tenant>.auth0.com` |
 | Maven reactor | `mvn dependency:get` of one artifact into an empty local repo, on the internal network, with the stack's rendered `settings.xml`; the same command without it must fail | CONNECT `repo.maven.apache.org` |
-| `docker build` (apk, npm/pnpm) | a probe image from the frontend's base image runs `apk add pnpm`, `pnpm add` and `npm view`, built `--no-cache` with the stack's proxy variables as `--build-arg` | CONNECT `dl-cdn.alpinelinux.org`, `registry.npmjs.org` |
-| Image pulls (D36) | doctor's test pull fails, and its detail gives the daemon proxy instructions | `network-docker-pull` is `fail` with the instructions |
-| Everything | squid denied nothing, and saw no request for `localhost` or `127.*` | the whole log |
+| `docker build` (apk, npm/pnpm) | a probe image from the base image of the stack's frontend Dockerfile runs `apk add pnpm`, `pnpm add` and `npm view`, built `--no-cache` with the stack's proxy variables as `--build-arg` | CONNECT `dl-cdn.alpinelinux.org`, `registry.npmjs.org` |
+| Image pulls (D36) | doctor's test pull fails, and its detail gives the daemon proxy instructions | `network-docker-pull` is `fail`, and its detail names the proxy URL (and, on Docker Desktop, its settings page) |
+| no-proxy list | squid denied nothing, and saw no request for a single-label host (the stack's services, `localhost`) or `127.*` | the whole log |
 
 ### Why the small probes are enough
 
