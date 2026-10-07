@@ -1,9 +1,126 @@
-# Not implemented yet: exit 1, naming ticket 034.
-exitcode 1 pic-sure init
-stderr '^pic-sure: not implemented \(ticket 034\)$'
-! stdout .
-exitcode 1 pic-sure init mystack
-stderr '^pic-sure: not implemented \(ticket 034\)$'
-! stdout .
+# init's usage and precondition paths, through the fake docker and git.
+# The cache root must be outside TMPDIR (see doctor.txtar).
+env XDG_CACHE_HOME=/nonexistent-pic-sure-init/cache
 
+# Missing required fields are exit 2, naming every flag, before docker is
+# asked anything.
+exitcode 2 pic-sure init new
+stderr '--admin-email: required'
+stderr '--auth0-client-id: required when auth.mode is not open'
+stderr '--name: required'
+! exists new
+! exists docker.log
+exitcode 2 pic-sure --json init new --name demo
+stdout '"exit_code":2'
+stdout 'admin-email: required'
+
+# Outside open mode the client secret must come on stdin.
+exitcode 2 pic-sure init new --name demo --admin-email admin@example.com --auth0-client-id abc
+stderr '^pic-sure: --auth0-client-secret-stdin is required when auth.mode is not open$'
+
+# Bad values name their flag.
+exitcode 2 pic-sure init new --name demo --admin-email admin@example.com --auth-mode closed
+stderr '--auth-mode'
+exitcode 2 pic-sure init new --name Demo! --admin-email admin@example.com --auth-mode open
+stderr '--name'
+exitcode 2 pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --hpds-data shared
+stderr '--hpds-data shared: want local or shared:NAME'
+exitcode 2 pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --source hpds=../x
+stderr '--source hpds=../x: want COMPONENT=PATH'
+exitcode 2 pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --http-port eighty
+stderr '--http-port'
+exitcode 2 pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --db-mode remote --db-host db.example.com
+stderr '^pic-sure: --db-root-password-stdin is required when db.mode is remote$'
+exitcode 2 pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --skip-step bogus
+stderr '--skip-step bogus: init has no such step'
+! exists new
+! exists docker.log
+
+# Stdin holds one secret, read with the shared reader: one trailing newline
+# is stripped, any other line break is exit 2.
+stdin two-lines.txt
+exitcode 2 pic-sure init new --name demo --admin-email admin@example.com --auth0-client-id abc --auth0-client-secret-stdin
+stderr '--auth0-client-secret-stdin'
+
+# With both secret flags, stdin holds one secret per line.
+stdin one-line.txt
+exitcode 2 pic-sure init new --name demo --admin-email admin@example.com --auth0-client-id abc --db-mode remote --db-host db.example.com --auth0-client-secret-stdin --db-root-password-stdin
+stderr '--auth0-client-secret-stdin and --db-root-password-stdin both read stdin: give one secret per line, in that order'
+stdin blank-second.txt
+exitcode 2 pic-sure init new --name demo --admin-email admin@example.com --auth0-client-id abc --db-mode remote --db-host db.example.com --auth0-client-secret-stdin --db-root-password-stdin
+stderr '--db-root-password-stdin'
+
+# DIR and a different --stack is a usage error; so are two DIRs.
+exitcode 2 pic-sure --stack other init new
+stderr 'name different directories'
 exitcode 2 pic-sure init one two
+
+# A host that isn't ready is exit 3, and nothing is written.
+cp info-old-compose.json info.json
+exitcode 3 pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --auto-ports
+stderr 'the host isn''t ready'
+stderr 'compose-version: docker compose v2.20.3 is older than 2.29.0'
+! exists new
+cp info-ok.json info.json
+
+# A stack name another compose project uses is exit 3.
+cp ps-other.json ps.json
+exitcode 3 pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --auto-ports
+stderr 'the stack name demo is in use by another stack or compose project \(container demo-web-1\)'
+! exists new
+cp empty.json ps.json
+
+# A failed release fetch also leaves nothing behind.
+exitcode 1 pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --auto-ports
+stderr 'step release failed'
+! exists new
+
+# On a stack init finished, it does nothing and exits 0.
+exec pic-sure init done
+stdout 'Stack demo in .*done is already initialised; use `pic-sure up` or `pic-sure update`.'
+exec pic-sure --json init done
+stdout '"already_initialized":true'
+stdout '"url":"https://localhost:8443/"'
+
+-- one-line.txt --
+synthetic-client-secret-0123456789abcdef
+-- blank-second.txt --
+synthetic-client-secret-0123456789abcdef
+
+-- two-lines.txt --
+first
+second
+-- docker.scenario --
+docker info --format json => 0 stdout=info.json
+docker version --format json => 0 stdout=version.json
+docker image inspect alpine:* => 0 stdout=image.json
+docker run * df -Pk / => 0 stdout=df.txt
+docker rm -v -f pic-sure-doctor-* => 0
+docker ps --all --no-trunc --filter * => 0 stdout=ps.json
+docker ps * => 0
+docker volume ls * => 0
+docker image inspect * => 1
+-- ps.json --
+-- empty.json --
+-- ps-other.json --
+{"Names":"demo-web-1","Labels":"com.docker.compose.project=demo,com.docker.compose.service=web"}
+-- info-ok.json --
+{"ServerVersion":"28.5.1","OperatingSystem":"Docker Desktop","OSType":"linux","Architecture":"x86_64","MemTotal":17179869184,"DockerRootDir":"/var/lib/docker","ClientInfo":{"Context":"desktop-linux","Plugins":[{"Name":"compose","Version":"v2.29.7"},{"Name":"buildx","Version":"v0.17.1"}]}}
+-- info.json --
+{"ServerVersion":"28.5.1","OperatingSystem":"Docker Desktop","OSType":"linux","Architecture":"x86_64","MemTotal":17179869184,"DockerRootDir":"/var/lib/docker","ClientInfo":{"Context":"desktop-linux","Plugins":[{"Name":"compose","Version":"v2.29.7"},{"Name":"buildx","Version":"v0.17.1"}]}}
+-- info-old-compose.json --
+{"ServerVersion":"28.5.1","OperatingSystem":"Docker Desktop","OSType":"linux","Architecture":"x86_64","MemTotal":17179869184,"DockerRootDir":"/var/lib/docker","ClientInfo":{"Context":"desktop-linux","Plugins":[{"Name":"compose","Version":"v2.20.3"},{"Name":"buildx","Version":"v0.17.1"}]}}
+-- version.json --
+{"Client":{"Version":"28.5.1"},"Server":{"Platform":{"Name":"Docker Desktop 4.48.0"},"Version":"28.5.1"}}
+-- image.json --
+[{"Id":"sha256:a1"}]
+-- df.txt --
+Filesystem 1024-blocks Used Available Capacity Mounted on
+overlay 200000000 1000 104857600 1% /
+-- done/pic-sure.yaml --
+schema: 1
+name: demo
+network: {http_port: 8083, https_port: 8443}
+auth: {mode: open, admin_email: admin@example.com}
+-- done/.pic-sure/state.json --
+{"cli_version": "dev", "schema_version": 1, "initialized_at": "2026-10-07T12:00:00Z"}

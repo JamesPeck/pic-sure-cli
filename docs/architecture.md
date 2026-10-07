@@ -241,6 +241,25 @@ it.
   exits. The passthrough's output goes straight to the terminal, never to
   the run log.
 
+- `init.go` (034): `init [DIR]`. Its flags come from `stack.Fields` (a
+  secret's is a bool that reads stdin through `ReadUserSecret`), plus `--auto-ports` and `--source COMPONENT=PATH`. Usage problems
+  are exit 2 naming the flag, before docker is asked anything. A DIR whose
+  state.json has `initialized_at` gets "already initialised" and exit 0; a
+  DIR with a `pic-sure.yaml` is resumed with that config as it is (config
+  flags are ignored with a warning). Then three unskippable steps run:
+  `preconditions` (doctor's host checks, with `memory` only a warning;
+  `ops.StackNameInUse`; on a new stack `ops.ChoosePorts` and
+  `ChooseDevPortsBase`), `release` (`release.Fetch` at a resumed stack's
+  recorded commit, else the branch head, then `Gate` with
+  `newSelfUpdater`) and `config` (`stack.Create`, the run log, the stack
+  lock, pic-sure.yaml, `EnsureSecrets` with `OpenAuth`, state.json with
+  the release and the operation). Then `ops.InitSteps` with `--skip-step`,
+  and `initialized_at` once they succeed. `r.compose` builds the adapter
+  with a lazy env over init's `*Secrets`, so `compose up` sees the token
+  seed issued; `up` (035) can copy it. With both `--auth0-client-secret-stdin`
+  and `--db-root-password-stdin`, stdin holds one secret per line, in that
+  order. A loopback `--db-host` gets a warning with `ops.LoopbackHint`.
+
 | File | Commands | Ticket |
 |---|---|---|
 | `init.go` | `init` | 034 |
@@ -350,6 +369,8 @@ A directory is a stack when it holds `pic-sure.yaml` and `.pic-sure/`.
   rendered with), the release commit, component commits (with the local
   checkout and dirty flag of one built from a source, 031), image tags, what
   the TLS step installed (`tls`, 024), the last operation and timestamps.
+  `hpds_key` (034) records what the HPDS key step copied, and
+  `initialized_at` (034) when init finished.
   No secrets. `StartOperation` and
   `FinishOperation` take the time from the caller (`Deps.Clock`).
   `LoadState` wraps `fs.ErrNotExist` before init saves it.
@@ -396,6 +417,13 @@ the manifest.
   salt, lowercase v4 UUIDs, and 32 lowercase hex characters for the HPDS
   key. The introspection token isn't generated: the caller issues it with
   `jwt.Introspection` and saves it with `SaveSecrets`.
+- **Open mode (034).** With `EnsureOptions.OpenAuth` and no client secret
+  stored or supplied, a random 32-byte hex one is generated and
+  `auth0_client_secret_generated` set, since PSAMA signs the introspection
+  token with it. Without `OpenAuth`, a generated one is exit 3 asking for
+  `--auth0-client-secret-stdin`; a supplied secret replaces a generated one
+  (the one exception to never replacing) and clears the token issued from
+  it. Doctor's `auth0` check fails on a generated secret outside open mode.
 - `LoadSecrets`/`SaveSecrets` read and write secrets.yaml (`LoadSecrets`
   wraps `fs.ErrNotExist` before there is one, ignores unknown keys, and
   reports a malformed file by line only, since yaml's messages can quote
@@ -900,6 +928,37 @@ computed before the step must recompute it.
   since an empty one would make a passwordless account. A login refused
   while the user has accounts other than `name@'%'` names them instead of
   suggesting `--sync-passwords`, which changes only `name@'%'`.
+
+**Init and converge steps (034, `init.go`, `hpdskey.go`).** §9.1 for
+init, and the parts `up` and `update` reuse.
+
+- `InitSteps(d, st, cfg, sec, state, ConvergeOptions{Cache, CLIVersion,
+  Compose})`: `resolve` (`ResolveStep`, 031's), `images`, `tls`,
+  `truststore` (`StackTruststoreStep`, which reads the psama tag from
+  state when it runs), `render`, then `ConvergeSteps`. `InitStepIDs` lists
+  their IDs for checking `--skip-step` early.
+- `RenderStep`, ID `render`, always applies: it renders from a fresh
+  state.json (the TLS and truststore steps save it themselves), writes the
+  files, records `cli_version` and `schema_version`, copies the state into
+  the caller's, and sets `d.Compose` to nil.
+- `ConvergeSteps` are steps 8–12: `DBSteps` (`db`, plus `db-bootstrap` for
+  a remote database), `migrate`, `seed`, `hpds-key` and `start`, each wrapped so it sets `d.Compose` from `opts.Compose` when it
+  is nil. The Composer's env must be computed per call from the
+  `*Secrets` the seed step updates.
+- `StartStep`, ID `start`: `compose up -d --wait` (15 min) for
+  `StartServices(cfg)`, the mode's services without the one-shots.
+- `HPDSKeyStep`, ID `hpds-key`: copies `.pic-sure/hpds/encryption_key`
+  into the `hpds-data` volume as `encryption_key` (0600, root) through an
+  alpine helper fed on stdin, creating the volume with `st.EnsureVolume`.
+  state.json's `hpds_key` records the key's hash and the volume's
+  `CreatedAt`, so a re-created volume (after `reset`) is keyed again. With
+  `hpds.data: shared` it does nothing: the data set carries its key.
+- `ChoosePorts(host, http, https, auto)` and `ChooseDevPortsBase(host,
+  avoid...)` are §6.5's port rules; `StackNameInUse(ctx, d, name, dir)`
+  finds a container or volume of compose project `name`, or a volume
+  labelled for stack `name`, whose stack-dir label isn't `dir`.
+- `Summary` is init's report (URL, Auth0 URLs, token expiry, next steps);
+  `PeekState(dir)` reads state.json without opening the stack.
 
 ## internal/steps
 

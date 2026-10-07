@@ -31,6 +31,12 @@ type State struct {
 	// Truststore is what the truststore step last built in the truststore
 	// volume.
 	Truststore *TruststoreBuild `json:"truststore,omitempty"`
+	// HPDSKey is the HPDS key the hpds-key step last copied into the
+	// hpds-data volume.
+	HPDSKey *VolumeCopy `json:"hpds_key,omitempty"`
+	// InitializedAt is when init finished; a stack without it is still
+	// being created, and init resumes it.
+	InitializedAt time.Time `json:"initialized_at,omitzero"`
 	// LastOperation is the most recent mutating command.
 	LastOperation *Operation `json:"last_operation,omitempty"`
 	// CreatedAt is when the first operation started.
@@ -77,6 +83,16 @@ type TLSInstall struct {
 // truststore from, so a re-run can tell whether the volume already holds it.
 type TruststoreBuild struct {
 	// Hash covers the custom certs, the build script and the psama image ID.
+	Hash string `json:"hash"`
+	// VolumeCreatedAt is the volume's creation time, as docker reports it.
+	// A volume re-created since then is empty whatever the hash says.
+	VolumeCreatedAt string `json:"volume_created_at"`
+}
+
+// VolumeCopy identifies a file a step copied into a stack volume, so a
+// re-run can tell whether the volume still holds it.
+type VolumeCopy struct {
+	// Hash is the hex SHA-256 of what was copied.
 	Hash string `json:"hash"`
 	// VolumeCreatedAt is the volume's creation time, as docker reports it.
 	// A volume re-created since then is empty whatever the hash says.

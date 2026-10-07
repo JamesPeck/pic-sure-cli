@@ -327,3 +327,57 @@ func wantNotExist(t *testing.T, path string) {
 		t.Errorf("%s exists (err = %v)", path, err)
 	}
 }
+
+func TestEnsureSecretsOpenModeClientSecret(t *testing.T) {
+	// Open mode without a supplied client secret gets a random 32-byte one.
+	s := newStack(t)
+	sec, err := s.EnsureSecrets(seeded(1), EnsureOptions{OpenAuth: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(string(sec.Auth0ClientSecret)) || !sec.Auth0ClientSecretGenerated {
+		t.Fatalf("open mode: client secret %d bytes, generated %v; want 64 hex characters, generated", len(sec.Auth0ClientSecret), sec.Auth0ClientSecretGenerated)
+	}
+	again, err := s.EnsureSecrets(seeded(2), EnsureOptions{OpenAuth: true})
+	if err != nil || again.Auth0ClientSecret != sec.Auth0ClientSecret {
+		t.Fatalf("a second run replaced the generated secret (err %v)", err)
+	}
+
+	// Out of open mode the generated secret is refused, and nothing is
+	// written.
+	sec.IntrospectionToken = "synthetic-token"
+	sec.IntrospectionTokenExpiry = time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := s.SaveSecrets(sec); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(s.Path(SecretsFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.EnsureSecrets(seeded(3), EnsureOptions{})
+	if exitcode.FromError(err) != exitcode.CodePrecondition || !strings.Contains(err.Error(), "--auth0-client-secret-stdin") {
+		t.Fatalf("leaving open mode: err = %v, want exit 3 asking for the real secret", err)
+	}
+	wantContent(t, s.Path(SecretsFile), string(before))
+
+	// A supplied secret replaces it and the token issued from it.
+	real, err := s.EnsureSecrets(seeded(4), EnsureOptions{Supplied: UserSecrets{Auth0ClientSecret: syntheticClientSecret}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if real.Auth0ClientSecret != syntheticClientSecret || real.Auth0ClientSecretGenerated ||
+		real.IntrospectionToken != "" || !real.IntrospectionTokenExpiry.IsZero() {
+		t.Errorf("after supplying the real secret: generated %v, token %q, expiry %v", real.Auth0ClientSecretGenerated, real.IntrospectionToken, real.IntrospectionTokenExpiry)
+	}
+	loaded, err := s.LoadSecrets()
+	if err != nil || loaded.Auth0ClientSecret != syntheticClientSecret || loaded.Auth0ClientSecretGenerated {
+		t.Errorf("saved: err %v, generated %v", err, loaded.Auth0ClientSecretGenerated)
+	}
+
+	// A secret supplied in open mode is used, not generated over.
+	open := newStack(t)
+	sec, err = open.EnsureSecrets(seeded(1), EnsureOptions{OpenAuth: true, Supplied: UserSecrets{Auth0ClientSecret: syntheticClientSecret}})
+	if err != nil || sec.Auth0ClientSecret != syntheticClientSecret || sec.Auth0ClientSecretGenerated {
+		t.Errorf("open mode with a supplied secret: err %v, generated %v", err, sec.Auth0ClientSecretGenerated)
+	}
+}

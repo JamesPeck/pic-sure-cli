@@ -43,6 +43,12 @@ type Secrets struct {
 	DictionaryDBPassword Secret `yaml:"dictionary_db_password"`
 
 	Auth0ClientSecret Secret `yaml:"auth0_client_secret"`
+	// Auth0ClientSecretGenerated says Auth0ClientSecret is random, made
+	// for open mode (§9.1 step 3), where Auth0 is never contacted but PSAMA
+	// still signs the introspection token with it. Outside open mode
+	// EnsureSecrets refuses it until the application's real secret is
+	// supplied, which replaces it.
+	Auth0ClientSecretGenerated bool `yaml:"auth0_client_secret_generated,omitempty"`
 
 	QueryServiceInternalToken Secret `yaml:"query_service_internal_token"`
 	PicsureApplicationToken   Secret `yaml:"picsure_application_token"`
@@ -148,6 +154,10 @@ type EnsureOptions struct {
 	// (db.mode: remote), whose root password must then be stored or
 	// supplied.
 	RemoteDB bool
+	// OpenAuth is set when auth.mode is open. With no Auth0 client secret
+	// stored or supplied, a random one is generated; without it, a
+	// generated one is refused.
+	OpenAuth bool
 	// Supplied holds the secrets the operator gave this run.
 	Supplied UserSecrets
 }
@@ -166,12 +176,15 @@ func (o EnsureOptions) Format(f fmt.State, _ rune) {
 // saves secrets.yaml if anything changed. Every secret is registered with
 // the log redactor.
 //
-// It never replaces a secret (§9.11). A supplied secret that differs from
-// the stored one is an exit-2 error: changing one is `secrets rotate`'s
-// job. It also fails, before writing anything, when RemoteDB is set and
-// there is no remote root password, and when secrets.yaml exists but the
-// HPDS key file doesn't: data loaded with the lost key would be
-// unreadable under a new one.
+// It never replaces a secret (§9.11), with one exception: a supplied Auth0
+// client secret replaces one generated for open mode, and clears the
+// introspection token issued from it. Any other supplied secret that
+// differs from the stored one is an exit-2 error: changing one is `secrets
+// rotate`'s job. It also fails, before writing anything, with exit 3 when
+// RemoteDB is set and there is no remote root password, when OpenAuth isn't
+// set and the client secret is a generated one, and when secrets.yaml
+// exists but the HPDS key file doesn't: data loaded with the lost key would
+// be unreadable under a new one.
 func (s *Stack) EnsureSecrets(rnd io.Reader, opts EnsureOptions) (*Secrets, error) {
 	sec, err := s.LoadSecrets()
 	existed := err == nil
@@ -188,9 +201,21 @@ func (s *Stack) EnsureSecrets(rnd io.Reader, opts EnsureOptions) (*Secrets, erro
 	if opts.RemoteDB && sec.DBRemoteRootPassword == "" {
 		return nil, exitcode.Precondition("the stack uses a remote database, but no root password was given for it")
 	}
+	if !opts.OpenAuth && sec.Auth0ClientSecretGenerated {
+		return nil, exitcode.Precondition("auth.mode is no longer open, but the stack's Auth0 client secret is a random one made for open mode; " +
+			"give the Auth0 application's client secret with --auth0-client-secret-stdin")
+	}
 	filled, err := sec.generate(rnd)
 	if err != nil {
 		return nil, err
+	}
+	if opts.OpenAuth && sec.Auth0ClientSecret == "" {
+		v, err := hexToken(32)(rnd)
+		if err != nil {
+			return nil, err
+		}
+		sec.Auth0ClientSecret, sec.Auth0ClientSecretGenerated, filled = Secret(v), true, true
+		registerSecrets(sec.Auth0ClientSecret)
 	}
 	// The key goes first, so once secrets.yaml exists a missing key file
 	// was lost rather than never made.
@@ -206,8 +231,14 @@ func (s *Stack) EnsureSecrets(rnd io.Reader, opts EnsureOptions) (*Secrets, erro
 }
 
 // supply stores each user secret sec doesn't have yet and reports whether
-// it stored any. One that differs from the stored value is an exit-2 error.
+// it stored any. A supplied Auth0 client secret replaces a generated one,
+// and the token issued from it. Any other that differs from the stored
+// value is an exit-2 error.
 func (sec *Secrets) supply(u UserSecrets) (stored bool, err error) {
+	if u.Auth0ClientSecret != "" && sec.Auth0ClientSecretGenerated {
+		sec.Auth0ClientSecret, sec.Auth0ClientSecretGenerated = "", false
+		sec.IntrospectionToken, sec.IntrospectionTokenExpiry = "", time.Time{}
+	}
 	for _, f := range []struct {
 		name string
 		dst  *Secret

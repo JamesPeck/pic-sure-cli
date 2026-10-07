@@ -602,6 +602,14 @@ func TestDoctorStackAuth0(t *testing.T) {
 		}
 		wantCheck(t, e.run(), "auth0", ops.CheckFail, "missing: the Auth0 client secret")
 	})
+	t.Run("secret generated for open mode", func(t *testing.T) {
+		e := newDoctorEnv(t)
+		st := e.stack(t, required)
+		if err := st.SaveSecrets(&stack.Secrets{Auth0ClientSecret: "s3cret-s3cret-s3cret-s3cret-s3cret", Auth0ClientSecretGenerated: true}); err != nil {
+			t.Fatal(err)
+		}
+		wantCheck(t, e.run(), "auth0", ops.CheckFail, "only the random one made for open mode")
+	})
 }
 
 func TestDoctorStackProxy(t *testing.T) {

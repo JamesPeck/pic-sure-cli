@@ -750,6 +750,8 @@ func (c *doctor) auth0Check() {
 		return
 	case sec.Auth0ClientSecret == "":
 		missing = append(missing, "the Auth0 client secret")
+	case sec.Auth0ClientSecretGenerated:
+		missing = append(missing, "the Auth0 client secret (the stack has only the random one made for open mode)")
 	}
 	if len(missing) > 0 {
 		c.add("auth0", CheckFail, "auth.mode is %s but these are missing: %s", c.cfg.Auth.Mode, strings.Join(missing, ", "))

@@ -6,7 +6,7 @@
 // steps.Run.
 //
 // Ticket 001 owns Deps (deps.go). Each operation lives in its own file,
-// owned by the ticket that implements it: init.go (034), up.go (035),
+// owned by the ticket that implements it: init.go and hpdskey.go (034), up.go (035),
 // update.go (036), build.go (031), reactor.go (029), images.go (030),
 // migrate.go (032), seed.go (033), tls.go (024), truststore.go (023),
 // doctor.go (025), status.go (027, 037), loader and data files (042–046, 049),

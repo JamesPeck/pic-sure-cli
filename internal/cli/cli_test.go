@@ -41,7 +41,7 @@ func testApp(t *testing.T) (*App, *bytes.Buffer, *bytes.Buffer) {
 // specCommands is every command path in spec §5, with the ticket that
 // implements it ("" for commands that already work).
 var specCommands = map[string]string{
-	"init": "034", "up": "035",
+	"init": "", "up": "035",
 	"down": "", "restart": "", "ps": "", "logs": "", "compose": "",
 	"status": "", "doctor": "", "update": "036", "build": "", "migrate": "",
 	"config show": "", "config get": "", "config set": "", "config edit": "",
