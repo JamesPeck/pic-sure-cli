@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -190,9 +191,13 @@ func newComposeCmd(a *App) *cobra.Command {
 		Short: "Run docker compose against the rendered stack (escape hatch)",
 		Long: `Run docker compose against the rendered stack, with the same -f files and
 environment the CLI uses. Put -- before the compose arguments. pic-sure
-exits with compose's exit code. It holds the stack lock until compose
-exits, as every command that can change the stack does. Its output is
-compose's own, so --json is refused.`,
+exits with compose's exit code. Its output is compose's own, so --json is
+refused.
+
+Subcommands that only read (ps, logs, top, config, events, images, ls,
+port, version, exec, stats, wait, attach) run as read-only commands. Any
+other holds the stack lock until compose exits, as every command that can
+change the stack does.`,
 		Example: `  pic-sure compose -- ps -a
   pic-sure compose -- exec hpds sh`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -208,11 +213,13 @@ compose's own, so --json is refused.`,
 			}
 			defer func() { _ = st.Close() }()
 			d := a.newDeps()
-			lock, err := a.lockStack(cmd.Context(), cmd, st, d.Sink)
-			if err != nil {
-				return err
+			if commandClass(cmd) != stack.ReadOnly {
+				lock, err := a.lockStack(cmd.Context(), cmd, st, d.Sink)
+				if err != nil {
+					return err
+				}
+				defer func() { _ = lock.Unlock() }()
 			}
-			defer func() { _ = lock.Unlock() }()
 			c, err := a.stackCompose(cmd, a.newForegroundRunner(d.Log), st)
 			if err != nil {
 				return err
@@ -242,25 +249,36 @@ compose's own, so --json is refused.`,
 // docker.ErrNotRendered. A read-only command (gate.go) that can't read the
 // config or secrets warns and carries on without them.
 func (a *App) stackCompose(cmd *cobra.Command, r docker.Runner, st *stack.Stack) (*docker.Compose, error) {
+	c, _, _, err := a.stackComposeConfig(cmd, r, st)
+	return c, err
+}
+
+// stackComposeConfig is stackCompose, also returning the config and secrets
+// the environment came from.
+func (a *App) stackComposeConfig(cmd *cobra.Command, r docker.Runner, st *stack.Stack) (*docker.Compose, *stack.Config, *stack.Secrets, error) {
 	c, err := docker.NewCompose(r, st.Dir, nil)
 	if errors.Is(err, docker.ErrNotRendered) {
-		return nil, exitcode.Precondition("%w yet; run `pic-sure up`", docker.ErrNotRendered)
+		return nil, nil, nil, exitcode.Precondition("%w yet; run `pic-sure up`", docker.ErrNotRendered)
 	}
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
-	env, err := a.stackComposeEnv(cmd, st)
+	cfg, sec, err := a.stackComposeInputs(cmd, st)
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
+	}
+	env, err := render.ComposeEnv(cfg, sec)
+	if err != nil {
+		return nil, nil, nil, err
 	}
 	c.Env = func() []string { return env }
 	if a.output().mode == modeJSON {
 		c.Progress = docker.ProgressJSON
 	}
-	return c, nil
+	return c, cfg, sec, nil
 }
 
-func (a *App) stackComposeEnv(cmd *cobra.Command, st *stack.Stack) ([]string, error) {
+func (a *App) stackComposeInputs(cmd *cobra.Command, st *stack.Stack) (*stack.Config, *stack.Secrets, error) {
 	// A read-only command creates no container, so it carries on with the
 	// variables set but empty, which keeps compose from warning that they
 	// are unset. It must work on a stack whose config is invalid or newer
@@ -269,19 +287,22 @@ func (a *App) stackComposeEnv(cmd *cobra.Command, st *stack.Stack) ([]string, er
 	cfg, err := st.LoadConfig()
 	if err != nil {
 		if !readOnly {
-			return nil, configError(err)
+			return nil, nil, configError(err)
 		}
 		a.warnStderr("docker compose runs without the stack's config or secrets: %v", err)
 		def := stack.DefaultConfig()
-		return render.ComposeEnv(&def, &stack.Secrets{})
+		return &def, &stack.Secrets{}, nil
 	}
 	sec, err := st.LoadSecrets()
 	if err != nil {
 		if !readOnly {
-			return nil, err
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil, nil, exitcode.Precondition("the stack has no secrets.yaml; run `pic-sure init` to finish creating it")
+			}
+			return nil, nil, err
 		}
 		a.warnStderr("docker compose runs without the stack's secrets: %v", err)
 		sec = &stack.Secrets{}
 	}
-	return render.ComposeEnv(cfg, sec)
+	return cfg, sec, nil
 }

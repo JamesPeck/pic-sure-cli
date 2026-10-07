@@ -204,22 +204,29 @@ it.
   logger, so it can log argv. Until the others land, the sink discards
   events.
 
-- `composeverbs.go` (026, 069): `a.stackCompose(cmd, runner, st)` is the
-  compose adapter for every command on a stack, `status` and `doctor`
-  included: exit 3 with "run `pic-sure up`", wrapping
+- `composeverbs.go` (026, 069, 070): `a.stackCompose(cmd, runner, st)` is the
+  compose adapter for every command on a stack, `status`, `doctor` and
+  `migrate` included (`stackComposeConfig` also returns the config and
+  secrets it read): exit 3 with "run `pic-sure up`", wrapping
   `docker.ErrNotRendered`, when it isn't rendered; `render.ComposeEnv` from
   the config and secrets; and `ProgressJSON` under `--json`. A read-only
   command, by `commandClass`, that can't read them warns on stderr and
   carries on with the secrets empty (and the default config if the config
   is unreadable), so `ps`, `status` and `doctor` work on a newer stack or
-  one without secrets.yaml. `status` and `doctor` pass their reports
+  one without secrets.yaml. A mutating command without secrets.yaml is
+  exit 3, pointing at `init`. `status` and `doctor` pass their reports
   through `log.Redact`, since compose's errors can quote a secret.
   `down` and `restart` take the stack lock and run as one step
   whose `Log` events are compose's output. `ps --json` uses status's
   service shape (`ops.StatusServices`). `logs` writes the logs to stdout and compose's own
   messages to stderr (a `logs` step under `--json`), and reports Ctrl-C as
-  the signal alone. `compose` refuses `--json`, holds the stack lock, runs
-  in the foreground runner and exits with compose's code.
+  the signal alone. `compose` refuses `--json`, runs in the foreground
+  runner and exits with compose's code. Its class for the gate and the lock
+  comes from its compose subcommand (`composeClass` in `composeclass.go`,
+  skipping compose's global flags): `ps`, `logs`, `exec` and the other
+  read-only ones run without the lock and on a newer stack; any other, an
+  unknown one or none, holds the stack lock until compose exits. The
+  passthrough's output goes straight to the terminal, never to the run log.
 
 | File | Commands | Ticket |
 |---|---|---|

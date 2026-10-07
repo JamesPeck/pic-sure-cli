@@ -7,7 +7,7 @@ stderr 'no pic-sure stack found'
 
 # A stack that was never rendered: exit 3, pointing at up.
 exitcode 3 pic-sure --stack unrendered migrate
-stderr 'has not been rendered.*run `pic-sure up` first'
+stderr 'has not been rendered.*run `pic-sure up`'
 exitcode 3 pic-sure --stack unrendered migrate --check
 
 # A stack without secrets.yaml hasn't finished init.

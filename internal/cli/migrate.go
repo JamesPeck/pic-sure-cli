@@ -1,18 +1,14 @@
 package cli
 
 import (
-	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"strings"
 
 	"github.com/spf13/cobra"
 
-	"github.com/JamesPeck/pic-sure-cli/internal/docker"
 	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
 	"github.com/JamesPeck/pic-sure-cli/internal/ops"
-	"github.com/JamesPeck/pic-sure-cli/internal/render"
 )
 
 func newMigrateCmd(a *App) *cobra.Command {
@@ -53,30 +49,9 @@ func (a *App) migrate(cmd *cobra.Command, _ []string) error {
 		}
 		defer func() { _ = lock.Unlock() }()
 	}
-	cfg, err := st.LoadConfig()
-	if err != nil {
-		return configError(err)
-	}
-	sec, err := st.LoadSecrets()
-	if errors.Is(err, fs.ErrNotExist) {
-		return exitcode.Precondition("the stack has no secrets.yaml; run `pic-sure init` to finish creating it")
-	}
+	c, cfg, sec, err := a.stackComposeConfig(cmd, d.Runner, st)
 	if err != nil {
 		return err
-	}
-	env, err := render.ComposeEnv(cfg, sec)
-	if err != nil {
-		return err
-	}
-	c, err := docker.NewCompose(d.Runner, st.Dir, func() []string { return env })
-	if errors.Is(err, docker.ErrNotRendered) {
-		return exitcode.Precondition("%w; run `pic-sure up` first", err)
-	}
-	if err != nil {
-		return err
-	}
-	if a.Global.JSON {
-		c.Progress = docker.ProgressJSON
 	}
 	d.Compose = c
 

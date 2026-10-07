@@ -47,10 +47,17 @@ exec pic-sure --plain restart hpds psama
 stderr 'Restart hpds, psama'
 grep '--progress plain restart hpds psama$' $WORK/docker.log
 
-# down, restart and compose are gated as mutating: a newer stack is exit 5.
+# down, restart and compose's mutating subcommands are gated as mutating:
+# a newer stack is exit 5.
 exitcode 5 pic-sure --stack $WORK/newer down
 exitcode 5 pic-sure --stack $WORK/newer restart
-exitcode 5 pic-sure --stack $WORK/newer compose -- ps
+exitcode 5 pic-sure --stack $WORK/newer compose -- up -d
+exitcode 5 pic-sure --stack $WORK/newer compose -- -p newer nosuch
+
+# compose's read-only subcommands run on a newer stack, with a warning.
+exec pic-sure --stack $WORK/newer compose -- -f x.yaml ps -a
+stderr 'warning: '
+stdout 'raw compose ps'
 
 # ps and logs are read-only: they run on a newer stack, with a warning,
 # though this CLI can't read its config.
@@ -111,18 +118,48 @@ stderr '^pic-sure: interrupted \(interrupt\)$'
 ! stderr 'docker compose'
 exec sh -c '! kill -0 "$(cat follow.pid)" 2>/dev/null'
 
-# compose holds the stack lock while compose runs, and a SIGTERM to
-# pic-sure alone reaches compose, which the terminal's Ctrl-C would not.
+# A mutating compose subcommand holds the stack lock while compose runs,
+# and a SIGTERM to pic-sure alone reaches compose, which the terminal's
+# Ctrl-C would not.
 rm follow.pid
-! exec pic-sure --stack stack compose -- logs -f &pass&
+! exec pic-sure --stack stack compose -- up &pass&
 exec sh -c 'while [ ! -f follow.pid ]; do sleep 0.05; done'
 exitcode 1 pic-sure --stack stack down
 stderr 'pic-sure compose'
 stderr 'pass --wait-lock'
+exitcode 1 pic-sure --stack stack compose -- --dry-run up -d
+stderr 'pass --wait-lock'
+
+# Its read-only subcommands, like logs, take no lock, so they run.
+exec pic-sure --stack stack compose -- ps -a
+stdout 'raw compose ps'
+exec pic-sure --stack stack compose -- logs hpds
+stdout '^hpds-1  \| started$'
+exec pic-sure --stack stack logs hpds
+
+# With --wait-lock, a mutating one waits for the holder, then runs.
+exec sh -c '(pic-sure --stack stack --wait-lock compose -- up -d; echo $? >wait.code) </dev/null >/dev/null 2>wait.err &'
+exec sh -c 'until grep -q "waiting for" wait.err; do sleep 0.05; done'
 exec sh -c 'kill -TERM "$(cat parent.pid)"'
 wait pass
 stderr '^pic-sure: interrupted \(terminated\)$'
 exec sh -c '! kill -0 "$(cat follow.pid)" 2>/dev/null'
+exec sh -c 'until [ -s wait.code ]; do sleep 0.05; done'
+grep '^0$' wait.code
+grep 'up -d$' docker.log
+
+# Compose's and the containers' output reaches the terminal only, never
+# the run log. (A failed command's error, such as restart's above, carries
+# compose's message there; the passthrough's doesn't.)
+rm stack/.pic-sure/logs
+exec pic-sure --log-level debug --stack stack compose -- logs hpds
+stdout started
+! exec pic-sure --log-level debug --stack stack compose -- logs nosuch
+stderr 'no such service'
+exec pic-sure --log-level debug --stack stack logs hpds
+stdout started
+exec sh -c 'grep -rq "compose.*logs nosuch" stack/.pic-sure/logs'
+exec sh -c '! grep -rE "started|no such service" stack/.pic-sure/logs'
 
 -- docker.scenario --
 docker compose * --progress plain down --remove-orphans => 0 stderr=down.txt
@@ -134,6 +171,7 @@ docker compose * logs nosuch => 1 stderr=nosuch.txt
 docker compose * logs* => 0 stdout=logs.txt
 docker compose * ps -a => 0 stdout=raw.txt
 docker compose * top => 4
+docker compose * up -d => 0
 -- down.txt --
  Container demo-hpds-1  Removed
 -- down.json --
@@ -151,9 +189,15 @@ hpds-1  | started
 raw compose ps
 -- bin/docker --
 #!/bin/sh
-echo $PPID > "$HOME/parent.pid"
-echo $$ > "$HOME/follow.pid"
-exec sleep 30
+# Blocks on compose's up and logs --follow; hands the rest to the fake.
+case "$*" in
+*" up" | *" logs --follow")
+	echo $PPID > "$HOME/parent.pid"
+	echo $$ > "$HOME/follow.pid"
+	exec sleep 30
+	;;
+esac
+PATH=${PATH#*:} exec docker "$@"
 -- stack/pic-sure.yaml --
 schema: 1
 name: demo
