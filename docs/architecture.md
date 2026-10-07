@@ -296,7 +296,8 @@ it.
   `openStackUnlogged`, since a run log is a write to the stack); until the
   `config` step, pic-sure.yaml is migrated in memory only. Under the stack
   lock: up's checks (CheckFiles, shared HPDS data, `initialized_at`, the
-  client secret, the ports), reading secrets.yaml only. Then two
+  ports, and `checkSecrets`: what `upSecrets` would refuse), reading
+  secrets.yaml only. Then two
   unskippable steps: `release` (`release.Fetch` of the `release.branch`
   head or `--release-commit`, or with `--no-build` the stack's recorded
   release; the gate with `newSelfUpdater`; then `ResolveComponents`) and
@@ -1133,15 +1134,16 @@ from the image step's own check; `build`; `pull` for every pulled image,
 since update always pulls; `keep` with `NoBuild`, which moves nothing),
 the Flyway status, the token (renewed when it is valid for less than
 `TokenRenewBefore`) and the running services to `recreate` or `restart`,
-with reasons. Migrations are `unknown` when the pic-sure or migrations
-tree moves, to another commit or a local source (the new files aren't in
-the cache yet; the migrate step's Check decides after the image step), or
-when dictionary-db isn't healthy; otherwise `MigrationsUpToDate`, after
+with reasons. Migrations are `unknown` when the render will mount the
+pic-sure or migrations files from elsewhere (another commit's cache tree,
+or a local source set or unset, with `NoBuild` too; the migrate step's
+Check decides after the render), or when dictionary-db isn't healthy; otherwise `MigrationsUpToDate`, after
 starting picsure-db through `DBSteps` if `StartDB` and it isn't healthy
 (`started_db`). Restarts come from an in-memory render at the target
 (`renderStack`, shared with `RenderStep`), written to a temporary file in
 the cache: a running service whose `compose config --hash` there (with
-the stack's env and overrides; `docker.Compose.ConfigHashes`) differs from
+the stack's env and overrides; `docker.Compose.ConfigHashes`, so the
+plan needs the real adapter) differs from
 its container's `com.docker.compose.config-hash` label is recreated. That
 is compose's own test, so it covers a changed definition, image tag or
 env value, and a render an earlier run never started. So are the users of
@@ -1626,9 +1628,10 @@ argv. `Compose` implements it over a `Runner`.
   form, nulls and unknown fields. `Health` is empty for a container without
   a healthcheck; compare it exactly. `Label(key)` reads one of `Labels`
   (036).
-- `ConfigHashes` (036) runs `config --hash *`: each service's config hash,
-  which compose compares with a container's `ConfigHashLabel` to decide
-  whether `up` recreates it.
+- `ConfigHashes(rendered)` (036) runs `config --hash *`: each service's
+  config hash, which compose compares with a container's `ConfigHashLabel`
+  to decide whether `up` recreates it. A non-empty `rendered` stands in for
+  the rendered compose.yaml, keeping the overrides and env.
 - `Config(quiet)`: `config --quiet` validates. Without quiet,
   `config --no-interpolate` returns the merged YAML, with no secret values
   in it.

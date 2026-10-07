@@ -713,12 +713,28 @@ func TestComposeRunPassesEnvByName(t *testing.T) {
 
 func TestComposeConfigHashes(t *testing.T) {
 	f := fakerunner.New(t)
-	f.On(fakerunner.Glob("docker compose * config --hash *")).Stdout("httpd 2213c4e3\npsama 9e7ae5ea\n\n")
-	got, err := newTestCompose(f).ConfigHashes(context.Background())
+	var calls []fakerunner.Call
+	f.On(fakerunner.Glob("docker compose * config --hash *")).Do(func(_ context.Context, c fakerunner.Call) (docker.Result, error) {
+		calls = append(calls, c)
+		return docker.Result{Stdout: []byte("httpd 2213c4e3\npsama 9e7ae5ea\n\n")}, nil
+	})
+	c := newTestCompose(f)
+	got, err := c.ConfigHashes(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if want := map[string]string{"httpd": "2213c4e3", "psama": "9e7ae5ea"}; !maps.Equal(got, want) {
 		t.Errorf("hashes %v, want %v", got, want)
+	}
+	// Another render keeps the overrides and the env.
+	if _, err := c.ConfigHashes(context.Background(), "/tmp/next.yaml"); err != nil {
+		t.Fatal(err)
+	}
+	want := "docker compose -f /tmp/next.yaml -f /stack/overrides/a.yaml --project-directory /stack"
+	if argv := strings.Join(calls[1].Argv, " "); !strings.HasPrefix(argv, want) || !slices.Equal(calls[1].Env, []string{"PICSURE_DB_PASSWORD", "HPDS_TAG"}) {
+		t.Errorf("call %s with env %v, want %s... with the adapter's env", argv, calls[1].Env, want)
+	}
+	if c.Files[0] != "/stack/.pic-sure/render/compose.yaml" {
+		t.Errorf("the adapter's files changed: %v", c.Files)
 	}
 }

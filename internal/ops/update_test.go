@@ -298,7 +298,7 @@ func TestPlanUpdateLeavesMovedMigrationsToTheMigrateStep(t *testing.T) {
 	x.missing()
 	rel, comps := x.target(map[string]stack.Component{catalog.Migrations: {Ref: "v3.1", Commit: migSHA2}})
 	p := x.plan(ops.UpdateOptions{Release: rel, Components: comps})
-	if p.Migrations.Status != ops.MigrationsStatusUnknown || !strings.Contains(p.Migrations.Detail, "migrations's new commit") {
+	if p.Migrations.Status != ops.MigrationsStatusUnknown || !strings.Contains(p.Migrations.Detail, "a new migrations tree") {
 		t.Errorf("migrations %+v, want unknown until the new tree is fetched", p.Migrations)
 	}
 	// flyway-init's mounts move, but it is a one-shot, so only the services
@@ -518,12 +518,14 @@ func TestPlanUpdateDoesntStartTheDatabaseWithoutTheDictionary(t *testing.T) {
 }
 
 func TestPlanUpdateTreatsANewMigrationsSourceAsMovedFiles(t *testing.T) {
-	x := newUpdateFixture(t)
-	x.missing()
-	x.cfg.Components.Migrations.Source = x.checkout(false)
-	rel, comps := x.target(nil)
-	p := x.plan(ops.UpdateOptions{Release: rel, Components: comps})
-	if p.Migrations.Status != ops.MigrationsStatusUnknown {
-		t.Errorf("migrations %+v, want unknown when the files come from a new checkout", p.Migrations)
+	for _, noBuild := range []bool{false, true} {
+		x := newUpdateFixture(t)
+		x.missing()
+		x.cfg.Components.Migrations.Source = x.checkout(false)
+		rel, comps := x.target(nil)
+		p := x.plan(ops.UpdateOptions{Release: rel, Components: comps, NoBuild: noBuild})
+		if p.Migrations.Status != ops.MigrationsStatusUnknown {
+			t.Errorf("--no-build %v: migrations %+v, want unknown when the files come from a new checkout", noBuild, p.Migrations)
+		}
 	}
 }

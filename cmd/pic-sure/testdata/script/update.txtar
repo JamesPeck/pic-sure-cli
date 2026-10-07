@@ -38,6 +38,22 @@ stderr 'random one made for open mode'
 cmp left-open/.pic-sure/secrets.yaml secrets-before.yaml
 ! exists docker.log
 
+# A short client secret is refused before the release is fetched, even
+# for a dry run.
+exitcode 3 pic-sure --stack short-secret update --dry-run
+stderr 'shorter than the 32 bytes PSAMA needs'
+
+# secrets.yaml lacks generated secrets update would fill in, but only once
+# the release has been fetched and gated: a failed fetch leaves it as it
+# was. A dry run leaves no run log in the stack.
+cp ready.scenario docker.scenario
+cp ready/.pic-sure/secrets.yaml secrets-before.yaml
+! exec pic-sure --stack ready update --dry-run
+! exists ready/.pic-sure/logs
+! exec pic-sure --stack ready update
+stderr 'step release failed'
+cmp ready/.pic-sure/secrets.yaml secrets-before.yaml
+
 -- stack/pic-sure.yaml --
 schema: 1
 name: demo
@@ -73,3 +89,27 @@ auth: {mode: open, admin_email: admin@example.com}
 hpds: {data: shared, shared_name: demo-set}
 -- shared/.pic-sure/state.json --
 {"cli_version": "dev", "schema_version": 1, "initialized_at": "2026-10-07T12:00:00Z"}
+-- short-secret/pic-sure.yaml --
+schema: 1
+name: short-secret
+auth: {mode: open, admin_email: admin@example.com}
+-- short-secret/.pic-sure/state.json --
+{"cli_version": "dev", "schema_version": 1, "initialized_at": "2026-10-07T12:00:00Z"}
+-- short-secret/.pic-sure/secrets.yaml --
+db_root_password: rootpw
+auth0_client_secret: too-short
+-- ready/pic-sure.yaml --
+schema: 1
+name: ready
+auth: {mode: open, admin_email: admin@example.com}
+network: {http_port: 18741, https_port: 18742}
+-- ready/.pic-sure/state.json --
+{"cli_version": "dev", "schema_version": 1, "initialized_at": "2026-10-07T12:00:00Z"}
+-- ready/.pic-sure/hpds/encryption_key --
+0123456789abcdef0123456789abcdef
+-- ready/.pic-sure/secrets.yaml --
+db_root_password: rootpw
+auth0_client_secret: synthetic-client-secret-0123456789abcdef
+auth0_client_secret_generated: true
+-- ready.scenario --
+docker * => 0

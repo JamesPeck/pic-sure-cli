@@ -365,9 +365,17 @@ func (c *Compose) Config(ctx context.Context, quiet bool) ([]byte, error) {
 const ConfigHashLabel = "com.docker.compose.config-hash"
 
 // ConfigHashes returns the config hash of every service compose would
-// start (`config --hash *`), interpolated with the adapter's env.
-func (c *Compose) ConfigHashes(ctx context.Context) (map[string]string, error) {
-	cmd, err := c.cmd(false, []string{"config", "--hash", "*"})
+// start (`config --hash *`), interpolated with the adapter's env. A
+// non-empty rendered replaces the rendered compose.yaml, keeping the
+// overrides, to hash a render not written to the stack yet.
+func (c *Compose) ConfigHashes(ctx context.Context, rendered string) (map[string]string, error) {
+	files := c
+	if rendered != "" {
+		next := *c
+		next.Files = append([]string{rendered}, c.Files[1:]...)
+		files = &next
+	}
+	cmd, err := files.cmd(false, []string{"config", "--hash", "*"})
 	if err != nil {
 		return nil, err
 	}

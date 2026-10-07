@@ -14,6 +14,7 @@ import (
 	"github.com/JamesPeck/pic-sure-cli/internal/cache"
 	"github.com/JamesPeck/pic-sure-cli/internal/events"
 	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
+	"github.com/JamesPeck/pic-sure-cli/internal/jwt"
 	"github.com/JamesPeck/pic-sure-cli/internal/log"
 	"github.com/JamesPeck/pic-sure-cli/internal/netproxy"
 	"github.com/JamesPeck/pic-sure-cli/internal/ops"
@@ -232,11 +233,26 @@ func (r *updateRun) preconditions() error {
 	if err != nil {
 		return err
 	}
-	if err := refuseClientSecret(r.cfg, sec); err != nil {
+	if err := checkSecrets(r.cfg, sec); err != nil {
 		return err
 	}
 	r.sec = sec
 	return checkUpPorts(r.cmd, r.d, r.st, r.cfg)
+}
+
+// checkSecrets refuses, before the gate and for a dry run too, the
+// secrets upSecrets would refuse after it.
+func checkSecrets(cfg *stack.Config, sec *stack.Secrets) error {
+	if err := refuseClientSecret(cfg, sec); err != nil {
+		return err
+	}
+	if cfg.DB.Mode == stack.DBRemote && sec.DBRemoteRootPassword == "" {
+		return exitcode.Precondition("the stack uses a remote database, but no root password was given for it")
+	}
+	if s := sec.Auth0ClientSecret; s != "" && len(s) < jwt.MinSecretLen {
+		return shortClientSecret()
+	}
+	return nil
 }
 
 // fetchRelease is §9.3 step 1: release-control into the host cache, and

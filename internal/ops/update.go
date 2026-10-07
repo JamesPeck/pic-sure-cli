@@ -194,7 +194,7 @@ func PlanUpdate(ctx context.Context, d *Deps, st *stack.Stack, doc *stack.Config
 	if p.target, err = cloneState(state); err != nil {
 		return nil, err
 	}
-	p.planCommits(cfg, state, opts)
+	p.planCommits(st.Dir, cfg, state, opts)
 	if err := p.planImages(ctx, d, st, cfg, state, opts); err != nil {
 		return nil, err
 	}
@@ -211,7 +211,7 @@ func PlanUpdate(ctx context.Context, d *Deps, st *stack.Stack, doc *stack.Config
 
 // planCommits records the target release and component commits in
 // p.target, and lists the changes.
-func (p *UpdatePlan) planCommits(cfg *stack.Config, state *stack.State, opts UpdateOptions) {
+func (p *UpdatePlan) planCommits(stackDir string, cfg *stack.Config, state *stack.State, opts UpdateOptions) {
 	p.Release = ReleaseChange{Repo: state.Release.Repo, Branch: state.Release.Branch, From: state.Release.Commit, To: state.Release.Commit}
 	resolved := opts.Components
 	if opts.NoBuild {
@@ -235,8 +235,16 @@ func (p *UpdatePlan) planCommits(cfg *stack.Config, state *stack.State, opts Upd
 		c := ComponentChange{Name: comp.Name, FromRef: from.Ref, FromCommit: from.Commit, ToRef: to.Ref, ToCommit: to.Commit,
 			Source: componentSource(cfg, comp.Name)}
 		c.Changed = from.Commit != to.Commit || from.Ref != to.Ref
-		if c.Changed && (comp.Name == catalog.PicSure || comp.Name == catalog.Migrations) {
-			p.trees[comp.Name] = true
+		if comp.Name == catalog.PicSure || comp.Name == catalog.Migrations {
+			// Render mounts a local source in place, whatever --no-build
+			// says, and otherwise the cache tree of the commit.
+			src := c.Source
+			if src != "" && !filepath.IsAbs(src) {
+				src = filepath.Join(stackDir, src)
+			}
+			if src != from.Source || src == "" && from.Commit != to.Commit {
+				p.trees[comp.Name] = true
+			}
 		}
 		p.Components = append(p.Components, c)
 	}
@@ -263,9 +271,6 @@ func (p *UpdatePlan) planImages(ctx context.Context, d *Deps, st *stack.Stack, c
 		// A local checkout's commit is only known now.
 		if part.comp.Source != "" {
 			p.target.Components[part.component] = part.comp
-			if part.comp != state.Components[part.component] && (part.component == catalog.PicSure || part.component == catalog.Migrations) {
-				p.trees[part.component] = true
-			}
 			for i := range p.Components {
 				if c := &p.Components[i]; c.Name == part.component {
 					c.ToCommit, c.ToRef = part.comp.Commit, ""
@@ -273,17 +278,19 @@ func (p *UpdatePlan) planImages(ctx context.Context, d *Deps, st *stack.Stack, c
 				}
 			}
 		}
-		upToDate, err := part.upToDate(ctx, d, opts.Cache, cfg, p.target)
-		if err != nil {
-			return err
-		}
 		action := ImageBuild
 		switch {
 		case part.pull:
 			// Update pulls every time: a ref such as a branch can move.
 			action = ImagePull
-		case upToDate:
-			action = ImageUpToDate
+		default:
+			upToDate, err := part.upToDate(ctx, d, opts.Cache, cfg, p.target)
+			if err != nil {
+				return err
+			}
+			if upToDate {
+				action = ImageUpToDate
+			}
 		}
 		part.record(p.target, cfg, part.tag)
 		for _, img := range part.images {
@@ -295,14 +302,15 @@ func (p *UpdatePlan) planImages(ctx context.Context, d *Deps, st *stack.Stack, c
 }
 
 // planMigrations compares the Flyway histories with the migration files
-// the stack mounts. When the trees holding them move to another commit,
-// the new files aren't in the cache yet, so the migrate step's Check
-// decides after the image step.
+// the stack mounts. When the render will mount them from somewhere else
+// (another commit's tree, or a local source set or unset), the current
+// mounts say nothing about them, so the migrate step's Check decides
+// after the render.
 func (p *UpdatePlan) planMigrations(ctx context.Context, d *Deps, cfg *stack.Config, sec *stack.Secrets, opts UpdateOptions) error {
 	if len(p.trees) > 0 {
 		p.Migrations = MigrationsPlan{Status: MigrationsStatusUnknown,
-			Detail: "the migration files move to " + strings.Join(slices.Sorted(maps.Keys(p.trees)), " and ") +
-				"'s new commit; the migrate step compares them with the Flyway histories once the image step has fetched it"}
+			Detail: "the migration files come from a new " + strings.Join(slices.Sorted(maps.Keys(p.trees)), " and ") +
+				" tree; the migrate step compares them with the Flyway histories after the render"}
 		return nil
 	}
 	if err := ensureCompose(d, opts.ConvergeOptions); err != nil {
@@ -484,9 +492,7 @@ func recreatedServices(ctx context.Context, d *Deps, compose []byte, running []d
 	if err := os.WriteFile(file, compose, 0o600); err != nil {
 		return nil, err
 	}
-	next := *cur
-	next.Files = append([]string{file}, cur.Files[1:]...)
-	hashes, err := next.ConfigHashes(ctx)
+	hashes, err := cur.ConfigHashes(ctx, file)
 	if err != nil {
 		return nil, fmt.Errorf("hashing the new compose config: %w", err)
 	}

@@ -163,10 +163,14 @@ func upSecrets(d *ops.Deps, st *stack.Stack, cfg *stack.Config) (*stack.Secrets,
 		return nil, err
 	}
 	if len(sec.Auth0ClientSecret) < jwt.MinSecretLen {
-		return nil, exitcode.Precondition("the stack's Auth0 client secret is shorter than the %d bytes PSAMA needs; %s",
-			jwt.MinSecretLen, rotateClientSecret)
+		return nil, shortClientSecret()
 	}
 	return sec, nil
+}
+
+func shortClientSecret() error {
+	return exitcode.Precondition("the stack's Auth0 client secret is shorter than the %d bytes PSAMA needs; %s",
+		jwt.MinSecretLen, rotateClientSecret)
 }
 
 const rotateClientSecret = "pipe the Auth0 application's client secret to `pic-sure secrets rotate auth0-client-secret`"
