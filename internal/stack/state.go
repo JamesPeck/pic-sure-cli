@@ -25,6 +25,9 @@ type State struct {
 	Images map[string]string `json:"images,omitempty"`
 	// TLS is what the TLS step last copied into the certs volume.
 	TLS *TLSInstall `json:"tls,omitempty"`
+	// Truststore is what the truststore step last built in the truststore
+	// volume.
+	Truststore *TruststoreBuild `json:"truststore,omitempty"`
 	// LastOperation is the most recent mutating command.
 	LastOperation *Operation `json:"last_operation,omitempty"`
 	// CreatedAt is when the first operation started.
@@ -58,6 +61,16 @@ type TLSInstall struct {
 	// VolumeCreatedAt is the volume's creation time, as docker reports it.
 	// A volume re-created since then, say by compose after a `down -v`, is
 	// empty whatever the hash says.
+	VolumeCreatedAt string `json:"volume_created_at"`
+}
+
+// TruststoreBuild identifies what the truststore step built psama's
+// truststore from, so a re-run can tell whether the volume already holds it.
+type TruststoreBuild struct {
+	// Hash covers the custom certs, the build script and the psama image ID.
+	Hash string `json:"hash"`
+	// VolumeCreatedAt is the volume's creation time, as docker reports it.
+	// A volume re-created since then is empty whatever the hash says.
 	VolumeCreatedAt string `json:"volume_created_at"`
 }
 

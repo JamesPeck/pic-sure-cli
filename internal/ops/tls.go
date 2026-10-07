@@ -140,7 +140,7 @@ func (t *tlsStep) apply(ctx context.Context, sink events.Sink) error {
 	if err != nil {
 		return err
 	}
-	vol, err := t.ensureVolume(ctx)
+	vol, err := t.st.EnsureVolume(ctx, t.d.Docker, t.cfg.Name, t.volume(), "certs")
 	if err != nil {
 		return err
 	}
@@ -298,28 +298,6 @@ func (t *tlsStep) providedFiles() (pki.Files, error) {
 		return pki.Files{}, fmt.Errorf("tls.chain_file: %s is empty; leave chain_file blank if there is no chain", tls.ChainFile)
 	}
 	return f, nil
-}
-
-// ensureVolume returns the certs volume, creating it with labels that let
-// compose adopt it. It refuses a volume of that name labelled for another
-// stack, or not labelled at all, rather than overwrite what it holds.
-func (t *tlsStep) ensureVolume(ctx context.Context) (docker.Volume, error) {
-	name := t.volume()
-	vol, err := t.d.Docker.VolumeInspect(ctx, name)
-	if errors.Is(err, docker.ErrNotFound) {
-		if err := t.d.Docker.VolumeCreate(ctx, name, t.st.VolumeLabels(t.cfg.Name, "certs")); err != nil {
-			return docker.Volume{}, err
-		}
-		vol, err = t.d.Docker.VolumeInspect(ctx, name)
-	}
-	if err != nil {
-		return docker.Volume{}, err
-	}
-	if owner := vol.Labels[stack.LabelStack]; owner != t.cfg.Name {
-		return docker.Volume{}, fmt.Errorf("volume %s exists but isn't stack %s's (its %s label is %q), so pic-sure won't write to it",
-			name, t.cfg.Name, stack.LabelStack, owner)
-	}
-	return vol, nil
 }
 
 type tlsFile struct {
