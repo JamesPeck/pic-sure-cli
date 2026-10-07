@@ -89,6 +89,9 @@ func (a *App) rotateSecret(cmd *cobra.Command, args []string) error {
 	} else if err := a.confirmYes(cmd, fmt.Sprintf("This replaces stack %s's %s and recreates the running services that use it.", cfg.Name, name)); err != nil {
 		return err
 	}
+	if err := ops.CheckRotateOptions(cfg, opts); err != nil {
+		return err
+	}
 	a.openRunLog(st)
 
 	d := a.newDeps()

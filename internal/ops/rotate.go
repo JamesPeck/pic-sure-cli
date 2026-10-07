@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"regexp"
 	"slices"
 	"strings"
@@ -59,7 +58,6 @@ func RotateReadsStdin(cfg *stack.Config, name string) bool {
 
 // Step IDs of a rotation.
 const (
-	RotateDBStepID      = "rotate-db"
 	RotateSaveStepID    = "rotate-save"
 	RotateRestartStepID = "rotate-restart"
 	RotateHPDSDataID    = "hpds-data"
@@ -105,9 +103,10 @@ type RotateReport struct {
 // references the secret's variable are recreated with `compose up -d
 // --wait`, which a plain restart wouldn't do: compose passes the new value
 // only to a new container. The render holds no secret values (§6.4), so it
-// isn't redone. If saving secrets.yaml fails, the database change is undone,
-// so the two never disagree; a failed database change leaves both as they
-// were.
+// isn't redone. The database change and the save run as one step that a
+// signal doesn't cut short. If saving secrets.yaml fails, the database
+// change is undone, so the two never disagree; a failed database change
+// leaves both as they were.
 //
 // The caller holds the stack lock and sets d.Compose to a Composer whose
 // env is computed on each call from sec, which is updated in place once
@@ -119,11 +118,8 @@ type RotateReport struct {
 func RotateSecret(ctx context.Context, d *Deps, st *stack.Stack, cfg *stack.Config, sec *stack.Secrets, opts RotateOptions) (*RotateReport, error) {
 	r := &rotator{d: d, st: st, cfg: cfg, sec: sec, opts: opts,
 		report: &RotateReport{Stack: cfg.Name, Secret: opts.Name, Restarted: []string{}}}
-	if RotateReadsStdin(cfg, opts.Name) != (opts.Value != "") {
-		if opts.Value == "" {
-			return nil, exitcode.Usage("%s's new value must be given on stdin", opts.Name)
-		}
-		return nil, exitcode.Usage("%s is generated, not read from stdin", opts.Name)
+	if err := CheckRotateOptions(cfg, opts); err != nil {
+		return nil, err
 	}
 	var plan []steps.Step
 	if opts.Name == SecretHPDSKey {
@@ -135,11 +131,66 @@ func RotateSecret(ctx context.Context, d *Deps, st *stack.Stack, cfg *stack.Conf
 		plan = r.plan()
 	}
 	if err := steps.Run(ctx, d.Sink, plan, steps.Options{}); err != nil {
-		return nil, err
+		return nil, r.runError(err)
 	}
 	slices.Sort(r.report.Restarted)
 	return r.report, nil
 }
+
+// CheckRotateOptions checks opts before anything changes: a value for
+// exactly the names read from stdin, and an Auth0 client secret PSAMA can
+// sign with.
+func CheckRotateOptions(cfg *stack.Config, opts RotateOptions) error {
+	switch {
+	case RotateReadsStdin(cfg, opts.Name) && opts.Value == "":
+		return exitcode.Usage("%s's new value must be given on stdin", opts.Name)
+	case !RotateReadsStdin(cfg, opts.Name) && opts.Value != "":
+		return exitcode.Usage("%s is generated, not read from stdin", opts.Name)
+	case opts.Name == SecretAuth0ClientSecret && len(opts.Value) < jwt.MinSecretLen:
+		return exitcode.Usage("the Auth0 client secret must be at least %d bytes; PSAMA can't sign with a shorter one", jwt.MinSecretLen)
+	}
+	return nil
+}
+
+// runError replaces the step engine's advice to re-run the command, which
+// for a rotation would rotate again: a failed step says what to do itself,
+// and an interrupted run says whether the new secret was saved.
+func (r *rotator) runError(err error) error {
+	var se *steps.Error
+	if !errors.As(err, &se) {
+		return err
+	}
+	if !se.Interrupted {
+		return se.Err
+	}
+	var hint string
+	switch {
+	case r.saved && r.opts.Name == SecretHPDSKey:
+		hint = "the new key is saved; run `pic-sure up` to install it and start hpds"
+	case r.saved:
+		hint = "the new secret is saved; run `pic-sure up` to restart the services that use it"
+	case r.report.DiscardedData:
+		hint = "the HPDS data was deleted but the key wasn't replaced; run the command again to finish"
+	case r.hpdsWasRunning:
+		hint = "the key wasn't replaced; run `pic-sure up` to start hpds again"
+	default:
+		hint = "nothing was changed"
+	}
+	return &rotateInterrupted{err: se, hint: hint}
+}
+
+// rotateInterrupted is an interrupted rotation. It unwraps to the
+// *steps.Error, so the exit code still comes from the signal.
+type rotateInterrupted struct {
+	err  *steps.Error
+	hint string
+}
+
+func (e *rotateInterrupted) Error() string {
+	return fmt.Sprintf("stopped at step %s: %v; %s", e.err.Step, e.err.Err, e.hint)
+}
+
+func (e *rotateInterrupted) Unwrap() error { return e.err }
 
 type rotator struct {
 	d      *Deps
@@ -161,12 +212,12 @@ type rotator struct {
 	// to undo it. Nil for a secret only the services read.
 	change func(ctx context.Context) (undo func(context.Context) error, err error)
 	undo   func(context.Context) error
+	// saved is set once secrets.yaml holds the new value.
+	saved bool
 
-	// hpds-key's state, from one step to the next.
-	hpdsVolume      string
-	hpdsData        bool
-	hpdsWasRunning  bool
-	hpdsVolumeFound bool
+	hpdsVolume     string
+	hpdsData       bool
+	hpdsWasRunning bool
 }
 
 // prepare works out the new value, where it goes and who reads it.
@@ -220,9 +271,6 @@ func (r *rotator) prepare() error {
 	case SecretIntrospectionToken:
 		err = r.mint()
 	case SecretAuth0ClientSecret:
-		if len(r.opts.Value) < jwt.MinSecretLen {
-			return exitcode.Usage("the Auth0 client secret must be at least %d bytes; PSAMA can't sign with a shorter one", jwt.MinSecretLen)
-		}
 		next.Auth0ClientSecret, next.Auth0ClientSecretGenerated = r.opts.Value, false
 		err = r.mint()
 		r.vars = append(r.vars, "AUTH0_CLIENT_SECRET")
@@ -252,38 +300,60 @@ func (r *rotator) mint() error {
 	return nil
 }
 
+// rotateSaveTimeout bounds the database change and the save, which a
+// signal doesn't cancel.
+const rotateSaveTimeout = 2 * time.Minute
+
 // plan is the rotation of a secret in secrets.yaml.
 func (r *rotator) plan() []steps.Step {
-	var plan []steps.Step
+	title := "Save the new secret to secrets.yaml"
 	if r.change != nil {
-		plan = append(plan, steps.Step{ID: RotateDBStepID, Title: "Change the secret in the database", Apply: r.applyDB})
+		title = "Change the secret in the database, then in secrets.yaml"
 	}
-	return append(plan,
-		steps.Step{ID: RotateSaveStepID, Title: "Save the new secret to secrets.yaml", Apply: r.save},
-		steps.Step{ID: RotateRestartStepID, Title: "Restart the services that use it", Apply: r.restart},
-	)
+	return []steps.Step{
+		{ID: RotateSaveStepID, Title: title, Apply: r.save},
+		{ID: RotateRestartStepID, Title: "Restart the services that use it", Apply: r.restart},
+	}
 }
 
-func (r *rotator) applyDB(ctx context.Context, _ events.Sink) error {
-	undo, err := r.change(ctx)
-	if err != nil {
-		return fmt.Errorf("%w; secrets.yaml is unchanged", err)
-	}
-	r.undo = undo
-	return nil
-}
-
+// save changes the database, then saves secrets.yaml. Once the database
+// may have changed, an interruption would leave the new value only in
+// memory, so the step runs to the end whatever ctx does.
 func (r *rotator) save(ctx context.Context, sink events.Sink) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rotateSaveTimeout)
+	defer cancel()
+	if r.change != nil {
+		undo, err := r.change(ctx)
+		if err != nil {
+			return fmt.Errorf("%w; secrets.yaml is unchanged", err)
+		}
+		r.undo = undo
+	}
 	// Mark the restarts compose can't see first, so no failure from here
 	// on loses them: `up` makes them.
 	if err := markPendingRestarts(r.st, r.extra...); err != nil {
 		return r.rollback(ctx, sink, err)
 	}
-	if err := r.st.SaveSecrets(r.next); err != nil {
+	if err := r.st.SaveSecrets(r.next); err != nil && !r.holdsNext() {
 		return r.rollback(ctx, sink, fmt.Errorf("saving secrets.yaml: %w", err))
+	} else if err != nil {
+		// The write landed and only syncing the directory failed.
+		sink.Emit(events.Warning{ID: RotateSaveStepID, Text: "secrets.yaml holds the new secret, but saving it reported: " + err.Error()})
 	}
 	*r.sec = *r.next
+	r.saved = true
 	return nil
+}
+
+// holdsNext reports whether secrets.yaml reads back as next.
+func (r *rotator) holdsNext() bool {
+	saved, err := r.st.LoadSecrets()
+	if err != nil {
+		return false
+	}
+	a, aerr := yaml.Marshal(saved)
+	b, berr := yaml.Marshal(r.next)
+	return aerr == nil && berr == nil && bytes.Equal(a, b)
 }
 
 // rollback undoes the database change after err, so the database keeps
@@ -293,7 +363,7 @@ func (r *rotator) rollback(ctx context.Context, sink events.Sink, err error) err
 		return err
 	}
 	sink.Emit(events.Progress{ID: RotateSaveStepID, Text: "undoing the database change"})
-	if uerr := r.undo(context.WithoutCancel(ctx)); uerr != nil {
+	if uerr := r.undo(ctx); uerr != nil {
 		return fmt.Errorf("%w; undoing the database change also failed (%v), so the database no longer matches secrets.yaml", err, uerr)
 	}
 	return fmt.Errorf("%w; the database change was undone", err)
@@ -396,7 +466,7 @@ func (r *rotator) alterRoot(ctx context.Context) (func(context.Context) error, e
 // checkRemoteRoot makes sure the new remote root password logs in. The
 // account is the DBA's: pic-sure only records its new password.
 func (r *rotator) checkRemoteRoot(ctx context.Context) (func(context.Context) error, error) {
-	t, _ := r.rootTarget(ctx, r.next)
+	t := mysqlTarget(r.cfg, r.next, "")
 	if err := sql.ExecMySQL(ctx, r.d.Docker, t, "SELECT 1"); err != nil {
 		return nil, remoteDBError(r.cfg, "logging in with the new password to", err)
 	}
@@ -465,8 +535,7 @@ func (r *rotator) setToken(ctx context.Context) (func(context.Context) error, er
 	}, nil
 }
 
-// dictionaryRole is the dictionary database's role, which every service
-// uses.
+// dictionaryRole is dictionary-db's POSTGRES_USER.
 const dictionaryRole = "picsure"
 
 // hpdsPlan re-keys HPDS: refuse while it has data unless DiscardData, stop
@@ -484,10 +553,10 @@ func (r *rotator) hpdsPlan() []steps.Step {
 	}
 }
 
-// hpdsDataFiles lists what hpds-data holds besides the key: phenotype and
-// genomic data, and the provenance marker, all encrypted with (or
-// describing data encrypted with) the old key.
-const hpdsDataFiles = `find /data -mindepth 1 -maxdepth 1 ! -name encryption_key ! -name .encryption_key.incoming`
+// hpdsDataFiles lists the phenotype data in hpds-data, which the loader
+// encrypts with the key, and its provenance marker. all/ is the mountpoint
+// of hpds-genomic, whose store HPDS doesn't encrypt, so it is kept.
+const hpdsDataFiles = `find /data -mindepth 1 -maxdepth 1 ! -name encryption_key ! -name .encryption_key.incoming ! -name all`
 
 func (r *rotator) hpdsCheck(ctx context.Context, _ events.Sink) error {
 	if r.cfg.HPDS.Data != stack.HPDSLocal {
@@ -502,7 +571,10 @@ func (r *rotator) hpdsCheck(ctx context.Context, _ events.Sink) error {
 	if err != nil {
 		return err
 	}
-	r.hpdsVolumeFound = true
+	// Refuses a volume labelled for another stack, before it is wiped.
+	if _, err := r.st.EnsureVolume(ctx, r.d.Docker, r.cfg.Name, r.hpdsVolume, hpdsDataVolume); err != nil {
+		return err
+	}
 	var out bytes.Buffer
 	if err := volumeHelper(ctx, r.d, r.st, r.cfg, r.hpdsVolume, "hpds-data", hpdsDataFiles, nil, &out); err != nil {
 		return fmt.Errorf("listing volume %s: %w", r.hpdsVolume, err)
@@ -541,22 +613,11 @@ func (r *rotator) hpdsWipe(ctx context.Context, _ events.Sink) error {
 }
 
 func (r *rotator) hpdsSave(_ context.Context, _ events.Sink) error {
-	// Forget the old key's copy first, so the key step can't take the
-	// volume for keyed.
-	state, err := r.st.LoadState()
-	if errors.Is(err, fs.ErrNotExist) {
-		state, err = &stack.State{}, nil
-	}
-	if err != nil {
+	if err := r.st.ReplaceHPDSKey(r.d.Rand); err != nil {
 		return err
 	}
-	if state.HPDSKey != nil {
-		state.HPDSKey = nil
-		if err := r.st.SaveState(state); err != nil {
-			return err
-		}
-	}
-	return r.st.ReplaceHPDSKey(r.d.Rand)
+	r.saved = true
+	return nil
 }
 
 func (r *rotator) hpdsStart(ctx context.Context, sink events.Sink) error {

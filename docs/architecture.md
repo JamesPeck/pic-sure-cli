@@ -1436,38 +1436,49 @@ tag goes. It then forgets the gone stacks' registry entries, and with
 **Secret rotation (058, `rotate.go`).** §9.11. `RotateSecret(ctx, d, st,
 cfg, sec, RotateOptions{Name, Value, DiscardData})` returns a
 `RotateReport` (`stack`, `secret`, `restarted`, `discarded_data`,
-`introspection_token_expiry`). The caller holds the stack lock and sets
-`d.Compose` with an env computed from `sec`, which is updated in place once
-secrets.yaml is saved. Steps:
+`introspection_token_expiry`). `CheckRotateOptions` is its usage check
+(a value for exactly the names `RotateReadsStdin`, a client secret of
+`jwt.MinSecretLen`), for the command to run before anything changes. The
+caller holds the stack lock and sets `d.Compose` with an env computed from
+`sec`, which is updated in place once secrets.yaml is saved. Steps:
 
-- `rotate-db` (database secrets only): MySQL `ALTER USER` as root
-  (`db-root` changes every `root` account in `mysql.user`; `db-picsure`,
-  `db-auth` and `db-airflow` change `name@'%'`), Postgres `ALTER ROLE
-  picsure` for `dictionary-db`, or `UPDATE auth.application` with a token
-  issued by `jwt.Introspection` for `introspection-token` and
-  `auth0-client-secret`. A local database must be running (exit 3). With a
-  remote database `db-root` is the DBA's: the new password comes from
-  stdin and is only checked to log in, never `ALTER`ed. A failure here
-  leaves secrets.yaml unchanged.
-- `rotate-save`: secrets.yaml (the client secret also clears
-  `auth0_client_secret_generated`). If saving fails the database change is
-  undone. psama, which reads the token from the database, goes into
-  `pending_restarts` first, so a failure later leaves it for `up`.
+- `rotate-save`: the database change, then secrets.yaml, run with
+  `context.WithoutCancel` (bounded at 2 minutes) so a signal can't leave
+  the new value only in the database. The change is MySQL `ALTER USER` as
+  root (`db-root` changes every `root` account in `mysql.user`;
+  `db-picsure`, `db-auth` and `db-airflow` change `name@'%'`), Postgres
+  `ALTER ROLE picsure` for `dictionary-db`, or `UPDATE auth.application`
+  with a token from `jwt.Introspection` for `introspection-token` and
+  `auth0-client-secret` (which also clears `auth0_client_secret_generated`);
+  none for the secrets only services read. A local database must be
+  running (exit 3). With a remote database `db-root` is the DBA's: the new
+  password comes from stdin and is only checked to log in, never
+  `ALTER`ed. A failed change leaves secrets.yaml unchanged; a failed save
+  undoes the change, unless secrets.yaml reads back as the new secrets
+  (the rename landed and only the directory sync failed). psama, which
+  reads the token from the database, goes into `pending_restarts` first.
 - `rotate-restart`: the running services whose `compose config
   --no-interpolate` references one of the secret's variables (`${VAR}`,
   `${VAR:-x}`, `$VAR`; `$$` is an escape) are recreated with `compose up -d
-  --wait` (a restart would keep the old env); then psama is restarted if it
+  --wait` (a restart would keep the old env), then psama is restarted if it
   wasn't recreated. Nothing is re-rendered: the render holds no secret
   values (§6.4). A failure says to run `up`, whose start step recreates
   them.
 
-`hpds-key` has its own plan: `hpds-data` (shared data is exit 3; any file in
-`hpds-data` besides the key is loaded data, exit 4 without `DiscardData`),
-`hpds-stop`, `hpds-wipe` (everything but the key), `rotate-save`
-(`st.ReplaceHPDSKey`, after clearing state.json's `hpds_key`), `hpds-key`
-(`HPDSKeyStep`'s Apply) and `hpds-start` (only if hpds was running).
-`volumeHelper` is the alpine helper on a volume that the loader shares. The new values come from
-`stack.GeneratePassword` and `stack.GenerateHexToken`, added here.
+A failed step's error is returned without the engine's "re-run the
+command", since a re-run would rotate again; an interrupted run says
+whether the new secret was saved.
+
+`hpds-key` has its own plan: `hpds-data` (shared data is exit 3; the volume
+must be this stack's, `st.EnsureVolume`; any file besides the key and the
+`all/` mountpoint of `hpds-genomic` is loaded phenotype data, exit 4
+without `DiscardData`. HPDS doesn't encrypt the genomic store, so it is
+kept), `hpds-stop`, `hpds-wipe`, `rotate-save` (`st.ReplaceHPDSKey`),
+`hpds-key` (`HPDSKeyStep`'s Apply) and `hpds-start` (only if hpds was
+running). `volumeHelper` is the alpine helper on a volume that the loader
+shares. The new values come from `stack.GeneratePassword` and
+`stack.GenerateHexToken`, added here; `markPendingRestarts` is shared with
+up.
 
 **Reset and destroy (056, `teardown.go`).** §9.8. Both run a `down` step
 (compose down; nothing when `d.Compose` is nil, a never-rendered stack)

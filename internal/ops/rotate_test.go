@@ -245,14 +245,7 @@ func TestRotateFailedDBChangeLeavesSecretsUnchanged(t *testing.T) {
 func TestRotateUndoesTheDBChangeWhenSavingFails(t *testing.T) {
 	x := newRotateFixture(t)
 	old := x.sec.DBAirflowPassword
-	// A directory where secrets.yaml goes makes the atomic rename fail.
-	path := x.st.Path(stack.SecretsFile)
-	if err := os.Remove(path); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(path, "x"), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	x.breakSecretsFile(t)
 
 	_, err := x.rotate(ops.RotateOptions{Name: ops.SecretDBAirflow})
 	if err == nil || !strings.Contains(err.Error(), "the database change was undone") {
@@ -265,6 +258,71 @@ func TestRotateUndoesTheDBChangeWhenSavingFails(t *testing.T) {
 		t.Error("the caller's secrets changed although secrets.yaml didn't")
 	}
 	x.f.AssertNotCalled(rotateUp)
+}
+
+// breakSecretsFile puts a directory where secrets.yaml goes, so the atomic
+// rename that saves it fails.
+func (x *rotateFixture) breakSecretsFile(t *testing.T) {
+	t.Helper()
+	path := x.st.Path(stack.SecretsFile)
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(path, "x"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRotateUndoesRootAndTokenChangesWhenSavingFails(t *testing.T) {
+	t.Run("db-root", func(t *testing.T) {
+		x := newRotateFixture(t)
+		old := string(x.sec.DBRootPassword)
+		x.breakSecretsFile(t)
+		if _, err := x.rotate(ops.RotateOptions{Name: ops.SecretDBRoot}); err == nil {
+			t.Fatal("want an error")
+		}
+		if len(x.alters) != 4 || x.alters[2] != "root@%="+old || x.alters[3] != "root@localhost="+old {
+			t.Errorf("want both root accounts set back to the old password, got %d alters", len(x.alters))
+		}
+		if x.sec.DBRootPassword != stack.Secret(old) {
+			t.Error("the caller's secrets changed")
+		}
+	})
+	t.Run("introspection-token", func(t *testing.T) {
+		x := newRotateFixture(t)
+		x.breakSecretsFile(t)
+		if _, err := x.rotate(ops.RotateOptions{Name: ops.SecretIntrospectionToken}); err == nil {
+			t.Fatal("want an error")
+		}
+		if x.token != "old-token" {
+			t.Error("auth.application should hold the old token again")
+		}
+	})
+}
+
+func TestRotateSignalDuringTheDBChangeStillSaves(t *testing.T) {
+	x := newRotateFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	x.f = fakerunner.New(t)
+	x.f.On(fakerunner.Glob("docker compose * ps --all --format json picsure-db")).Stdout(psLine("picsure-db", "running", "healthy"))
+	x.f.On(rotateMySQL).Do(func(c context.Context, call fakerunner.Call) (docker.Result, error) {
+		res, err := x.mysql(c, call)
+		cancel() // the signal arrives while the server applies the change
+		return res, err
+	})
+	x.d.Runner, x.d.Docker, x.d.Compose = x.f, docker.NewEngine(x.f), &docker.Compose{Runner: x.f, Files: []string{"/s/c.yaml"}, ProjectDir: "/s"}
+
+	_, err := ops.RotateSecret(ctx, x.d, x.st, x.cfg, x.sec, ops.RotateOptions{Name: ops.SecretDBPicsure})
+	if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "the new secret is saved; run `pic-sure up`") {
+		t.Fatalf("err = %v", err)
+	}
+	if strings.Contains(err.Error(), "re-run") {
+		t.Errorf("a re-run would rotate again: %v", err)
+	}
+	if got := x.saved(t).DBPicsurePassword; len(x.alters) != 1 || x.alters[0] != "picsure@%="+string(got) {
+		t.Error("secrets.yaml should hold the password the database now has")
+	}
 }
 
 func TestRotateDBRootChangesEveryRootAccount(t *testing.T) {
@@ -478,6 +536,38 @@ func TestRotateHPDSKeyDiscardsDataAndRekeys(t *testing.T) {
 	}
 }
 
+func TestRotateHPDSKeyWithoutDataNeedsNoDiscard(t *testing.T) {
+	x := newRotateFixture(t)
+	h := x.hpdsFakes("")
+	report, err := x.rotate(ops.RotateOptions{Name: ops.SecretHPDSKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.wiped || report.DiscardedData {
+		t.Error("nothing was loaded, so nothing should be deleted")
+	}
+	if h.key == nil {
+		t.Error("the new key wasn't copied")
+	}
+}
+
+func TestRotateHPDSKeyRefusesAnotherStacksVolume(t *testing.T) {
+	x := newRotateFixture(t)
+	x.f = fakerunner.New(t)
+	x.f.On(fakerunner.Exact("docker", "volume", "inspect", "demo_hpds-data")).
+		Stdout(`[{"Name":"demo_hpds-data","CreatedAt":"2026-10-07T12:00:00Z","Labels":{"` + stack.LabelStack + `":"other"}}]`)
+	x.d.Runner, x.d.Docker = x.f, docker.NewEngine(x.f)
+	oldKey, _ := x.st.LoadHPDSKey()
+
+	_, err := x.rotate(ops.RotateOptions{Name: ops.SecretHPDSKey, DiscardData: true})
+	if exitcode.FromError(err) != exitcode.CodePrecondition {
+		t.Fatalf("err = %v, want exit 3", err)
+	}
+	if k, _ := x.st.LoadHPDSKey(); k != oldKey {
+		t.Error("the key file changed")
+	}
+}
+
 type hpdsRotateFakes struct {
 	wiped bool
 	key   []byte
@@ -522,7 +612,7 @@ func TestRotateRestartFailureSaysHowToFinish(t *testing.T) {
 	x.d.Runner, x.d.Docker, x.d.Compose = x.f, docker.NewEngine(x.f), &docker.Compose{Runner: x.f, Files: []string{"/s/c.yaml"}, ProjectDir: "/s"}
 	old := x.sec.QueryServiceInternalToken
 	_, err := x.rotate(ops.RotateOptions{Name: ops.SecretQueryServiceToken})
-	if err == nil || !strings.Contains(err.Error(), "run `pic-sure up` to finish") {
+	if err == nil || !strings.Contains(err.Error(), "run `pic-sure up` to finish") || strings.Contains(err.Error(), "re-run") {
 		t.Fatalf("err = %v", err)
 	}
 	if x.saved(t).QueryServiceInternalToken == old {

@@ -75,20 +75,7 @@ type upRestarts struct {
 
 // mark adds services to state.json's PendingRestarts.
 func (r *upRestarts) mark(services ...string) error {
-	state, err := r.st.LoadState()
-	if err != nil {
-		return err
-	}
-	n := len(state.PendingRestarts)
-	for _, s := range services {
-		if !slices.Contains(state.PendingRestarts, s) {
-			state.PendingRestarts = append(state.PendingRestarts, s)
-		}
-	}
-	if len(state.PendingRestarts) == n {
-		return nil
-	}
-	return r.st.SaveState(state)
+	return markPendingRestarts(r.st, services...)
 }
 
 // restartAfter makes s mark service for a restart before it applies, so
