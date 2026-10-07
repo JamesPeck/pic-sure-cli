@@ -255,9 +255,9 @@ func (m *model) summaryBody() []string {
 	}
 
 	switch s.Migrations.Status {
-	case "up_to_date":
+	case ops.MigrationsStatusUpToDate:
 		oks = append(oks, "migrations")
-	case "pending":
+	case ops.MigrationsStatusPending:
 		blockers = append(blockers, "migrations pending; m runs them")
 	}
 

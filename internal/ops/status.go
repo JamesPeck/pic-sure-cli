@@ -196,7 +196,7 @@ type StatusAuth0 struct {
 func Status(ctx context.Context, d *Deps, st *stack.Stack, opts StatusOptions) *StatusReport {
 	r := &StatusReport{
 		Stack:      StatusStack{Dir: st.Dir},
-		Migrations: StatusMigrations{Status: "unknown"},
+		Migrations: StatusMigrations{Status: MigrationsStatusUnknown},
 	}
 	cfg := statusConfig(r, st, opts.Migrations)
 	statusVersions(r, st, opts)
@@ -432,9 +432,9 @@ func statusMigrations(ctx context.Context, d *Deps, r *StatusReport, st *stack.S
 	case err != nil:
 		r.Migrations.Error = err.Error()
 	case ok:
-		r.Migrations.Status = "up_to_date"
+		r.Migrations.Status = MigrationsStatusUpToDate
 	default:
-		r.Migrations.Status = "pending"
+		r.Migrations.Status = MigrationsStatusPending
 	}
 }
 
