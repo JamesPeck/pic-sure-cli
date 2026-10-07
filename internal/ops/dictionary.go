@@ -56,8 +56,10 @@ var (
 	dictionaryETLReady = 120 * time.Second
 	dictionaryETLPoll  = 2 * time.Second
 	// dictionaryAPIWait bounds the wait for dictionary-api to be healthy
-	// again after its restart.
+	// again after its restart; dictionaryAPIPoll is how often compose ps
+	// is asked.
 	dictionaryAPIWait = 5 * time.Minute
+	dictionaryAPIPoll = 2 * time.Second
 )
 
 // Dictionary runs the dictionary operations (§9.6) on one stack. Its steps
@@ -145,8 +147,9 @@ func (x *Dictionary) HydrateSteps(opts HydrateOptions) []steps.Step {
 			if strings.TrimSpace(resp) != "Success" {
 				return fmt.Errorf("dictionary-etl didn't hydrate: %s", strings.TrimSpace(resp))
 			}
-			// It also answers "Success" after logging a failed load, so
-			// an empty dictionary is the only sign.
+			// It also answers "Success" after logging a failed load. An
+			// empty dictionary afterwards catches that for a first or
+			// --clear hydrate; over existing concepts it can't be told.
 			return x.requireConcepts(ctx, sink, StepHydrate)
 		},
 	}}
@@ -394,8 +397,8 @@ func (x *Dictionary) RefreshStep() steps.Step {
 		ID:    StepDictionaryRefresh,
 		Title: "Refresh dictionary-api",
 		Apply: func(ctx context.Context, sink events.Sink) error {
-			// Free the ETL's memory before the restart; a failure here is
-			// retried, and reported, by the caller's deferred Close.
+			// Free the ETL's memory before the restart; if removing it
+			// fails, the caller's deferred Close retries and reports it.
 			_ = x.Close(ctx)
 			db, err := x.dictionaryDB(ctx)
 			if err != nil {
@@ -807,8 +810,11 @@ func (x *Dictionary) waitAPI(ctx context.Context) error {
 			if ctx.Err() != nil {
 				return context.Cause(ctx)
 			}
+			if err != nil {
+				return fmt.Errorf("dictionary-api wasn't healthy within %s of its restart: %w", dictionaryAPIWait, err)
+			}
 			return fmt.Errorf("dictionary-api wasn't healthy within %s of its restart", dictionaryAPIWait)
-		case <-time.After(dictionaryETLPoll):
+		case <-time.After(dictionaryAPIPoll):
 		}
 	}
 }

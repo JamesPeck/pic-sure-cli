@@ -1135,13 +1135,14 @@ concatenate its step lists with their own and end with one `RefreshStep()`.
   `/load/initialize` with AIO's request, plus `errorDirectory` in shared
   mode). The ETL answers `Success` even after a load it only logged as
   failed, so `hydrate` also fails, showing the ETL's log, when
-  `dict.concept_node` is empty afterwards.
-  `LoadCSVSteps` reads both inputs first, with the ETL's required columns
-  and every row as wide as its header, so a bad file is a usage error
-  before anything is cleared. Then `dictionary-clear` (with Clear),
+  `dict.concept_node` is empty afterwards. That catches a failed first or
+  `--clear` hydrate only: over existing concepts a failure can't be told.
+  `LoadCSVSteps` reads both inputs first, with the ETL's required columns,
+  no column twice and no row narrower than its header, so a bad file is a
+  usage error before anything is cleared. Then `dictionary-clear` (with Clear),
   `datasets` (a byte order mark dropped) and `concepts`: the zip's
-  `concepts_*.csv` files, at any depth, in name order, split in one pass
-  by exact `dataset_ref` into a temp dir (`LoadCSVOptions.TempDir`; the cli
+  `concepts_*.csv` files, at any depth, in name order, split by exact
+  `dataset_ref` into a temp dir, one pass per 200 datasets (`LoadCSVOptions.TempDir`; the cli
   uses the cache's), then one PUT per dataset, `datasetRef` URL-encoded. `FacetSteps`: `facets`, three PUTs in order.
   `WeightsSteps`: `weights`, the reactor's `dictionary-weights` image with
   the file bind-mounted read-only at `/weights.csv`; the default file is

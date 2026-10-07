@@ -68,7 +68,7 @@ func TestConceptSplitTrickyRefs(t *testing.T) {
 	header := "dataset_ref,name,display,concept_type,concept_path,parent_concept_path,values\n"
 	concepts := writeZip(t, dir, "concepts.zip", map[string]string{
 		"export/concepts_2.csv": header +
-			"phs10,c10,C ten,categorical,\\phs10\\c10\\,,\"[\"\"x\"\"]\"\n" +
+			"phs10,c10,C ten,categorical,\\phs10\\c10\\,,\"[\"\"x\"\"]\",extra\n" +
 			"phs1xv2,cx,not dotted,categorical,\\phs1xv2\\,,\n",
 		"export/concepts_1.csv": header +
 			"\"phs1\",c1,\"C one, quoted\",continuous,\\phs1\\c1\\,,\"[1,2]\"\n" +
@@ -122,7 +122,7 @@ func TestConceptSplitTrickyRefs(t *testing.T) {
 	hdr := strings.Split(strings.TrimSuffix(header, "\n"), ",")
 	cases := map[string][][]string{
 		"phs1":    {hdr, {"phs1", "c1", "C one, quoted", "continuous", `\phs1\c1\`, "", "[1,2]"}},
-		"phs10":   {hdr, {"phs10", "c10", "C ten", "categorical", `\phs10\c10\`, "", `["x"]`}},
+		"phs10":   {hdr, {"phs10", "c10", "C ten", "categorical", `\phs10\c10\`, "", `["x"]`, "extra"}},
 		"phs1.v2": {hdr, {"phs1.v2", "cd", "dotted", "categorical", `\phs1.v2\cd\`, "", ""}},
 		"a,b":     {hdr, {"a,b", "cab", "multi\nline", "categorical", `\ab\`, "", ""}},
 		"empty":   nil,
@@ -130,6 +130,18 @@ func TestConceptSplitTrickyRefs(t *testing.T) {
 	for ref, want := range cases {
 		if got := split(ref); !reflect.DeepEqual(got, want) {
 			t.Errorf("split(%q) =\n%q\nwant\n%q", ref, got, want)
+		}
+	}
+
+	// Splitting in batches of 2 datasets gives the same files.
+	defer func(n int) { splitBatch = n }(splitBatch)
+	splitBatch = 2
+	if files, err = in.split(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	for ref, want := range cases {
+		if got := split(ref); !reflect.DeepEqual(got, want) {
+			t.Errorf("batched split(%q) =\n%q\nwant\n%q", ref, got, want)
 		}
 	}
 }
@@ -155,14 +167,15 @@ func TestOpenCSVLoadRejectsBadInput(t *testing.T) {
 	}{
 		{"no ref column", write("noref.csv", "name,full_name,abbreviation,description\na,b,c,d\n"), okZip, "lacks the ref column"},
 		{"missing columns", write("short.csv", "ref\nphs1\n"), okZip, "lacks the full_name, abbreviation, description column(s)"},
+		{"repeated column", write("repeat.csv", "ref,full_name,abbreviation,description,ref\na,A,A,d,b\n"), okZip, "the ref column twice"},
 		{"no datasets", write("empty.csv", "ref,full_name,abbreviation,description\n"), okZip, "lists no datasets"},
 		{"empty ref", write("blank.csv", "ref,full_name,abbreviation,description\n,x,y,z\n"), okZip, "empty ref"},
 		{"duplicate ref", write("dup.csv", "ref,full_name,abbreviation,description\na,x,y,z\na,y,z,w\n"), okZip, `ref "a" twice`},
-		{"short dataset row", write("ragged.csv", "ref,full_name,abbreviation,description\na,x\n"), okZip, "wrong number of fields"},
+		{"short dataset row", write("ragged.csv", "ref,full_name,abbreviation,description\na,x\n"), okZip, "has 2 fields; the header has"},
 		{"not a zip", good, good, "not a zip"},
 		{"no concepts files", good, writeZip(t, dir, "none.zip", map[string]string{"x.csv": header}, "x.csv"), "no concepts_*.csv"},
 		{"no dataset_ref", good, writeZip(t, dir, "nocol.zip", map[string]string{"concepts_1.csv": "name\nx\n"}, "concepts_1.csv"), "lacks the dataset_ref, display"},
-		{"short concept row", good, writeZip(t, dir, "ragged.zip", map[string]string{"concepts_1.csv": header + "phs1,c\n"}, "concepts_1.csv"), "wrong number of fields"},
+		{"short concept row", good, writeZip(t, dir, "ragged.zip", map[string]string{"concepts_1.csv": header + "phs1,c\n"}, "concepts_1.csv"), "has 2 fields; the header has"},
 		{"headers differ", good, writeZip(t, dir, "differ.zip", map[string]string{
 			"concepts_1.csv": header,
 			"concepts_2.csv": "dataset_ref,name\n",

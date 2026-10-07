@@ -43,9 +43,12 @@ func dictPs(service, state, health string) string {
 
 func newDictFixture(t *testing.T) *dictFixture {
 	t.Helper()
-	ready, poll := dictionaryETLReady, dictionaryETLPoll
+	ready, poll, apiWait, apiPoll := dictionaryETLReady, dictionaryETLPoll, dictionaryAPIWait, dictionaryAPIPoll
 	dictionaryETLReady, dictionaryETLPoll = 200*time.Millisecond, time.Millisecond
-	t.Cleanup(func() { dictionaryETLReady, dictionaryETLPoll = ready, poll })
+	dictionaryAPIWait, dictionaryAPIPoll = 200*time.Millisecond, time.Millisecond
+	t.Cleanup(func() {
+		dictionaryETLReady, dictionaryETLPoll, dictionaryAPIWait, dictionaryAPIPoll = ready, poll, apiWait, apiPoll
+	})
 
 	st, err := stack.Create(filepath.Join(t.TempDir(), "demo"))
 	if err != nil {
@@ -585,4 +588,52 @@ func TestDictionaryCloseAfterCancel(t *testing.T) {
 	if err := dict.Close(ctx); err != nil || len(x.f.CallsMatching(fakerunner.Glob("docker rm *"))) != 1 {
 		t.Errorf("a second Close removed again (err %v)", err)
 	}
+}
+
+func TestDictionaryWaitsForAPIHealth(t *testing.T) {
+	weights := func(t *testing.T, x *dictFixture) error {
+		p := filepath.Join(t.TempDir(), "w.csv")
+		if err := os.WriteFile(p, []byte("x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		x.f.On(fakerunner.Glob("docker run * --name demo-dictionary-weights-* *"))
+		return DictionaryWeights(context.Background(), x.d, x.st, x.cfg, x.sec, x.state, WeightsOptions{Weights: p}, nil)
+	}
+	api := fakerunner.Glob("docker compose * ps --all --format json dictionary-api")
+
+	t.Run("starting then healthy", func(t *testing.T) {
+		x := newDictFixture(t)
+		x.f.On(api).Stdout(dictPs("dictionary-api", "running", "healthy")).Times(1)
+		x.f.On(api).Stdout(dictPs("dictionary-api", "running", "starting")).Times(2)
+		x.stackUp()
+		if err := weights(t, x); err != nil {
+			t.Fatal(err)
+		}
+		if n := len(x.f.CallsMatching(api)); n != 4 {
+			t.Errorf("ps calls = %d, want 4 (before the restart, 2 starting, healthy)", n)
+		}
+	})
+	t.Run("stopped", func(t *testing.T) {
+		x := newDictFixture(t)
+		x.f.On(api).Stdout(dictPs("dictionary-api", "running", "healthy")).Times(1)
+		x.f.On(api).Stdout(dictPs("dictionary-api", "exited", ""))
+		x.stackUp()
+		if err := weights(t, x); err == nil || !strings.Contains(err.Error(), "dictionary-api stopped after its restart") {
+			t.Fatalf("err = %v", err)
+		}
+		state, _ := x.st.LoadState()
+		if !slices.Contains(state.PendingRestarts, dictionaryAPI) {
+			t.Error("a failed restart cleared the pending restart")
+		}
+	})
+	t.Run("timeout keeps the last error", func(t *testing.T) {
+		x := newDictFixture(t)
+		x.f.On(api).Stdout(dictPs("dictionary-api", "running", "healthy")).Times(1)
+		x.f.On(api).Stderr("Cannot connect to the Docker daemon\n").Exit(1)
+		x.stackUp()
+		err := weights(t, x)
+		if err == nil || !strings.Contains(err.Error(), "wasn't healthy within") || !strings.Contains(err.Error(), "Cannot connect") {
+			t.Fatalf("err = %v", err)
+		}
+	})
 }

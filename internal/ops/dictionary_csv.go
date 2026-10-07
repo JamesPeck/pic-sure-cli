@@ -2,7 +2,6 @@ package ops
 
 import (
 	"archive/zip"
-	"bufio"
 	"bytes"
 	"encoding/csv"
 	"errors"
@@ -93,8 +92,14 @@ var (
 	conceptColumns = []string{"dataset_ref", "name", "display", "concept_type", "concept_path", "parent_concept_path"}
 )
 
-// requireColumns checks header has every column in want.
+// requireColumns checks header has every column in want, and no column
+// twice: the ETL would read a repeated one's last copy.
 func requireColumns(header, want []string) error {
+	for i, c := range header {
+		if slices.Contains(header[:i], c) {
+			return fmt.Errorf("the header has the %s column twice", c)
+		}
+	}
 	var missing []string
 	for _, c := range want {
 		if !slices.Contains(header, c) {
@@ -107,10 +112,10 @@ func requireColumns(header, want []string) error {
 	return nil
 }
 
-// readDatasetRefs returns the ref column of a datasets file. Every row
-// must have as many fields as the header.
+// readDatasetRefs returns the ref column of a datasets file.
 func readDatasetRefs(data []byte) ([]string, error) {
 	r := csv.NewReader(bytes.NewReader(data))
+	r.FieldsPerRecord = -1
 	header, err := r.Read()
 	if errors.Is(err, io.EOF) {
 		return nil, errors.New("the file is empty")
@@ -132,6 +137,9 @@ func readDatasetRefs(data []byte) ([]string, error) {
 			return nil, err
 		}
 		line, _ := r.FieldPos(0)
+		if err := checkWidth(rec, header, line); err != nil {
+			return nil, err
+		}
 		if rec[col] == "" {
 			return nil, fmt.Errorf("line %d has an empty ref", line)
 		}
@@ -144,6 +152,15 @@ func readDatasetRefs(data []byte) ([]string, error) {
 		return nil, errors.New("the file lists no datasets")
 	}
 	return refs, nil
+}
+
+// checkWidth refuses a row narrower than its header, which the ETL indexes
+// past the end of. It ignores extra fields, as the ETL does.
+func checkWidth(rec, header []string, line int) error {
+	if len(rec) < len(header) {
+		return fmt.Errorf("line %d has %d fields; the header has %d", line, len(rec), len(header))
+	}
+	return nil
 }
 
 // scan checks f's header against the first file's and counts its rows by
@@ -163,6 +180,7 @@ func (in *csvLoad) each(f *zip.File, fn func(rec []string) error) error {
 	}
 	defer func() { _ = rc.Close() }()
 	r := csv.NewReader(rc)
+	r.FieldsPerRecord = -1
 	r.ReuseRecord = true
 	header, err := r.Read()
 	if errors.Is(err, io.EOF) {
@@ -190,23 +208,46 @@ func (in *csvLoad) each(f *zip.File, fn func(rec []string) error) error {
 		if err != nil {
 			return err
 		}
+		line, _ := r.FieldPos(0)
+		if err := checkWidth(rec, in.header, line); err != nil {
+			return err
+		}
 		if err := fn(rec); err != nil {
 			return err
 		}
 	}
 }
 
-// split writes, in one pass over the concepts files, each listed
-// dataset's rows (dataset_ref exactly its ref) to its own CSV file in dir,
-// with the header, and returns the file of each ref that has rows.
-func (in *csvLoad) split(dir string) (_ map[string]string, err error) {
+// splitBatch bounds the files split holds open at once.
+var splitBatch = 200
+
+// split writes each listed dataset's rows (dataset_ref exactly its ref) to
+// its own CSV file in dir, with the header, and returns the file of each
+// ref that has rows. It reads the concepts files once per splitBatch
+// datasets.
+func (in *csvLoad) split(dir string) (map[string]string, error) {
+	var refs []string
+	for _, ref := range in.refs {
+		if in.counts[ref] > 0 {
+			refs = append(refs, ref)
+		}
+	}
+	paths := map[string]string{}
+	for start := 0; start < len(refs); start += splitBatch {
+		batch := refs[start:min(start+splitBatch, len(refs))]
+		if err := in.splitPass(dir, batch, len(paths), paths); err != nil {
+			return nil, err
+		}
+	}
+	return paths, nil
+}
+
+func (in *csvLoad) splitPass(dir string, refs []string, n int, paths map[string]string) (err error) {
 	type out struct {
 		f *os.File
-		b *bufio.Writer
 		w *csv.Writer
 	}
 	outs := map[string]*out{}
-	paths := map[string]string{}
 	defer func() {
 		for _, o := range outs {
 			if cerr := o.f.Close(); err == nil {
@@ -214,20 +255,16 @@ func (in *csvLoad) split(dir string) (_ map[string]string, err error) {
 			}
 		}
 	}()
-	for i, ref := range in.refs {
-		if in.counts[ref] == 0 {
-			continue
-		}
-		p := filepath.Join(dir, fmt.Sprintf("concepts-%d.csv", i))
+	for i, ref := range refs {
+		p := filepath.Join(dir, fmt.Sprintf("concepts-%d.csv", n+i))
 		f, err := os.Create(p)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		o := &out{f: f, b: bufio.NewWriter(f)}
-		o.w = csv.NewWriter(o.b)
+		o := &out{f: f, w: csv.NewWriter(f)}
 		outs[ref], paths[ref] = o, p
 		if err := o.w.Write(in.header); err != nil {
-			return nil, err
+			return err
 		}
 	}
 	for _, f := range in.files {
@@ -238,19 +275,16 @@ func (in *csvLoad) split(dir string) (_ map[string]string, err error) {
 			return nil
 		})
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w", f.Name, err)
+			return fmt.Errorf("%s: %w", f.Name, err)
 		}
 	}
 	for _, o := range outs {
 		o.w.Flush()
 		if err := o.w.Error(); err != nil {
-			return nil, err
-		}
-		if err := o.b.Flush(); err != nil {
-			return nil, err
+			return err
 		}
 	}
-	return paths, nil
+	return nil
 }
 
 // unmatched returns the dataset_refs of concept rows that name no dataset
