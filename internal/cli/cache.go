@@ -29,8 +29,8 @@ func newCacheCmd(a *App) *cobra.Command {
 contexts, downloads and temporary directories that nothing uses.
 
 An item is in use, and kept, if any container (running or stopped)
-references it, or if the state.json of a stack labelled on a container or
-volume, or of the stack you run this in, names it. If a labelled stack's
+references it, or if the state.json of a stack labelled on a container,
+volume or network, or of the stack you run this in, names it. If a labelled stack's
 directory can't be read (it was moved or deleted), prune keeps every shared
 image and source tree that stack might use, unless --force is given. Items
 made or changed in the last hour are always kept, as a running command may

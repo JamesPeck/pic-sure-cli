@@ -150,7 +150,7 @@ func (e daemonError) Error() string        { return e.err.Error() }
 func (e daemonError) Is(target error) bool { return target == ErrDaemonUnreachable }
 func (e daemonError) Unwrap() error        { return e.err }
 
-var notFoundRE = regexp.MustCompile(`(?i)no such (image|volume|container|object)|network \S+ not found`)
+var notFoundRE = regexp.MustCompile(`(?i)no such (image|volume|container|object)`)
 
 func (e *cliEngine) run(ctx context.Context, c Cmd) (Result, error) { return runCmd(ctx, e.r, c) }
 

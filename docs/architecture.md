@@ -994,11 +994,11 @@ the stacks it found and every `CacheItem` with a status.
     entry by a bind mount of it, inside it or above it), whether or not
     the container is labelled, or a readable state names it (`images`,
     `dev_images`, a component's commit for a source tree);
+  - `recent`: made or changed within `RecentCacheAge` (1 h), because a
+    build may not have saved its state yet;
   - `unknown-stack`: an unreadable stack might use it. That covers every
     commit-tagged image and source tree, and that stack's own dev images.
     Build contexts, downloads and `tmp/` belong to no stack;
-  - `recent`: made or changed within `RecentCacheAge` (1 h), because a
-    build may not have saved its state yet;
   - `unused`.
 
 `PruneCache(ctx, d, c, PruneOptions{DryRun, Force})` runs one step,

@@ -220,6 +220,8 @@ func newCacheFixture(t *testing.T) *cacheFixture {
 			{"hms-dbmi/pic-sure-psama:dev-gone-aaaaaaaaaaaa", "sha256:psama-gone", 200, old},
 			{"hms-dbmi/pic-sure-psama:dev-zed-aaaaaaaaaaaa-dirty", "sha256:psama-zed", 100, old},
 			{"hms-dbmi/pic-sure-httpd:dev-new-dddddddddddd", "sha256:httpd-new", 500, cacheNow.Add(-10 * time.Minute)},
+			// Just built by a stack prune can't see; "gone" might use it too.
+			{"hms-dbmi/pic-sure-visualization:eeeeeeeeeeee", "sha256:vis-new", 500, cacheNow.Add(-10 * time.Minute)},
 		},
 		containers: []fakeContainer{
 			// Another tool's stack, unlabelled, running the gateway by tag;
@@ -268,6 +270,7 @@ func TestCacheInventoryInUseRules(t *testing.T) {
 		"hms-dbmi/pic-sure-psama:dev-gone-aaaaaaaaaaaa":      ops.CacheUnknownStack, // gone's own dev image
 		"hms-dbmi/pic-sure-psama:dev-zed-aaaaaaaaaaaa-dirty": ops.CacheUnused,       // no stack zed
 		"hms-dbmi/pic-sure-httpd:dev-new-dddddddddddd":       ops.CacheRecent,
+		"hms-dbmi/pic-sure-visualization:eeeeeeeeeeee":       ops.CacheRecent, // recent wins over unknown-stack
 		"src/pic-sure/" + shaA:                               ops.CacheInUse,
 		"src/pic-sure/" + shaB:                               ops.CacheInUse,
 		"src/pic-sure/" + shaC:                               ops.CacheUnknownStack,
@@ -402,6 +405,7 @@ func TestPruneCacheForceStillKeepsInUse(t *testing.T) {
 		"hms-dbmi/pic-sure-gateway:other-tool", // not managed
 		"hms-dbmi/pic-sure-psama:dev-alpha-aaaaaaaaaaaa",
 		"hms-dbmi/pic-sure-httpd:dev-new-dddddddddddd", // recent
+		"hms-dbmi/pic-sure-visualization:eeeeeeeeeeee", // recent, though gone might use it
 	}
 	if got := fx.daemon.refs(); !slices.Equal(got, want) {
 		t.Errorf("images left %v, want %v", got, want)

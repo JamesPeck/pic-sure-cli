@@ -114,6 +114,9 @@ func (c *Cache) lockMode(ctx context.Context, file, what string, timeout time.Du
 		return nil, err
 	}
 	if shared {
+		// No exclusive holder can be left, so what the file says is a dead
+		// one's; clear it so nobody waiting reads it.
+		_ = f.Truncate(0)
 		return &Lock{f: f, shared: true}, nil
 	}
 	data, _ := json.Marshal(holder{PID: os.Getpid(), Holder: c.holder})

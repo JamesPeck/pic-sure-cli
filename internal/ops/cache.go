@@ -241,10 +241,10 @@ func classifyCache(items []CacheItem, containers []docker.ContainerInfo, stacks 
 		switch {
 		case len(it.UsedBy) > 0:
 			it.Status = CacheInUse
-		case len(it.MayBeUsedBy) > 0:
-			it.Status = CacheUnknownStack
 		case now.Sub(it.modTime) < RecentCacheAge:
 			it.Status = CacheRecent
+		case len(it.MayBeUsedBy) > 0:
+			it.Status = CacheUnknownStack
 		default:
 			it.Status = CacheUnused
 		}

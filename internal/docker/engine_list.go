@@ -1,6 +1,7 @@
 package docker
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -124,7 +125,9 @@ func (e *cliEngine) NetworkList(ctx context.Context, labels ...string) ([]Networ
 			return nil, nil
 		}
 		res, err = e.run(ctx, Cmd{Argv: append([]string{"docker", "network", "inspect"}, ids...)})
-		if errors.Is(err, ErrNotFound) && attempt < 2 {
+		// docker says "network ID not found", not "No such network".
+		var ee *ExitError
+		if errors.As(err, &ee) && bytes.Contains(ee.Stderr, []byte(" not found")) && attempt < 2 {
 			continue
 		}
 		if err != nil {
