@@ -110,6 +110,12 @@ type ComposeRunOpts struct {
 	Args []string
 	// Rm adds --rm: remove the container when it exits.
 	Rm bool
+	// Env sets variables in the container, as NAME=value entries that
+	// override the service's environment. Each becomes a bare -e NAME with
+	// its value in Cmd.Env, so no value reaches argv. A name the stack's
+	// Env() already sets is refused, since compose would interpolate the
+	// compose files with it too.
+	Env []string
 	// Stdout and Stderr receive the container's output, and compose's own
 	// on stderr; nil discards it.
 	Stdout, Stderr io.Writer
@@ -295,8 +301,16 @@ func (c *Compose) Run(ctx context.Context, opts ComposeRunOpts) (int, error) {
 	if opts.Rm {
 		args = append(args, "--rm")
 	}
-	args = append(args, "-T", opts.Service)
-	return c.workload(ctx, true, append(args, opts.Args...), nil, opts.Stdout, opts.Stderr)
+	args = append(args, "-T")
+	if err := checkComposeEnv(opts.Env); err != nil {
+		return 0, fmt.Errorf("docker compose run: env %w", err)
+	}
+	for _, kv := range opts.Env {
+		name, _, _ := strings.Cut(kv, "=")
+		args = append(args, "-e", name)
+	}
+	args = append(args, opts.Service)
+	return c.workloadEnv(ctx, true, append(args, opts.Args...), opts.Env, nil, opts.Stdout, opts.Stderr)
 }
 
 // Exec implements Composer.
@@ -434,10 +448,22 @@ func (c *Compose) streamTo(ctx context.Context, out, errOut io.Writer, progress 
 // workload runs a verb that runs a command in a container and returns that
 // command's exit code, with an error only if docker or compose itself failed.
 func (c *Compose) workload(ctx context.Context, progress bool, args []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+	return c.workloadEnv(ctx, progress, args, nil, stdin, stdout, stderr)
+}
+
+// workloadEnv is workload with extra Cmd.Env entries.
+func (c *Compose) workloadEnv(ctx context.Context, progress bool, args, env []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
 	cmd, err := c.cmd(progress, args)
 	if err != nil {
 		return 0, err
 	}
+	for _, kv := range env {
+		name, _, _ := strings.Cut(kv, "=")
+		if slices.ContainsFunc(cmd.Env, func(e string) bool { return strings.HasPrefix(e, name+"=") }) {
+			return 0, fmt.Errorf("docker compose: env %s: the stack's compose env already sets it", name)
+		}
+	}
+	cmd.Env = append(cmd.Env, env...)
 	cmd.Stdin = stdin
 	code, tail, err := streamCmd(ctx, c.Runner, cmd, stdout, stderr)
 	if err != nil || code == 0 {

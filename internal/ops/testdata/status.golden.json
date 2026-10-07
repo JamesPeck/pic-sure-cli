@@ -161,7 +161,8 @@
     "port": 3306
   },
   "migrations": {
-    "status": "unknown"
+    "status": "unknown",
+    "error": "not checked for a remote database"
   },
   "token": {
     "expires_at": "2026-10-06T11:00:00Z",

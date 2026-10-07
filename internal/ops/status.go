@@ -155,10 +155,12 @@ type StatusDB struct {
 	Port int    `json:"port,omitempty"`
 }
 
-// StatusMigrations is the Flyway migration state. Until ticket 032 adds
-// its check, Status is always unknown.
+// StatusMigrations is the Flyway migration state (MigrationsUpToDate).
 type StatusMigrations struct {
+	// Status is up_to_date, pending or unknown.
 	Status string `json:"status"`
+	// Error says why Status is unknown.
+	Error string `json:"error,omitempty"`
 }
 
 // StatusToken is the introspection token's expiry, from secrets.yaml.
@@ -212,6 +214,7 @@ func Status(ctx context.Context, d *Deps, st *stack.Stack, opts StatusOptions) *
 	statusImages(ctx, d, r, state, cfg)
 	statusServices(ctx, d, r, opts.ComposeErr)
 	statusToken(d, r, st)
+	statusMigrations(ctx, d, r, st, cfg)
 	if cfg != nil {
 		r.Stack.Name = cfg.Name
 		r.DB = &StatusDB{Mode: string(cfg.DB.Mode)}
@@ -384,6 +387,39 @@ func StatusServices(ps []docker.ComposeService) []StatusService {
 		return a.Service < b.Service || a.Service == b.Service && a.Container < b.Container
 	})
 	return services
+}
+
+// statusMigrations checks the Flyway histories when both databases are
+// running. A remote database isn't queried, since status reaches no
+// further than the local daemon.
+func statusMigrations(ctx context.Context, d *Deps, r *StatusReport, st *stack.Stack, cfg *stack.Config) {
+	if cfg == nil || d.Compose == nil || r.ServicesError != "" {
+		return
+	}
+	if cfg.DB.Mode == stack.DBRemote {
+		r.Migrations.Error = "not checked for a remote database"
+		return
+	}
+	running := func(service string) bool {
+		return slices.ContainsFunc(r.Services, func(s StatusService) bool { return s.Service == service && s.State == "running" })
+	}
+	if !running(picsureDB) || !running(dictionaryDB) {
+		r.Migrations.Error = "the databases aren't running"
+		return
+	}
+	sec, err := st.LoadSecrets()
+	if err != nil {
+		r.Migrations.Error = err.Error()
+		return
+	}
+	switch ok, err := MigrationsUpToDate(ctx, d, cfg, sec); {
+	case err != nil:
+		r.Migrations.Error = err.Error()
+	case ok:
+		r.Migrations.Status = "up_to_date"
+	default:
+		r.Migrations.Status = "pending"
+	}
 }
 
 func statusToken(d *Deps, r *StatusReport, st *stack.Stack) {

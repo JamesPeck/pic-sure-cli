@@ -143,12 +143,38 @@ type PostgresTarget struct {
 // values escaped into them never appear in argv. A trailing semicolon on a
 // statement is optional. With no statements it runs nothing.
 func ExecPostgres(ctx context.Context, e docker.Engine, t PostgresTarget, statements ...string) error {
+	_, err := runPostgres(ctx, e, t, statements, nil)
+	return err
+}
+
+// QueryPostgres runs query like ExecPostgres and returns the rows it
+// prints, each a slice of column values. A NULL reads as "", and a value
+// containing a tab or newline can't be told apart from a column or row
+// break, so query only values that can't hold one.
+func QueryPostgres(ctx context.Context, e docker.Engine, t PostgresTarget, query string) ([][]string, error) {
+	out, err := runPostgres(ctx, e, t, []string{query},
+		[]string{"--tuples-only", "--no-align", "--field-separator=\t"})
+	if err != nil {
+		return nil, err
+	}
+	out = bytes.TrimSuffix(out, []byte("\n"))
+	if len(out) == 0 {
+		return nil, nil
+	}
+	var rows [][]string
+	for _, line := range strings.Split(string(out), "\n") {
+		rows = append(rows, strings.Split(line, "\t"))
+	}
+	return rows, nil
+}
+
+func runPostgres(ctx context.Context, e docker.Engine, t PostgresTarget, statements, extra []string) ([]byte, error) {
 	in := script(statements)
 	if in == "" {
-		return nil
+		return nil, nil
 	}
 	if t.Container == "" || t.User == "" {
-		return errors.New("sql: a Postgres target needs a container and a user")
+		return nil, errors.New("sql: a Postgres target needs a container and a user")
 	}
 	// UTF8 is a client encoding in which no multibyte character contains a
 	// quote or backslash byte, which QuotePostgres relies on.
@@ -163,10 +189,11 @@ func ExecPostgres(ctx context.Context, e docker.Engine, t PostgresTarget, statem
 	if t.Database != "" {
 		args = append(args, "--dbname="+t.Database)
 	}
-	var stderr bytes.Buffer
+	args = append(args, extra...)
+	var stdout, stderr bytes.Buffer
 	code, err := e.Exec(ctx, docker.ExecOpts{Container: t.Container, Args: args, Env: env,
-		Stdin: strings.NewReader(in), Stderr: &stderr})
-	return clientError(args, code, stderr.Bytes(), err)
+		Stdin: strings.NewReader(in), Stdout: &stdout, Stderr: &stderr})
+	return stdout.Bytes(), clientError(args, code, stderr.Bytes(), err)
 }
 
 // script joins statements into client input, each followed by a semicolon

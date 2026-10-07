@@ -342,3 +342,29 @@ func (f runnerFunc) Stream(_ context.Context, c docker.Cmd, _, _ io.Writer) (int
 	res, err := f(c)
 	return res.ExitCode, err
 }
+
+func TestQueryPostgresReturnsRows(t *testing.T) {
+	f := fakerunner.New(t)
+	f.On(fakerunner.Glob("docker exec *")).Stdout("1\tt\n2\t\n")
+	target := sql.PostgresTarget{Container: "4567cdef", User: "picsure", Database: "dictionary"}
+
+	rows, err := sql.QueryPostgres(ctx, docker.NewEngine(f), target, "SELECT version, success FROM h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := [][]string{{"1", "t"}, {"2", ""}}; !reflect.DeepEqual(rows, want) {
+		t.Errorf("rows = %q, want %q", rows, want)
+	}
+	assertArgv(t, onlyCall(t, f), "docker", "exec", "-i", "-e", "PGCLIENTENCODING", "4567cdef",
+		"psql", "--no-psqlrc", "--no-password", "--quiet", "--set=ON_ERROR_STOP=1",
+		"--username=picsure", "--dbname=dictionary", "--tuples-only", "--no-align", "--field-separator=\t")
+}
+
+func TestQueryPostgresWithNoRows(t *testing.T) {
+	f := fakerunner.New(t)
+	f.On(fakerunner.Glob("docker exec *"))
+	rows, err := sql.QueryPostgres(ctx, docker.NewEngine(f), sql.PostgresTarget{Container: "c", User: "u"}, "SELECT 1 WHERE false")
+	if err != nil || rows != nil {
+		t.Errorf("rows %q, err %v; want none", rows, err)
+	}
+}

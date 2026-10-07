@@ -1,13 +1,58 @@
-# Not implemented yet: exit 1, naming ticket 032.
-exitcode 1 pic-sure migrate
-stderr '^pic-sure: not implemented \(ticket 032\)$'
-! stdout .
-exitcode 1 pic-sure migrate --check
-stderr '^pic-sure: not implemented \(ticket 032\)$'
-! stdout .
-exitcode 1 pic-sure migrate --repair
-stderr '^pic-sure: not implemented \(ticket 032\)$'
-! stdout .
-
 # --check and --repair are mutually exclusive.
 exitcode 2 pic-sure migrate --check --repair
+
+# No stack: exit 3.
+exitcode 3 pic-sure migrate
+stderr 'no pic-sure stack found'
+
+# A stack that was never rendered: exit 3, pointing at up.
+exitcode 3 pic-sure --stack unrendered migrate
+stderr 'has not been rendered.*run `pic-sure up` first'
+exitcode 3 pic-sure --stack unrendered migrate --check
+
+# A stack without secrets.yaml hasn't finished init.
+exitcode 3 pic-sure --stack nosecrets migrate
+stderr 'no secrets.yaml; run `pic-sure init`'
+
+# --check prints one report and exits 3 when an input is missing. The
+# runner can't reach docker here, so compose config fails too.
+exitcode 3 pic-sure --stack stack --json migrate --check
+stdout '^\{"schema_version":2,"ok":false,"inputs":\[\{"name":"compose config","ok":false,"problem":"[^"]+"\},'
+stdout '"name":"project UUIDs","ok":false,"problem":"secrets.yaml lacks application_uuid, resource_uuid, visualization_uuid"'
+! stdout '"type"'
+exitcode 3 pic-sure --stack stack --plain migrate --check
+stdout '^FAIL compose config'
+stdout '^FAIL project UUIDs \(secrets.yaml lacks application_uuid, resource_uuid, visualization_uuid\)$'
+! stdout 'look valid'
+
+# A migrate that can't start the database fails in the db step.
+exitcode 1 pic-sure --stack stack --json migrate
+stdout '"type":"step_done","id":"db","status":"failed"'
+stdout '"step":"db"'
+
+# --skip-step takes the migrate command's step IDs only.
+exitcode 2 pic-sure --stack stack migrate --skip-step seed
+stderr 'db, migrate'
+
+-- stack/pic-sure.yaml --
+schema: 1
+name: demo
+auth: {mode: open, admin_email: admin@example.com}
+-- stack/.pic-sure/state.json --
+{"cli_version": "dev", "schema_version": 1}
+-- stack/.pic-sure/secrets.yaml --
+db_root_password: synthetic-root-password
+-- stack/.pic-sure/render/compose.yaml --
+services: {}
+-- unrendered/pic-sure.yaml --
+schema: 1
+name: demo
+auth: {mode: open, admin_email: admin@example.com}
+-- unrendered/.pic-sure/secrets.yaml --
+db_root_password: synthetic-root-password
+-- nosecrets/pic-sure.yaml --
+schema: 1
+name: demo
+auth: {mode: open, admin_email: admin@example.com}
+-- nosecrets/.pic-sure/render/compose.yaml --
+services: {}

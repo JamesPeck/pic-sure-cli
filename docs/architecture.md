@@ -776,6 +776,42 @@ those trees exist, which is what `up` needs.
   image as `built`, `pulled` or `up-to-date`. The command holds the stack
   lock, records the operation in state.json and saves it even on failure.
 
+**DB and migrations (032, `migrate.go`).** §9.1 steps 8 and 9, for
+init, up and update to add, and the `migrate` command.
+
+- `DBStep(d, cfg, sec, DBOptions)`, ID `db`: `compose up -d picsure-db`,
+  a poll of `compose ps` until `Health` is exactly `healthy`, then
+  `SELECT 1` as root over TCP (`-h 127.0.0.1`, 014's client), retried
+  while the entrypoint's socket-only temporary server runs. `ERROR 1045`
+  fails at once with exit 3, naming the `picsure-db-data` volume: MySQL
+  sets the root password only when it initialises an empty volume. A
+  stopped container or the timeout (5 min) shows its last 30 log lines.
+  Check is a healthy container plus a passing probe. With a remote DB the
+  step only probes it; 054 adds bootstrap.
+- `MigrateStep(d, cfg, sec, MigrateOptions{Action, NoRestart})`, ID
+  `migrate`: `compose run --rm flyway-init`, then `flyway-dictionary-init`.
+  A non-zero exit fails the step and shows the output's last lines. Repair
+  passes `-e FLYWAY_ACTION=repair` (`ComposeRunOpts.Env`, added here) and
+  has no Check. After a migrate, the catalog's `RestartAfterMigrate`
+  services (psama, dictionary-api) are restarted if running.
+- `MigrationsUpToDate` is the migrate step's Check, and status's
+  `migrations.status`. It reads the one-shots' bind mounts from `compose
+  config --no-interpolate` (so overrides count) and lists the `V*__*.sql`
+  versions in each, then reads the five Flyway histories (four in MySQL,
+  checked in `information_schema` first, so a missing table is "not
+  migrated", and the dictionary's in Postgres with 014's new
+  `QueryPostgres`). Up to date means every file version is recorded, or at
+  or below the pass's baseline, and no row failed. A stopped database, a
+  missing table or an `R__` repeatable migration (no checksum compare)
+  means not up to date, so the step applies and Flyway decides.
+- `MigrateCheck` is `migrate --check`, ported from AIO's
+  `run-migrations.sh --check`: the mounted SQL directories, dictionary-db's
+  `schema.sql`, the project UUIDs, the remote DB settings, and `compose
+  config --quiet`. It runs nothing but compose config. Legacy Jenkins
+  UUID tokens in the project migrations are a warning.
+- `Migrate` runs `[db, migrate]` for the command. `migrate` uses the
+  existing render; an unrendered stack is exit 3 ("run `pic-sure up`").
+
 ## internal/steps
 
 Ticket 011, on the `Step` type and `Run` signature from 001.
@@ -978,6 +1014,8 @@ argv. `Compose` implements it over a `Runner`.
   `ComposeLogsOpts.Err` instead) (wrap the sink in
   `events.NewLogWriter`) and return an `*ExitError` carrying compose's
   message when it fails. `Down` always passes `--remove-orphans`.
+- `ComposeRunOpts.Env` (032) sets container variables as bare `-e NAME`,
+  values in `Cmd.Env`; a name the stack's `Env()` sets is refused.
 - `Run` (`run [--rm] -T`) and `Exec` (`exec -T`) stream stdout and stderr
   separately and return the command's exit code, plus an `*ExitError` only
   when docker or compose itself failed (no such service, service not
@@ -1228,7 +1266,8 @@ than `ops.Deps` so that operations can import this package.
   - `User` defaults to root.
   - `ExecPostgres` runs psql in the dictionary-db container with
     `PGPASSWORD`, and with `ON_ERROR_STOP`, so that a failure exits
-    non-zero.
+    non-zero. `QueryPostgres` (032) returns rows, tab-separated, so query
+    only values without tabs or newlines.
   - A statement's trailing semicolon is optional.
 - **Escaping.** `QuoteMySQL` doubles single quotes and backslash-escapes
   `\`, NUL, CR, LF and Ctrl-Z. `QuotePostgres` doubles single quotes and

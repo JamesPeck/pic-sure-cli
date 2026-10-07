@@ -686,3 +686,26 @@ services:
 		t.Errorf("config --quiet without TAG: err = %v, want the required-variable error (.env must be ignored)", err)
 	}
 }
+
+func TestComposeRunPassesEnvByName(t *testing.T) {
+	f := fakerunner.New(t)
+	f.On(fakerunner.Exact(composeArgv(true, "run", "--rm", "-T", "-e", "FLYWAY_ACTION", "flyway-init")...))
+	c := newTestCompose(f)
+	if _, err := c.Run(context.Background(), docker.ComposeRunOpts{
+		Service: "flyway-init", Rm: true, Env: []string{"FLYWAY_ACTION=repair"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.Calls()[0].Env; !slices.Contains(got, "FLYWAY_ACTION") || !slices.Contains(got, "PICSURE_DB_PASSWORD") {
+		t.Errorf("env names %v, want FLYWAY_ACTION beside the stack's", got)
+	}
+
+	for _, env := range [][]string{{"HPDS_TAG=x"}, {"COMPOSE_PROJECT_NAME=x"}, {"DOCKER_HOST=x"}, {"bad"}} {
+		if _, err := c.Run(context.Background(), docker.ComposeRunOpts{Service: "flyway-init", Env: env}); err == nil {
+			t.Errorf("env %v: no error", env)
+		}
+	}
+	if n := len(f.Calls()); n != 1 {
+		t.Errorf("%d calls, want refused envs not to run", n)
+	}
+}
