@@ -14,7 +14,7 @@ const (
 	execGateway = "docker compose * exec -T gateway wget -q -S -O - -T 10 http://localhost:8080/system/status"
 	execCount   = "docker compose * exec -T hpds wget -q -S -O - -T 5 --header=Content-Type: application/json --post-data=* http://localhost:8080/PIC-SURE/v3/query/sync"
 	execHealth  = "docker compose * exec -T hpds wget -q -S -O - -T 5 http://localhost:8080/actuator/health"
-	execHTML    = "docker compose * exec -T httpd wget -q -S -O - -T 5 --no-check-certificate -O /dev/null https://127.0.0.1/"
+	execHTML    = "docker compose * exec -T httpd wget -q -S -O - -T 5 --no-check-certificate -O /dev/null --header=Host: localhost:8443 https://127.0.0.1/"
 )
 
 // deepRunner is a fake for a stack whose gateway, hpds and httpd all run.
@@ -86,14 +86,14 @@ func TestStatusDeepDataNotReady(t *testing.T) {
 			count: func(r *fakerunner.Rule) {
 				r.Exit(1).Stderr(headers("HTTP/1.1 403 Forbidden") + "wget: server returned error: HTTP/1.1 403 Forbidden\n")
 			},
-			ready: new(false), message: "no data loaded",
+			ready: new(false), message: "HTTP 403",
 		},
 		"actuator 503": {
 			count: func(r *fakerunner.Rule) { r.Stdout("0").Stderr(headers("HTTP/1.1 200 OK")) },
 			health: func(r *fakerunner.Rule) {
 				r.Exit(1).Stderr(headers("HTTP/1.1 503 Service Unavailable") + "wget: server returned error: HTTP/1.1 503 Service Unavailable\n")
 			},
-			ready: new(false), message: "health is DOWN",
+			ready: new(false), message: "health is DOWN: no data loaded",
 		},
 		"actuator unreadable": {
 			count:  func(r *fakerunner.Rule) { r.Stdout("0").Stderr(headers("HTTP/1.1 200 OK")) },

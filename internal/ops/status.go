@@ -219,7 +219,7 @@ func Status(ctx context.Context, d *Deps, st *stack.Stack, opts StatusOptions) *
 	statusImages(ctx, d, r, state, cfg)
 	statusServices(ctx, d, r, opts.ComposeErr)
 	if opts.Deep {
-		r.Deep = statusDeep(ctx, d, r)
+		r.Deep = statusDeep(ctx, d, r, cfg)
 	}
 	statusToken(d, r, st)
 	statusMigrations(ctx, d, r, st, cfg)
@@ -397,6 +397,18 @@ func StatusServices(ps []docker.ComposeService) []StatusService {
 	return services
 }
 
+// webHost is the host[:port] of the stack's HTTPS origin.
+func webHost(cfg *stack.Config) string {
+	host := cfg.Network.Hostname
+	if cfg.Network.HTTPSPort != 443 {
+		return net.JoinHostPort(host, strconv.Itoa(cfg.Network.HTTPSPort))
+	}
+	if strings.Contains(host, ":") {
+		return "[" + host + "]"
+	}
+	return host
+}
+
 // statusMigrationsTimeout bounds the migration check's compose and
 // database calls, so a wedged daemon can't hang status.
 const statusMigrationsTimeout = 30 * time.Second
@@ -457,13 +469,7 @@ func statusToken(d *Deps, r *StatusReport, st *stack.Stack) {
 // auth0URLs are the URLs the frontend sends Auth0 for this stack: it logs
 // in through /login/loading/ on its own origin.
 func auth0URLs(cfg *stack.Config) *StatusAuth0 {
-	host := cfg.Network.Hostname
-	if cfg.Network.HTTPSPort != 443 {
-		host = net.JoinHostPort(host, strconv.Itoa(cfg.Network.HTTPSPort))
-	} else if strings.Contains(host, ":") {
-		host = "[" + host + "]"
-	}
-	origin := "https://" + host
+	origin := "https://" + webHost(cfg)
 	a := &StatusAuth0{
 		Needed:      cfg.Auth.Mode != stack.AuthOpen,
 		CallbackURL: origin + "/login/loading/",

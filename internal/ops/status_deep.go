@@ -12,6 +12,7 @@ import (
 
 	"github.com/JamesPeck/pic-sure-cli/internal/docker"
 	"github.com/JamesPeck/pic-sure-cli/internal/render"
+	"github.com/JamesPeck/pic-sure-cli/internal/stack"
 )
 
 // StatusDeep is what `status --deep` adds: probes run inside the running
@@ -76,8 +77,8 @@ const (
 )
 
 // statusDeep runs the probes in the containers r.Services reports
-// running.
-func statusDeep(ctx context.Context, d *Deps, r *StatusReport) *StatusDeep {
+// running. cfg is nil when the config couldn't be read.
+func statusDeep(ctx context.Context, d *Deps, r *StatusReport, cfg *stack.Config) *StatusDeep {
 	deep := &StatusDeep{HTTP: StatusHTTP{CSP: CSPUnknown}}
 	running := map[string]bool{}
 	for _, s := range r.Services {
@@ -108,7 +109,11 @@ func statusDeep(ctx context.Context, d *Deps, r *StatusReport) *StatusDeep {
 	if why := skip("httpd"); why != "" {
 		deep.HTTP.Message = why + "; CSP unknown"
 	} else {
-		deep.HTTP = probeHTTP(ctx, d.Compose)
+		host := ""
+		if cfg != nil {
+			host = webHost(cfg)
+		}
+		deep.HTTP = probeHTTP(ctx, d.Compose, host)
 	}
 	return deep
 }
@@ -211,9 +216,9 @@ func lastNonEmptyLine(s string) string {
 var countRE = regexp.MustCompile(`^[0-9]+$`)
 
 // probeData asks HPDS for a COUNT. HPDS has no authentication filter, and
-// its v3 handler refuses with 403 until the encryption key is loaded,
-// which happens only with data. A numeric answer is then checked against
-// the actuator, which looks at the metadata but never the key.
+// its v3 handler refuses with 403 while the encryption key isn't loaded.
+// init installs the key, so a fresh stack answers 0; the actuator then
+// tells, since it is DOWN without loaded metadata (it never checks the key).
 func probeData(ctx context.Context, c docker.Composer) StatusData {
 	dr := StatusData{Checked: true}
 	res := wget(ctx, c, "hpds", deepWgetTimeout,
@@ -227,7 +232,7 @@ func probeData(ctx context.Context, c docker.Composer) StatusData {
 	switch code := res.lastStatus(); {
 	case code == 403:
 		dr.Ready = new(false)
-		dr.Message = "no data loaded: HPDS refused the query (HTTP 403); load some with pic-sure data demo or pic-sure data load-phenotype"
+		dr.Message = "HPDS refused the query (HTTP 403): its encryption key isn't loaded; load data with pic-sure data demo or pic-sure data load-phenotype"
 		return dr
 	case code != 200:
 		dr.Message = "HPDS query unavailable" + res.why() + "; data readiness unknown"
@@ -257,7 +262,7 @@ func probeData(ctx context.Context, c docker.Composer) StatusData {
 		dr.Message = "HPDS answers COUNT queries and its data is healthy"
 	case "DOWN", "OUT_OF_SERVICE":
 		dr.Ready = new(false)
-		dr.Message = "HPDS answered the COUNT, but its health is " + status + "; check the data load"
+		dr.Message = "HPDS's health is " + status + ": no data loaded, or a broken load; load data with pic-sure data demo or pic-sure data load-phenotype"
 	default:
 		dr.Message = "HPDS answered the COUNT, but its health is unknown" + health.why()
 	}
@@ -267,10 +272,15 @@ func probeData(ctx context.Context, c docker.Composer) StatusData {
 // probeHTTP fetches the frontend through httpd's TLS ingress and classifies
 // its CSP. Only a single 200 text/html response counts, so that a redirect
 // or an Apache error page, which carry the floor, isn't taken for the
-// frontend's HTML.
-func probeHTTP(ctx context.Context, c docker.Composer) StatusHTTP {
+// frontend's HTML. host is the Host header to send, the stack's own
+// origin: the frontend server doesn't answer a Host of 127.0.0.1.
+func probeHTTP(ctx context.Context, c docker.Composer, host string) StatusHTTP {
 	h := StatusHTTP{Checked: true, CSP: CSPUnknown}
-	res := wget(ctx, c, "httpd", deepWgetTimeout, "--no-check-certificate", "-O", "/dev/null", "https://127.0.0.1/")
+	args := []string{"--no-check-certificate", "-O", "/dev/null"}
+	if host != "" {
+		args = append(args, "--header=Host: "+host)
+	}
+	res := wget(ctx, c, "httpd", deepWgetTimeout, append(args, "https://127.0.0.1/")...)
 	codes := res.statusCodes()
 	contentType := strings.Join(res.header("Content-Type"), ",")
 	if res.err != nil || len(codes) != 1 || codes[0] != 200 || !isHTML(contentType) {
