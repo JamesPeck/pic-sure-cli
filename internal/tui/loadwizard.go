@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/huh/v2"
@@ -32,7 +33,7 @@ import (
 //	   │                  └──────────────────────────────────────────┤
 //	   ├─dir──▶ loadPhenoDir ─────────────────────────────────────────┤
 //	   │                                                              ▼
-//	   │                                      loadPhenoHeap ─▶ loadPhenoDict
+//	   │                                          loadHeap ─▶ loadPhenoDict
 //	   │                                             auto ──────────┤
 //	   │                         custom ─▶ loadPhenoDatasets         │
 //	   │                                  ─▶ loadPhenoConcepts       │
@@ -43,13 +44,13 @@ import (
 //	   │                                 ─▶ loadPhenoFacets          │
 //	   │                                 ─▶ loadPhenoFacetConcepts   │
 //	   │                                                  ▼          ▼
-//	   ├─demo─▶ loadDemoDataset ─▶ loadPhenoHeap ───────▶ loadConfirm ─▶ run
+//	   ├─demo─▶ loadDemoDataset ─▶ loadHeap ────────────▶ loadConfirm ─▶ run
 //	   │
 //	   ▼ genomic
 //	loadGenomicIndex ─▶ loadGenomicDirAsk ──no──▶ loadGenomicPartition
 //	                          │ yes                        │
 //	                          ▼                            ▼
-//	                    loadGenomicDir ─────────▶ loadGenomicHeap
+//	                    loadGenomicDir ─────────▶ loadHeap
 //	                                                       │
 //	                                                       ▼
 //	                            loadGenomicPromote ─▶ loadGenomicProfile
@@ -64,7 +65,7 @@ const (
 	loadPhenoArchiveEntry
 	loadPhenoDir
 	loadDemoDataset
-	loadPhenoHeap
+	loadHeap
 	loadPhenoDict
 	loadPhenoDatasets
 	loadPhenoConcepts
@@ -78,7 +79,6 @@ const (
 	loadGenomicDirAsk
 	loadGenomicDir
 	loadGenomicPartition
-	loadGenomicHeap
 	loadGenomicPromote
 	loadGenomicProfile
 	loadGenomicConfirm
@@ -93,11 +93,13 @@ const (
 )
 
 // The heap (MB) each kind's input opens with: the commands' own defaults.
-var defaultHeaps = map[string]string{
-	kindFile:    "4096",
-	kindDir:     "8000",
-	kindDemo:    "4096",
-	kindGenomic: "16000",
+// A heap left at its default isn't passed, so the command applies its
+// defaults everywhere (load-phenotype's dictionary step has its own).
+var defaultHeaps = map[string]int{
+	kindFile:    ops.DefaultLoaderHeapMB,
+	kindDir:     ops.DefaultDirLoaderHeapMB,
+	kindDemo:    ops.DefaultLoaderHeapMB,
+	kindGenomic: ops.DefaultGenomicHeapMB,
 }
 
 // minHeapMB is the smallest heap the wizard takes. Anything below it is
@@ -114,11 +116,14 @@ var fetchArchiveCSVs = phenoinput.ListCSVEntries
 // the load will. A package var for tests; it runs in a tea.Cmd too.
 var checkPhenotypeDir = ops.CheckPhenotypeDir
 
+// inspectSeq numbers every check, across screens, so a result is used only
+// by the pick it was made for.
+var inspectSeq atomic.Int64
+
 // inspectFillMsg carries the result of the async check of a picked file or
-// directory. seq stamps the pick it was made for, so a result that arrives
-// after the step was re-entered or the screen closed is dropped.
+// directory, stamped with the check's inspectSeq.
 type inspectFillMsg struct {
-	seq     int
+	seq     int64
 	entries []string
 	err     error
 }
@@ -140,9 +145,11 @@ var (
 )
 
 type loadScreen struct {
-	ctx  context.Context
-	root string
-	step loadStep
+	// ctx bounds the screen's checks; close cancels it.
+	ctx    context.Context
+	cancel context.CancelFunc
+	root   string
+	step   loadStep
 
 	// Exactly one of form / fb is live per step: huh forms drive the
 	// select/input/confirm steps; fb drives the file steps. A file step builds
@@ -184,11 +191,10 @@ type loadScreen struct {
 	// A picked phenotype file or directory is checked asynchronously: a file
 	// for the CSVs it holds (≥2 → entry picker), a directory as --input-dir
 	// would check it. While the check runs inspecting is true (the view shows
-	// a placeholder and the filebrowser is parked); inspectSeq stamps each
-	// check so a stale result is dropped; inspectErr shows a rejection above
-	// the re-opened browser.
+	// a placeholder and the filebrowser is parked); inspectErr shows a
+	// rejection above the re-opened browser.
 	inspecting     bool
-	inspectSeq     int
+	inspectSeq     int64
 	archiveEntries []string
 	inspectErr     string
 
@@ -200,14 +206,18 @@ func newLoadScreen(ctx context.Context, root, kind string) *loadScreen {
 	// kind is pre-set to the first real option so the huh select cursor
 	// starts there on first paint. Without this, s.kind="" collides with
 	// Cancel's value "" and huh preselects Cancel.
-	s := &loadScreen{ctx: ctx, root: root, step: loadKind, dictMode: "auto", kind: kindFile, demo: ops.DemoDatasets()[0]}
+	s := &loadScreen{root: root, step: loadKind, dictMode: "auto", kind: kindFile, demo: ops.DemoDatasets()[0]}
+	s.ctx, s.cancel = context.WithCancel(ctx)
 	if kind != "" {
 		s.kind = kind
-		s.heap = defaultHeaps[kind]
+		s.heap = strconv.Itoa(defaultHeaps[kind])
 		s.step = firstStep(kind)
 	}
 	return s
 }
+
+// close stops a check still running for the screen.
+func (s *loadScreen) close() { s.cancel() }
 
 // init builds and starts the opening step (the app sizes the screen first).
 func (s *loadScreen) init() tea.Cmd {
@@ -350,13 +360,16 @@ func (s *loadScreen) formCompleted() (*loadScreen, tea.Cmd) {
 		if s.kind == "" { // Cancel
 			return s, closeLoad(true)
 		}
-		s.heap = defaultHeaps[s.kind]
+		s.heap = strconv.Itoa(defaultHeaps[s.kind])
 		return s.enterStep(firstStep(s.kind))
-	case loadPhenoArchiveEntry, loadDemoDataset:
-		return s.enterStep(loadPhenoHeap)
-	case loadPhenoHeap:
-		if s.kind == kindDemo {
+	case loadPhenoArchiveEntry, loadDemoDataset, loadGenomicPartition:
+		return s.enterStep(loadHeap)
+	case loadHeap:
+		switch s.kind {
+		case kindDemo:
 			return s.enterStep(loadConfirm)
+		case kindGenomic:
+			return s.enterStep(loadGenomicPromote)
 		}
 		return s.enterStep(loadPhenoDict)
 	case loadPhenoDict:
@@ -380,10 +393,6 @@ func (s *loadScreen) formCompleted() (*loadScreen, tea.Cmd) {
 			return s.enterStep(loadGenomicDir)
 		}
 		return s.enterStep(loadGenomicPartition)
-	case loadGenomicPartition:
-		return s.enterStep(loadGenomicHeap)
-	case loadGenomicHeap:
-		return s.enterStep(loadGenomicPromote)
 	case loadGenomicPromote:
 		return s.enterStep(loadGenomicProfile)
 	case loadGenomicProfile:
@@ -398,8 +407,7 @@ func (s *loadScreen) formCompleted() (*loadScreen, tea.Cmd) {
 }
 
 // consumeFile stores a just-selected path into the field for the current file
-// step and advances. Tests drive the state machine by calling it directly
-// rather than through the real filepicker.
+// step and advances.
 func (s *loadScreen) consumeFile(path string) (*loadScreen, tea.Cmd) {
 	switch s.step {
 	case loadPhenoFile:
@@ -445,7 +453,7 @@ func (s *loadScreen) startInspection(check func(context.Context) ([]string, erro
 	s.inspecting = true
 	s.inspectErr = ""
 	s.archiveEntries = nil
-	s.inspectSeq++
+	s.inspectSeq = inspectSeq.Add(1)
 	seq, ctx := s.inspectSeq, s.ctx
 	return s, func() tea.Msg {
 		entries, err := check(ctx)
@@ -477,11 +485,10 @@ func (s *loadScreen) applyInspectFill(msg inspectFillMsg) (*loadScreen, tea.Cmd)
 	}
 	if len(msg.entries) >= 2 {
 		s.archiveEntries = msg.entries
-		// Preselect the first entry so the select cursor starts on a real option.
 		s.archiveEntry = msg.entries[0]
 		return s.enterStep(loadPhenoArchiveEntry)
 	}
-	return s.enterStep(loadPhenoHeap)
+	return s.enterStep(loadHeap)
 }
 
 // enterStep sets the step and constructs (and sizes) its form or filebrowser,
@@ -502,7 +509,7 @@ func (s *loadScreen) enterStep(step loadStep) (*loadScreen, tea.Cmd) {
 		return s.openDirBrowser("Select the directory of phenotype CSVs")
 	case loadDemoDataset:
 		form = s.buildDemoForm()
-	case loadPhenoHeap, loadGenomicHeap:
+	case loadHeap:
 		form = s.buildHeapForm()
 	case loadPhenoDict:
 		form = s.buildDictForm()
@@ -564,20 +571,33 @@ func (s *loadScreen) dirty() bool {
 		s.vcfIndex != "" || s.vcfDir != ""
 }
 
+// heapMB is the heap entered, as validateHeap reads it.
+func (s *loadScreen) heapMB() int {
+	mb, _ := strconv.Atoi(strings.TrimSpace(s.heap))
+	return mb
+}
+
+// heapArgs is --heap with the heap entered, or nothing for the default.
+func (s *loadScreen) heapArgs() []string {
+	if mb := s.heapMB(); mb != defaultHeaps[s.kind] {
+		return []string{"--heap", strconv.Itoa(mb)}
+	}
+	return nil
+}
+
 // args is the pic-sure command line the collected values make. Paths are
 // absolute, so the command doesn't depend on the working directory.
 func (s *loadScreen) args() []string {
-	heap := strings.TrimSpace(s.heap)
 	switch s.kind {
 	case kindDemo:
-		return []string{"data", "demo", s.demo, "--heap", heap}
+		return append([]string{"data", "demo", s.demo}, s.heapArgs()...)
 	case kindGenomic:
 		args := []string{"data", "load-genomic", "--partition", strings.TrimSpace(s.partition),
 			"--vcf-index", absPath(s.vcfIndex)}
 		if s.includeVCFDir && s.vcfDir != "" {
 			args = append(args, "--vcf-dir", absPath(s.vcfDir))
 		}
-		args = append(args, "--heap", heap)
+		args = append(args, s.heapArgs()...)
 		if s.promote {
 			args = append(args, "--promote")
 		}
@@ -595,7 +615,7 @@ func (s *loadScreen) args() []string {
 			args = append(args, "--entry", s.archiveEntry)
 		}
 	}
-	args = append(args, "--heap", heap)
+	args = append(args, s.heapArgs()...)
 	if s.dictMode == "custom" {
 		args = append(args, "--dictionary", "custom",
 			"--datasets", absPath(s.datasets), "--concepts", absPath(s.concepts))
@@ -697,10 +717,12 @@ func (s *loadScreen) buildDemoForm() *huh.Form {
 }
 
 func (s *loadScreen) buildHeapForm() *huh.Form {
-	desc := "The loader's JVM heap in MB. 4096 suits up to about 1M rows."
+	desc := "The loader's JVM heap in MB, also used to build the auto dictionary.\n4096 suits up to about 1M rows."
 	switch s.kind {
+	case kindDemo:
+		desc = "The loader's JVM heap in MB, also used to build the dictionary."
 	case kindDir:
-		desc = "The sequential loader's JVM heap in MB."
+		desc = "The sequential loader's JVM heap in MB. A changed heap also builds\nthe auto dictionary."
 	case kindGenomic:
 		desc = "Each VCF loader's JVM heap in MB. Raise it for large partitions."
 	}
@@ -865,7 +887,7 @@ func (s *loadScreen) confirmSummary() string {
 			rows = append(rows, [2]string{"Archive entry", s.archiveEntry})
 		}
 	}
-	rows = append(rows, [2]string{"Heap", strings.TrimSpace(s.heap) + " MB"})
+	rows = append(rows, [2]string{"Heap", strconv.Itoa(s.heapMB()) + " MB"})
 	switch {
 	case s.kind == kindDemo:
 	case s.dictMode == "custom":
@@ -898,7 +920,7 @@ func (s *loadScreen) genomicConfirmSummary() string {
 		{"Partition", strings.TrimSpace(s.partition)},
 		{"VCF index", s.vcfIndex},
 		{"VCF dir", vcfDir},
-		{"Heap", strings.TrimSpace(s.heap) + " MB"},
+		{"Heap", strconv.Itoa(s.heapMB()) + " MB"},
 		{"Promote", yesNo(s.promote)},
 		{"Enable profile", yesNo(s.enableProfile)},
 	}
@@ -942,13 +964,10 @@ func (s *loadScreen) view() string {
 	var body, footer string
 	switch {
 	case s.inspecting:
-		// The check reads the picked file or directory; park the browser
-		// behind a placeholder so the screen doesn't look frozen.
 		body = loadTitleStyle.Render("(checking…)")
 		footer = loadFooterStyle.Render("esc cancel")
 	case isFileStep(s.step):
 		fbView := s.fb.View()
-		// Show why the previous pick was rejected above the re-opened browser.
 		if s.inspectErr != "" {
 			fbView = lipgloss.JoinVertical(lipgloss.Left, styles.Bad.Render(s.inspectErr), fbView)
 		}

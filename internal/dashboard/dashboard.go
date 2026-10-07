@@ -46,8 +46,8 @@ type RunMsg struct{ Action Action }
 // again.
 type ActionDoneMsg struct{}
 
-// LoadMsg asks the embedding program to open its load wizard (l). The
-// wizard's load runs as an action: ActionDoneMsg follows it.
+// LoadMsg asks the embedding program to open its load wizard (l). A load
+// the wizard runs is followed by ActionDoneMsg, as an action is.
 type LoadMsg struct{}
 
 // BackMsg asks the embedding program to leave the dashboard (esc).

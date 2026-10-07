@@ -43,11 +43,12 @@ type Options struct {
 	// Dashboard reads the stack in Root for the dashboard.
 	Dashboard dashboard.Backend
 	// Command runs a pic-sure command line in-process for the dashboard's
-	// actions, sending its events to req.Sink.
+	// actions and the load wizard's loads, sending its events to req.Sink.
 	Command func(ctx context.Context, req CommandRequest) (InitResult, error)
 }
 
-// CommandRequest is a command the dashboard asks Options.Command to run.
+// CommandRequest is a command the dashboard or the load wizard asks
+// Options.Command to run.
 type CommandRequest struct {
 	// Dir is the stack directory, which the command gets as --stack.
 	Dir string
@@ -258,7 +259,7 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a.openLoad(msg.kind)
 
 	case loadDataClosedMsg:
-		a.load = nil
+		a.closeLoad()
 		if a.dash != nil {
 			// Opened from the dashboard, which kept running behind it.
 			a.screen = ScreenDashboard
@@ -270,7 +271,7 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, a.openLandingCmd()
 
 	case loadRunMsg:
-		a.load = nil
+		a.closeLoad()
 		return a.startAction(msg.act)
 	}
 
@@ -350,6 +351,13 @@ func (a *app) openLoad(kind string) (tea.Model, tea.Cmd) {
 	a.load = s
 	a.screen = ScreenLoadData
 	return a, s.init()
+}
+
+func (a *app) closeLoad() {
+	if a.load != nil {
+		a.load.close()
+		a.load = nil
+	}
 }
 
 // startAction opens the run screen on a command line: a dashboard action

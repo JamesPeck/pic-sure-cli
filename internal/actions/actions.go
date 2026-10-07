@@ -1,13 +1,13 @@
 // Package actions describes the operations the landing and the activity
-// screen can launch (the dashboard runs pic-sure commands instead).
-// Destructive actions must be confirmed by typing ConfirmWord and clearly
-// state what is destroyed; every action carries an AbortNote so a confirmed
-// abort never leaves the user guessing about state.
+// screen can launch (the dashboard and the load wizard run pic-sure
+// commands instead). Destructive actions must be confirmed by typing
+// ConfirmWord and clearly state what is destroyed; every action carries an
+// AbortNote so a confirmed abort never leaves the user guessing about state.
 //
 // Starting an action fails with NotImplemented until the TUI tickets run
-// in-process operations. Args holds the v1 script arguments: they record the choices
-// each screen collected, which the TUI tests assert, and they go away with
-// that rewiring.
+// in-process operations. Args holds the v1 script arguments: they record
+// the choices each screen collected, which the TUI tests assert, and they
+// go away with that rewiring.
 package actions
 
 import (

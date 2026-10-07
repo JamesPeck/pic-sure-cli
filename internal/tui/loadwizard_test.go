@@ -95,7 +95,7 @@ func TestLoadWizardFileAutoFlow(t *testing.T) {
 	stubInspect(t, nil, nil)
 	s := chooseKind(t, newTestLoad(t, "/tmp/x", ""), kindFile)
 	s = pick(t, s, "/data/pheno.csv")
-	if s.step != loadPhenoHeap || s.heap != "4096" {
+	if s.step != loadHeap || s.heap != "4096" {
 		t.Fatalf("after the file: step %v heap %q", s.step, s.heap)
 	}
 	s, _ = completeForm(s)
@@ -104,7 +104,7 @@ func TestLoadWizardFileAutoFlow(t *testing.T) {
 	}
 	s, _ = completeForm(s) // auto
 	act := run(t, s)
-	want := []string{"data", "load-phenotype", "--file", "/data/pheno.csv", "--heap", "4096"}
+	want := []string{"data", "load-phenotype", "--file", "/data/pheno.csv"}
 	if !eq(act.Args, want) {
 		t.Errorf("args = %q, want %q", act.Args, want)
 	}
@@ -164,7 +164,7 @@ func TestLoadWizardArchiveEntryPicker(t *testing.T) {
 	}
 	s.archiveEntry = "b/two.csv"
 	s, _ = completeForm(s)
-	if s.step != loadPhenoHeap {
+	if s.step != loadHeap {
 		t.Fatalf("after the entry: step %v", s.step)
 	}
 	s, _ = completeForm(s)
@@ -182,7 +182,7 @@ func TestLoadWizardSingleEntryArchiveSkipsPicker(t *testing.T) {
 	stubInspect(t, []string{"only.csv"}, nil)
 	s := chooseKind(t, newTestLoad(t, "/tmp/x", ""), kindFile)
 	s = pick(t, s, "/data/one.zip")
-	if s.step != loadPhenoHeap || s.archiveEntry != "" {
+	if s.step != loadHeap || s.archiveEntry != "" {
 		t.Fatalf("step %v entry %q", s.step, s.archiveEntry)
 	}
 }
@@ -200,7 +200,7 @@ func TestLoadWizardRealInspection(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := chooseKind(t, newTestLoad(t, dir, ""), kindFile)
-	if s = pick(t, s, csv); s.step != loadPhenoHeap {
+	if s = pick(t, s, csv); s.step != loadHeap {
 		t.Errorf("plain CSV: step %v, want the heap", s.step)
 	}
 	s = chooseKind(t, newTestLoad(t, dir, ""), kindFile)
@@ -224,6 +224,28 @@ func TestLoadWizardRejectedPick(t *testing.T) {
 	}
 }
 
+// The heap reaches the command as the number the summary shows, and only
+// when it isn't the command's default: pflag would read "08000" as octal.
+func TestLoadWizardHeapArgs(t *testing.T) {
+	for heap, want := range map[string][]string{
+		"4096":   nil,
+		"04096":  nil,
+		"08000":  {"--heap", "8000"},
+		" 2048 ": {"--heap", "2048"},
+	} {
+		s := newTestLoad(t, "/tmp/x", kindDemo)
+		s, _ = completeForm(s)
+		s.heap = heap
+		s, _ = completeForm(s)
+		if v := loadView(s); heap == "08000" && !strings.Contains(v, "8000 MB") {
+			t.Errorf("summary for %q:\n%s", heap, v)
+		}
+		if args := run(t, s).Args; !eq(args[3:], want) {
+			t.Errorf("heap %q: args %q, want %q after the dataset", heap, args, want)
+		}
+	}
+}
+
 // A check's result is used only by the pick it was made for.
 func TestLoadWizardStaleInspection(t *testing.T) {
 	stubInspect(t, []string{"a.csv", "b.csv"}, nil)
@@ -238,6 +260,23 @@ func TestLoadWizardStaleInspection(t *testing.T) {
 	stale.seq = s.inspectSeq
 	if s, _ = s.update(stale); s.step != loadPhenoFile {
 		t.Errorf("a result after the check ended was applied: step %v", s.step)
+	}
+}
+
+// Closing the screen cancels its check, and the next screen's pick never
+// takes the closed screen's result.
+func TestLoadWizardCheckAfterClose(t *testing.T) {
+	stubInspect(t, []string{"a.csv", "b.csv"}, nil)
+	old := chooseKind(t, newTestLoad(t, "/tmp/x", ""), kindFile)
+	old, oldCmd := old.consumeFile("/data/old.tgz")
+	old.close()
+	if old.ctx.Err() == nil {
+		t.Error("close didn't cancel the screen's checks")
+	}
+	s := chooseKind(t, newTestLoad(t, "/tmp/x", ""), kindFile)
+	s, _ = s.consumeFile("/data/new.tgz")
+	if s, _ = s.update(oldCmd().(inspectFillMsg)); !s.inspecting || s.step != loadPhenoFile {
+		t.Errorf("the closed screen's result was applied: step %v", s.step)
 	}
 }
 
@@ -260,7 +299,7 @@ func TestLoadWizardInputDirFlow(t *testing.T) {
 	stubInspect(t, nil, nil)
 	s := chooseKind(t, newTestLoad(t, "/tmp/x", ""), kindDir)
 	s = pick(t, s, "/data/csvs")
-	if s.step != loadPhenoHeap || s.heap != "8000" {
+	if s.step != loadHeap || s.heap != "8000" {
 		t.Fatalf("step %v heap %q, want the heap at 8000", s.step, s.heap)
 	}
 	s, _ = completeForm(s)
@@ -268,7 +307,7 @@ func TestLoadWizardInputDirFlow(t *testing.T) {
 	if v := loadView(s); !strings.Contains(v, "Directory") || !strings.Contains(v, "HPDS keeps running") {
 		t.Errorf("summary:\n%s", v)
 	}
-	want := []string{"data", "load-phenotype", "--input-dir", "/data/csvs", "--heap", "8000"}
+	want := []string{"data", "load-phenotype", "--input-dir", "/data/csvs"}
 	if args := run(t, s).Args; !eq(args, want) {
 		t.Errorf("args = %q, want %q", args, want)
 	}
@@ -286,7 +325,7 @@ func TestLoadWizardDemoFlow(t *testing.T) {
 	}
 	s.demo = "synthea"
 	s, _ = completeForm(s)
-	if s.step != loadPhenoHeap || s.heap != "4096" {
+	if s.step != loadHeap || s.heap != "4096" {
 		t.Fatalf("step %v heap %q", s.step, s.heap)
 	}
 	s, _ = completeForm(s)
@@ -297,7 +336,7 @@ func TestLoadWizardDemoFlow(t *testing.T) {
 		t.Errorf("summary:\n%s", v)
 	}
 	act := run(t, s)
-	if want := []string{"data", "demo", "synthea", "--heap", "4096"}; !eq(act.Args, want) {
+	if want := []string{"data", "demo", "synthea"}; !eq(act.Args, want) {
 		t.Errorf("args = %q, want %q", act.Args, want)
 	}
 	if act.Title != "Loading the synthea demo data" {
@@ -344,7 +383,7 @@ func driveGenomicToConfirm(t *testing.T, s *loadScreen, in genomicInputs) *loadS
 	}
 	s.partition = in.partition
 	s, _ = completeForm(s)
-	if s.step != loadGenomicHeap || s.heap != "16000" {
+	if s.step != loadHeap || s.heap != "16000" {
 		t.Fatalf("step %v heap %q, want the heap at 16000", s.step, s.heap)
 	}
 	if in.heap != "" {
@@ -367,7 +406,7 @@ func TestLoadWizardGenomicFlow(t *testing.T) {
 		want []string
 	}{
 		{genomicInputs{vcfIndex: "/v/idx.tsv", partition: "p1"},
-			[]string{"data", "load-genomic", "--partition", "p1", "--vcf-index", "/v/idx.tsv", "--heap", "16000"}},
+			[]string{"data", "load-genomic", "--partition", "p1", "--vcf-index", "/v/idx.tsv"}},
 		{genomicInputs{vcfIndex: "/v/idx.tsv", vcfDir: "/vcfs", partition: "p2", heap: "20000", promote: true, enableProfile: true},
 			[]string{"data", "load-genomic", "--partition", "p2", "--vcf-index", "/v/idx.tsv", "--vcf-dir", "/vcfs",
 				"--heap", "20000", "--promote", "--enable-profile"}},

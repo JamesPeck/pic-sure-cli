@@ -120,7 +120,7 @@ func redacted(err error) error {
 }
 
 // commandFromTUI is tui.Options.Command: `pic-sure --stack DIR ARGS...`
-// run in-process for a dashboard action. Its events, and the run log's
+// run in-process for a dashboard action or a load. Its events, and the run log's
 // stderr records, go to req.Sink; the summary it would print is the
 // result's Summary. Its exit code and message come back as the error.
 func (a *App) commandFromTUI(ctx context.Context, req tui.CommandRequest) (tui.InitResult, error) {
