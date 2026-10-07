@@ -24,13 +24,14 @@ const (
 	deepTimeout = 2 * time.Minute
 )
 
-// Log-follower restart backoff: a dead follower is restarted after a delay
-// that doubles on each consecutive failed restart, capped at logRetryMax, so a
-// service whose `compose logs -f` keeps failing is retried ever less often.
-// The delay resets once a session delivers real lines.
+// Log-follower restart backoff: a follower that ends is restarted after a
+// delay that doubles, up to logRetryMax, while followers keep ending within
+// logRanLong of starting (an error, a stopped container). One that ran
+// longer resets it.
 const (
 	logRetryBase = 2 * time.Second
 	logRetryMax  = 30 * time.Second
+	logRanLong   = 30 * time.Second
 )
 
 // nextLogRetryDelay computes the next backoff from the previous one: it starts

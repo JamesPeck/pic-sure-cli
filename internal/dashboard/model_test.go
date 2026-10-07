@@ -673,3 +673,26 @@ func TestOwns(t *testing.T) {
 		}
 	}
 }
+
+// An empty service list stops the follower; an action brings a backed-off
+// follower back at once.
+func TestFollowerAfterEmptyListAndAction(t *testing.T) {
+	m, b := testModel(t)
+	m = deliverServices(t, m)
+	b.mu.Lock()
+	ctx := b.logCtxs[0]
+	b.mu.Unlock()
+	m, _ = update(t, m, servicesMsg{services: []ops.StatusService{}})
+	if m.logSvc != "" || m.logSession != nil || ctx.Err() == nil || len(m.logLines) != 0 {
+		t.Errorf("empty list kept following %q", m.logSvc)
+	}
+
+	m = deliverServices(t, m)
+	m, _ = update(t, m, logClosedMsg{sessionID: m.logSession.id})
+	m, _ = update(t, m, logClosedMsg{}) // stale: ignored
+	m.logRetryDelay = logRetryMax
+	m, cmd := update(t, m, ActionDoneMsg{})
+	if m.logSession == nil || m.logRetryDelay != 0 || cmd == nil {
+		t.Errorf("ActionDoneMsg didn't follow again: session %v, delay %v", m.logSession != nil, m.logRetryDelay)
+	}
+}

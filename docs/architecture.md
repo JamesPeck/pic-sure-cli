@@ -2408,7 +2408,8 @@ Ticket 040. The dashboard screen, embedded in the TUI (alt-screen).
   across polls. A follower that ends is restarted after 2 s, doubling to
   30 s while followers keep ending within 30 s of starting (an error, a
   stopped container); the new one's tail replaces the scrollback. Compose's
-  own messages stay out of the pane.
+  own messages stay out of the pane (it prints the containers' stderr on
+  its stdout). An empty service list stops the follower.
   Leaving the dashboard cancels its context, which stops all of them.
 - **Actions** are pic-sure command lines (`Action.Args`): `r` restart the
   selected service, `u` update, `m` migrate (each after a yes/no dialog),
@@ -2416,7 +2417,7 @@ Ticket 040. The dashboard screen, embedded in the TUI (alt-screen).
   the user types the stack's name, and then run with `--yes`. `l` (load
   data) only says the load wizard isn't built (047). The dashboard sends
   `RunMsg`; the embedder runs it and sends `ActionDoneMsg` back, which drops
-  the deep check and polls again.
+  the deep check, polls again and restarts an ended log follower at once.
 - `Owns(msg)` names the dashboard's own messages (ticks, poll results, log
   lines), which the embedder routes to it while another screen shows. They
   carry the dashboard's id, so a closed dashboard's late ones are dropped

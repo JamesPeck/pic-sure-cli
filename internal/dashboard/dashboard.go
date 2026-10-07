@@ -42,7 +42,8 @@ type Action struct {
 type RunMsg struct{ Action Action }
 
 // ActionDoneMsg tells the dashboard its action's screen has closed. The
-// dashboard drops its cached deep check and polls again.
+// dashboard drops its cached deep check, polls again and follows the logs
+// again.
 type ActionDoneMsg struct{}
 
 // BackMsg asks the embedding program to leave the dashboard (esc).

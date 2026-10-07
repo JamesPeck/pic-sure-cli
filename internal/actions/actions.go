@@ -1,8 +1,8 @@
 // Package actions describes the operations the landing and the activity
-// screen can launch (the dashboard runs pic-sure commands instead). Destructive actions must be confirmed by
-// typing ConfirmWord and clearly state what is destroyed; every action
-// carries an AbortNote so a confirmed abort never leaves the user guessing
-// about state.
+// screen can launch (the dashboard runs pic-sure commands instead).
+// Destructive actions must be confirmed by typing ConfirmWord and clearly
+// state what is destroyed; every action carries an AbortNote so a confirmed
+// abort never leaves the user guessing about state.
 //
 // Starting an action fails with NotImplemented until the TUI tickets (038
 // renderer, 039 landing, 047 load wizard) run in-process

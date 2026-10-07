@@ -64,9 +64,7 @@ type model struct {
 	logSvc     string
 	logSession *logSession
 	logSeq     int
-	// logRetryDelay is the current follower-restart backoff: it doubles on each
-	// consecutive failed restart (up to logRetryMax) and resets once a session
-	// delivers real lines.
+	// logRetryDelay is the current follower-restart backoff (commands.go).
 	logRetryDelay time.Duration
 	// logReplace is set when a follower restarts: its first lines (the tail
 	// again) replace the scrollback, so the pane keeps the old lines and the
@@ -156,7 +154,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.selected = i
 				}
 			}
-			if svc := m.selectedService(); svc != "" && svc != m.logSvc {
+			switch svc := m.selectedService(); {
+			case svc == "" && m.logSvc != "":
+				m.stopLogs()
+			case svc != m.logSvc:
 				return m, m.followLogs(svc)
 			}
 		}
@@ -182,7 +183,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ActionDoneMsg:
 		m.invalidateDeep()
-		return m, tea.Batch(m.refreshServices(), m.refreshStatus())
+		// The action may have restarted the followed service: follow it
+		// again now rather than after the backoff.
+		var follow tea.Cmd
+		m.logRetryDelay = 0
+		if m.logSession == nil && m.logSvc != "" {
+			follow = m.restartLogs(m.logSvc)
+		}
+		return m, tea.Batch(m.refreshServices(), m.refreshStatus(), follow)
 
 	case logLinesMsg:
 		if m.logSession == nil || msg.sessionID != m.logSession.id {
@@ -206,7 +214,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// A follower that ran a while restarts quickly; one that keeps
 		// ending soon after it starts (an error, a stopped container) is
 		// restarted ever less often.
-		if time.Since(m.logSession.started) >= logRetryMax {
+		if time.Since(m.logSession.started) >= logRanLong {
 			m.logRetryDelay = 0
 		}
 		m.logSession = nil
@@ -365,6 +373,18 @@ func (m *model) startLogs(service string) tea.Cmd {
 	m.logSvc = service
 	m.logSession = startLogSession(m.ctx, m.backend, service, m.logSeq)
 	return m.own(m.logSession.waitLines())
+}
+
+// stopLogs stops following logs, when no service is listed.
+func (m *model) stopLogs() {
+	if m.logSession != nil {
+		m.logSession.stop()
+		m.logSession = nil
+	}
+	m.logSeq++ // drops a pending retry
+	m.logSvc = ""
+	m.logLines = nil
+	m.logView.SetContent("")
 }
 
 // cleanup stops the polls and the log follower when the dashboard closes.
