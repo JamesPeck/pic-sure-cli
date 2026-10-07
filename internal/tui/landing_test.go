@@ -61,7 +61,7 @@ func eq(a, b []string) bool {
 func TestLandingMenuIsContextAware(t *testing.T) {
 	// Fresh checkout: Preflight stays on the main menu — it matters most
 	// before/during the first install.
-	fresh := newLanding("/tmp/x", false, false)
+	fresh := newLanding("/tmp/x", noStack, false)
 	want := []string{"setup", "preflight", "quit"}
 	if got := menuIDs(fresh.menu); !eq(got, want) {
 		t.Errorf("fresh menu = %v, want %v", got, want)
@@ -69,10 +69,16 @@ func TestLandingMenuIsContextAware(t *testing.T) {
 	// Configured: Preflight has moved to Developer options; the main menu
 	// carries "Load your data…" (the guided load screen) instead of
 	// "Load demo data".
-	configured := newLanding("/tmp/x", true, false)
-	want = []string{"dashboard", "update", "loaddata", "reconfigure", "devmenu", "quit"}
+	configured := newLanding("/tmp/x", readyStack, false)
+	want = []string{"dashboard", "update", "loaddata", "devmenu", "quit"}
 	if got := menuIDs(configured.menu); !eq(got, want) {
 		t.Errorf("configured menu = %v, want %v", got, want)
+	}
+	// A stack init didn't finish offers to resume it.
+	part := newLanding("/tmp/x", partStack, false)
+	want = []string{"resume", "devmenu", "quit"}
+	if got := menuIDs(part.menu); !eq(got, want) {
+		t.Errorf("partial stack menu = %v, want %v", got, want)
 	}
 	labels := menuLabels(configured.menu)
 	if !contains(labels, "Load your data…") {
@@ -87,8 +93,8 @@ func TestLandingMenuIsContextAware(t *testing.T) {
 }
 
 func TestLandingDevSubmenu(t *testing.T) {
-	l := newLanding("/tmp/x", true, false)
-	keyDownN(l, 4) // select devmenu
+	l := newLanding("/tmp/x", readyStack, false)
+	keyDownN(l, 3) // select devmenu
 	l.update(keyEnter())
 	want := []string{"preflight", "migrate", "seed", "demo", "etl", "devoverlay", "devrevert", "relctl", "reset", "uninstall", "back"}
 	if got := menuIDs(l.menu); !eq(got, want) {
@@ -110,7 +116,7 @@ func TestLandingDevSubmenu(t *testing.T) {
 	}
 	// esc returns to the main menu
 	l.update(tea.KeyPressMsg{Code: tea.KeyEscape})
-	if got := menuIDs(l.menu); len(got) != 6 {
+	if got := menuIDs(l.menu); len(got) != 5 {
 		t.Fatalf("esc did not return to main menu: %v", got)
 	}
 }
@@ -121,9 +127,9 @@ func TestLandingDevSubmenu(t *testing.T) {
 // menuWidth, so any label longer than menuWidth-4 wraps to a second line and
 // shears the box. At width 80, menuWidth = min(max(80/3,28),80-8) = 28.
 func TestLandingDevMenuNoWrapAt80(t *testing.T) {
-	l := newLanding("/tmp/x", true, false)
+	l := newLanding("/tmp/x", readyStack, false)
 	l.setSize(80, 40)
-	keyDownN(l, 4) // open the dev submenu
+	keyDownN(l, 3) // open the dev submenu
 	l.update(keyEnter())
 
 	// Same menuWidth formula as contentLines at width 80.
@@ -152,9 +158,9 @@ func TestLandingDevMenuNoWrapAt80(t *testing.T) {
 // synthetic resize from setSize, a dialog opened wide and then shrunk keeps
 // rendering at the old budget (content clipped below the fold).
 func TestLandingResizeReflowsOpenDialog(t *testing.T) {
-	l := newLanding("/tmp/x", true, false)
+	l := newLanding("/tmp/x", readyStack, false)
 	l.setSize(120, 40)
-	keyDownN(l, 4) // dev submenu
+	keyDownN(l, 3) // dev submenu
 	l.update(keyEnter())
 	// Open the reset dialog (a tall select+input group).
 	keyDownN(l, 8) // preflight, migrate, seed, demo, etl, devoverlay, devrevert, relctl, reset
@@ -185,7 +191,7 @@ func maxLineWidth(s string) int {
 }
 
 func TestLandingSelectionsEmitRequests(t *testing.T) {
-	l := newLanding("/tmp/x", true, false)
+	l := newLanding("/tmp/x", readyStack, false)
 	// Dashboard (first item)
 	_, cmd := l.update(keyEnter())
 	if _, ok := cmd().(openDashboardMsg); !ok {
@@ -193,8 +199,8 @@ func TestLandingSelectionsEmitRequests(t *testing.T) {
 	}
 	// Preflight runs immediately (read-only, no confirm). On a configured
 	// checkout it lives in the Developer options submenu now.
-	l = newLanding("/tmp/x", true, false)
-	keyDownN(l, 4) // devmenu
+	l = newLanding("/tmp/x", readyStack, false)
+	keyDownN(l, 3) // devmenu
 	l.update(keyEnter())
 	_, cmd = l.update(keyEnter()) // preflight is the first dev-submenu item
 	run, ok := cmd().(runActionMsg)
@@ -203,7 +209,7 @@ func TestLandingSelectionsEmitRequests(t *testing.T) {
 	}
 	// On a fresh checkout Preflight stays on the main menu and still runs
 	// immediately.
-	l = newLanding("/tmp/x", false, false)
+	l = newLanding("/tmp/x", noStack, false)
 	keyDownN(l, 1) // setup, preflight
 	_, cmd = l.update(keyEnter())
 	run, ok = cmd().(runActionMsg)
@@ -211,23 +217,28 @@ func TestLandingSelectionsEmitRequests(t *testing.T) {
 		t.Fatalf("fresh preflight selection = %#v, want runActionMsg{preflight}", cmd())
 	}
 	// Update opens a light confirm, not an immediate run
-	l = newLanding("/tmp/x", true, false)
+	l = newLanding("/tmp/x", readyStack, false)
 	keyDownN(l, 1)
 	_, _ = l.update(keyEnter())
 	if l.form == nil || l.pending == nil || l.pending.Name != "update" {
 		t.Fatal("update selection did not open a confirm dialog")
 	}
 	// Setup on a fresh checkout opens the embedded wizard
-	l = newLanding("/tmp/x", false, false)
+	l = newLanding("/tmp/x", noStack, false)
 	_, cmd = l.update(keyEnter())
-	wiz, ok := cmd().(openWizardMsg)
-	if !ok || wiz.reconfigure {
-		t.Fatalf("setup selection = %#v, want openWizardMsg{reconfigure: false}", cmd())
+	if _, ok := cmd().(openWizardMsg); !ok {
+		t.Fatalf("setup selection = %#v, want openWizardMsg", cmd())
+	}
+	// Resume setup runs init on the stack's own config.
+	l = newLanding("/tmp/x", partStack, false)
+	_, cmd = l.update(keyEnter())
+	if _, ok := cmd().(resumeSetupMsg); !ok {
+		t.Fatalf("resume selection = %#v, want resumeSetupMsg", cmd())
 	}
 }
 
 func TestLandingAnimationTicksSurviveConfirmDialog(t *testing.T) {
-	l := newLanding("/tmp/x", true, true)
+	l := newLanding("/tmp/x", readyStack, true)
 	l.setSize(80, 24)
 	l.startAnimations()
 	keyDownN(l, 1)       // select Update
@@ -242,7 +253,7 @@ func TestLandingAnimationTicksSurviveConfirmDialog(t *testing.T) {
 }
 
 func TestLandingQuitKeys(t *testing.T) {
-	l := newLanding("/tmp/x", true, false)
+	l := newLanding("/tmp/x", readyStack, false)
 	_, cmd := l.update(tea.KeyPressMsg{Code: 'q', Text: "q"})
 	if cmd == nil {
 		t.Fatal("q returned no command")
@@ -274,8 +285,8 @@ func devRoot(t *testing.T) string {
 }
 
 func TestLandingDevSubmenuHasOverlayEntries(t *testing.T) {
-	l := newLanding("/tmp/x", true, false)
-	keyDownN(l, 4)
+	l := newLanding("/tmp/x", readyStack, false)
+	keyDownN(l, 3)
 	l.update(keyEnter()) // enter developer options
 	want := []string{"preflight", "migrate", "seed", "demo", "etl", "devoverlay", "devrevert", "relctl", "reset", "uninstall", "back"}
 	if got := menuIDs(l.menu); !eq(got, want) {
@@ -284,7 +295,7 @@ func TestLandingDevSubmenuHasOverlayEntries(t *testing.T) {
 }
 
 func TestLandingDevOverlayPickerRunsAction(t *testing.T) {
-	l := newLanding(devRoot(t), true, false)
+	l := newLanding(devRoot(t), readyStack, false)
 	l.dev = true
 	l.rebuildMenu()
 	_, _ = l.choose("devoverlay")
@@ -308,7 +319,7 @@ func TestLandingDevOverlayPickerRunsAction(t *testing.T) {
 }
 
 func TestLandingDevOverlayPickerCancel(t *testing.T) {
-	l := newLanding(devRoot(t), true, false)
+	l := newLanding(devRoot(t), readyStack, false)
 	l.dev = true
 	l.rebuildMenu()
 	_, _ = l.choose("devoverlay")
@@ -330,7 +341,7 @@ func TestLandingDevOverlayPickerCancel(t *testing.T) {
 // dispatch a bogus `dev up "(loading overlays…)"` action (the branch input's
 // safe-cancel invariant: an unfilled dialog can only cancel, never act).
 func TestLandingDevPickerPrematureEnterCancels(t *testing.T) {
-	l := newLanding(devRoot(t), true, false)
+	l := newLanding(devRoot(t), readyStack, false)
 	l.dev = true
 	l.rebuildMenu()
 	_, _ = l.choose("devoverlay")
@@ -360,7 +371,7 @@ func TestLandingDevOverlayPickerNoFiles(t *testing.T) {
 	fetchDevOverlays = func(string) []string { return nil }
 	t.Cleanup(func() { fetchDevOverlays = orig })
 
-	l := newLanding(t.TempDir(), true, false)
+	l := newLanding(t.TempDir(), readyStack, false)
 	l.dev = true
 	l.rebuildMenu()
 	// The picker opens immediately with a placeholder; pump the async fill.
@@ -411,7 +422,7 @@ func TestLandingEtlPicker(t *testing.T) {
 	// The parameterless ETL picker ("Maintenance / adv. ETL…") lives in the
 	// Developer options submenu now; the main-menu "Load your data…" opens the
 	// guided load screen instead (see TestLandingLoadDataOpensGuidedScreen).
-	l := newLanding("/tmp/x", true, false)
+	l := newLanding("/tmp/x", readyStack, false)
 	l.dev = true
 	l.rebuildMenu()
 	_, _ = l.choose("etl")
@@ -434,7 +445,7 @@ func TestLandingEtlPicker(t *testing.T) {
 // (openLoadDataMsg) — NOT the parameterless ETL picker (which moved to the dev
 // submenu). It must not open a landing dialog form at all.
 func TestLandingLoadDataOpensGuidedScreen(t *testing.T) {
-	l := newLanding("/tmp/x", true, false)
+	l := newLanding("/tmp/x", readyStack, false)
 	if !contains(menuIDs(l.menu), "loaddata") {
 		t.Fatalf("configured menu missing the loaddata entry: %v", menuIDs(l.menu))
 	}
@@ -452,7 +463,7 @@ func TestLandingLoadDataOpensGuidedScreen(t *testing.T) {
 
 func TestLandingDemoOpensDatasetPicker(t *testing.T) {
 	// "Load demo data…" now lives in the Developer options submenu.
-	l := newLanding("/tmp/x", true, false)
+	l := newLanding("/tmp/x", readyStack, false)
 	l.dev = true
 	l.rebuildMenu()
 	_, _ = l.choose("demo")
@@ -479,7 +490,7 @@ func TestLandingDemoOpensDatasetPicker(t *testing.T) {
 // invocation runs, and the typed word still gates dispatch.
 func TestLandingResetCombinedScreen(t *testing.T) {
 	open := func() *landing {
-		l := newLanding("/tmp/x", true, false)
+		l := newLanding("/tmp/x", readyStack, false)
 		l.dev = true
 		l.rebuildMenu()
 		_, _ = l.choose("reset")
@@ -579,7 +590,7 @@ func TestLandingResetCombinedScreen(t *testing.T) {
 // be visible after the fill.
 func TestLandingDevPickerShowsAllOptionsInitially(t *testing.T) {
 	// devRoot stubs fetchDevOverlays → ["httpd-hmr", "gateway"].
-	l := newLanding(devRoot(t), true, false)
+	l := newLanding(devRoot(t), readyStack, false)
 	l.setSize(100, 35)
 	l.dev = true
 	l.rebuildMenu()
@@ -606,7 +617,7 @@ func TestLandingReleaseControlSubmenu(t *testing.T) {
 	fetchReleaseBranch = func(string) string { return "release/2.4" }
 	t.Cleanup(func() { fetchReleaseBranch = orig })
 
-	l := newLanding("/tmp/x", true, false)
+	l := newLanding("/tmp/x", readyStack, false)
 	l.dev = true
 	l.rebuildMenu()
 	_, _ = l.choose("relctl")
@@ -650,7 +661,7 @@ func TestLandingReleaseControlSubmenu(t *testing.T) {
 	}
 
 	// back navigates to the dev submenu
-	l2 := newLanding("/tmp/x", true, false)
+	l2 := newLanding("/tmp/x", readyStack, false)
 	l2.dev = true
 	l2.rebuildMenu()
 	_, _ = l2.choose("relctl")
@@ -691,7 +702,7 @@ func TestLandingDevPickerOpensImmediately(t *testing.T) {
 	}
 	t.Cleanup(func() { fetchDevOverlays = orig })
 
-	l := newLanding("/tmp/x", true, false)
+	l := newLanding("/tmp/x", readyStack, false)
 	l.setSize(80, 24)
 	l.dev = true
 	l.rebuildMenu()
@@ -719,7 +730,7 @@ func TestLandingDevPickerFillStaleness(t *testing.T) {
 	fetchDevOverlays = func(string) []string { return []string{"hpds"} }
 	t.Cleanup(func() { fetchDevOverlays = orig })
 
-	l := newLanding("/tmp/x", true, false)
+	l := newLanding("/tmp/x", readyStack, false)
 	l.setSize(80, 24)
 	l.dev = true
 	l.rebuildMenu()
@@ -801,7 +812,7 @@ func TestDevOverlaysFetchParsing(t *testing.T) {
 			fetchDevOverlays = func(string) []string { return tc.fetched }
 			t.Cleanup(func() { fetchDevOverlays = orig })
 
-			l := newLanding("/tmp/x", true, false)
+			l := newLanding("/tmp/x", readyStack, false)
 			l.setSize(100, 35)
 			l.dev = true
 			l.rebuildMenu()
@@ -838,7 +849,7 @@ func TestLandingBranchInputOpensImmediately(t *testing.T) {
 	}
 	t.Cleanup(func() { fetchReleaseBranch = orig })
 
-	l := newLanding("/tmp/x", true, false)
+	l := newLanding("/tmp/x", readyStack, false)
 	l.setSize(80, 24)
 	l.dev = true
 	l.rebuildMenu()
@@ -875,7 +886,7 @@ func TestLandingBranchPrefillStaleness(t *testing.T) {
 	t.Cleanup(func() { fetchReleaseBranch = orig })
 
 	open := func() *landing {
-		l := newLanding("/tmp/x", true, false)
+		l := newLanding("/tmp/x", readyStack, false)
 		l.setSize(80, 24)
 		l.dev = true
 		l.rebuildMenu()
@@ -926,7 +937,7 @@ func TestLandingBranchPrefillFailure(t *testing.T) {
 	t.Cleanup(func() { fetchReleaseBranch = orig })
 
 	open := func() *landing {
-		l := newLanding("/tmp/x", true, false)
+		l := newLanding("/tmp/x", readyStack, false)
 		l.setSize(80, 24)
 		l.dev = true
 		l.rebuildMenu()
@@ -993,7 +1004,7 @@ func TestLandingFrameStaysInBoxWithDialogs(t *testing.T) {
 	}
 	for _, sz := range sizes {
 		for i, openDialog := range open {
-			l := newLanding("/tmp/x", true, false)
+			l := newLanding("/tmp/x", readyStack, false)
 			l.setSize(sz[0], sz[1])
 			openDialog(l)
 			view := l.view()
@@ -1014,7 +1025,7 @@ func TestLandingFrameStaysInBoxWithDialogs(t *testing.T) {
 // wrong. The footer must switch to a dialog-appropriate hint ("esc cancel")
 // when l.form != nil, and revert to the normal hints once the dialog closes.
 func TestLandingFooterSwitchesWhenDialogIsOpen(t *testing.T) {
-	l := newLanding("/tmp/x", true, false)
+	l := newLanding("/tmp/x", readyStack, false)
 	// No dialog: normal footer.
 	if got := l.footer(); got != "↑/↓ select · enter · q quit" {
 		t.Errorf("no-dialog footer = %q, want hint with q quit", got)
@@ -1061,7 +1072,7 @@ func TestLandingEscCancelsEveryDialogKind(t *testing.T) {
 		}},
 	}
 	for _, tc := range open {
-		l := newLanding("/tmp/x", true, false)
+		l := newLanding("/tmp/x", readyStack, false)
 		l.setSize(80, 24)
 		tc.do(l)
 		if l.form == nil {

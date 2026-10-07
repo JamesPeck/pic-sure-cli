@@ -8,8 +8,9 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/colorprofile"
 
-	"github.com/JamesPeck/pic-sure-cli/internal/actions"
 	"github.com/JamesPeck/pic-sure-cli/internal/dashboard"
+	"github.com/JamesPeck/pic-sure-cli/internal/ops"
+	"github.com/JamesPeck/pic-sure-cli/internal/stack"
 	"github.com/JamesPeck/pic-sure-cli/internal/styles"
 )
 
@@ -22,6 +23,7 @@ const (
 	ScreenActivity
 	ScreenWizard
 	ScreenLoadData
+	ScreenRun
 )
 
 // Options configures the unified TUI.
@@ -29,10 +31,19 @@ type Options struct {
 	Root       string
 	Start      Screen
 	Animations bool
+	// Init runs init in-process for the setup wizard and "Resume setup",
+	// sending its events to req.Sink.
+	Init func(ctx context.Context, req InitRequest) (InitResult, error)
+	// Defaults is the config the setup wizard opens with for a new stack
+	// in dir: free ports, a name. Nil means stack.DefaultConfig.
+	Defaults func(dir string) stack.Config
 }
 
-// openWizardMsg asks the app to open the embedded wizard screen.
-type openWizardMsg struct{ reconfigure bool }
+// openWizardMsg asks the app to open the setup wizard.
+type openWizardMsg struct{}
+
+// resumeSetupMsg asks the app to run init on the stack's own config.
+type resumeSetupMsg struct{}
 
 // Run starts the unified TUI and blocks until the user quits or ctx is
 // done. The CLI owns SIGINT and SIGTERM, which cancel ctx; Bubble Tea's own
@@ -45,11 +56,17 @@ func Run(ctx context.Context, o Options) error {
 		// parse as true; no-color.org counts any non-empty value.
 		opts = append(opts, tea.WithColorProfile(colorprofile.Ascii))
 	}
-	_, err := tea.NewProgram(newApp(o), opts...).Run()
+	a := newApp(ctx, o)
+	_, err := tea.NewProgram(a, opts...).Run()
+	if a.run != nil {
+		// Ended by a signal while init ran: let it stop and clean up.
+		a.run.close()
+	}
 	return err
 }
 
 type app struct {
+	ctx           context.Context
 	opts          Options
 	width, height int
 
@@ -59,11 +76,12 @@ type app struct {
 	activity *activity
 	wizard   *wizardScreen
 	load     *loadScreen
+	run      *runScreen
 }
 
-func newApp(o Options) *app {
-	a := &app{opts: o, screen: ScreenLanding}
-	a.landing = newLanding(o.Root, envExists(o.Root), o.Animations)
+func newApp(ctx context.Context, o Options) *app {
+	a := &app{ctx: ctx, opts: o, screen: ScreenLanding}
+	a.landing = newLanding(o.Root, detectStack(o.Root), o.Animations)
 	if o.Start == ScreenDashboard {
 		a.dash = dashboard.New(o.Root)
 		a.screen = ScreenDashboard
@@ -71,9 +89,24 @@ func newApp(o Options) *app {
 	return a
 }
 
-func envExists(root string) bool {
-	_, err := os.Stat(filepath.Join(root, ".env"))
-	return err == nil
+// stackStatus is what the landing finds in its directory.
+type stackStatus int
+
+const (
+	noStack stackStatus = iota
+	// partStack has a pic-sure.yaml, but init hasn't finished.
+	partStack
+	readyStack
+)
+
+func detectStack(root string) stackStatus {
+	if _, err := os.Stat(filepath.Join(root, stack.ConfigFile)); err != nil {
+		return noStack
+	}
+	if st, err := ops.PeekState(root); err != nil || st == nil || st.InitializedAt.IsZero() {
+		return partStack
+	}
+	return readyStack
 }
 
 // Init asks the terminal for its background color alongside the first
@@ -102,6 +135,9 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if a.load != nil {
 			a.load.setSize(msg.Width, msg.Height)
+		}
+		if a.run != nil {
+			a.run.setSize(msg.Width, msg.Height)
 		}
 		if a.dash != nil {
 			var cmd tea.Cmd
@@ -136,11 +172,11 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a.openLanding()
 
 	case openWizardMsg:
-		s, err := newWizardScreen(a.opts.Root, msg.reconfigure)
-		if err != nil {
-			a.landing.result = "setup failed: " + err.Error()
-			return a, nil
+		base := stack.DefaultConfig()
+		if a.opts.Defaults != nil {
+			base = a.opts.Defaults(a.opts.Root)
 		}
+		s := newWizardScreen(base)
 		a.landing.stopAnimations()
 		s.setSize(a.width, a.height)
 		a.wizard = s
@@ -149,20 +185,26 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case wizardClosedMsg:
 		a.wizard = nil
-		if msg.aborted {
-			a.landing.result = "setup cancelled — nothing written"
+		a.landing.result = "setup cancelled — nothing written"
+		if msg.err != nil {
+			a.landing.result = "setup failed: " + msg.err.Error()
 		}
 		return a, a.openLandingCmd()
 
-	case wizardWritesDoneMsg:
+	case wizardDoneMsg:
+		// Consent was given at the wizard's confirm-summary.
 		a.wizard = nil
-		if msg.err != nil {
-			a.landing.result = "setup failed: " + msg.err.Error()
-			return a, a.openLandingCmd()
+		return a.startInit(InitRequest{Dir: a.opts.Root, Config: msg.doc, Secrets: msg.secrets})
+
+	case resumeSetupMsg:
+		return a.startInit(InitRequest{Dir: a.opts.Root})
+
+	case runClosedMsg:
+		if a.run != nil {
+			a.run.close()
+			a.run = nil
 		}
-		// Consent already given at the wizard's confirm-summary: run init
-		// in the activity screen with no further dialog.
-		return a.Update(runActionMsg{act: actions.Init()})
+		return a, a.openLandingCmd()
 
 	case openLoadDataMsg:
 		s := newLoadScreen(a.opts.Root)
@@ -210,6 +252,13 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		a.load, cmd = a.load.update(msg)
 		return a, cmd
+	case ScreenRun:
+		if a.run == nil {
+			return a, nil
+		}
+		var cmd tea.Cmd
+		a.run, cmd = a.run.update(msg)
+		return a, cmd
 	default:
 		var cmd tea.Cmd
 		a.landing, cmd = a.landing.update(msg)
@@ -227,9 +276,22 @@ func (a *app) openDashboard() (tea.Model, tea.Cmd) {
 	return a, tea.Batch(cmd, a.dash.Init())
 }
 
+// startInit opens the run screen on an init of req.
+func (a *app) startInit(req InitRequest) (tea.Model, tea.Cmd) {
+	if a.opts.Init == nil {
+		a.landing.result = "setup failed: init isn't available here"
+		return a, a.openLandingCmd()
+	}
+	a.landing.stopAnimations()
+	a.run = newRunScreen(a.ctx, "Setting up PIC-SURE", a.opts.Init, req, a.opts.Animations)
+	a.run.setSize(a.width, a.height)
+	a.screen = ScreenRun
+	return a, a.run.init()
+}
+
 func (a *app) openLandingCmd() tea.Cmd {
 	a.screen = ScreenLanding
-	a.landing.setEnvExists(envExists(a.opts.Root))
+	a.landing.setStatus(detectStack(a.opts.Root))
 	return a.landing.startAnimations()
 }
 
@@ -261,6 +323,10 @@ func (a *app) content() string {
 	case ScreenLoadData:
 		if a.load != nil {
 			return a.load.view()
+		}
+	case ScreenRun:
+		if a.run != nil {
+			return a.run.view()
 		}
 	}
 	return a.landing.view()

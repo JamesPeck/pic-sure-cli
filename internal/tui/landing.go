@@ -58,7 +58,7 @@ var fetchDevOverlays = func(string) []string { return nil }
 // script invocation already exposed by the CLI.
 type landing struct {
 	root       string
-	envExists  bool
+	status     stackStatus
 	animations bool
 
 	star   *starfield
@@ -87,10 +87,10 @@ type landing struct {
 	width, height int
 }
 
-func newLanding(root string, envExists, animations bool) *landing {
+func newLanding(root string, status stackStatus, animations bool) *landing {
 	l := &landing{
 		root:       root,
-		envExists:  envExists,
+		status:     status,
 		animations: animations,
 		star:       newStarfield(starGlyphs(os.Getenv)),
 		logo:       newLogo(),
@@ -122,12 +122,17 @@ func (l *landing) rebuildMenu() {
 			menuItem{ID: "uninstall", Label: "Uninstall…"},
 			menuItem{ID: "back", Label: "Back"},
 		)
-	case l.envExists:
+	case l.status == readyStack:
 		l.menu = newMenu(
 			menuItem{ID: "dashboard", Label: "Dashboard"},
 			menuItem{ID: "update", Label: "Update"},
 			menuItem{ID: "loaddata", Label: "Load your data…"},
-			menuItem{ID: "reconfigure", Label: "Reconfigure"},
+			menuItem{ID: "devmenu", Label: "Developer options…"},
+			menuItem{ID: "quit", Label: "Quit"},
+		)
+	case l.status == partStack:
+		l.menu = newMenu(
+			menuItem{ID: "resume", Label: "Resume setup"},
 			menuItem{ID: "devmenu", Label: "Developer options…"},
 			menuItem{ID: "quit", Label: "Quit"},
 		)
@@ -155,12 +160,13 @@ func (l *landing) stopAnimations() {
 	l.logo.stopShine()
 }
 
-// setEnvExists refreshes context-awareness (called after setup or actions).
-func (l *landing) setEnvExists(exists bool) {
-	if l.envExists == exists {
+// setStatus refreshes the menu for what is in the directory now (after
+// setup or an action).
+func (l *landing) setStatus(status stackStatus) {
+	if l.status == status {
 		return
 	}
-	l.envExists = exists
+	l.status = status
 	l.dev = false
 	l.relctl = false
 	l.rebuildMenu()
@@ -252,8 +258,8 @@ func (l *landing) choose(id string) (*landing, tea.Cmd) {
 		return l, func() tea.Msg { return openDashboardMsg{} }
 	case "setup":
 		return l, func() tea.Msg { return openWizardMsg{} }
-	case "reconfigure":
-		return l, func() tea.Msg { return openWizardMsg{reconfigure: true} }
+	case "resume":
+		return l, func() tea.Msg { return resumeSetupMsg{} }
 	case "preflight":
 		// Read-only: runs immediately, no confirm (spec: Flows table).
 		act := actions.Preflight()

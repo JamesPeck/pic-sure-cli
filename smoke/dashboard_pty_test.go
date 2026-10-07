@@ -142,6 +142,25 @@ func (s *ptySession) waitExit0() {
 	}
 }
 
+// finishedStack returns a directory the landing takes for a stack init
+// finished: a pic-sure.yaml, and a state.json with initialized_at.
+func finishedStack(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".pic-sure"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, data := range map[string]string{
+		"pic-sure.yaml":        "schema: 1\nname: smoke\n",
+		".pic-sure/state.json": `{"initialized_at": "2026-10-07T00:00:00Z"}`,
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(data), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
 func TestLandingStartsAndQuitsUnderPTY(t *testing.T) {
 	skipUnlessPTYAllowed(t)
 	s := startPTY(t, t.TempDir(), "--no-animations")
@@ -152,12 +171,9 @@ func TestLandingStartsAndQuitsUnderPTY(t *testing.T) {
 
 func TestDashboardStartsAndQuitsUnderPTY(t *testing.T) {
 	skipUnlessPTYAllowed(t)
-	// The landing still detects a configured stack by the v1 .env file;
-	// with one present, its first entry opens the dashboard.
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, ".env"), nil, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	// On a stack init finished, the landing's first entry opens the
+	// dashboard.
+	dir := finishedStack(t)
 	s := startPTY(t, dir, "--no-animations")
 	s.waitFor("Dashboard")
 	s.send("\r")
@@ -168,16 +184,10 @@ func TestDashboardStartsAndQuitsUnderPTY(t *testing.T) {
 
 func TestWizardOpensAndClosesUnderPTY(t *testing.T) {
 	skipUnlessPTYAllowed(t)
-	// The setup wizard still seeds itself from the v1 .env.example.
-	dir := t.TempDir()
-	example := "DB_MODE=local\nAUTH_MODE=open\n"
-	if err := os.WriteFile(filepath.Join(dir, ".env.example"), []byte(example), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	s := startPTY(t, dir, "--no-animations")
+	s := startPTY(t, t.TempDir(), "--no-animations")
 	s.waitFor("Set up PIC-SURE")
 	s.send("\r")
-	s.waitFor("Identity provider", "esc cancel")
+	s.waitFor("Stack name", "esc cancel")
 	s.send("\x1b") // a pristine form closes without asking
 	s.waitFor("setup cancelled")
 	s.send("q")
@@ -189,10 +199,7 @@ func TestWizardOpensAndClosesUnderPTY(t *testing.T) {
 // (#224D96) rather than the lifted dark-background variant.
 func TestTUIFollowsTerminalBackground(t *testing.T) {
 	skipUnlessPTYAllowed(t)
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, ".env"), nil, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	dir := finishedStack(t)
 	s := startPTYEnv(t, dir, []string{"TERM=xterm-256color", "COLORTERM=truecolor", "NO_COLOR="}, "--no-animations")
 	s.waitFor("\x1b]11;?") // the background color query (OSC 11)
 	s.send("\x1b]11;rgb:ffff/ffff/ffff\x07")
@@ -207,10 +214,7 @@ func TestTUIFollowsTerminalBackground(t *testing.T) {
 // truecolor terminal and even for values that don't parse as true.
 func TestTUIHonoursNoColor(t *testing.T) {
 	skipUnlessPTYAllowed(t)
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, ".env"), nil, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	dir := finishedStack(t)
 	s := startPTYEnv(t, dir, []string{"TERM=xterm-256color", "COLORTERM=truecolor", "NO_COLOR=yes"}, "--no-animations")
 	s.waitFor("Dashboard")
 	s.send("\r")

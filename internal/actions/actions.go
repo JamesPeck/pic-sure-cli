@@ -27,19 +27,6 @@ type Action struct {
 	AbortNote   string // shown after a confirmed mid-run abort
 }
 
-// Init runs the full first-time setup (or a re-run after reconfiguration).
-// The wizard's confirm-summary is the consent step, so no separate confirm
-// dialog is shown before this action.
-func Init() Action {
-	return Action{
-		Name:   "setup (init.sh)",
-		Ticket: "034",
-		Describe: "Generates secrets and config, clones/builds service images,\n" +
-			"starts the stack, and seeds the database. Idempotent.",
-		AbortNote: "init.sh is safe to re-run; it resumes from the current state.",
-	}
-}
-
 func Update() Action {
 	return Action{
 		Name:   "update",

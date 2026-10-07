@@ -83,11 +83,15 @@ func (a *App) openRunLog(st *stack.Stack) {
 	a.runLogPath = path
 }
 
-// logStderr is where log records for stderr go: through the TUI renderer
-// while the run has one, so they print above its frame, else to stderr.
+// logStderr is where log records for stderr go: to the full-screen TUI's
+// init as events while it runs one, through the TUI renderer while the run
+// has one, so they print above its frame, else to stderr.
 type logStderr struct{ a *App }
 
 func (w logStderr) Write(b []byte) (int, error) {
+	if l := w.a.tuiLog.Load(); l != nil {
+		return l.Write(b)
+	}
 	if r := w.a.tuiOut.Load(); r != nil {
 		return r.Write(b)
 	}

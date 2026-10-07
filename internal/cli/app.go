@@ -57,6 +57,9 @@ type App struct {
 	// tuiOut is the run's TUI renderer, if it has one, for log records
 	// written from any goroutine (logStderr).
 	tuiOut atomic.Pointer[progress.Renderer]
+	// tuiLog takes the log records for stderr while the full-screen TUI
+	// runs init (initFromTUI).
+	tuiLog atomic.Pointer[logEvents]
 	// interrupt cancels the running command's context as SIGINT would. The
 	// TUI renderer calls it when the user confirms Ctrl-C, which the
 	// terminal delivers as a key rather than a signal while it runs.
@@ -147,20 +150,25 @@ func (a *App) canPrompt() bool {
 	return !g.Yes && !g.NonInteractive && !g.JSON && a.IsTerminal()
 }
 
-// startTUI opens the TUI's landing screen on the --stack directory, or the
+// startTUI opens the TUI's landing screen on the stack a command would act
+// on, or else on the directory init would create one in: --stack, or the
 // current one.
 func (a *App) startTUI(ctx context.Context) error {
-	dir := a.Global.Stack
-	if dir == "" {
-		wd, err := os.Getwd()
-		if err != nil {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	dir, err := stack.Find(a.Global.Stack, cwd)
+	if err != nil {
+		if dir, err = stack.InitDir("", a.Global.Stack, cwd); err != nil {
 			return err
 		}
-		dir = wd
 	}
 	return a.StartTUI(ctx, tui.Options{
 		Root:       dir,
 		Start:      tui.ScreenLanding,
 		Animations: tui.AnimationsEnabled(a.Global.NoAnimations, os.Getenv),
+		Init:       a.initFromTUI,
+		Defaults:   wizardDefaults,
 	})
 }

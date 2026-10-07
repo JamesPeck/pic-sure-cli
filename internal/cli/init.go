@@ -80,23 +80,40 @@ the cache (see cache prune).`,
 	return c
 }
 
-// initRun is one init's state, shared by its steps.
+// initRun is one init's state, shared by its steps. The fields before d
+// are its options: initStack fills them from the flags, and the TUI's
+// setup wizard sets them itself (initFromTUI).
 type initRun struct {
 	a   *App
 	cmd *cobra.Command
-	d   *ops.Deps
 	dir string
 	// resumed is set when DIR already had a pic-sure.yaml.
 	resumed bool
-	doc     *stack.ConfigDoc
-	cfg     *stack.Config
+	// doc and cfg are the config. When cfg is nil, run reads it from DIR's
+	// pic-sure.yaml or the flags.
+	doc *stack.ConfigDoc
+	cfg *stack.Config
+	// httpPort and httpsPort are the ports asked for, 0 to choose one.
+	httpPort, httpsPort int
+	autoPorts           bool
+	supplied            stack.UserSecrets
+	// fromFlags makes run read the --*-stdin secrets.
+	fromFlags bool
+	// selfUpdate, ignoreCLIVersion and confirm are the gate's options;
+	// installOnly makes its self-update install the new pic-sure without
+	// re-running, and gateCommand is the command its messages retry.
+	selfUpdate, ignoreCLIVersion bool
+	confirm                      func(context.Context, string) (bool, error)
+	installOnly                  bool
+	gateCommand                  string
 
-	sets     []initSet
-	supplied stack.UserSecrets
-	cache    *cache.Cache
-	proxy    *netproxy.Proxy
-	rel      *release.Release
-	prior    *stack.State // state.json before this run, nil if none
+	d *ops.Deps
+	// sets are the --set values (072).
+	sets  []initSet
+	cache *cache.Cache
+	proxy *netproxy.Proxy
+	rel   *release.Release
+	prior *stack.State // state.json before this run, nil if none
 
 	st    *stack.Stack
 	lock  *stack.Lock
@@ -104,28 +121,49 @@ type initRun struct {
 	state *stack.State
 }
 
-func (a *App) initStack(cmd *cobra.Command, args []string) (err error) {
-	ctx := cmd.Context()
+func (a *App) initStack(cmd *cobra.Command, args []string) error {
 	dir, err := a.initDir(args)
 	if err != nil {
 		return err
 	}
-	r := &initRun{a: a, cmd: cmd, dir: dir}
-	if r.prior, err = ops.PeekState(dir); err != nil {
+	r := &initRun{a: a, cmd: cmd, dir: dir, fromFlags: true, gateCommand: "pic-sure init"}
+	r.selfUpdate, _ = cmd.Flags().GetBool("self-update")
+	r.ignoreCLIVersion, _ = cmd.Flags().GetBool("ignore-cli-version")
+	summary, err := r.run(cmd.Context())
+	if err != nil {
 		return err
+	}
+	if summary.AlreadyInitialized {
+		return a.finish(summary, func(w io.Writer) error {
+			_, err := fmt.Fprintf(w, "Stack %s in %s is already initialised; use `pic-sure up` or `pic-sure update`.\n", summary.Stack, summary.Dir)
+			return err
+		})
+	}
+	return a.finish(summary, func(w io.Writer) error { return writeInitSummary(w, summary) })
+}
+
+// run creates and converges the stack, and returns its summary.
+func (r *initRun) run(ctx context.Context) (_ *ops.InitSummary, err error) {
+	a := r.a
+	if r.prior, err = ops.PeekState(r.dir); err != nil {
+		return nil, err
 	}
 	if r.prior != nil && !r.prior.InitializedAt.IsZero() {
-		return a.alreadyInitialized(cmd, dir)
+		return a.alreadyInitialized(r.cmd, r.dir)
 	}
-	if err := r.readConfig(); err != nil {
-		return err
+	if r.cfg == nil {
+		if err := r.readConfig(); err != nil {
+			return nil, err
+		}
 	}
 	log.RegisterSecrets(r.cfg.Auth.AdminEmail)
 	if err := checkInitSkips(r.cfg, a.Global.SkipSteps); err != nil {
-		return err
+		return nil, err
 	}
-	if err := r.readSecrets(); err != nil {
-		return err
+	if r.fromFlags {
+		if err := r.readSecrets(); err != nil {
+			return nil, err
+		}
 	}
 
 	r.d = a.newDeps()
@@ -143,11 +181,11 @@ func (a *App) initStack(cmd *cobra.Command, args []string) (err error) {
 		{ID: initConfig, Title: "Write the config and secrets", Apply: r.writeConfig},
 	}
 	if err := steps.Run(ctx, r.d.Sink, prep, steps.Options{}); err != nil {
-		return err
+		return nil, err
 	}
 	if r.state == nil {
 		// Another init finished the stack while this one waited for it.
-		return a.alreadyInitialized(cmd, dir)
+		return a.alreadyInitialized(r.cmd, r.dir)
 	}
 	if err := registerStack(ctx, r.cache, r.d.Sink, r.st, r.cfg.Name); err != nil {
 		_ = r.finishOperation(err)
@@ -164,10 +202,9 @@ func (a *App) initStack(cmd *cobra.Command, args []string) (err error) {
 		err = ferr
 	}
 	if err != nil {
-		return err
+		return nil, err
 	}
-	summary := ops.Summary(r.st, r.cfg, r.sec)
-	return a.finish(summary, func(w io.Writer) error { return writeInitSummary(w, summary) })
+	return ops.Summary(r.st, r.cfg, r.sec), nil
 }
 
 // checkInitSkips refuses a --skip-step that names no step of init's plan
@@ -182,22 +219,22 @@ func checkInitSkips(cfg *stack.Config, skips []string) error {
 	return nil
 }
 
-func (a *App) alreadyInitialized(cmd *cobra.Command, dir string) error {
+func (a *App) alreadyInitialized(cmd *cobra.Command, dir string) (*ops.InitSummary, error) {
 	st, err := stack.Open(dir)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer func() { _ = st.Close() }()
 	if err := a.gate(cmd, st); err != nil {
-		return err
+		return nil, err
 	}
 	cfg, err := st.LoadConfig()
 	if err != nil {
-		return configError(err)
+		return nil, configError(err)
 	}
 	sec, err := st.LoadSecrets()
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return err
+		return nil, err
 	}
 	// Register though nothing else runs: the stack may have been moved here.
 	sink := a.newDeps().Sink
@@ -206,10 +243,7 @@ func (a *App) alreadyInitialized(cmd *cobra.Command, dir string) error {
 	}
 	summary := ops.Summary(st, cfg, sec)
 	summary.AlreadyInitialized = true
-	return a.finish(summary, func(w io.Writer) error {
-		_, err := fmt.Fprintf(w, "Stack %s in %s is already initialised; use `pic-sure up` or `pic-sure update`.\n", cfg.Name, st.Dir)
-		return err
-	})
+	return summary, nil
 }
 
 // readConfig reads DIR's pic-sure.yaml when there is one, or else makes the
@@ -298,6 +332,7 @@ func (r *initRun) readConfig() error {
 		return err
 	}
 	auto, _ := flags.GetBool("auto-ports")
+	r.httpPort, r.httpsPort, r.autoPorts = httpPort, httpsPort, auto
 	if err := r.setPorts(anyPortFree{}, httpPort, httpsPort, auto); err != nil {
 		return err
 	}
@@ -567,17 +602,7 @@ func (r *initRun) preconditions(ctx context.Context, sink events.Sink) error {
 		}
 		return nil
 	}
-	flags := r.cmd.Flags()
-	httpPort, err := r.portFlag("http-port", "network.http_port")
-	if err != nil {
-		return err
-	}
-	httpsPort, err := r.portFlag("https-port", "network.https_port")
-	if err != nil {
-		return err
-	}
-	auto, _ := flags.GetBool("auto-ports")
-	if err := r.setPorts(systemHost{}, httpPort, httpsPort, auto); err != nil {
+	if err := r.setPorts(systemHost{}, r.httpPort, r.httpsPort, r.autoPorts); err != nil {
 		return err
 	}
 	if r.cfg, err = r.doc.Config(); err != nil {
@@ -650,15 +675,18 @@ func (r *initRun) fetchRelease(ctx context.Context, sink events.Sink) error {
 	if r.rel, err = release.Fetch(ctx, r.cache.WithEvents(sink, initRelease), r.d.Git, sink, initRelease, r.releaseOptions()); err != nil {
 		return err
 	}
-	selfUpdate, _ := r.cmd.Flags().GetBool("self-update")
-	ignore, _ := r.cmd.Flags().GetBool("ignore-cli-version")
+	var updater release.SelfUpdater = r.a.newSelfUpdater(r.proxy, sink, initRelease)
+	if r.installOnly {
+		updater = installOnly{r.a.newSelfUpdater(r.proxy, sink, initRelease)}
+	}
 	return r.rel.Gate(ctx, release.GateOptions{
 		CLIVersion:       r.a.Info.Version,
 		Compat:           r.cfg.Release.CLICompat,
-		SelfUpdate:       selfUpdate,
-		IgnoreCLIVersion: ignore,
-		Updater:          r.a.newSelfUpdater(r.proxy, sink, initRelease),
-		Command:          "pic-sure init",
+		SelfUpdate:       r.selfUpdate,
+		IgnoreCLIVersion: r.ignoreCLIVersion,
+		Confirm:          r.confirm,
+		Updater:          updater,
+		Command:          r.gateCommand,
 		Sink:             sink,
 		Step:             initRelease,
 	})

@@ -44,7 +44,7 @@ func TestLandingNarrowLogoMatrix(t *testing.T) {
 	for _, sz := range sizes {
 		w, h := sz[0], sz[1]
 		t.Run(fmt.Sprintf("%dx%d", w, h), func(t *testing.T) {
-			l := newLanding("/tmp/x", true, false)
+			l := newLanding("/tmp/x", readyStack, false)
 			l.setSize(w, h)
 			view := l.view()
 
@@ -174,7 +174,7 @@ func TestActivityFooterMatrix(t *testing.T) {
 func TestLandingColorProfileSGR(t *testing.T) {
 	for _, sz := range [][2]int{{60, 16}, {80, 24}, {200, 50}} {
 		w, h := sz[0], sz[1]
-		l := newLanding("/tmp/x", true, false)
+		l := newLanding("/tmp/x", readyStack, false)
 		l.setSize(w, h)
 		view := l.view()
 

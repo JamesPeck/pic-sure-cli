@@ -129,7 +129,7 @@ func TestResetWithArgs(t *testing.T) {
 // also names the v2 ticket that implements it, for the not-implemented error.
 func TestEveryActionHasAbortNoteAndTicket(t *testing.T) {
 	acts := []Action{
-		Init(), Update(), Restart("gateway"), Preflight(), Migrate(), SeedDB(),
+		Update(), Restart("gateway"), Preflight(), Migrate(), SeedDB(),
 		DemoData("nhanes"), DemoData("all"), DevUp("httpd-hmr"), DevOff("httpd"),
 		Reset(), ResetAll(), ResetWith(false, true), ResetWith(true, true), Uninstall(),
 		Etl("hydrate-dictionary"), Etl("run-weights"), Etl("promote-genomic"), Etl("public-1000genomes"),

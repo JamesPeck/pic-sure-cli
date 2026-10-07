@@ -5,138 +5,147 @@ import (
 	"fmt"
 	"strings"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
+
+	"github.com/JamesPeck/pic-sure-cli/internal/jwt"
+	"github.com/JamesPeck/pic-sure-cli/internal/stack"
 )
 
-// summaryDimStyle renders the "(default)" marker faintly so it reads as a quiet
-// annotation, not a value.
+// summaryDimStyle renders the "(default)" marker faintly, as an annotation
+// rather than part of the value.
 var summaryDimStyle = lipgloss.NewStyle().Faint(true)
 
-// Form is the wizard's single definition (spec amendment 1): one constructor
-// builds the field form and, after it completes, the confirm-summary form.
-// Both hosts — the standalone CLI runner (RunForm) and the TUI's embedded
-// wizard screen — consume this type and differ only in how they pump it.
+const (
+	clientSecretKey = "auth.auth0.client_secret"
+	rootPasswordKey = "db.remote.root_password"
+	proxyHTTPKey    = "proxy.http"
+	proxyHTTPSKey   = "proxy.https"
+)
+
+// Form is the setup form: Main asks for the fields, and Confirm, built by
+// BuildConfirm once Main completes, summarizes them and asks to go ahead.
 type Form struct {
-	// vals tracks the current user-visible values; it is the authoritative
-	// source for Desired(). It is initialised from initial and refreshed by
-	// syncFromHuh (called from BuildConfirm, which both hosts invoke once
-	// Main completes) so that the select normalisation huh performs does not
-	// clobber the caller-supplied seeds before the form has run.
-	vals map[string]string
-	// ptrs are the string pointers shared with the huh input/select fields.
-	// huh may overwrite them during construction (select normalisation), so
-	// they are NOT the source of truth until BuildConfirm syncs them back.
-	ptrs map[string]*string
-	// seed is the post-normalisation baseline captured at construction: the
-	// values the form opened with, against which Dirty() reports edits. It is
-	// distinct from vals (which BuildConfirm overwrites with the final entry)
-	// and from skip's seed (seedSkip).
-	seed      map[string]string
-	seedSkip  bool
-	skip      bool
+	// base is the config the form opened with. It holds every field the
+	// form doesn't ask for.
+	base stack.Config
+	// vals are the values entered, bound to the huh fields; seed is what
+	// they opened with.
+	vals map[string]*string
+	seed map[string]string
+
+	useProxy, seedProxy bool
+	// httpsInput and httpsSynced pre-fill the HTTPS proxy from the HTTP
+	// one (spec §9.10) until the user edits it.
+	httpsInput  *huh.Input
+	httpsSynced string
+
 	confirmed bool
 
-	// Main is phase 1: the IdP selector and every field group.
-	Main *huh.Form
-	// groups are Main's groups, retained so the section intros (group
-	// Title/Description) are inspectable without driving the whole form (huh's
-	// Form does not expose its groups). Only read in tests today.
-	groups []*huh.Group
-	// Confirm is phase 2, built by BuildConfirm once Main completes (its
-	// summary must reflect the final phase-1 values).
+	Main    *huh.Form
 	Confirm *huh.Form
 }
 
-// NewForm seeds every field from initial (defaults or current .env merged
-// with any flag-provided values) and skipAuth into the IdP selector.
-func NewForm(initial map[string]string, skipAuth bool) *Form {
+// NewForm returns the form, opened with base's values. Secrets start
+// empty.
+func NewForm(base stack.Config) *Form {
 	f := &Form{
-		vals: make(map[string]string, len(Fields)),
-		ptrs: make(map[string]*string, len(Fields)),
-		skip: skipAuth,
+		base:     base,
+		vals:     map[string]*string{},
+		seed:     map[string]string{},
+		useProxy: base.Proxy.HTTP != "" || base.Proxy.HTTPS != "",
 	}
-	for _, fl := range Fields {
-		v := initial[fl.Key]
-		f.vals[fl.Key] = v
-		huhV := v
-		f.ptrs[fl.Key] = &huhV
+	f.seedProxy = f.useProxy
+	var groups []*huh.Group
+	for _, g := range Groups {
+		var fields []huh.Field
+		if g.askProxy {
+			fields = append(fields, huh.NewSelect[bool]().
+				Options(huh.NewOption("No proxy", false), huh.NewOption("Use a proxy", true)).
+				Value(&f.useProxy))
+		}
+		for _, it := range g.Items {
+			fields = append(fields, f.field(it))
+		}
+		hg := huh.NewGroup(fields...).Title(g.Title).Description(g.Description)
+		if g.Shown != nil {
+			shown := g.Shown
+			hg = hg.WithHideFunc(func() bool { return !shown(f) })
+		}
+		groups = append(groups, hg)
 	}
-
-	// No field-level Title/Description: the group header directly above carries
-	// the "Identity provider" intro, and repeating it on the field read doubled
-	// when rendered (TestGroupIntrosRender pins this).
-	idp := huh.NewSelect[bool]().
-		Options(
-			huh.NewOption("Auth0 (recommended for evaluation)", false),
-			huh.NewOption("Skip — I'll configure an identity provider manually", true),
-		).
-		Value(&f.skip)
-
-	// Each group carries a one-sentence intro (huh renders the group Title +
-	// Description as a header above its fields) so the form reads as a guided
-	// flow with narrative per section rather than a flat wall of 13 inputs. A
-	// dynamic "Step N of M" indicator is intentionally NOT added: huh has no
-	// built-in group progress, and two groups here are conditionally hidden
-	// (Auth0 when skipped, the remote-DB details when DB_MODE!=remote), so any
-	// static count would mislead the moment a group is hidden — computing the
-	// visible index would mean reimagining huh's group selector.
-	groups := []*huh.Group{
-		huh.NewGroup(idp).
-			Title("Identity provider").
-			Description("Choose how users sign in. This distribution wires the Auth0 path."),
-		huh.NewGroup(inputsFor(GroupAuth0, false, f.ptrs)...).
-			Title("Auth0 credentials").
-			Description("From your Auth0 application — the client ID and its paired secret.").
-			WithHideFunc(func() bool { return f.skip }),
-		huh.NewGroup(inputsFor(GroupAdmin, false, f.ptrs)...).
-			Title("Admin account").
-			Description("The first administrator; sign in with this account after setup."),
-		huh.NewGroup(inputsFor(GroupPorts, false, f.ptrs)...).
-			Title("Ports").
-			Description("Host ports the frontend binds — change these if 80/443 are taken."),
-		// Titled "Access control" (the concern), not "Auth mode" (the knob):
-		// the single field inside is itself titled "Auth mode", and the same
-		// title twice in a row read doubled when rendered.
-		huh.NewGroup(inputsFor(GroupAuth, false, f.ptrs)...).
-			Title("Access control").
-			Description("How much of PIC-SURE is reachable without signing in."),
-		huh.NewGroup(inputsFor(GroupDB, false, f.ptrs)...).
-			Title("Database").
-			Description("Local runs a bundled MySQL; remote points at your own server."),
-		// Remote connection details only when DB_MODE=remote.
-		huh.NewGroup(inputsFor(GroupDB, true, f.ptrs)...).
-			Title("Remote database connection").
-			Description("Where to reach your external MySQL and the admin credentials.").
-			WithHideFunc(func() bool { return *f.ptrs["DB_MODE"] != "remote" }),
-		// Release-control repo/branch is orthogonal to DB mode — always shown.
-		huh.NewGroup(inputsFor(GroupReleaseControl, false, f.ptrs)...).
-			Title("Release control").
-			Description("Pins which component versions are built — keep the defaults unless you fork it."),
-	}
-	f.groups = groups
+	f.httpsSynced = f.Value(proxyHTTPSKey)
 	f.Main = huh.NewForm(groups...)
-	// Capture the baseline AFTER construction: huh normalises select values
-	// (an out-of-range seed snaps to a valid option) while building the
-	// groups, so the seed must reflect what the user actually sees, or Dirty()
-	// would report a phantom edit on the first open of a hand-normalised .env.
-	f.seedSkip = f.skip
-	f.seed = make(map[string]string, len(f.ptrs))
-	for k, p := range f.ptrs {
-		f.seed[k] = *p
-	}
 	return f
 }
 
-// Dirty reports whether any field (or the IdP selector) differs from the
-// values the form opened with. It reads the live huh pointers, so it is valid
-// at any point during phase 1 — used by the embedded host to gate an
-// esc-discards-everything confirm.
+// field builds the huh field for one item, bound to its value.
+func (f *Form) field(it Item) huh.Field {
+	sf, ok := stack.LookupField(it.Key)
+	if !ok {
+		panic("wizard: no config field " + it.Key)
+	}
+	v := ""
+	if !sf.Secret {
+		if got, err := f.base.Get(it.Key); err == nil {
+			v = fmt.Sprint(got)
+		}
+	}
+	f.vals[it.Key], f.seed[it.Key] = &v, v
+	if len(sf.Options) > 0 {
+		opts := make([]huh.Option[string], len(sf.Options))
+		for i, o := range sf.Options {
+			opts[i] = huh.NewOption(o, o)
+		}
+		return huh.NewSelect[string]().Title(it.Title).Description(sf.Help).Options(opts...).Value(&v)
+	}
+	in := huh.NewInput().Title(it.Title).Description(sf.Help).Value(&v).Validate(f.validator(it.Key))
+	if sf.Secret {
+		in = in.EchoMode(huh.EchoModePassword)
+	}
+	if it.Key == proxyHTTPSKey {
+		f.httpsInput = in
+	}
+	return in
+}
+
+// Value is the value entered for key so far.
+func (f *Form) Value(key string) string {
+	if p := f.vals[key]; p != nil {
+		return *p
+	}
+	return ""
+}
+
+// Update passes msg to Main.
+func (f *Form) Update(msg tea.Msg) tea.Cmd {
+	m, cmd := f.Main.Update(msg)
+	if mf, ok := m.(*huh.Form); ok {
+		f.Main = mf
+	}
+	f.syncHTTPSProxy()
+	return cmd
+}
+
+// syncHTTPSProxy copies the HTTP proxy into the HTTPS one while the HTTPS
+// one still holds the last value copied, so clearing or editing it sticks.
+func (f *Form) syncHTTPSProxy() {
+	http, https := f.vals[proxyHTTPKey], f.vals[proxyHTTPSKey]
+	if *https != f.httpsSynced || *https == *http {
+		return
+	}
+	*https = *http
+	f.httpsSynced = *http
+	f.httpsInput.Value(https) // huh shows the bound value only when it is set
+}
+
+// Dirty reports whether anything differs from what the form opened with.
 func (f *Form) Dirty() bool {
-	if f.skip != f.seedSkip {
+	if f.useProxy != f.seedProxy {
 		return true
 	}
-	for k, p := range f.ptrs {
+	for k, p := range f.vals {
 		if *p != f.seed[k] {
 			return true
 		}
@@ -144,205 +153,199 @@ func (f *Form) Dirty() bool {
 	return false
 }
 
-// syncFromHuh copies the huh-owned pointer values into vals so that
-// Desired() and the confirm summary reflect what the user entered.
-func (f *Form) syncFromHuh() {
-	for k, p := range f.ptrs {
-		f.vals[k] = *p
+// shown reports whether g applies to the values entered so far.
+func (f *Form) shown(g Group) bool { return g.Shown == nil || g.Shown(f) }
+
+// Result is the config and secrets entered. Fields of groups that don't
+// apply keep the form's opening values, except the proxy, which is
+// cleared when the user said there is none.
+func (f *Form) Result() (*stack.ConfigDoc, stack.UserSecrets, error) {
+	return f.result("", "")
+}
+
+// result is Result with key's value replaced by v (for validating a
+// value before huh stores it), when key isn't empty.
+func (f *Form) result(key, v string) (*stack.ConfigDoc, stack.UserSecrets, error) {
+	val := func(k string) string {
+		if k == key {
+			return v
+		}
+		return f.Value(k)
+	}
+	base := f.base
+	base.Name = val("name") // read-only, so Set refuses it
+	doc, err := stack.NewConfigDoc(&base)
+	if err != nil {
+		return nil, stack.UserSecrets{}, err
+	}
+	var sec stack.UserSecrets
+	for _, g := range Groups {
+		applies := f.shown(g)
+		for _, it := range g.Items {
+			x := val(it.Key)
+			switch it.Key {
+			case "name":
+			case clientSecretKey:
+				if applies {
+					sec.Auth0ClientSecret = stack.Secret(x)
+				}
+			case rootPasswordKey:
+				if applies {
+					sec.DBRemoteRootPassword = stack.Secret(x)
+				}
+			default:
+				if !applies {
+					if !strings.HasPrefix(it.Key, "proxy.") {
+						continue
+					}
+					x = "" // the user said there is no proxy
+				}
+				if err := doc.Set(it.Key, x); err != nil {
+					return nil, sec, err
+				}
+			}
+		}
+	}
+	return doc, sec, nil
+}
+
+// validator checks key's value in the context of everything else entered:
+// the config's validation problems at key, or a missing secret.
+func (f *Form) validator(key string) func(string) error {
+	return func(s string) error {
+		doc, sec, err := f.result(key, s)
+		if err != nil {
+			return problemAt(err, key)
+		}
+		if key == clientSecretKey || key == rootPasswordKey {
+			return f.checkSecret(doc, sec, key)
+		}
+		_, err = doc.Config()
+		return problemAt(err, key)
 	}
 }
 
-// BuildConfirm constructs phase 2: a confirm whose description summarizes
-// the final phase-1 values. Call only after Main completes. Both hosts
-// (the CLI's RunForm and the TUI's embedded screen) call BuildConfirm once
-// Main completes, so this is where huh's bound values become the
-// authoritative ones — the embedded host never calls Main.Run() and relies
-// on this sync to observe edits.
-func (f *Form) BuildConfirm() *huh.Form {
-	f.syncFromHuh()
-	// Build a snapshot of vals as pointers for summary (summary takes
-	// map[string]*string for consistency with inputsFor).
-	snap := make(map[string]*string, len(f.vals))
-	for k := range f.vals {
-		v := f.vals[k]
-		snap[k] = &v
+// checkSecret refuses a secret the config requires and doesn't have, or a
+// client secret PSAMA would refuse.
+func (f *Form) checkSecret(doc *stack.ConfigDoc, sec stack.UserSecrets, key string) error {
+	v := sec.Auth0ClientSecret
+	if key == rootPasswordKey {
+		v = sec.DBRemoteRootPassword
 	}
+	sf, _ := stack.LookupField(key)
+	cfg, err := doc.Config()
+	var ce *stack.ConfigError
+	if err != nil && !errors.As(err, &ce) {
+		return err
+	}
+	if cfg == nil {
+		// Some other field is invalid; judge with the modes entered.
+		c := f.base
+		c.Auth.Mode = stack.AuthMode(f.Value("auth.mode"))
+		c.DB.Mode = stack.DBMode(f.Value("db.mode"))
+		cfg = &c
+	}
+	switch {
+	case v == "" && sf.Required(cfg):
+		return fmt.Errorf("required when %s", sf.RequiredWhen.Desc)
+	case key == clientSecretKey && v != "" && len(v) < jwt.MinSecretLen:
+		return fmt.Errorf("%d bytes; PSAMA needs at least %d", len(v), jwt.MinSecretLen)
+	}
+	return nil
+}
+
+// problemAt is err's problem at key, if it has one. Problems elsewhere are
+// for their own fields to report.
+func problemAt(err error, key string) error {
+	var ce *stack.ConfigError
+	if !errors.As(err, &ce) {
+		return err
+	}
+	for _, p := range ce.Problems {
+		if p.Path == key {
+			return errors.New(p.Msg)
+		}
+	}
+	return nil
+}
+
+// Check validates everything entered, as init will.
+func (f *Form) Check() error {
+	doc, sec, err := f.Result()
+	if err != nil {
+		return err
+	}
+	if _, err := doc.Config(); err != nil {
+		return err
+	}
+	for _, key := range []string{clientSecretKey, rootPasswordKey} {
+		if err := f.checkSecret(doc, sec, key); err != nil {
+			sf, _ := stack.LookupField(key)
+			return fmt.Errorf("--%s: %w", sf.Flag, err)
+		}
+	}
+	return nil
+}
+
+// BuildConfirm builds Confirm: a summary of what was entered and a yes/no.
+// Yes is refused while anything is invalid. Call it once Main completes.
+func (f *Form) BuildConfirm() *huh.Form {
+	f.confirmed = false
 	confirm := huh.NewConfirm().
-		Title("Write these values to .env and run init.sh?").
-		Description(summary(snap, f.seed, f.skip)).
-		Value(&f.confirmed)
+		Title("Create the stack with these settings?").
+		Description(f.summary()).
+		Affirmative("Create").
+		Negative("Cancel").
+		Value(&f.confirmed).
+		Validate(func(yes bool) error {
+			if !yes {
+				return nil
+			}
+			return f.Check()
+		})
 	f.Confirm = huh.NewForm(huh.NewGroup(confirm))
 	return f.Confirm
 }
 
-// Desired snapshots the current field values from vals (the authoritative
-// source, not the huh-internal pointers which may have been normalised).
-func (f *Form) Desired() map[string]string {
-	out := make(map[string]string, len(f.vals))
-	for k, v := range f.vals {
-		out[k] = v
-	}
-	return out
-}
-
-// SkipAuth reports the IdP selector's current choice.
-func (f *Form) SkipAuth() bool { return f.skip }
-
-// Confirmed reports whether phase 2 was answered affirmatively.
+// Confirmed reports whether the user said yes on Confirm.
 func (f *Form) Confirmed() bool { return f.confirmed }
 
-// RunForm runs the interactive wizard in the calling terminal (the
-// standalone CLI host). initial seeds every field; skipAuth seeds the IdP
-// selector. Returns the desired values, the final skip-auth choice, and
-// whether the user confirmed writing them. A user abort (ctrl-c / esc)
-// returns confirmed=false with no error.
-func RunForm(initial map[string]string, skipAuth bool) (map[string]string, bool, bool, error) {
-	f := NewForm(initial, skipAuth)
-	if err := f.Main.Run(); err != nil {
-		if errors.Is(err, huh.ErrUserAborted) {
-			return nil, f.SkipAuth(), false, nil
-		}
-		return nil, f.SkipAuth(), false, err
-	}
-	if err := f.BuildConfirm().Run(); err != nil {
-		if errors.Is(err, huh.ErrUserAborted) {
-			return nil, f.SkipAuth(), false, nil
-		}
-		return nil, f.SkipAuth(), false, err
-	}
-	return f.Desired(), f.SkipAuth(), f.Confirmed(), nil
-}
-
-// inputsFor builds the huh fields for one group, split by the RemoteOnly
-// marker so remote connection details can live in their own hideable group.
-func inputsFor(group string, remoteOnly bool, vals map[string]*string) []huh.Field {
-	var fields []huh.Field
-	for _, f := range Fields {
-		if f.Group != group || f.RemoteOnly != remoteOnly {
+// summary lists the fields that apply, aligned, with secrets masked, empty
+// optional fields left out and "(default)" after a value left as it
+// opened.
+func (f *Form) summary() string {
+	type row struct{ title, value, note string }
+	var rows []row
+	for _, g := range Groups {
+		if !f.shown(g) {
 			continue
 		}
-		fields = append(fields, inputFor(f, vals))
-	}
-	return fields
-}
-
-func inputFor(f Field, vals map[string]*string) huh.Field {
-	if len(f.Options) > 0 {
-		opts := make([]huh.Option[string], len(f.Options))
-		for i, o := range f.Options {
-			opts[i] = huh.NewOption(o, o)
+		if g.askProxy && !f.useProxy {
+			rows = append(rows, row{title: "Proxy", value: "none"})
 		}
-		return huh.NewSelect[string]().
-			Title(f.Title).
-			Description(f.Help).
-			Options(opts...).
-			Value(vals[f.Key])
-	}
-
-	in := huh.NewInput().
-		Title(f.Title).
-		Description(f.Help).
-		Value(vals[f.Key])
-	if f.Secret {
-		in = in.EchoMode(huh.EchoModePassword)
-	}
-	if f.Validate != nil {
-		field := f
-		in = in.Validate(func(s string) error {
-			all := make(map[string]string, len(vals))
-			for k, p := range vals {
-				all[k] = *p
+		for _, it := range g.Items {
+			v := f.Value(it.Key)
+			sf, _ := stack.LookupField(it.Key)
+			switch {
+			case v == "":
+				continue
+			case sf.Secret:
+				v = "********"
 			}
-			all[field.Key] = s
-			return field.Validate(s, all)
-		})
+			r := row{title: it.Title, value: v}
+			if !sf.Secret && v == f.seed[it.Key] {
+				r.note = " " + summaryDimStyle.Render("(default)")
+			}
+			rows = append(rows, r)
+		}
 	}
-	return in
-}
-
-// summaryRow is one resolved confirm-summary line, pre-alignment.
-type summaryRow struct {
-	title string
-	value string
-	deflt bool // value equals the seeded default → append a dim "(default)"
-}
-
-// summary renders the confirm-screen field digest (U8): aligned title/value
-// columns (title padded with spaces to the widest visible title — sober, no dot
-// leaders), optional fields whose value is empty omitted entirely, and a dim
-// "(default)" marker on any field the user left at its seeded default. seed is
-// the post-normalisation baseline the form opened with (.env.example defaults
-// for fresh setup), so "default" means "unchanged from what we proposed".
-func summary(vals map[string]*string, seed map[string]string, skip bool) string {
-	// A missing pointer is treated as an empty value (a sparse snapshot must not
-	// panic — BuildConfirm always passes a full one, but be defensive).
-	valOf := func(key string) string {
-		if p := vals[key]; p != nil {
-			return *p
-		}
-		return ""
-	}
-	dbMode := valOf("DB_MODE")
-
-	var rows []summaryRow
-	for _, f := range Fields {
-		if f.Auth0Required && skip {
-			continue
-		}
-		if f.RemoteOnly && dbMode != "remote" {
-			continue
-		}
-		v := valOf(f.Key)
-
-		// Omit an optional field left empty rather than printing "(empty)": a
-		// blank optional is not information the user needs to confirm.
-		if v == "" && !fieldRequired(f, skip, dbMode) {
-			continue
-		}
-
-		// No "(default)" on an empty value: a required field left empty renders
-		// "(empty)" alone — "(empty) (default)" would read as contradictory noise
-		// even when the seed happened to be empty too.
-		isDefault := v != "" && v == seed[f.Key]
-		if f.Secret && v != "" {
-			v = "********"
-		}
-		if v == "" {
-			v = "(empty)" // a required field left empty: still surfaced
-		}
-		rows = append(rows, summaryRow{title: f.Title, value: v, deflt: isDefault})
-	}
-
-	// Widest title sets the column the values align to. Measured in display
-	// cells (lipgloss.Width), not bytes — a title containing a multi-byte rune
-	// (em dash, accented char) would otherwise skew every other row's padding.
-	titleWidth := 0
+	width := 0
 	for _, r := range rows {
-		if w := lipgloss.Width(r.title); w > titleWidth {
-			titleWidth = w
-		}
+		width = max(width, lipgloss.Width(r.title))
 	}
-
 	var b strings.Builder
-	if skip {
-		b.WriteString("Identity provider: configured manually (Auth0 skipped)\n")
-	}
 	for _, r := range rows {
-		pad := strings.Repeat(" ", titleWidth-lipgloss.Width(r.title))
-		fmt.Fprintf(&b, "%s%s  %s", r.title, pad, r.value)
-		if r.deflt {
-			b.WriteString(" " + summaryDimStyle.Render("(default)"))
-		}
-		b.WriteByte('\n')
+		b.WriteString(r.title + strings.Repeat(" ", width-lipgloss.Width(r.title)) + "  " + r.value + r.note + "\n")
 	}
-	return strings.TrimRight(b.String(), "\n")
-}
-
-// fieldRequired reports whether a field must be filled given the IdP choice and
-// DB mode — the same predicate MissingRequired uses, reused here so the summary
-// omits exactly the fields a non-interactive run would treat as optional.
-func fieldRequired(f Field, skip bool, dbMode string) bool {
-	return f.Required ||
-		(f.Auth0Required && !skip) ||
-		(f.RequiredWhenRemote && dbMode == "remote")
+	return strings.TrimSuffix(b.String(), "\n")
 }

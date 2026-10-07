@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -9,10 +11,11 @@ import (
 
 	"github.com/JamesPeck/pic-sure-cli/internal/actions"
 	"github.com/JamesPeck/pic-sure-cli/internal/dashboard"
+	"github.com/JamesPeck/pic-sure-cli/internal/stack"
 )
 
 func testApp(start Screen) *app {
-	a := newApp(Options{Root: "/tmp/x", Start: start, Animations: false})
+	a := newApp(context.Background(), Options{Root: "/tmp/x", Start: start, Animations: false})
 	a.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	return a
 }
@@ -72,34 +75,17 @@ func TestWizardFlowResultMessages(t *testing.T) {
 	t.Run("cancel shows neutral result", func(t *testing.T) {
 		a := testApp(ScreenLanding)
 		a.screen = ScreenWizard
-		a.Update(wizardClosedMsg{aborted: true})
-		if a.screen != ScreenLanding || !strings.Contains(a.landing.result, "cancelled") {
+		a.Update(wizardClosedMsg{})
+		if a.screen != ScreenLanding || !strings.Contains(a.landing.result, "nothing written") {
 			t.Fatalf("screen=%v result=%q, want landing with cancelled message", a.screen, a.landing.result)
 		}
 	})
-	t.Run("write failure returns to landing with error", func(t *testing.T) {
+	t.Run("an unusable setup returns to landing with error", func(t *testing.T) {
 		a := testApp(ScreenLanding)
 		a.screen = ScreenWizard
-		a.Update(wizardWritesDoneMsg{err: errors.New("writing ADMIN_EMAIL failed")})
-		if a.screen != ScreenLanding || !strings.Contains(a.landing.result, "failed") {
+		a.Update(wizardClosedMsg{err: errors.New("bad name")})
+		if a.screen != ScreenLanding || !strings.Contains(a.landing.result, "setup failed: bad name") {
 			t.Fatalf("screen=%v result=%q, want landing with failure", a.screen, a.landing.result)
-		}
-	})
-	t.Run("write success launches init in the activity screen", func(t *testing.T) {
-		orig := startRunner
-		startRunner = func(string, actions.Action, int, int) (runnerHandle, error) {
-			return &fakeRunner{}, nil
-		}
-		t.Cleanup(func() { startRunner = orig })
-
-		a := testApp(ScreenLanding)
-		a.screen = ScreenWizard
-		a.Update(wizardWritesDoneMsg{})
-		if a.screen != ScreenActivity || a.activity == nil {
-			t.Fatal("successful writes must open the activity screen")
-		}
-		if want := actions.Init().Name; a.activity.act.Name != want {
-			t.Errorf("activity action = %q, want %q", a.activity.act.Name, want)
 		}
 	})
 }
@@ -149,20 +135,18 @@ func TestAppLoadDataDispatchOpensActivity(t *testing.T) {
 	}
 }
 
-func TestOpenWizardNavigatesOrReportsError(t *testing.T) {
-	// testApp's root (/tmp/x) has no .env.example → constructor error path.
-	a := testApp(ScreenLanding)
-	a.Update(openWizardMsg{})
-	if a.screen != ScreenLanding || !strings.Contains(a.landing.result, "failed") {
-		t.Fatalf("unreadable seed file must stay on landing with an error, got screen=%v result=%q", a.screen, a.landing.result)
-	}
-
-	// With a real seed file the wizard screen opens.
-	root := wizardRoot(t, false)
-	a = newApp(Options{Root: root})
+func TestOpenWizardUsesDefaults(t *testing.T) {
+	a := newApp(context.Background(), Options{Root: "/tmp/x", Defaults: func(dir string) stack.Config {
+		c := stack.DefaultConfig()
+		c.Name = "from-" + filepath.Base(dir)
+		return c
+	}})
 	a.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	a.Update(openWizardMsg{})
 	if a.screen != ScreenWizard || a.wizard == nil {
 		t.Fatal("openWizardMsg did not open the wizard screen")
+	}
+	if got := a.wizard.wf.Value("name"); got != "from-x" {
+		t.Errorf("wizard name = %q, want the Defaults one", got)
 	}
 }

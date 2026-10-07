@@ -268,7 +268,10 @@ it.
   and `initialized_at` once they succeed. `r.compose` builds the adapter
   with a lazy env over init's `*Secrets`, so `compose up` sees the token
   seed issued; `up` (035) can copy it. `startRunLog` registers
-  `--admin-email` with the redactor before it logs the flags.
+  `--admin-email` with the redactor before it logs the flags. An
+  `initRun`'s leading fields are its options (config, ports, secrets,
+  gate options); `initStack` fills them from the flags, and `run` never
+  reads a flag.
 - `up.go` (035): `up`. Usage problems first: a `--skip-step` not in
   `ops.UpStepIDs(cfg)` is exit 2. Under the stack lock: the config with
   `CheckFiles`; shared HPDS data is exit 2 until 051; a stack without `initialized_at` or without secrets.yaml is
@@ -282,6 +285,18 @@ it.
   Composer like init's, recording the `up` operation in state.json. The
   version gate is openStack's: pending config migrations are exit 5 ("run
   `pic-sure update`"); §6.2's up prompt isn't implemented.
+- `tuiinit.go` (039): `initFromTUI`, the TUI's `Options.Init`, runs
+  `initRun.run` in-process on the wizard's config (its ports given
+  explicitly) or, with none, resumes DIR's pic-sure.yaml. For the call it
+  swaps the run's output for one whose sink is the TUI's and sends the run
+  log's stderr records there as `Log` events (`App.tuiLog`), so nothing
+  writes over the alt-screen; errors come back redacted. The gate's
+  self-update offer goes through the TUI's `Confirm`, and `installOnly`
+  installs the new pic-sure without re-executing (which would restart the
+  TUI), so the gate then says to run pic-sure again. `wizardDefaults` is
+  `Options.Defaults`: the default config named after DIR, with the ports
+  §6.5 would choose now. `startTUI` opens on the stack `stack.Find`
+  finds, else on init's directory.
 
 - `data_phenotype.go` (042): `data load-phenotype --file F [--entry E]
   [--heap MB]`, the load step only (045 adds the dictionary steps, 043
@@ -1861,14 +1876,27 @@ calls it, nothing is written to disk. The read-only commands (`status`, `ps`,
 
 ## internal/tui
 
-The v1 TUI shell: landing, setup wizard host, activity screen and load
+The TUI shell: landing, setup wizard, run screen, activity screen and load
 wizard. `tui.Run` takes the command's context and turns off Bubble Tea's
 signal handler, so SIGINT and SIGTERM end the TUI through the context and
 the CLI exits 128+N. Ticket 001 removed its script layer: every action fails
 to start with "not implemented in v2 yet (ticket NNN)", the release-branch
-and dev-overlay lookups return nothing, and the archive lister fails. Tickets
-039 and 047 rewire it onto in-process operations, showing their progress
-with an embedded `progress.Model` (038).
+and dev-overlay lookups return nothing, and the archive lister fails.
+Tickets 040 and 047 rewire the dashboard and the load wizard.
+
+- **Landing (039).** It reads its directory (`detectStack`): no
+  pic-sure.yaml offers set up; a pic-sure.yaml whose state.json lacks
+  `initialized_at` offers "Resume setup"; a finished stack offers the
+  dashboard, update and load data.
+- **Setup (039).** The wizard screen hosts `wizard.Form`, opened with
+  `Options.Defaults(root)`. On consent it sends the config and secrets to
+  the run screen, which calls `Options.Init` in a goroutine and shows its
+  events in an embedded `progress.Model`. The operation's events, the
+  gate's question (`InitRequest.Confirm`, a yes/no dialog) and its result
+  reach the screen in order on one channel. Ctrl-C twice cancels the
+  operation's context. If the program ends (a signal) while init runs,
+  `Run` cancels it and waits for it to return. A later in-process
+  operation (040, 047) can reuse `runScreen`.
 
 It runs on the Charm v2 modules (`charm.land/bubbletea/v2`, `bubbles/v2`,
 `huh/v2`, `lipgloss/v2`; ticket 002). The root model's `View` returns a
@@ -1889,8 +1917,18 @@ implemented in v2 yet" until ticket 040 rewires them. `pollCmd` and
 
 ## internal/wizard
 
-The v1 setup form over `.env` keys. It no longer writes anything; ticket
-039 moves it onto the config schema (006).
+Ticket 039. The setup form for a new stack. `Groups` lists the pages and
+the config keys each asks for (init's flag fields, plus `hpds.java_opts`);
+kind, help, enum options, secrecy and requiredness come from
+`stack.Fields`. Each input validates its value against the whole config
+entered so far (`ConfigDoc.Set` and `Config`, reporting only the problem at
+its own key), and the secrets against `RequiredWhen` and
+`jwt.MinSecretLen`. The Auth0 page is hidden in open mode, where init
+generates the client secret; the remote-database page outside remote mode.
+"Use a proxy?" gates the proxy page, and the HTTPS proxy follows the HTTP
+one until the user edits it (`Form.Update`). `Result` is the config
+document and the secrets; `BuildConfirm`'s summary masks secrets and its
+yes runs `Check` first. It writes nothing.
 
 ## internal/filebrowser
 
@@ -2009,7 +2047,8 @@ and commit are dispatch inputs.
 
 These packages exist only until the TUI tickets replace what uses them:
 
-- `internal/actions`: the TUI's action descriptions. `Ticket` names the v2
+- `internal/actions`: the TUI's action descriptions (init no longer has
+  one: the TUI runs it in-process). `Ticket` names the v2
   ticket behind each one, and `Args` keeps the v1 script arguments the TUI
   tests assert on.
 - `internal/contract`: the v1 status and compose-ps JSON types the dashboard
