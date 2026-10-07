@@ -169,3 +169,33 @@ func TestUpSkipsTheRestartWhenTheRenderChangedNothing(t *testing.T) {
 	f.AssertNotCalled(fakerunner.Glob("docker compose * config *"))
 	f.AssertNotCalled(fakerunner.Glob("docker compose * restart *"))
 }
+
+func TestUpMarksTheRestartEvenWhenTheStepFails(t *testing.T) {
+	r, _ := upFixture(t, "httpd")
+	if err := run(t, r, r.restartAfter(fail("tls"), httpd)); err == nil {
+		t.Fatal("the run didn't fail")
+	}
+	if got := pendingRestarts(t, r); !slices.Equal(got, []string{httpd}) {
+		t.Errorf("PendingRestarts = %v, want [httpd]", got)
+	}
+}
+
+func TestUpMarksTheReadersOfFilesARenderWroteBeforeFailing(t *testing.T) {
+	r, f := upFixture(t, "httpd")
+	dir := r.st.Path(render.FilesDir)
+	f.On(fakerunner.Glob("docker compose * config --no-interpolate")).Stdout(`services:
+  httpd:
+    volumes:
+      - {type: bind, source: ` + dir + `/httpd/httpd-vhosts.conf, target: /conf}
+`)
+	partial := steps.Step{ID: "render", Apply: func(context.Context, events.Sink) error {
+		writeFile(t, filepath.Join(dir, "httpd/httpd-vhosts.conf"), "new\n")
+		return errors.New("disk full")
+	}}
+	if err := run(t, r, r.watchRender(partial)); err == nil || !strings.Contains(err.Error(), "disk full") {
+		t.Fatalf("err = %v, want the render's", err)
+	}
+	if got := pendingRestarts(t, r); !slices.Equal(got, []string{httpd}) {
+		t.Errorf("PendingRestarts = %v, want [httpd]", got)
+	}
+}

@@ -94,20 +94,7 @@ func ConvergeSteps(d *Deps, st *stack.Stack, cfg *stack.Config, sec *stack.Secre
 
 // withCompose makes s set d.Compose from opts.Compose before it runs.
 func withCompose(d *Deps, opts ConvergeOptions, s steps.Step) steps.Step {
-	ensure := func() error {
-		if d.Compose != nil {
-			return nil
-		}
-		if opts.Compose == nil {
-			return errors.New("no compose adapter for the stack")
-		}
-		c, err := opts.Compose()
-		if err != nil {
-			return err
-		}
-		d.Compose = c
-		return nil
-	}
+	ensure := func() error { return ensureCompose(d, opts) }
 	check, apply := s.Check, s.Apply
 	if check != nil {
 		s.Check = func(ctx context.Context) (bool, error) {
@@ -124,6 +111,22 @@ func withCompose(d *Deps, opts ConvergeOptions, s steps.Step) steps.Step {
 		return apply(ctx, sink)
 	}
 	return s
+}
+
+// ensureCompose sets d.Compose from opts.Compose if it is nil.
+func ensureCompose(d *Deps, opts ConvergeOptions) error {
+	if d.Compose != nil {
+		return nil
+	}
+	if opts.Compose == nil {
+		return errors.New("no compose adapter for the stack")
+	}
+	c, err := opts.Compose()
+	if err != nil {
+		return err
+	}
+	d.Compose = c
+	return nil
 }
 
 // ResolveStep is the build command's resolve step, for init: it records

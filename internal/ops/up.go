@@ -85,21 +85,23 @@ func (r *upRestarts) mark(services ...string) error {
 	return r.st.SaveState(state)
 }
 
-// restartAfter makes s, once it applies, mark service for a restart.
+// restartAfter makes s mark service for a restart before it applies, so
+// no failure or interruption of s can lose the restart.
 func (r *upRestarts) restartAfter(s steps.Step, service string) steps.Step {
 	apply := s.Apply
 	s.Apply = func(ctx context.Context, sink events.Sink) error {
-		if err := apply(ctx, sink); err != nil {
+		if err := r.mark(service); err != nil {
 			return err
 		}
-		return r.mark(service)
+		return apply(ctx, sink)
 	}
 	return s
 }
 
 // watchRender makes the render step mark the services that bind-mount a
 // file under render/files it changed, added or removed, or a directory
-// holding one.
+// holding one. It does so even when the render fails partway, since the
+// re-run would find the files it wrote unchanged.
 func (r *upRestarts) watchRender(s steps.Step) steps.Step {
 	apply := s.Apply
 	s.Apply = func(ctx context.Context, sink events.Sink) error {
@@ -108,12 +110,10 @@ func (r *upRestarts) watchRender(s steps.Step) steps.Step {
 		if err != nil {
 			return err
 		}
-		if err := apply(ctx, sink); err != nil {
-			return err
-		}
+		applyErr := apply(ctx, sink)
 		after, err := readTree(dir)
 		if err != nil {
-			return err
+			return errors.Join(applyErr, err)
 		}
 		var changed []string
 		for p, data := range after {
@@ -127,7 +127,7 @@ func (r *upRestarts) watchRender(s steps.Step) steps.Step {
 			}
 		}
 		if len(changed) == 0 {
-			return nil
+			return applyErr
 		}
 		readers, err := r.readers(ctx, changed)
 		if err != nil {
@@ -137,7 +137,7 @@ func (r *upRestarts) watchRender(s steps.Step) steps.Step {
 				"); restarting every running service"})
 			readers = StartServices(r.cfg)
 		}
-		return r.mark(readers...)
+		return errors.Join(applyErr, r.mark(readers...))
 	}
 	return s
 }
@@ -145,17 +145,10 @@ func (r *upRestarts) watchRender(s steps.Step) steps.Step {
 // readers returns the services that bind-mount one of paths, or a
 // directory holding one, per `compose config` over the new render.
 func (r *upRestarts) readers(ctx context.Context, paths []string) ([]string, error) {
-	c := r.d.Compose
-	if c == nil {
-		if r.opts.Compose == nil {
-			return nil, errors.New("no compose adapter for the stack")
-		}
-		var err error
-		if c, err = r.opts.Compose(); err != nil {
-			return nil, err
-		}
+	if err := ensureCompose(r.d, r.opts); err != nil {
+		return nil, err
 	}
-	mounts, err := bindMounts(ctx, c)
+	mounts, err := bindMounts(ctx, r.d.Compose)
 	if err != nil {
 		return nil, err
 	}

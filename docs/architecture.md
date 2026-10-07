@@ -1000,11 +1000,11 @@ running, current stack every step but `render` and `start` is skipped and
 `compose up` recreates nothing. The TLS and truststore steps don't restart
 their readers, and compose doesn't recreate a container whose rendered
 files changed, so up records the services that must restart in state.json's
-`pending_restarts` (added by 035): httpd once `tls` applies, psama once
-`truststore` does, and, when the render changes, adds or removes a file
-under `render/files`, every service that bind-mounts it or a directory
-holding it per `compose config` (every start service if that can't be
-read). `restart` restarts the pending services that are running and then
+`pending_restarts` (added by 035): httpd before `tls` applies, psama
+before `truststore` does, and, when the render changes, adds or removes a
+file under `render/files` (even if it then fails), every service that
+bind-mounts it or a directory holding it per `compose config` (every
+start service if that can't be read). `restart` restarts the pending services that are running and then
 clears them, so `start`'s `--wait` covers the restarted services, and a
 run that fails before then leaves them pending for the next. `bindMounts`
 (migrate.go) is the shared `compose config` parse.

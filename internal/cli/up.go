@@ -33,8 +33,8 @@ start the services. Each step is skipped when it is already done, so on a
 running, current stack up only verifies. After a reset it re-migrates,
 re-seeds and re-keys HPDS.
 
-Services that were running on a certificate, truststore or rendered file
-that changed are restarted at the end.`,
+Running services whose certificate, truststore or rendered files changed
+are restarted before the services are started and waited for.`,
 		Args: cobra.NoArgs,
 		RunE: a.up,
 	}
@@ -55,10 +55,6 @@ func (a *App) up(cmd *cobra.Command, _ []string) (err error) {
 	if err := checkUpSkips(cfg, a.Global.SkipSteps); err != nil {
 		return err
 	}
-	if cfg.HPDS.Data == stack.HPDSShared {
-		// Render needs the data set's recorded HPDS profile (ticket 051).
-		return exitcode.Usage("up doesn't support shared HPDS data yet; set hpds.data to local")
-	}
 	d := a.newDeps()
 	lock, err := a.lockStack(ctx, cmd, st, d.Sink)
 	if err != nil {
@@ -72,6 +68,10 @@ func (a *App) up(cmd *cobra.Command, _ []string) (err error) {
 	}
 	if err := cfg.CheckFiles(st.Dir); err != nil {
 		return configError(err)
+	}
+	if cfg.HPDS.Data == stack.HPDSShared {
+		// Render needs the data set's recorded HPDS profile (ticket 051).
+		return exitcode.Usage("up doesn't support shared HPDS data yet; set hpds.data to local")
 	}
 	state, err := st.LoadState()
 	if errors.Is(err, fs.ErrNotExist) || err == nil && state.InitializedAt.IsZero() {
@@ -118,6 +118,7 @@ func (a *App) up(cmd *cobra.Command, _ []string) (err error) {
 		return err
 	}
 	summary := ops.Summary(st, cfg, sec)
+	summary.NextSteps = []string{}
 	return a.finish(summary, func(w io.Writer) error {
 		_, err := fmt.Fprintf(w, "Stack %s is up: %s\n", summary.Stack, summary.URL)
 		return err
