@@ -828,6 +828,24 @@ init, up and update to add, and the `migrate` command.
 - `Migrate` runs `[db, migrate]` for the command. `migrate` uses the
   existing render; an unrendered stack is exit 3 ("run `pic-sure up`").
 
+**Seed (033, `seed.go`).** `SeedStep(d, st, cfg, sec)`, ID `seed`, is
+§9.1 step 10, which init, up and update add after `migrate`. There is no
+`seed` command. It fails with exit 3 and the `migrate` / `migrate --repair`
+hint unless both custom Flyway histories exist (looked up in
+`information_schema` first) and have a non-baseline row. It creates the
+admin user with 014's `SeedAdminUser` when no user has
+`auth.admin_email`. Then it makes `auth.application`'s PICSURE token equal
+secrets.yaml's: a stored token valid for `TokenRenewBefore` (30 days) or
+longer is written back as it is (after `reset`); otherwise `jwt.Introspection`
+issues one, which goes to the database first, then to secrets.yaml and `sec`.
+If saving fails, the next run issues another, so it converges. A running
+psama is restarted after a change (a failure is a warning). Check is done
+when the user exists, the token is valid for 30 days and the database holds
+it. The step registers the admin email, and any token it issues, with the
+log redactor. A new token changes `render.ComposeEnv(cfg, sec)`
+(gateway's `PICSURE_INTROSPECTION_TOKEN`), so a Composer whose env was
+computed before the step must recompute it.
+
 ## internal/steps
 
 Ticket 011, on the `Step` type and `Run` signature from 001.

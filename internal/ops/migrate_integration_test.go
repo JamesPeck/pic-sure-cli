@@ -34,18 +34,74 @@ import (
 //
 //	go test -tags integration -run TestMigrateAgainstDocker -timeout 30m ./internal/ops/
 func TestMigrateAgainstDocker(t *testing.T) {
-	if err := exec.Command("docker", "info").Run(); err != nil {
-		t.Skipf("docker is not available: %v", err)
-	}
 	project := os.Getenv("PICSURE_IT_PROJECT")
 	if project == "" {
 		project = "ws-v2-032"
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Minute)
 	defer cancel()
+	x := newMigrateIT(ctx, t, project)
+	d, cfg, sec, rec := x.d, *x.cfg, x.sec, x.rec
+
+	if r := ops.MigrateCheck(ctx, d, &cfg, sec); !r.OK {
+		t.Fatalf("migrate --check: %+v", r)
+	}
+
+	start := time.Now()
+	if err := ops.Migrate(ctx, d, &cfg, sec, ops.MigrateOptions{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("first migrate: %s, steps %v", time.Since(start).Round(time.Second), stepStatus(rec))
+	if got := stepStatus(rec); got[ops.StepDB] != events.StepOK || got[ops.StepMigrate] != events.StepOK {
+		t.Fatalf("first run: steps %v, want both ok", got)
+	}
+
+	*rec = events.Recorder{}
+	start = time.Now()
+	if err := ops.Migrate(ctx, d, &cfg, sec, ops.MigrateOptions{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("second migrate: %s, steps %v", time.Since(start).Round(time.Second), stepStatus(rec))
+	if got := stepStatus(rec); got[ops.StepDB] != events.StepSkipped || got[ops.StepMigrate] != events.StepSkipped {
+		t.Fatalf("second run: steps %v, want both skipped", got)
+	}
+
+	*rec = events.Recorder{}
+	if err := ops.Migrate(ctx, d, &cfg, sec, ops.MigrateOptions{Action: ops.FlywayRepair}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := ops.MigrationsUpToDate(ctx, d, &cfg, sec); err != nil || !ok {
+		t.Fatalf("after repair: up to date %v, err %v", ok, err)
+	}
+
+	wrong := *sec
+	wrong.DBRootPassword = "not-the-root-password"
+	err := steps.Run(ctx, events.Discard, []steps.Step{ops.DBStep(d, &cfg, &wrong, ops.DBOptions{})}, steps.Options{})
+	if exitcode.FromError(err) != exitcode.CodePrecondition {
+		t.Fatalf("wrong root password: %v, want exit 3", err)
+	}
+	t.Logf("wrong root password: %v", err)
+}
+
+// migrateIT is a rendered stack whose databases and Flyway one-shots can
+// run, from release-control's james_mono sources. Cleanup takes its
+// compose project down with its volumes.
+type migrateIT struct {
+	d   *ops.Deps
+	st  *stack.Stack
+	cfg *stack.Config
+	sec *stack.Secrets
+	rec *events.Recorder
+}
+
+func newMigrateIT(ctx context.Context, t *testing.T, project string) *migrateIT {
+	t.Helper()
+	if err := exec.Command("docker", "info").Run(); err != nil {
+		t.Skipf("docker is not available: %v", err)
+	}
 	runner := &docker.ExecRunner{}
 	g := git.New(runner)
-	var rec events.Recorder
+	rec := &events.Recorder{}
 	sink := events.SinkFunc(func(e events.Event) {
 		rec.Emit(e)
 		if l, ok := e.(events.Log); ok {
@@ -89,7 +145,7 @@ func TestMigrateAgainstDocker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = st.Close() }()
+	t.Cleanup(func() { _ = st.Close() })
 	doc, err := stack.NewConfigDoc(&cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -101,7 +157,8 @@ func TestMigrateAgainstDocker(t *testing.T) {
 	if err := st.WriteConfig(data); err != nil {
 		t.Fatal(err)
 	}
-	sec, err := st.EnsureSecrets(rand.Reader, stack.EnsureOptions{})
+	sec, err := st.EnsureSecrets(rand.Reader, stack.EnsureOptions{Supplied: stack.UserSecrets{
+		Auth0ClientSecret: "synthetic-it-client-secret-0123456789abcdef"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,51 +194,16 @@ func TestMigrateAgainstDocker(t *testing.T) {
 		}
 	})
 
-	if r := ops.MigrateCheck(ctx, d, &cfg, sec); !r.OK {
-		t.Fatalf("migrate --check: %+v", r)
-	}
+	return &migrateIT{d: d, st: st, cfg: &cfg, sec: sec, rec: rec}
+}
 
-	stepStatus := func() map[string]events.StepStatus {
-		got := map[string]events.StepStatus{}
-		for _, e := range rec.Events() {
-			if done, ok := e.(events.StepDone); ok {
-				got[done.ID] = done.Status
-			}
+// stepStatus returns each step's last StepDone status in rec.
+func stepStatus(rec *events.Recorder) map[string]events.StepStatus {
+	got := map[string]events.StepStatus{}
+	for _, e := range rec.Events() {
+		if done, ok := e.(events.StepDone); ok {
+			got[done.ID] = done.Status
 		}
-		return got
 	}
-	start := time.Now()
-	if err := ops.Migrate(ctx, d, &cfg, sec, ops.MigrateOptions{}, nil); err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("first migrate: %s, steps %v", time.Since(start).Round(time.Second), stepStatus())
-	if got := stepStatus(); got[ops.StepDB] != events.StepOK || got[ops.StepMigrate] != events.StepOK {
-		t.Fatalf("first run: steps %v, want both ok", got)
-	}
-
-	rec = events.Recorder{}
-	start = time.Now()
-	if err := ops.Migrate(ctx, d, &cfg, sec, ops.MigrateOptions{}, nil); err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("second migrate: %s, steps %v", time.Since(start).Round(time.Second), stepStatus())
-	if got := stepStatus(); got[ops.StepDB] != events.StepSkipped || got[ops.StepMigrate] != events.StepSkipped {
-		t.Fatalf("second run: steps %v, want both skipped", got)
-	}
-
-	rec = events.Recorder{}
-	if err := ops.Migrate(ctx, d, &cfg, sec, ops.MigrateOptions{Action: ops.FlywayRepair}, nil); err != nil {
-		t.Fatal(err)
-	}
-	if ok, err := ops.MigrationsUpToDate(ctx, d, &cfg, sec); err != nil || !ok {
-		t.Fatalf("after repair: up to date %v, err %v", ok, err)
-	}
-
-	wrong := *sec
-	wrong.DBRootPassword = "not-the-root-password"
-	err = steps.Run(ctx, events.Discard, []steps.Step{ops.DBStep(d, &cfg, &wrong, ops.DBOptions{})}, steps.Options{})
-	if exitcode.FromError(err) != exitcode.CodePrecondition {
-		t.Fatalf("wrong root password: %v, want exit 3", err)
-	}
-	t.Logf("wrong root password: %v", err)
+	return got
 }
