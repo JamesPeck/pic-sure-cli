@@ -81,8 +81,9 @@ func (r *ExecRunner) Run(ctx context.Context, c Cmd) (Result, error) {
 // line, newline included, except for a final unterminated line and for
 // lines longer than 64 KiB, which arrive in pieces. The two writers are
 // never called concurrently, so they may be the same writer. A writer's
-// error ends the copy and is returned. The exit code is -1 when the
-// process never started.
+// error ends the copy and is returned; a writer that blocks keeps the call
+// from returning, though the group is still killed on time. The exit code
+// is -1 when the process never started.
 func (r *ExecRunner) Stream(ctx context.Context, c Cmd, stdout, stderr io.Writer) (int, error) {
 	var mu sync.Mutex
 	outW, out := newLineWriter(stdout, &mu)
@@ -180,10 +181,9 @@ type stdinCopy struct {
 	done   chan error
 }
 
-// startStdin sets cmd.Stdin from src.
 func startStdin(cmd *exec.Cmd, src io.Reader) (*stdinCopy, error) {
-	if f, ok := src.(*os.File); ok || src == nil {
-		cmd.Stdin = f
+	if _, ok := src.(*os.File); ok || src == nil {
+		cmd.Stdin = src
 		return &stdinCopy{}, nil
 	}
 	pr, pw, err := os.Pipe()
@@ -201,8 +201,9 @@ func (s *stdinCopy) started() {
 	}
 	_ = s.pr.Close()
 	go func() {
-		_, err := io.Copy(s.pw, s.src)
-		if errors.Is(err, syscall.EPIPE) || errors.Is(err, os.ErrClosed) {
+		w := &pipeWriter{f: s.pw}
+		_, err := io.Copy(w, s.src)
+		if err != nil && err == w.err && (errors.Is(err, syscall.EPIPE) || errors.Is(err, os.ErrClosed)) {
 			err = nil // the child stopped reading
 		}
 		s.done <- err // before the close, so a child that exits on EOF sees it
@@ -225,6 +226,21 @@ func (s *stdinCopy) abandon() error {
 	default:
 		return nil
 	}
+}
+
+// pipeWriter remembers its last write error, so a write error can be told
+// from the source's read error.
+type pipeWriter struct {
+	f   *os.File
+	err error
+}
+
+func (w *pipeWriter) Write(p []byte) (int, error) {
+	n, err := w.f.Write(p)
+	if err != nil {
+		w.err = err
+	}
+	return n, err
 }
 
 func (r *ExecRunner) environ() []string {
@@ -300,8 +316,8 @@ func ctxError(ctx context.Context, argv string) error {
 const groupPollInterval = 20 * time.Millisecond
 
 // killGroupBy waits for the process group pgid to empty and sends SIGKILL to
-// whatever is still in it at the deadline. The group's leader has already
-// been reaped, but the group ID can't be reused while any member is alive.
+// whatever is still in it at the deadline. A group ID isn't reused while
+// any member, the unreaped leader included, is alive.
 func killGroupBy(pgid int, deadline time.Time) {
 	for syscall.Kill(-pgid, 0) == nil {
 		wait := time.Until(deadline)

@@ -208,11 +208,21 @@ func TestExecCancelNotBlockedByStalledStdin(t *testing.T) {
 
 func TestExecReturnsStdinReadError(t *testing.T) {
 	t.Parallel()
-	c := sh("cat >/dev/null")
-	c.Stdin = io.MultiReader(strings.NewReader("data"), iotest.ErrReader(errors.New("disk gone")))
-	_, err := (&docker.ExecRunner{}).Run(context.Background(), c)
-	if err == nil || !strings.Contains(err.Error(), "disk gone") {
-		t.Errorf("err = %v, want the stdin read error", err)
+	for _, readErr := range []error{errors.New("disk gone"), os.ErrClosed} {
+		c := sh("cat >/dev/null")
+		c.Stdin = io.MultiReader(strings.NewReader("data"), iotest.ErrReader(readErr))
+		_, err := (&docker.ExecRunner{}).Run(context.Background(), c)
+		if !errors.Is(err, readErr) {
+			t.Errorf("err = %v, want the stdin read error %v", err, readErr)
+		}
+	}
+}
+
+func TestExecNilStdinIsEmpty(t *testing.T) {
+	t.Parallel()
+	res, err := (&docker.ExecRunner{}).Run(context.Background(), sh("cat"))
+	if err != nil || res.ExitCode != 0 || len(res.Stdout) != 0 {
+		t.Errorf("cat with nil stdin: exit %d, stdout %q, err %v; want empty input", res.ExitCode, res.Stdout, err)
 	}
 }
 
