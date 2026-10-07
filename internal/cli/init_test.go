@@ -303,7 +303,7 @@ func TestInitKeepsGivenPorts(t *testing.T) {
 
 	// A taken dev port moves only the dev block.
 	port, choose := b.portRetry(taken(15013))
-	if err := b.claimPorts(context.Background(), b.d.Sink, ops.StartStepID, choose, port); err != nil {
+	if err := b.claimPorts(context.Background(), b.d.Sink, "", choose, port); err != nil {
 		t.Fatal(err)
 	}
 	if net := b.cfg.Network; net.HTTPPort != 8080 || net.HTTPSPort != 8444 || net.DevPorts.Base != 15030 {
@@ -312,7 +312,7 @@ func TestInitKeepsGivenPorts(t *testing.T) {
 	// A taken HTTPS port moves every port init chose, and pic-sure.yaml
 	// has them.
 	port, choose = b.portRetry(taken(8444))
-	if err := b.claimPorts(context.Background(), b.d.Sink, ops.StartStepID, choose, port); err != nil {
+	if err := b.claimPorts(context.Background(), b.d.Sink, "", choose, port); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := b.st.LoadConfig()

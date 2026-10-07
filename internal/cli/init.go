@@ -59,8 +59,8 @@ Secrets are read from stdin only (--auth0-client-secret-stdin,
 --db-root-password-stdin; with both, one per line in that order). Ports not
 given are 80 and 443, which must be free; --auto-ports takes the first free
 pair from 8080/8443 instead. Ports another stack's pic-sure.yaml sets count
-as taken. If a port init chose itself is taken by the time the stack
-starts, init chooses again once.
+as taken. If a port --auto-ports chose, or a dev port, is taken by the time
+the stack starts, init chooses again once.
 
 A DIR that already has a pic-sure.yaml is resumed: its config is used as it
 is, a config flag, --source or --set that would change it is an error
@@ -316,7 +316,7 @@ func (r *initRun) readConfig() error {
 	}
 	auto, _ := flags.GetBool("auto-ports")
 	r.httpPort, r.httpsPort, r.autoPorts = httpPort, httpsPort, auto
-	if err := r.setPorts(anyPortFree{}, httpPort, httpsPort, auto); err != nil {
+	if err := r.choosePorts(anyPortFree{}); err != nil {
 		return err
 	}
 	if r.cfg, err = r.doc.Config(); err != nil {
@@ -880,7 +880,7 @@ func (r *initRun) writeConfig(ctx context.Context, sink events.Sink) error {
 // of every registered stack reserved and the ports in avoid, then writes
 // pic-sure.yaml and registers the stack, all under the cache's port lock,
 // so a concurrent init sees these ports reserved (§6.5). Lock waits are
-// reported under step.
+// reported under step, if any.
 func (r *initRun) claimPorts(ctx context.Context, sink events.Sink, step string, choose func(ops.Host) error, avoid ...int) error {
 	c := r.cache.WithEvents(sink, step)
 	lock, err := c.LockPorts(ctx)
@@ -965,9 +965,9 @@ func (r *initRun) portRetry(err error) (int, func(ops.Host) error) {
 // retryPorts chooses again with choose, avoiding busy, and runs init's
 // plan again from the render step.
 func (r *initRun) retryPorts(ctx context.Context, busy int, choose func(ops.Host) error, opts ops.ConvergeOptions) error {
-	r.d.Sink.Emit(events.Warning{ID: ops.StartStepID, Text: fmt.Sprintf(
+	r.d.Sink.Emit(events.Warning{Text: fmt.Sprintf(
 		"port %d was taken after init chose it; choosing the ports again", busy)})
-	if err := r.claimPorts(ctx, r.d.Sink, ops.StartStepID, choose, busy); err != nil {
+	if err := r.claimPorts(ctx, r.d.Sink, "", choose, busy); err != nil {
 		return err
 	}
 	plan, skip := r.retryPlan(opts)

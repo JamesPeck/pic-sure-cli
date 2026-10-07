@@ -180,8 +180,8 @@ func exitError(argv []string, code int, stderr []byte) error {
 
 // portAllocatedRE matches the daemon's error for a host port something
 // else holds: "Bind for 0.0.0.0:8080 failed: port is already allocated"
-// when a container holds it, and Docker Desktop's "listen tcp
-// 0.0.0.0:8080: bind: address already in use" when a host process does.
+// when a container holds it, and "listen tcp 0.0.0.0:8080: bind: address
+// already in use" when a host process does.
 var portAllocatedRE = regexp.MustCompile(`Bind for \S*:(\d+) failed: port is already allocated|listen tcp\S* \S*:(\d+): bind: address already in use`)
 
 // PortAllocated returns the host port a docker or compose command failed to
