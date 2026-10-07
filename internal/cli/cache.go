@@ -50,7 +50,7 @@ finish with the cache, and otherwise fails, removing nothing.`,
 		},
 	}
 	prune.Flags().Bool("dry-run", false, "show what would be removed, and remove nothing")
-	prune.Flags().Bool("force", false, "also remove what a stack whose directory can't be read might use")
+	prune.Flags().Bool("force", false, "also remove what a stack whose directory can't be read might use, and forget unparseable registry entries")
 	return newGroup("cache", "Inspect and prune the host cache",
 		&cobra.Command{
 			Use:   "list",

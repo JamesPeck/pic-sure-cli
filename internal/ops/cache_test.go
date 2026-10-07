@@ -651,3 +651,27 @@ func TestPruneCacheKeepsAnUnreadableRegistryEntry(t *testing.T) {
 		t.Errorf("entry still there with --force: %v", err)
 	}
 }
+
+// A registered directory that lost pic-sure.yaml but still has .pic-sure/
+// isn't gone: its state may name what it uses.
+func TestCacheInventoryKeepsARegisteredStackWithoutItsConfig(t *testing.T) {
+	fx := newCacheFixture(t)
+	fx.daemon.volumes, fx.daemon.containers = nil, nil
+	if err := fx.cache.RegisterStack(context.Background(), fx.alpha, "alpha"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(fx.alpha, stack.ConfigFile)); err != nil {
+		t.Fatal(err)
+	}
+	d, _ := fx.deps(t, nil)
+	r, err := ops.CacheInventory(context.Background(), d, fx.cache, ops.CacheOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Stacks) != 1 || r.Stacks[0].Gone || r.Stacks[0].Readable {
+		t.Fatalf("stacks %+v, want alpha unreadable, not gone", r.Stacks)
+	}
+	if st := statuses(r.Items)["hms-dbmi/pic-sure-hpds:aaaaaaaaaaaa"]; st != ops.CacheUnknownStack {
+		t.Errorf("alpha's image is %s, want unknown-stack", st)
+	}
+}

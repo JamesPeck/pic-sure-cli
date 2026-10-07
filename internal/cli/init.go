@@ -58,7 +58,8 @@ pair from 8080/8443 instead.
 
 A DIR that already has a pic-sure.yaml is resumed: its config is used as it
 is, a --set that would change it is an error, and the steps already done
-are skipped. On a stack init has finished it does nothing.`,
+are skipped. On a stack init has finished it only registers the stack in
+the cache (see cache prune).`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: a.initStack,
 	}

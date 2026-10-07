@@ -103,8 +103,9 @@ func (c *Cache) ForgetStack(key string) error {
 }
 
 // RegisteredStacks lists the registry, sorted by key. An entry that can't
-// be parsed, or names a relative directory, is returned with only its Key. Temporary files of a write in progress, or
-// of one that died, are skipped; Entries lists them.
+// be parsed, or names a relative directory, is returned with only its Key.
+// Temporary files of a write in progress, or of one that died, are
+// skipped; Entries lists them.
 func (c *Cache) RegisteredStacks() ([]RegisteredStack, error) {
 	files, err := readDir(filepath.Join(c.root, stacksDir))
 	if err != nil {

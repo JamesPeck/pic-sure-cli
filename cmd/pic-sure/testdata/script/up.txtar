@@ -33,6 +33,12 @@ cmp left-open/.pic-sure/secrets.yaml secrets-before.yaml
 exitcode 3 pic-sure --stack no-client-secret up
 stderr 'the stack has no Auth0 client secret; pipe'
 
+# up registers the stack in the cache before its steps, so a prune run
+# elsewhere counts it.
+cp registered.scenario docker.scenario
+exec pic-sure --stack registered up --skip-step images --skip-step tls --skip-step truststore --skip-step render --skip-step db --skip-step migrate --skip-step seed --skip-step hpds-key --skip-step restart --skip-step start
+exec grep -r '"name":"registered"' cache/pic-sure/stacks
+
 -- stack/pic-sure.yaml --
 schema: 1
 name: demo
@@ -76,3 +82,18 @@ auth: {mode: open, admin_email: admin@example.com}
 hpds: {data: shared, shared_name: demo-set}
 -- shared/.pic-sure/state.json --
 {"cli_version": "dev", "schema_version": 1, "initialized_at": "2026-10-07T12:00:00Z"}
+-- registered/pic-sure.yaml --
+schema: 1
+name: registered
+auth: {mode: open, admin_email: admin@example.com}
+network: {http_port: 18731, https_port: 18732}
+-- registered/.pic-sure/state.json --
+{"cli_version": "dev", "schema_version": 1, "initialized_at": "2026-10-07T12:00:00Z"}
+-- registered/.pic-sure/hpds/encryption_key --
+0123456789abcdef0123456789abcdef
+-- registered.scenario --
+docker * => 0
+-- registered/.pic-sure/secrets.yaml --
+db_root_password: rootpw
+auth0_client_secret: synthetic-client-secret-0123456789abcdef
+auth0_client_secret_generated: true

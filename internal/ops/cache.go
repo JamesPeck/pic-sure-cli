@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/cache"
@@ -32,8 +34,10 @@ const (
 	// CacheInUse: a container references it, or a readable state.json of a
 	// stack names it. Never pruned.
 	CacheInUse = "in-use"
-	// CacheUnknownStack: nothing known uses it, but a labelled stack whose
-	// state.json can't be read might. Pruned only with --force.
+	// CacheUnknownStack: nothing known uses it, but a labelled or
+	// registered stack whose state.json can't be read might, or an
+	// unparseable registry entry hides which stack. Pruned only with
+	// --force.
 	CacheUnknownStack = "unknown-stack"
 	// CacheRecent: unused, but created or changed within RecentCacheAge,
 	// so a build or load still running may be about to record or mount
@@ -219,7 +223,7 @@ func readStacks(labels []map[string]string, registry []cache.RegisteredStack, ex
 	for _, r := range registry {
 		if r.Dir == "" {
 			stacks = append(stacks, CacheStack{Registered: true, key: r.Key, broken: true,
-				Error: "can't read its registry entry " + registryEntry(r.Key)})
+				Error: "can't parse its " + registryEntry(r.Key)})
 			continue
 		}
 		s := add(r.Name, r.Dir)
@@ -233,7 +237,7 @@ func readStacks(labels []map[string]string, registry []cache.RegisteredStack, ex
 		state, err := loadStackState(s.Dir)
 		switch {
 		case err == nil:
-		case s.Registered && !s.labelled && errors.Is(err, stack.ErrNotFound):
+		case s.Registered && !s.labelled && errors.Is(err, stack.ErrNotFound) && !hasCLIDir(s.Dir):
 			s.Gone, s.Error = true, "no longer a stack"
 			continue
 		default:
@@ -244,6 +248,13 @@ func readStacks(labels []map[string]string, registry []cache.RegisteredStack, ex
 	}
 	slices.SortFunc(stacks, func(a, b CacheStack) int { return strings.Compare(a.Dir, b.Dir) })
 	return stacks
+}
+
+// hasCLIDir reports whether dir may still hold a stack's .pic-sure/, and
+// with it a state.json naming what the stack uses.
+func hasCLIDir(dir string) bool {
+	_, err := os.Lstat(filepath.Join(dir, stack.CLIDir))
+	return !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR)
 }
 
 func loadStackState(dir string) (*stack.State, error) {
@@ -454,14 +465,15 @@ func prune(ctx context.Context, d *Deps, c *cache.Cache, sink events.Sink, opts 
 		if label == "" {
 			label = "a stack"
 		}
-		if s.broken {
-			label = "a registered stack"
-		}
 		action := "keeping every shared image and source tree it might use; --force removes them"
 		if opts.Force {
 			action = "--force: removing what it might use anyway"
 		}
-		sink.Emit(events.Warning{ID: StepPrune, Text: fmt.Sprintf("can't read the state of %s at %s (%s): %s", label, s.Dir, s.Error, action)})
+		text := fmt.Sprintf("can't read the state of %s at %s (%s): %s", label, s.Dir, s.Error, action)
+		if s.broken {
+			text = fmt.Sprintf("can't parse the %s, so it might name any stack: %s", registryEntry(s.key), action)
+		}
+		sink.Emit(events.Warning{ID: StepPrune, Text: text})
 	}
 
 	removed := map[string]bool{} // image refs
@@ -503,7 +515,7 @@ func prune(ctx context.Context, d *Deps, c *cache.Cache, sink events.Sink, opts 
 		}
 	}
 	for _, s := range report.Stacks {
-		if forget := s.Gone || s.broken && opts.Force; !forget {
+		if !s.Gone && (!s.broken || !opts.Force) {
 			continue
 		}
 		verb := "forgot"
