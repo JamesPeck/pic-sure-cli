@@ -27,6 +27,8 @@ type StatusOptions struct {
 	// ComposeErr is why the command couldn't build Deps.Compose, when it
 	// is nil for a reason other than a stack that hasn't been rendered.
 	ComposeErr error
+	// Deep runs the probes inside the containers (StatusDeep).
+	Deep bool
 }
 
 // StatusReport is `status --json` (spec §9.9). docs/json-schemas.md
@@ -55,6 +57,8 @@ type StatusReport struct {
 	Token         StatusToken      `json:"token"`
 	Auth0         *StatusAuth0     `json:"auth0"`
 	LastOperation *StatusOperation `json:"last_operation"`
+	// Deep is set by status --deep.
+	Deep *StatusDeep `json:"deep,omitempty"`
 }
 
 // StatusOperation is the last mutating command state.json records.
@@ -187,7 +191,8 @@ type StatusAuth0 struct {
 }
 
 // Status reports on st without changing anything: no lock, no writes, no
-// network beyond the local docker daemon.
+// network beyond the local docker daemon and, with Deep, the containers'
+// own localhost.
 func Status(ctx context.Context, d *Deps, st *stack.Stack, opts StatusOptions) *StatusReport {
 	r := &StatusReport{
 		Stack:      StatusStack{Dir: st.Dir},
@@ -213,6 +218,9 @@ func Status(ctx context.Context, d *Deps, st *stack.Stack, opts StatusOptions) *
 	}
 	statusImages(ctx, d, r, state, cfg)
 	statusServices(ctx, d, r, opts.ComposeErr)
+	if opts.Deep {
+		r.Deep = statusDeep(ctx, d, r)
+	}
 	statusToken(d, r, st)
 	statusMigrations(ctx, d, r, st, cfg)
 	if cfg != nil {

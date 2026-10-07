@@ -821,10 +821,24 @@ with `docker.PsTimeout`, stopping at the first docker failure), and
 release-control. A section it can't read carries an error string instead
 of failing, so the command exits 0. The command leaves `Deps.Compose` nil for an unrendered stack and
 builds it with no env, since `ps` needs no secret. Migrations are
-`unknown` until 032 adds its check; `--deep` is 037. 027 added
+`unknown` until 032 adds its check. 027 added
 `VersionCheck.MigrationErr` (a config schema older than every migration)
 and `render.HMROrigin` (httpd-hmr's Vite origin, which status prints for
 Auth0) for it.
+
+**Deep status (037, `status_deep.go`).** `StatusOptions.Deep` adds
+`StatusReport.Deep`: busybox `wget -S` probes through `compose exec -T`
+in the services `compose ps` reports running (wget's `-T` is 5 s, 10 s
+for the gateway; each exec is bounded 15 s beyond that). The gateway's
+`/system/status` must say `RUNNING`. HPDS gets a COUNT on
+`/PIC-SURE/v3/query/sync`: 403 is "no data loaded", 200 with a number is
+then checked against `/actuator/health`. httpd's `https://127.0.0.1/` must
+be a single 200 `text/html` response, whose CSP headers are classified
+`frontend` (one, with a nonce), `floor` (exactly `render.CSPFloor`, the
+vhost's fallback), `both` (several), `none` or `unknown`. A probe that
+can't run reports `checked: false` with the reason; deep status still
+exits 0. The cli layer redacts the probe messages, which can quote
+compose's errors.
 
 **Frontend and dictionary-etl images (030, `images.go`).** §7.2 steps 4
 and 5, the two images built outside the reactor.

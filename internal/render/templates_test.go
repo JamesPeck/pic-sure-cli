@@ -475,6 +475,17 @@ func TestVhostRedirectKeepsHTTPSPort(t *testing.T) {
 	}
 }
 
+func TestVhostSetsTheCSPFloor(t *testing.T) {
+	out, err := executeTemplate("files/httpd/httpd-vhosts.conf.tmpl", sampleData(catalog.Mode{}, nil, false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `Header always set Content-Security-Policy "` + CSPFloor + `" "expr=-z %{resp:Content-Security-Policy}"`
+	if !strings.Contains(string(out), want) {
+		t.Errorf("no %q in the vhost", want)
+	}
+}
+
 func TestMissingValuesFailExecution(t *testing.T) {
 	d := sampleData(catalog.Mode{}, nil, false)
 	delete(d.Images, "pic-sure-psama")

@@ -22,27 +22,30 @@ func newStatusCmd(a *App) *cobra.Command {
 gate, the release and component commits, which images are present, the
 services compose reports, the database mode, migrations, the introspection
 token's expiry, and the URLs to register in Auth0. It exits 0 whenever it
-finds the stack, even if parts of it couldn't be read.`,
+finds the stack, even if parts of it couldn't be read.
+
+--deep also runs probes inside the running containers, which take a few
+seconds: the gateway's /system/status, a COUNT query that tells whether
+HPDS has data loaded, and which Content-Security-Policy the frontend's
+HTML gets.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if deep, _ := cmd.Flags().GetBool("deep"); deep {
-				return notImplemented("037")(cmd, nil)
-			}
-			return a.status(cmd)
+			deep, _ := cmd.Flags().GetBool("deep")
+			return a.status(cmd, deep)
 		},
 	}
-	c.Flags().Bool("deep", false, "also probe inside the containers: gateway, HPDS data, frontend CSP (ticket 037)")
+	c.Flags().Bool("deep", false, "also probe inside the running containers: the gateway's health, whether HPDS has data, and the frontend's CSP")
 	return c
 }
 
-func (a *App) status(cmd *cobra.Command) error {
+func (a *App) status(cmd *cobra.Command, deep bool) error {
 	st, err := a.openStack(cmd)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = st.Close() }()
 	d := a.newDeps()
-	opts := ops.StatusOptions{CLIVersion: a.Info.Version, Migrations: a.configMigrations()}
+	opts := ops.StatusOptions{CLIVersion: a.Info.Version, Migrations: a.configMigrations(), Deep: deep}
 	if c, err := a.stackCompose(cmd, d.Runner, st); err == nil {
 		d.Compose = c
 	} else if !errors.Is(err, docker.ErrNotRendered) {
@@ -51,6 +54,11 @@ func (a *App) status(cmd *cobra.Command) error {
 	report := ops.Status(cmd.Context(), d, st, opts)
 	// Compose had the secrets, and its error can quote one.
 	report.ServicesError = log.Redact(report.ServicesError)
+	if dp := report.Deep; dp != nil {
+		dp.Gateway.Message = log.Redact(dp.Gateway.Message)
+		dp.Data.Message = log.Redact(dp.Data.Message)
+		dp.HTTP.Message = log.Redact(dp.HTTP.Message)
+	}
 	return a.printReport(report, func(w io.Writer) error { return writeStatus(w, report) })
 }
 
@@ -175,6 +183,13 @@ func writeStatus(w io.Writer, r *ops.StatusReport) error {
 		line("Last op", "%s, %s, started %s", op.Name, op.Status, op.StartedAt.Format(time.RFC3339))
 	}
 
+	if dp := r.Deep; dp != nil {
+		b.WriteString("Deep checks:\n")
+		fmt.Fprintf(&b, "  %-12s %s: %s\n", "Gateway", deepState(dp.Gateway.Checked, dp.Gateway.Healthy, "healthy", "unhealthy"), dp.Gateway.Message)
+		fmt.Fprintf(&b, "  %-12s %s: %s\n", "HPDS data", deepState(dp.Data.Checked, dp.Data.Ready, "ready", "not ready"), dp.Data.Message)
+		fmt.Fprintf(&b, "  %-12s %s: %s\n", "Frontend CSP", dp.HTTP.CSP, dp.HTTP.Message)
+	}
+
 	if au := r.Auth0; au != nil {
 		if au.Needed {
 			b.WriteString("Auth0 (register these in the application):\n")
@@ -189,6 +204,20 @@ func writeStatus(w io.Writer, r *ops.StatusReport) error {
 	}
 	_, err := io.WriteString(w, b.String())
 	return err
+}
+
+// deepState is a probe's verdict: yes or no, or unknown when the probe
+// didn't run or couldn't tell.
+func deepState(checked bool, ok *bool, yes, no string) string {
+	switch {
+	case !checked:
+		return "not checked"
+	case ok == nil:
+		return "unknown"
+	case *ok:
+		return yes
+	}
+	return no
 }
 
 func gateText(v ops.StatusVersions) string {

@@ -81,6 +81,17 @@ an `omitted` field is left out when empty.
 | `last_operation.status` | string | `running` (or interrupted, if nothing holds the lock), `ok` or `failed`. |
 | `last_operation.started_at` | string | When it started. |
 | `last_operation.finished_at` | string, omitted | When it finished. |
+| `deep` | object, omitted | Probes run inside the running containers; only with `--deep`. A probe that couldn't run has `checked` false and says why in its `message`. |
+| `deep.gateway.checked` | bool | Whether the gateway was probed (it must be running). |
+| `deep.gateway.healthy` | bool or null | Whether the gateway's `/system/status` is `RUNNING`, which folds in every downstream service; false when it didn't answer; null when not checked. |
+| `deep.gateway.status` | string | The gateway's answer, such as `RUNNING` or `ONE OR MORE COMPONENTS DEGRADED`; empty without one. |
+| `deep.gateway.message` | string | The verdict in words. |
+| `deep.data.checked` | bool | Whether HPDS was probed (it must be running). |
+| `deep.data.ready` | bool or null | Whether HPDS has data: true when a COUNT query answers with a number and its actuator health is `UP`; false when HPDS refuses the query with HTTP 403 (no data loaded) or its health is `DOWN`; null when unknown. |
+| `deep.data.message` | string | The verdict in words, with what to do. |
+| `deep.http.checked` | bool | Whether httpd was probed (it must be running). |
+| `deep.http.csp` | string | The Content-Security-Policy of the frontend's HTML at `https://127.0.0.1/` inside httpd: `frontend` (one policy with a nonce), `floor` (only httpd's fallback policy), `both` (more than one policy), `none`, or `unknown` (not checked, not a single 200 HTML response, or an unrecognized policy). |
+| `deep.http.message` | string | The verdict in words. |
 
 ## `ps --json`
 
