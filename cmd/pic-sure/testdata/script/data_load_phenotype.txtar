@@ -70,8 +70,7 @@ stderr 'isn''t initialised; run `pic-sure init .*partial` to finish it'
 exitcode 3 pic-sure --stack stack data load-phenotype --file pheno.csv
 stderr 'run `pic-sure up`'
 
-# An --input-dir is checked before the stack is looked at, and again by the
-# load.
+# An --input-dir is checked before the stack is looked at.
 exitcode 3 pic-sure data load-phenotype --input-dir indir
 stderr 'no pic-sure stack found'
 

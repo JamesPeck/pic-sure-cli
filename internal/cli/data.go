@@ -47,8 +47,8 @@ started again once the loader has finished.
 
 --input-dir instead takes a directory of such CSVs (and the loader's
 optional config.json; other entries are left out), which the sequential
-loader reads into a temporary volume while HPDS keeps running. HPDS is then stopped, and the loader's
-output replaces its phenotype data.
+loader reads into a temporary volume while HPDS keeps running. HPDS is
+then stopped, and the loader's output replaces its phenotype data.
 
 With --file, the previous load's files are removed before the loader runs,
 so if it fails HPDS stays stopped with no phenotype data: fix the problem and

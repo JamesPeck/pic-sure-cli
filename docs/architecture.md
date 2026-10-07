@@ -1316,10 +1316,11 @@ loader runs before hpds stops, so a failed load leaves HPDS as it was.
   a copy of the key; then `LOADER_NAME=SequentialLoader` (default heap
   `DefaultDirLoaderHeapMB`, 8000, as AIO) with the volume at
   `/opt/local/hpds` and each input read-only at
-  `/opt/local/hpds_input/<name>`, not the directory: upstream
-  SequentialLoader switches from LowRAMMultiCSVLoader to its own CSV
-  parser when its input directory holds anything but CSVs and
-  `config.json`. A helper then checks the store and
+  `/opt/local/hpds_input/<name>`, not the directory, with a `.CSV`
+  extension lowercased (`loaderInputName`; two inputs that would collide
+  are exit 2): upstream SequentialLoader switches from
+  LowRAMMultiCSVLoader to its own CSV parser when its input directory
+  holds anything but `*.csv` (case-sensitive) and `config.json`. A helper then checks the store and
   `columnMeta.javabin` exist (the loader can exit 0 without them).
 - `hpds-stop`, `hpds-wipe`, `hpds-key` as above.
 - `hpds-copy`: copies `dirLoaderOutput` (the store and columnMeta files,

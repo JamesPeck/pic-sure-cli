@@ -14,7 +14,6 @@ import (
 	"github.com/JamesPeck/pic-sure-cli/internal/docker"
 	"github.com/JamesPeck/pic-sure-cli/internal/events"
 	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
-	"github.com/JamesPeck/pic-sure-cli/internal/stack"
 )
 
 const (
@@ -83,7 +82,25 @@ func dirInputs(dir string) (files, ignored []string, err error) {
 		return nil, nil, exitcode.Usage("--input-dir: %s holds no .csv file", dir)
 	}
 	slices.Sort(files)
+	seen := map[string]string{}
+	for _, f := range files {
+		n := loaderInputName(f)
+		if prev, ok := seen[n]; ok {
+			return nil, nil, exitcode.Usage("--input-dir: %s and %s would both load as %s; rename one", prev, f, n)
+		}
+		seen[n] = f
+	}
 	return files, ignored, nil
+}
+
+// loaderInputName is what the loader sees name as: with a lowercase .csv.
+// Upstream SequentialLoader uses LowRAMMultiCSVLoader only when every input
+// ends in a lowercase .csv, and its own, different CSV parser otherwise.
+func loaderInputName(name string) string {
+	if ext := filepath.Ext(name); strings.EqualFold(ext, ".csv") {
+		return strings.TrimSuffix(name, ext) + ".csv"
+	}
+	return name
 }
 
 // CheckPhenotypeDir checks an --input-dir as the load will, before
@@ -111,10 +128,7 @@ func dirManifest(ctx context.Context, dir string, files []string) (string, error
 // out the provenance, and makes sure the daemon sees them, copying them
 // into the cache if it doesn't. Nothing has changed yet if it fails.
 func (l *loader) inputDir(ctx context.Context, sink events.Sink) error {
-	if _, err := l.st.LoadHPDSKey(); err != nil {
-		return fmt.Errorf("the stack's HPDS key (%s): %w", l.st.Path(stack.HPDSKeyFile), err)
-	}
-	if err := l.findImage(ctx); err != nil {
+	if err := l.preflight(ctx); err != nil {
 		return err
 	}
 	files, ignored, err := dirInputs(l.opts.InputDir)
@@ -133,10 +147,12 @@ func (l *loader) inputDir(ctx context.Context, sink events.Sink) error {
 		l.opts.Dataset = "phenotype:" + sum
 	}
 	srcs := make([]string, len(files))
+	l.inputNames = make([]string, len(files))
 	for i, f := range files {
 		srcs[i] = filepath.Join(l.opts.InputDir, f)
+		l.inputNames[i] = loaderInputName(f)
 	}
-	l.inputs, err = l.ensureVisible(ctx, sink, "the files in "+l.opts.InputDir, srcs, files, "phenotype-dir-")
+	l.inputs, err = l.ensureVisible(ctx, sink, l.opts.InputDir, srcs, l.inputNames, "phenotype-dir-")
 	return err
 }
 
@@ -162,8 +178,8 @@ func (l *loader) loadDir(ctx context.Context, sink events.Sink) error {
 	// Each input is mounted on its own: SequentialLoader reads any other
 	// file in its input directory with a different CSV parser.
 	mounts := []docker.Mount{{Source: name, Target: hpdsDir}}
-	for _, in := range l.inputs {
-		mounts = append(mounts, docker.Mount{Source: in, Target: path.Join(dirLoaderInput, filepath.Base(in)), ReadOnly: true})
+	for i, in := range l.inputs {
+		mounts = append(mounts, docker.Mount{Source: in, Target: path.Join(dirLoaderInput, l.inputNames[i]), ReadOnly: true})
 	}
 	if err := l.runETL(ctx, sink, dirLoaderName, mounts); err != nil {
 		return err
@@ -174,7 +190,7 @@ func (l *loader) loadDir(ctx context.Context, sink events.Sink) error {
 		return fmt.Errorf("checking the loader's output in volume %s: %w", name, err)
 	}
 	if code != 0 {
-		return fmt.Errorf("the HPDS loader wrote no %s or %s; its output is above and in the run log", dirLoaderOutput[0], dirLoaderOutput[1])
+		return fmt.Errorf("the HPDS loader wrote no %s or %s, or an empty one; its output is above and in the run log", dirLoaderOutput[0], dirLoaderOutput[1])
 	}
 	return nil
 }

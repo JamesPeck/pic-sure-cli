@@ -148,6 +148,17 @@ func TestLoadPhenotypeDirLoadsIntoATempVolumeBeforeStopping(t *testing.T) {
 	fx.assertVolumeRemoved(t)
 }
 
+func TestLoadPhenotypeDirMountsAnUppercaseCSVAsLowercase(t *testing.T) {
+	fx := newDirFixture(t)
+	if err := os.Rename(filepath.Join(fx.dir, "b.csv"), filepath.Join(fx.dir, "B.CSV")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.loadDir(context.Background(), ops.PhenotypeLoadOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	fx.f.AssertCalled(fakerunner.Glob("docker run * demo-hpds-etl-* -v " + filepath.Join(fx.dir, "B.CSV") + ":/opt/local/hpds_input/B.csv:ro *"))
+}
+
 func TestLoadPhenotypeDirLoaderFailureLeavesHPDSRunning(t *testing.T) {
 	for name, setup := range map[string]func(*dirFixture){
 		"loader exits 1": func(fx *dirFixture) { fx.loaderExit = 1 },

@@ -195,12 +195,14 @@ type loader struct {
 	state *stack.State
 	opts  PhenotypeLoadOptions
 	// csv is what the loader mounts: opts.CSV, or a copy the daemon can
-	// see, in copyDir. inputs are the same for opts.InputDir's files.
-	csv     string
-	inputs  []string
-	copyDir string
-	useLock *cache.Lock
-	image   string
+	// see, in copyDir. inputs are the same for opts.InputDir's files,
+	// which the loader sees as inputNames.
+	csv        string
+	inputs     []string
+	inputNames []string
+	copyDir    string
+	useLock    *cache.Lock
+	image      string
 	// tempVolume is loadDir's volume, once created.
 	tempVolume string
 }
@@ -213,11 +215,7 @@ func (l *loader) volume() string {
 // input finds the loader image, works out the provenance, and makes sure the
 // daemon sees the CSV. Nothing has changed yet if it fails.
 func (l *loader) input(ctx context.Context, sink events.Sink) error {
-	// The hpds-key step would find a missing key only after the wipe.
-	if _, err := l.st.LoadHPDSKey(); err != nil {
-		return fmt.Errorf("the stack's HPDS key (%s): %w", l.st.Path(stack.HPDSKeyFile), err)
-	}
-	if err := l.findImage(ctx); err != nil {
+	if err := l.preflight(ctx); err != nil {
 		return err
 	}
 
@@ -240,7 +238,8 @@ func (l *loader) input(ctx context.Context, sink events.Sink) error {
 
 // ensureVisible returns where the loader can bind-mount srcs, the host
 // files it reads: srcs, or if the daemon can't see them, their copies,
-// named names, in a MkdirTemp directory. what names them in messages.
+// named names, in a MkdirTemp directory. what, the file or its directory,
+// names them in messages.
 func (l *loader) ensureVisible(ctx context.Context, sink events.Sink, what string, srcs, names []string, pattern string) ([]string, error) {
 	sizes := make([]int64, len(srcs))
 	for i, src := range srcs {
@@ -277,6 +276,15 @@ func (l *loader) ensureVisible(ctx context.Context, sink events.Sink, what strin
 			"move it under a directory the daemon shares", what, l.copyDir)
 	}
 	return dsts, nil
+}
+
+// preflight checks the stack's HPDS key, which the hpds-key step would
+// find missing only after the wipe, and finds the loader image.
+func (l *loader) preflight(ctx context.Context) error {
+	if _, err := l.st.LoadHPDSKey(); err != nil {
+		return fmt.Errorf("the stack's HPDS key (%s): %w", l.st.Path(stack.HPDSKeyFile), err)
+	}
+	return l.findImage(ctx)
 }
 
 // findImage sets l.image to the stack's hpds-etl image, which must exist.
@@ -325,7 +333,11 @@ func (l *loader) daemonSees(ctx context.Context, prefix string, mounts []docker.
 		if strings.Contains(msg, "mounts denied") || strings.Contains(msg, "not shared from the host") {
 			return false, nil
 		}
-		return false, fmt.Errorf("checking that the Docker daemon can read %s: %w", mounts[0].Source, err)
+		src := mounts[0].Source
+		if len(mounts) > 1 {
+			src = fmt.Sprintf("%s and %d more", src, len(mounts)-1)
+		}
+		return false, fmt.Errorf("checking that the Docker daemon can read %s: %w", src, err)
 	}
 	got := strings.Fields(out.String())
 	if code != 0 || len(got) != len(sizes) {
