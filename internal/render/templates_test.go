@@ -480,7 +480,7 @@ func TestVhostSetsTheCSPFloor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `Header always set Content-Security-Policy "` + CSPFloor + `" "expr=-z %{resp:Content-Security-Policy}"`
+	want := `Header always set Content-Security-Policy "` + CSPFloorPolicy + `" "expr=-z %{resp:Content-Security-Policy}"`
 	if !strings.Contains(string(out), want) {
 		t.Errorf("no %q in the vhost", want)
 	}

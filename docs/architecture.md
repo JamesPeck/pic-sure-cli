@@ -831,12 +831,16 @@ Auth0) for it.
 in the services `compose ps` reports running (wget's `-T` is 5 s, 10 s
 for the gateway; each exec is bounded 15 s beyond that). The gateway's
 `/system/status` must say `RUNNING`. HPDS gets a COUNT on
-`/PIC-SURE/v3/query/sync`: 403 is "no data loaded", 200 with a number is
-then checked against `/actuator/health`. httpd's `https://127.0.0.1/` must
+`/PIC-SURE/v3/query/sync`: 403 means the encryption key isn't loaded; 200
+with a number is then checked against `/actuator/health`, which is DOWN
+(503) without data, as on a fresh stack. httpd's `https://127.0.0.1/` must
 be a single 200 `text/html` response, whose CSP headers are classified
-`frontend` (one, with a nonce), `floor` (exactly `render.CSPFloor`, the
-vhost's fallback), `both` (several), `none` or `unknown`. A probe that
-can't run reports `checked: false` with the reason; deep status still
+`frontend` (one, with a nonce), `floor` (exactly `render.CSPFloorPolicy`,
+the vhost's fallback), `both` (several), `none` or `unknown`. A probe
+whose wget can't run (the container isn't running, or exec fails) reports
+`checked: false` with the reason; a probe that ran but got no answer in
+time is checked, with the verdict unknown (or unhealthy for the gateway).
+Deep status still
 exits 0. The cli layer redacts the probe messages, which can quote
 compose's errors.
 

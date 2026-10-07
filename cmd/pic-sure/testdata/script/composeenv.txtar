@@ -50,6 +50,11 @@ stderr 'warning: docker compose runs without the stack''s config or secrets: .*b
 exec pic-sure --stack leaky status
 stdout 'password \[REDACTED\] rejected'
 ! stdout 'rootpw-0123456789'
+exec pic-sure --stack leaky --json status --deep
+stdout '"gateway":\{"checked":false,[^}]*password \[REDACTED\] rejected'
+stdout '"data":\{"checked":false,[^}]*password \[REDACTED\] rejected'
+stdout '"http":\{"checked":false,[^}]*password \[REDACTED\] rejected'
+! stdout 'rootpw-0123456789'
 exec sh -c 'pic-sure --stack leaky --json doctor >doctor.out 2>doctor.err || true'
 grep '"name":"compose-config","status":"fail","message":"[^"]*password \[REDACTED\] rejected' doctor.out
 ! grep 'rootpw-0123456789' doctor.out

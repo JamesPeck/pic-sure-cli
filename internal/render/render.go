@@ -506,7 +506,7 @@ func Write(st *stack.Stack, files []File) error {
 	return nil
 }
 
-// CSPFloor is the Content-Security-Policy the httpd vhost sets on responses
-// that carry none of their own. `status --deep` tells it apart from the
+// CSPFloorPolicy is the Content-Security-Policy the httpd vhost sets on
+// responses that carry none of their own. `status --deep` tells it apart from the
 // frontend's nonce policy.
-const CSPFloor = "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; sandbox"
+const CSPFloorPolicy = "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; sandbox"

@@ -14,7 +14,7 @@ const (
 	execGateway = "docker compose * exec -T gateway wget -q -S -O - -T 10 http://localhost:8080/system/status"
 	execCount   = "docker compose * exec -T hpds wget -q -S -O - -T 5 --header=Content-Type: application/json --post-data=* http://localhost:8080/PIC-SURE/v3/query/sync"
 	execHealth  = "docker compose * exec -T hpds wget -q -S -O - -T 5 http://localhost:8080/actuator/health"
-	execHTML    = "docker compose * exec -T httpd wget -q -S -O - -T 5 --no-check-certificate -O /dev/null --header=Host: localhost:8443 https://127.0.0.1/"
+	execHTML    = "docker compose * exec -T httpd wget -q -S -O - -T 5 --no-check-certificate https://127.0.0.1/"
 )
 
 // deepRunner is a fake for a stack whose gateway, hpds and httpd all run.
@@ -82,7 +82,7 @@ func TestStatusDeepDataNotReady(t *testing.T) {
 		ready         *bool
 		message       string
 	}{
-		"403 on a fresh stack": {
+		"403 without the key": {
 			count: func(r *fakerunner.Rule) {
 				r.Exit(1).Stderr(headers("HTTP/1.1 403 Forbidden") + "wget: server returned error: HTTP/1.1 403 Forbidden\n")
 			},
@@ -127,13 +127,14 @@ func TestStatusDeepDataNotReady(t *testing.T) {
 
 func TestStatusDeepCSP(t *testing.T) {
 	for name, tc := range map[string]struct {
-		stderr string
-		exit   int
-		want   string
+		stderr  string
+		exit    int
+		want    string
+		message string
 	}{
 		"frontend": {stderr: htmlHeaders("script-src 'nonce-xyz'"), want: ops.CSPFrontend},
-		"floor":    {stderr: htmlHeaders(render.CSPFloor), want: ops.CSPFloor},
-		"both":     {stderr: htmlHeaders("script-src 'nonce-xyz'", render.CSPFloor), want: ops.CSPBoth},
+		"floor":    {stderr: htmlHeaders(render.CSPFloorPolicy), want: ops.CSPFloor},
+		"both":     {stderr: htmlHeaders("script-src 'nonce-xyz'", render.CSPFloorPolicy), want: ops.CSPBoth},
 		"none":     {stderr: htmlHeaders(), want: ops.CSPNone},
 		"unrecognized": {
 			stderr: htmlHeaders("default-src 'self'"), want: ops.CSPUnknown,
@@ -143,25 +144,28 @@ func TestStatusDeepCSP(t *testing.T) {
 			want:   ops.CSPFrontend,
 		},
 		"a redirect": {
-			stderr: headers("HTTP/1.1 302 Found", "Location: /x") + htmlHeaders("script-src 'nonce-xyz'"),
-			want:   ops.CSPUnknown,
+			stderr:  headers("HTTP/1.1 302 Found", "Location: /x") + htmlHeaders("script-src 'nonce-xyz'"),
+			want:    ops.CSPUnknown,
+			message: "redirects (HTTP 302 200)",
 		},
 		"not HTML": {
-			stderr: headers("HTTP/1.1 200 OK", "Content-Type: application/json", "Content-Security-Policy: "+render.CSPFloor),
-			want:   ops.CSPUnknown,
+			stderr:  headers("HTTP/1.1 200 OK", "Content-Type: application/json", "Content-Security-Policy: "+render.CSPFloorPolicy),
+			want:    ops.CSPUnknown,
+			message: `answered "application/json", not HTML`,
 		},
 		"an error page": {
-			stderr: headers("HTTP/1.1 503 Service Unavailable", "Content-Type: text/html", "Content-Security-Policy: "+render.CSPFloor),
-			exit:   1,
-			want:   ops.CSPUnknown,
+			stderr:  headers("HTTP/1.1 503 Service Unavailable", "Content-Type: text/html", "Content-Security-Policy: "+render.CSPFloorPolicy),
+			exit:    1,
+			want:    ops.CSPUnknown,
+			message: "unavailable (HTTP 503)",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := deepRunner(t, "httpd")
 			f.On(fakerunner.Glob(execHTML)).Stderr(tc.stderr).Exit(tc.exit)
 			h := deepStatus(t, f).HTTP
-			if !h.Checked || h.CSP != tc.want || h.Message == "" {
-				t.Errorf("http %+v, want csp %s", h, tc.want)
+			if !h.Checked || h.CSP != tc.want || h.Message == "" || !strings.Contains(h.Message, tc.message) {
+				t.Errorf("http %+v, want csp %s and %q", h, tc.want, tc.message)
 			}
 		})
 	}
@@ -182,6 +186,23 @@ func TestStatusDeepGatewayNoAnswer(t *testing.T) {
 	g := deepStatus(t, f).Gateway
 	if !g.Checked || g.Healthy == nil || *g.Healthy || !strings.Contains(g.Message, "HTTP 502") {
 		t.Errorf("gateway %+v", g)
+	}
+}
+
+// A container that stops between compose ps and compose exec: wget never
+// runs, so no probe counts as checked.
+func TestStatusDeepExecFails(t *testing.T) {
+	f := deepRunner(t, "gateway", "hpds", "httpd")
+	f.On(fakerunner.Glob("docker compose * exec -T *")).Exit(1).Stderr("service \"x\" is not running\n")
+	d := deepStatus(t, f)
+	if d.Gateway.Checked || d.Gateway.Healthy != nil || !strings.HasPrefix(d.Gateway.Message, "couldn't run wget in gateway: ") {
+		t.Errorf("gateway %+v", d.Gateway)
+	}
+	if d.Data.Checked || d.Data.Ready != nil || !strings.HasPrefix(d.Data.Message, "couldn't run wget in hpds: ") {
+		t.Errorf("data %+v", d.Data)
+	}
+	if d.HTTP.Checked || d.HTTP.CSP != ops.CSPUnknown || !strings.HasPrefix(d.HTTP.Message, "couldn't run wget in httpd: ") {
+		t.Errorf("http %+v", d.HTTP)
 	}
 }
 

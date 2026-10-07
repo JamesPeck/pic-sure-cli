@@ -12,7 +12,6 @@ import (
 
 	"github.com/JamesPeck/pic-sure-cli/internal/docker"
 	"github.com/JamesPeck/pic-sure-cli/internal/render"
-	"github.com/JamesPeck/pic-sure-cli/internal/stack"
 )
 
 // StatusDeep is what `status --deep` adds: probes run inside the running
@@ -68,17 +67,21 @@ type StatusHTTP struct {
 	Message string `json:"message"`
 }
 
-// Probe bounds. wget's own timeout is short (§9.9: 5–10 s); the exec
-// bound adds time for compose to start the command.
+// wget's own timeouts, in seconds (§9.9: 5–10 s).
 const (
 	gatewayWgetTimeout = 10
 	deepWgetTimeout    = 5
-	deepExecSlack      = 15 * time.Second
 )
 
+// deepExecBound bounds a probe's whole compose exec: wget's timeout plus
+// time for compose to start the command.
+var deepExecBound = func(wgetTimeout int) time.Duration {
+	return time.Duration(wgetTimeout)*time.Second + 15*time.Second
+}
+
 // statusDeep runs the probes in the containers r.Services reports
-// running. cfg is nil when the config couldn't be read.
-func statusDeep(ctx context.Context, d *Deps, r *StatusReport, cfg *stack.Config) *StatusDeep {
+// running.
+func statusDeep(ctx context.Context, d *Deps, r *StatusReport) *StatusDeep {
 	deep := &StatusDeep{HTTP: StatusHTTP{CSP: CSPUnknown}}
 	running := map[string]bool{}
 	for _, s := range r.Services {
@@ -109,11 +112,7 @@ func statusDeep(ctx context.Context, d *Deps, r *StatusReport, cfg *stack.Config
 	if why := skip("httpd"); why != "" {
 		deep.HTTP.Message = why + "; CSP unknown"
 	} else {
-		host := ""
-		if cfg != nil {
-			host = webHost(cfg)
-		}
-		deep.HTTP = probeHTTP(ctx, d.Compose, host)
+		deep.HTTP = probeHTTP(ctx, d.Compose)
 	}
 	return deep
 }
@@ -124,21 +123,27 @@ type wgetResult struct {
 	code    int
 	body    string
 	headers string
-	err     error
+	// err is set when wget didn't run, such as when the container stopped
+	// after compose ps; the probe then counts as not checked.
+	err error
+	// timeout is set when wget ran but didn't finish within it.
+	timeout time.Duration
 }
 
 // wget runs busybox wget in service. The Spring images (corretto-alpine)
 // and httpd have wget but no curl.
 func wget(ctx context.Context, c docker.Composer, service string, timeout int, args ...string) wgetResult {
-	ctx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second+deepExecSlack)
+	bound := deepExecBound(timeout)
+	ectx, cancel := context.WithTimeout(ctx, bound)
 	defer cancel()
 	argv := append([]string{"wget", "-q", "-S", "-O", "-", "-T", strconv.Itoa(timeout)}, args...)
 	var out, errOut bytes.Buffer
-	code, err := c.Exec(ctx, docker.ComposeExecOpts{Service: service, Args: argv, Stdout: &out, Stderr: &errOut})
-	if err == nil && ctx.Err() != nil {
-		err = fmt.Errorf("no answer within %s", time.Duration(timeout)*time.Second+deepExecSlack)
+	code, err := c.Exec(ectx, docker.ComposeExecOpts{Service: service, Args: argv, Stdout: &out, Stderr: &errOut})
+	res := wgetResult{code: code, body: out.String(), headers: errOut.String(), err: err}
+	if ctx.Err() == nil && ectx.Err() != nil {
+		res.err, res.timeout = nil, bound
 	}
-	return wgetResult{code: code, body: out.String(), headers: errOut.String(), err: err}
+	return res
 }
 
 var statusLineRE = regexp.MustCompile(`(?m)^\s*HTTP/[0-9.]+ ([0-9]{3})`)
@@ -175,30 +180,11 @@ func (w wgetResult) header(name string) []string {
 	return values
 }
 
-func probeGateway(ctx context.Context, c docker.Composer) StatusGateway {
-	g := StatusGateway{Checked: true}
-	res := wget(ctx, c, "gateway", gatewayWgetTimeout, "http://localhost:8080/system/status")
-	if res.err != nil || res.code != 0 {
-		g.Healthy = new(false)
-		g.Message = "gateway /system/status did not respond" + res.why()
-		return g
-	}
-	// Plain text: RUNNING, ONE OR MORE COMPONENTS DEGRADED, or UNTESTED.
-	g.Status = strings.TrimSpace(res.body)
-	g.Healthy = new(g.Status == "RUNNING")
-	if *g.Healthy {
-		g.Message = "all gateway downstreams are up"
-	} else {
-		g.Message = "gateway reports " + strconv.Quote(g.Status)
-	}
-	return g
-}
-
 // why is the probe failure's detail, for a message.
 func (w wgetResult) why() string {
 	switch {
-	case w.err != nil:
-		return ": " + w.err.Error()
+	case w.timeout != 0:
+		return fmt.Sprintf(": no answer within %s", w.timeout)
 	case w.lastStatus() != 0:
 		return fmt.Sprintf(" (HTTP %d)", w.lastStatus())
 	}
@@ -213,6 +199,32 @@ func lastNonEmptyLine(s string) string {
 	return strings.TrimSpace(lines[len(lines)-1])
 }
 
+// notRun is the message for a probe whose wget didn't run.
+func notRun(service string, err error) string {
+	return fmt.Sprintf("couldn't run wget in %s: %v", service, err)
+}
+
+func probeGateway(ctx context.Context, c docker.Composer) StatusGateway {
+	res := wget(ctx, c, "gateway", gatewayWgetTimeout, "http://localhost:8080/system/status")
+	if res.err != nil {
+		return StatusGateway{Message: notRun("gateway", res.err)}
+	}
+	g := StatusGateway{Checked: true}
+	if res.timeout != 0 || res.code != 0 {
+		g.Healthy = new(false)
+		g.Message = "gateway /system/status did not respond" + res.why()
+		return g
+	}
+	g.Status = strings.TrimSpace(res.body)
+	g.Healthy = new(g.Status == "RUNNING")
+	if *g.Healthy {
+		g.Message = "all gateway downstreams are up"
+	} else {
+		g.Message = "gateway reports " + strconv.Quote(g.Status)
+	}
+	return g
+}
+
 var countRE = regexp.MustCompile(`^[0-9]+$`)
 
 // probeData asks HPDS for a COUNT. HPDS has no authentication filter, and
@@ -220,16 +232,18 @@ var countRE = regexp.MustCompile(`^[0-9]+$`)
 // init installs the key, so a fresh stack answers 0; the actuator then
 // tells, since it is DOWN without loaded metadata (it never checks the key).
 func probeData(ctx context.Context, c docker.Composer) StatusData {
-	dr := StatusData{Checked: true}
 	res := wget(ctx, c, "hpds", deepWgetTimeout,
 		"--header=Content-Type: application/json",
 		`--post-data={"query":{"expectedResultType":"COUNT"}}`,
 		"http://localhost:8080/PIC-SURE/v3/query/sync")
 	if res.err != nil {
+		return StatusData{Message: notRun("hpds", res.err) + "; data readiness unknown"}
+	}
+	dr := StatusData{Checked: true}
+	switch code := res.lastStatus(); {
+	case res.timeout != 0:
 		dr.Message = "HPDS query unavailable" + res.why() + "; data readiness unknown"
 		return dr
-	}
-	switch code := res.lastStatus(); {
 	case code == 403:
 		dr.Ready = new(false)
 		dr.Message = "HPDS refused the query (HTTP 403): its encryption key isn't loaded; load data with pic-sure data demo or pic-sure data load-phenotype"
@@ -245,7 +259,7 @@ func probeData(ctx context.Context, c docker.Composer) StatusData {
 	health := wget(ctx, c, "hpds", deepWgetTimeout, "http://localhost:8080/actuator/health")
 	status := ""
 	switch {
-	case health.err != nil:
+	case health.err != nil || health.timeout != 0:
 	case health.lastStatus() == 503:
 		status = "DOWN"
 	case health.lastStatus() == 200:
@@ -263,8 +277,14 @@ func probeData(ctx context.Context, c docker.Composer) StatusData {
 	case "DOWN", "OUT_OF_SERVICE":
 		dr.Ready = new(false)
 		dr.Message = "HPDS's health is " + status + ": no data loaded, or a broken load; load data with pic-sure data demo or pic-sure data load-phenotype"
+	case "":
+		why := health.why()
+		if health.err != nil {
+			why = ": " + health.err.Error()
+		}
+		dr.Message = "HPDS answered the COUNT, but its health is unknown" + why
 	default:
-		dr.Message = "HPDS answered the COUNT, but its health is unknown" + health.why()
+		dr.Message = "HPDS answered the COUNT, but its health is " + status
 	}
 	return dr
 }
@@ -272,22 +292,27 @@ func probeData(ctx context.Context, c docker.Composer) StatusData {
 // probeHTTP fetches the frontend through httpd's TLS ingress and classifies
 // its CSP. Only a single 200 text/html response counts, so that a redirect
 // or an Apache error page, which carry the floor, isn't taken for the
-// frontend's HTML. host is the Host header to send, the stack's own
-// origin: the frontend server doesn't answer a Host of 127.0.0.1.
-func probeHTTP(ctx context.Context, c docker.Composer, host string) StatusHTTP {
-	h := StatusHTTP{Checked: true, CSP: CSPUnknown}
-	args := []string{"--no-check-certificate", "-O", "/dev/null"}
-	if host != "" {
-		args = append(args, "--header=Host: "+host)
+// frontend's HTML.
+func probeHTTP(ctx context.Context, c docker.Composer) StatusHTTP {
+	res := wget(ctx, c, "httpd", deepWgetTimeout, "--no-check-certificate", "https://127.0.0.1/")
+	if res.err != nil {
+		return StatusHTTP{CSP: CSPUnknown, Message: notRun("httpd", res.err) + "; CSP unknown"}
 	}
-	res := wget(ctx, c, "httpd", deepWgetTimeout, append(args, "https://127.0.0.1/")...)
+	h := StatusHTTP{Checked: true, CSP: CSPUnknown}
 	codes := res.statusCodes()
 	contentType := strings.Join(res.header("Content-Type"), ",")
-	if res.err != nil || len(codes) != 1 || codes[0] != 200 || !isHTML(contentType) {
+	switch {
+	case res.timeout != 0 || len(codes) == 0:
 		h.Message = "the frontend's HTML is unavailable" + res.why() + "; CSP unknown"
-		return h
+	case len(codes) > 1:
+		h.Message = fmt.Sprintf("https://127.0.0.1/ redirects (HTTP %s), so it isn't the frontend's HTML; CSP unknown", strings.Trim(fmt.Sprint(codes), "[]"))
+	case codes[0] != 200:
+		h.Message = "the frontend's HTML is unavailable" + res.why() + "; CSP unknown"
+	case !isHTML(contentType):
+		h.Message = fmt.Sprintf("https://127.0.0.1/ answered %q, not HTML; CSP unknown", contentType)
+	default:
+		h.CSP, h.Message = classifyCSP(res.header("Content-Security-Policy"))
 	}
-	h.CSP, h.Message = classifyCSP(res.header("Content-Security-Policy"))
 	return h
 }
 
@@ -296,14 +321,13 @@ func isHTML(contentType string) bool {
 	return strings.EqualFold(strings.TrimSpace(mediaType), "text/html")
 }
 
-// classifyCSP classifies the CSP headers of the frontend's HTML.
 func classifyCSP(policies []string) (csp, message string) {
 	switch {
 	case len(policies) == 0:
 		return CSPNone, "the HTML has no CSP"
 	case len(policies) > 1:
 		return CSPBoth, "the HTML has more than one CSP, which browsers intersect; check the httpd vhost"
-	case policies[0] == render.CSPFloor:
+	case policies[0] == render.CSPFloorPolicy:
 		return CSPFloor, "the HTML has only httpd's CSP floor, so the frontend sets none; update the frontend and rebuild"
 	case strings.Contains(policies[0], "'nonce-"):
 		return CSPFrontend, "the HTML has the frontend's nonce CSP"

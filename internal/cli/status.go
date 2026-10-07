@@ -187,7 +187,11 @@ func writeStatus(w io.Writer, r *ops.StatusReport) error {
 		b.WriteString("Deep checks:\n")
 		fmt.Fprintf(&b, "  %-12s %s: %s\n", "Gateway", deepState(dp.Gateway.Checked, dp.Gateway.Healthy, "healthy", "unhealthy"), dp.Gateway.Message)
 		fmt.Fprintf(&b, "  %-12s %s: %s\n", "HPDS data", deepState(dp.Data.Checked, dp.Data.Ready, "ready", "not ready"), dp.Data.Message)
-		fmt.Fprintf(&b, "  %-12s %s: %s\n", "Frontend CSP", dp.HTTP.CSP, dp.HTTP.Message)
+		csp := dp.HTTP.CSP
+		if !dp.HTTP.Checked {
+			csp = "not checked"
+		}
+		fmt.Fprintf(&b, "  %-12s %s: %s\n", "Frontend CSP", csp, dp.HTTP.Message)
 	}
 
 	if au := r.Auth0; au != nil {

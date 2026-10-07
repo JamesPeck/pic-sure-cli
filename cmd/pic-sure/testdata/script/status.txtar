@@ -12,7 +12,7 @@ exec pic-sure --stack stack --plain status --deep
 stdout '^Deep checks:$'
 stdout '^  Gateway +not checked: services unknown: '
 stdout '^  HPDS data +not checked: '
-stdout '^  Frontend CSP unknown: '
+stdout '^  Frontend CSP not checked: '
 exec pic-sure --stack stack --json status
 ! stdout '"deep"'
 
