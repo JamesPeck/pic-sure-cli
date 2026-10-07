@@ -431,16 +431,22 @@ func registerYAMLSecrets(r *bundleRedactor, n *yaml.Node, key string) {
 // secretKeyLine is a YAML line holding a block-style key and its value.
 var secretKeyLine = regexp.MustCompile(`(?m)^(\s*(?:-\s+)?["']?([A-Za-z0-9_.-]+)["']?\s*:[ \t]+)([^\s#].*)$`)
 
-// redactConfigKeys blanks the value of every secret-named key
-// (log.IsSecretName) in pic-sure.yaml. A valid config has none, since its
-// secrets live in secrets.yaml, but an operator may have pasted one in.
-// A flow-style mapping is parsed and re-encoded, which drops its comments.
+// redactConfigKeys blanks every secret-flagged field (stack.Fields) and
+// every other secret-named key (log.IsSecretName) with a string value in
+// pic-sure.yaml. A valid config has none, since its secrets live in
+// secrets.yaml, but an operator may have pasted one in. A changed file is
+// re-encoded, which normalizes its layout.
 func redactConfigKeys(data []byte) []byte {
 	var doc yaml.Node
 	if yaml.Unmarshal(data, &doc) != nil {
 		return redactSecretKeyLines(data)
 	}
-	if !blankSecretKeys(&doc) {
+	changed := false
+	walkSecretKeys(&doc, "", func(parent *yaml.Node, i int) {
+		parent.Content[i] = &yaml.Node{Kind: yaml.ScalarNode, Value: log.Redacted}
+		changed = true
+	})
+	if !changed {
 		return data
 	}
 	out, err := yaml.Marshal(&doc)
@@ -450,29 +456,41 @@ func redactConfigKeys(data []byte) []byte {
 	return out
 }
 
-// blankSecretKeys replaces the value of every secret-named key under n,
-// and reports whether it changed anything.
-func blankSecretKeys(n *yaml.Node) bool {
-	changed := false
-	walkSecretKeys(n, func(parent *yaml.Node, i int) {
-		parent.Content[i] = &yaml.Node{Kind: yaml.ScalarNode, Value: log.Redacted}
-		changed = true
-	})
-	return changed
-}
-
-// walkSecretKeys calls fn for the value of every secret-named key under n
-// that isn't an empty scalar: parent.Content[i] is the value.
-func walkSecretKeys(n *yaml.Node, fn func(parent *yaml.Node, i int)) {
-	if n.Kind == yaml.MappingNode {
-		for i := 1; i < len(n.Content); i += 2 {
-			if v := n.Content[i]; log.IsSecretName(n.Content[i-1].Value) && (v.Kind != yaml.ScalarNode || v.Value != "") {
-				fn(n, i)
-			}
+// configSecretFields are the dotted keys of stack.Fields' secrets.
+var configSecretFields = func() map[string]bool {
+	m := map[string]bool{}
+	for _, f := range stack.Fields {
+		if f.Secret {
+			m[f.Key] = true
 		}
 	}
-	for _, c := range n.Content {
-		walkSecretKeys(c, fn)
+	return m
+}()
+
+// walkSecretKeys calls fn for every value under n, at dotted path prefix,
+// that redactConfigKeys blanks, unless it is an empty scalar:
+// parent.Content[i] is the value. A secret-named key's value must be a
+// string, so consent_authorization: false is left alone.
+func walkSecretKeys(n *yaml.Node, prefix string, fn func(parent *yaml.Node, i int)) {
+	if n.Kind != yaml.MappingNode {
+		for _, c := range n.Content {
+			walkSecretKeys(c, prefix, fn)
+		}
+		return
+	}
+	for i := 1; i < len(n.Content); i += 2 {
+		key, v := n.Content[i-1].Value, n.Content[i]
+		p := key
+		if prefix != "" {
+			p = prefix + "." + key
+		}
+		empty := v.Kind == yaml.ScalarNode && v.Value == ""
+		str := v.Kind == yaml.ScalarNode && v.ShortTag() == "!!str"
+		if !empty && (configSecretFields[p] || log.IsSecretName(key) && str) {
+			fn(n, i)
+			continue
+		}
+		walkSecretKeys(v, p, fn)
 	}
 }
 
@@ -483,13 +501,13 @@ func configSecretValues(data []byte) []string {
 	var doc yaml.Node
 	if yaml.Unmarshal(data, &doc) != nil {
 		for _, m := range secretKeyLine.FindAllSubmatch(data, -1) {
-			if log.IsSecretName(string(m[2])) {
-				values = append(values, strings.Trim(strings.TrimSpace(string(m[3])), `"'`))
+			if v, ok := secretLineValue(m); ok {
+				values = append(values, v)
 			}
 		}
 		return values
 	}
-	walkSecretKeys(&doc, func(parent *yaml.Node, i int) {
+	walkSecretKeys(&doc, "", func(parent *yaml.Node, i int) {
 		var collect func(n *yaml.Node)
 		collect = func(n *yaml.Node) {
 			if n.Kind == yaml.ScalarNode {
@@ -504,14 +522,28 @@ func configSecretValues(data []byte) []string {
 	return values
 }
 
-// redactSecretKeyLines is blankSecretKeys for a file that isn't valid
-// YAML: line by line, block style only.
+// redactSecretKeyLines is redactConfigKeys for a file that isn't valid
+// YAML: line by line, block style only, by key name alone.
 func redactSecretKeyLines(data []byte) []byte {
 	return secretKeyLine.ReplaceAllFunc(data, func(line []byte) []byte {
 		m := secretKeyLine.FindSubmatch(line)
-		if !log.IsSecretName(string(m[2])) {
+		if _, ok := secretLineValue(m); !ok {
 			return line
 		}
 		return append(m[1][:len(m[1]):len(m[1])], log.Redacted...)
 	})
+}
+
+// secretLineValue returns the value of a secretKeyLine match whose key is
+// secret-named and whose value reads as a string.
+func secretLineValue(m [][]byte) (string, bool) {
+	if !log.IsSecretName(string(m[2])) {
+		return "", false
+	}
+	var v any
+	if yaml.Unmarshal(m[3], &v) == nil {
+		s, ok := v.(string)
+		return s, ok && s != ""
+	}
+	return strings.Trim(strings.TrimSpace(string(m[3])), `"'`), true
 }

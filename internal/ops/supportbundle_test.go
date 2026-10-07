@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"regexp"
 	"slices"
 	"strings"
@@ -55,6 +56,7 @@ name: demo
 auth:
   mode: open
   admin_email: admin@example.com
+  consent_authorization: false
   auth0:
     client_secret: ` + bundlePasted + `   # pasted here by mistake
 proxy: {http: "http://user:` + bundleProxyPass + `@proxy.example.com:3128"}
@@ -91,8 +93,10 @@ func newBundleStack(t *testing.T) *stack.Stack {
 
 func writeStackFile(t *testing.T, st *stack.Stack, rel, data string) {
 	t.Helper()
-	if err := st.MkdirAll(rel[:strings.LastIndex(rel, "/")], 0o700); err != nil {
-		t.Fatal(err)
+	if dir := path.Dir(rel); dir != "." {
+		if err := st.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := st.WriteFile(rel, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
@@ -107,6 +111,7 @@ func leakyText() string {
 		js, _ := json.Marshal(v)
 		fmt.Fprintf(&b, "%s=%s\n{\"msg\":\"login\",\"%s\":%s}\njdbc:mysql://root:%s@picsure-db:3306/picsure\n", strings.ToUpper(k), v, k, js, v)
 	}
+	b.WriteString("depends_on=db:service_healthy:false\n")
 	fmt.Fprintf(&b, "HPDS key %s loaded\nproxy http://user:%s@proxy.example.com:3128\nconfig client_secret=%s\n", bundleHPDSKey, bundleProxyPass, bundlePasted)
 	return b.String()
 }
@@ -234,12 +239,14 @@ func TestSupportBundleRedactsEverySecret(t *testing.T) {
 	for _, s := range []string{
 		"EMAIL_PASSWORD=[REDACTED]\n", "jdbc:mysql://[REDACTED]@picsure-db", "HPDS key [REDACTED] loaded",
 		"http://[REDACTED]@proxy.example.com", "config client_secret=[REDACTED]",
+		"service_healthy:false",
 	} {
 		if !strings.Contains(files["compose/logs/gateway.log"], s) {
 			t.Errorf("gateway.log lacks %q", s)
 		}
 	}
-	if !strings.Contains(files["stack/pic-sure.yaml"], "client_secret: '[REDACTED]'") || !strings.Contains(files["stack/pic-sure.yaml"], "admin_email: admin@example.com") {
+	if !strings.Contains(files["stack/pic-sure.yaml"], "client_secret: '[REDACTED]'") || !strings.Contains(files["stack/pic-sure.yaml"], "admin_email: admin@example.com") ||
+		!strings.Contains(files["stack/pic-sure.yaml"], "consent_authorization: false") {
 		t.Errorf("pic-sure.yaml:\n%s", files["stack/pic-sure.yaml"])
 	}
 	if !strings.Contains(files["status.json"], `"schema_version":2`) || !strings.Contains(files["status.json"], `"deep":`) {
@@ -327,3 +334,16 @@ func TestSupportBundleWriteFailure(t *testing.T) {
 type failingWriter struct{}
 
 func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("disk full") }
+
+func TestSupportBundleWithInvalidConfig(t *testing.T) {
+	st := newBundleStack(t)
+	writeStackFile(t, st, stack.ConfigFile, bundleConfig+"tos: false\nemail:\n  password: \""+bundlePasted+"\"\n  [broken\n")
+	_, files := buildBundle(t, st, bundleRunner(t))
+	assertNoSecrets(t, files)
+	cfg := files["stack/pic-sure.yaml"]
+	for _, s := range []string{"  password: [REDACTED]\n", "consent_authorization: false\n", "tos: false\n"} {
+		if !strings.Contains(cfg, s) {
+			t.Errorf("pic-sure.yaml lacks %q:\n%s", s, cfg)
+		}
+	}
+}
