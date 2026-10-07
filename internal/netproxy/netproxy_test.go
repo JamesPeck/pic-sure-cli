@@ -43,6 +43,7 @@ func TestParseURL(t *testing.T) {
 		{in: "http://[2001:db8::1]:3128", want: "http://[2001:db8::1]:3128"},
 		{in: "https://[2001:db8::1]", want: "https://[2001:db8::1]:443"},
 		{in: "http://10.0.0.5", want: "http://10.0.0.5:80"},
+		{in: "http://proxy.example.org.:3128", want: "http://proxy.example.org.:3128"},
 
 		{in: "proxy:3128", wantErr: "want an http:// or https:// URL"},
 		{in: "socks5://user:hunter2@proxy:1080", wantErr: `want an http:// or https:// URL, got "socks5://user:xxxxx@proxy:1080"`},
@@ -58,6 +59,8 @@ func TestParseURL(t *testing.T) {
 		{in: `http://pr"oxy:3128`, wantErr: "has an invalid host"},
 		{in: "http://a$(id)b:3128", wantErr: "has an invalid host"},
 		{in: "http://10.1.2.300:3128", wantErr: "has an invalid host"},
+		{in: "http://10.1.2.99999999999999999999:3128", wantErr: "has an invalid host"},
+		{in: "http://.:3128", wantErr: "has an invalid host"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.in, func(t *testing.T) {

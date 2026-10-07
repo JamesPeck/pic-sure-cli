@@ -782,7 +782,8 @@ just `proxy.http` set, https traffic goes direct.
   compose file, never argv or a rendered file.
 - `JVMOpts()`: `-Dhttp.proxyHost/Port`, `-Dhttps.proxyHost/Port` and
   `-Dhttp.nonProxyHosts` for `JAVA_OPTS`, without white space or
-  credentials (the JVM has no property for them).
+  credentials (the JVM has no property for them). The JVM and Maven speak
+  plain HTTP to the proxy, even for an `https://` proxy URL.
 - `MavenSettings()`: a `settings.xml` with a `<proxy>` per scheme, for the
   reactor container's `/root/.m2`. It holds the credentials: write it 0600.
   Maven sends https through an http proxy when it has no https one, so with
@@ -800,8 +801,8 @@ just `proxy.http` set, https traffic goes direct.
 
 `ParseURL` and `ParseNoProxy` are the parsers `New` uses. `stack.Validate`
 calls them too, so a config that validates always resolves. A proxy host
-must be an IP address or a host name whose last label isn't all digits. The package
-imports only the catalog.
+must be an IP address or a host name whose last label isn't all digits.
+The package imports only the catalog.
 
 ## internal/selfupdate
 

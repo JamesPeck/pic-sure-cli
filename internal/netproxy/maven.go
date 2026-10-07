@@ -25,17 +25,18 @@ type mavenProxy struct {
 // reactor build's downloads through the proxy, or nil without one. Java
 // ignores the proxy env vars, so the reactor container gets this file in
 // /root/.m2 instead. It holds the proxy's user and password, so write it
-// 0600.
+// 0600. Maven, like the JVM, speaks plain HTTP to the proxy whatever its
+// URL's scheme.
 //
 // Maven sends https through an http proxy when it has no https one, so with
-// only proxy.http set this is nil too: Maven's downloads are all https (it
-// blocks http repositories), and they go direct, as https does everywhere
-// else with that config.
+// only proxy.http set this is nil too, and Maven's downloads, which are
+// https (it blocks external http repositories by default), go direct as
+// https does everywhere else with that config.
 func (p *Proxy) MavenSettings() []byte {
 	if p.https == nil {
 		return nil
 	}
-	nonProxyHosts := p.nonProxyHosts(true)
+	nonProxyHosts := p.nonProxyHosts(forMaven)
 	var s mavenSettings
 	add := func(protocol string, u *url.URL) {
 		if u == nil {

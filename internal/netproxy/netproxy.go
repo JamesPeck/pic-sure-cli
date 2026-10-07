@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -99,7 +100,9 @@ func ParseURL(s string) (*url.URL, error) {
 	case (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "":
 		return nil, fmt.Errorf("want only a scheme, host and port, got %q", u.Redacted())
 	}
-	if host := u.Hostname(); net.ParseIP(host) == nil && !validHostName(strings.ToLower(host)) {
+	// A trailing dot makes a name absolute, skipping the resolver's search
+	// domains.
+	if host := u.Hostname(); net.ParseIP(host) == nil && !validHostName(strings.ToLower(strings.TrimSuffix(host, "."))) {
 		return nil, fmt.Errorf("has an invalid host: %q", u.Redacted())
 	}
 	port := u.Port()
@@ -111,6 +114,26 @@ func ParseURL(s string) (*url.URL, error) {
 		return nil, fmt.Errorf("has a port outside 1-65535: %q", u.Redacted())
 	}
 	return &url.URL{Scheme: u.Scheme, User: u.User, Host: net.JoinHostPort(u.Hostname(), strconv.Itoa(n))}, nil
+}
+
+// labelRE is one label of a lower-case host or domain name: letters,
+// digits, - and _, with no - at either end.
+var labelRE = regexp.MustCompile(`^[a-z0-9_]([a-z0-9_-]*[a-z0-9_])?$`)
+
+// validHostName reports whether s, in lower case, is a host or domain name.
+// A last label of only digits is refused, because the name is then most
+// likely a mistyped IP address such as 10.1.2.300.
+func validHostName(s string) bool {
+	if len(s) > 253 {
+		return false
+	}
+	labels := strings.Split(s, ".")
+	for _, l := range labels {
+		if len(l) > 63 || !labelRE.MatchString(l) {
+			return false
+		}
+	}
+	return strings.Trim(labels[len(labels)-1], "0123456789") != ""
 }
 
 func defaultPort(scheme string) string {
@@ -169,7 +192,8 @@ func (p *Proxy) BuildArgs() []string {
 // HTTPS through the proxy, for JAVA_OPTS: -Dhttp.proxyHost and
 // -Dhttp.proxyPort, the https pair, and -Dhttp.nonProxyHosts, which the JVM
 // applies to both. No option contains white space. They carry no
-// credentials, because the JVM has no system property for them.
+// credentials, because the JVM has no system property for them, and the
+// JVM speaks plain HTTP to the proxy whatever its URL's scheme.
 func (p *Proxy) JVMOpts() []string {
 	if !p.Enabled() {
 		return nil
@@ -181,7 +205,7 @@ func (p *Proxy) JVMOpts() []string {
 	if p.https != nil {
 		opts = append(opts, "-Dhttps.proxyHost="+p.https.Hostname(), "-Dhttps.proxyPort="+p.https.Port())
 	}
-	return append(opts, "-Dhttp.nonProxyHosts="+p.nonProxyHosts(false))
+	return append(opts, "-Dhttp.nonProxyHosts="+p.nonProxyHosts(forJVM))
 }
 
 // ProxyURL is an http.Transport.Proxy for the CLI's own HTTP. It returns

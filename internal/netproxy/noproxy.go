@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net"
 	"net/url"
-	"regexp"
 	"strconv"
 	"strings"
 )
@@ -20,27 +19,6 @@ type entry struct {
 	domain  string // without a leading dot
 	subOnly bool   // ".example.com" or "*.example.com": subdomains, not the domain
 	port    string // only this port; empty for any
-}
-
-// labelRE is one label of a lower-case host or domain name: letters,
-// digits, - and _, with no - at either end.
-var labelRE = regexp.MustCompile(`^[a-z0-9_]([a-z0-9_-]*[a-z0-9_])?$`)
-
-// validHostName reports whether s, in lower case, is a host or domain name.
-// A last label of only digits is refused, because the name is then most
-// likely a mistyped IP address such as 10.1.2.300.
-func validHostName(s string) bool {
-	if len(s) > 253 {
-		return false
-	}
-	labels := strings.Split(s, ".")
-	for _, l := range labels {
-		if len(l) > 63 || !labelRE.MatchString(l) {
-			return false
-		}
-	}
-	_, err := strconv.Atoi(labels[len(labels)-1])
-	return err != nil
 }
 
 // ParseNoProxy parses the user's no_proxy setting: comma-separated entries,
@@ -155,6 +133,12 @@ func (e entry) matches(host string, ip net.IP, port string) bool {
 		return (host == e.domain && !e.subOnly) || strings.HasSuffix(host, "."+e.domain)
 	}
 }
+
+// The values of nonProxyHosts's maven argument.
+const (
+	forJVM   = false
+	forMaven = true
+)
 
 // nonProxyHosts is the no-proxy list as a JVM's or Maven's nonProxyHosts:
 // "|"-separated patterns whose only wildcard is a leading or trailing "*".
