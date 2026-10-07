@@ -805,7 +805,42 @@ command holds a lock.
 
 ## internal/release
 
-_Ticket 028 fills this in; 060 adds the gate's self-update action._
+Ticket 028; 060 adds the gate's self-update action. Release-control (§8)
+is read in three calls that `init` and `update` make in order, before any
+stack mutation:
+
+- `Fetch(ctx, cache, git, sink, step, Options{Repo, Branch, Commit})`
+  clones or fetches release-control into `cache.ReleaseControlDir()` under
+  `LockRepo("release-control")`, takes the branch head or the
+  `--release-commit` pin (full or abbreviated sha; a pin already in the
+  clone needs no fetch), and parses `build-spec.json` from that commit. A
+  malformed pin is exit 2; an unknown pin or branch is exit 3. The
+  `Release` it returns carries the repo, branch, full commit and the
+  `BuildSpec`.
+- `ParseBuildSpec` reads `.application[] | {project_job_git_key,
+  git_hash}`. Only the keys pic-sure reads (the catalog's component keys
+  and `PSCLI`) are checked: non-empty `git_hash`, no duplicates. Other
+  projects' entries are ignored. `Spec.Ref(key)` looks one up.
+- `rel.Gate(ctx, GateOptions{...})` is the CLI compatibility gate (§8
+  table). Missing `PSCLI` warns; equal proceeds; older warns, or is exit 5
+  with `release.cli_compat: strict`; newer asks `Confirm` (set it only on a
+  TTY) or needs `SelfUpdate` (`--self-update`), then calls
+  `Updater.SelfUpdate(ctx, version)`, and is otherwise exit 5 naming the
+  command to run. A nil `Updater` (until 060) is always exit 5 with
+  instructions. `IgnoreCLIVersion` turns any mismatch into a warning. A CLI
+  version `CompareVersions` can't order (`dev`, a bare sha) is treated as
+  equal with a warning, and so is a `PSCLI` that isn't a version.
+- `rel.ResolveComponents(ctx, cache, sink, step, cfg.Components)` resolves
+  each component's ref to a commit with `cache.ResolveRef`:
+  `components.<name>.ref` from pic-sure.yaml if set, else the build-spec's
+  key, else `main` with a warning. An unknown ref is exit 3. The commits are
+  then in the cache's clones, so `EnsureSource` doesn't fetch again.
+- `rel.Record(state, components)` sets state.json's release and
+  components; the caller saves the state.
+
+`cache.ResolveRef(ctx, component, ref)` (`internal/cache/ref.go`, added by
+028) clones or fetches the component's bare clone under its fetch lock and
+resolves ref there. A full sha the clone already has skips the fetch.
 
 ## internal/pki
 
