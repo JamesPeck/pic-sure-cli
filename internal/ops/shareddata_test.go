@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -503,7 +504,7 @@ func TestSharedDataProfile(t *testing.T) {
 			if tt.setup != nil {
 				tt.setup(fx)
 			}
-			fx.f.On(fakerunner.Glob("docker run --rm --name pic-sure-shared-check-* --network none -v x_hpds-data:/d:ro -v x_hpds-genomic:/g:ro alpine:* sh -c *.picsure-published*")).
+			fx.f.On(fakerunner.Glob("docker run --rm --name pic-sure-shared-check-* --network none -v x_hpds-data:/d:ro -v x_hpds-genomic:/g:ro alpine:* sh -c *.picsure-published* sh /d /g")).
 				Exit(tt.helper)
 			profile, err := ops.SharedDataProfile(context.Background(), fx.d, "x")
 			if tt.want == "" {
@@ -517,4 +518,65 @@ func TestSharedDataProfile(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSharedDataProfileMarkerScript(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("no sh")
+	}
+	tests := []struct {
+		name          string
+		data, genomic string // marker contents; "-" for none
+		code          int
+	}{
+		{"same markers", "name=x created=1\n", "name=x created=1\n", 0},
+		{"no data marker", "-", "name=x created=1\n", 42},
+		{"no genomic marker", "name=x created=1\n", "-", 42},
+		{"empty markers", "", "", 42},
+		{"different markers", "name=x created=1\n", "name=x created=2\n", 42},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dirs := map[string]string{"/d": t.TempDir(), "/g": t.TempDir()}
+			for dir, content := range map[string]string{dirs["/d"]: tt.data, dirs["/g"]: tt.genomic} {
+				if content != "-" {
+					if err := os.WriteFile(filepath.Join(dir, ops.PublishedMarker), []byte(content), 0o644); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			fx := newSharedFixture(t)
+			fx.vols["x_hpds-data"] = map[string]string{ops.SharedDataLabel: "x"}
+			fx.vols["x_hpds-genomic"] = map[string]string{ops.SharedDataLabel: "x"}
+			fx.f.On(fakerunner.Glob("docker run * sh -c *")).Do(func(ctx context.Context, c fakerunner.Call) (docker.Result, error) {
+				i := slices.Index(c.Argv, "-c")
+				args := []string{"-c", c.Argv[i+1], "sh"}
+				for _, a := range c.Argv[i+3:] {
+					args = append(args, dirs[a])
+				}
+				err := exec.CommandContext(ctx, "sh", args...).Run()
+				var exit *exec.ExitError
+				if errors.As(err, &exit) {
+					return docker.Result{ExitCode: exit.ExitCode()}, nil
+				}
+				return docker.Result{}, err
+			})
+			_, err := ops.SharedDataProfile(context.Background(), fx.d, "x")
+			if got := exitcode.FromError(err); tt.code == 0 && err != nil || tt.code != 0 && got != exitcode.CodePrecondition {
+				t.Errorf("err = %v, want helper exit %d", err, tt.code)
+			}
+		})
+	}
+}
+
+func TestSharedDataProfileRemovesAHelperDockerFailed(t *testing.T) {
+	fx := newSharedFixture(t)
+	fx.vols["x_hpds-data"] = map[string]string{ops.SharedDataLabel: "x"}
+	fx.vols["x_hpds-genomic"] = map[string]string{ops.SharedDataLabel: "x"}
+	fx.f.On(fakerunner.Glob("docker run * pic-sure-shared-check-*")).Err(errors.New("interrupted"))
+	fx.f.On(fakerunner.Glob("docker rm -v -f pic-sure-shared-check-*"))
+	if _, err := ops.SharedDataProfile(context.Background(), fx.d, "x"); err == nil {
+		t.Fatal("no error")
+	}
+	fx.f.AssertOrder(fakerunner.Glob("docker run * pic-sure-shared-check-*"), fakerunner.Glob("docker rm -v -f pic-sure-shared-check-*"))
 }

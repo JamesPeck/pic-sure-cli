@@ -517,10 +517,13 @@ func SharedDataProfile(ctx context.Context, d *Deps, name string) (string, error
 		Remove:  true,
 		Network: "none",
 		Mounts:  []docker.Mount{{Source: data, Target: "/d", ReadOnly: true}, {Source: genomic, Target: "/g", ReadOnly: true}},
-		Args: []string{"sh", "-c", `[ -s /d/` + PublishedMarker + ` ] && cmp -s /d/` + PublishedMarker + ` /g/` + PublishedMarker +
-			` || exit ` + strconv.Itoa(unfinishedSetExit)},
+		Args: []string{"sh", "-c", `[ -s "$1/` + PublishedMarker + `" ] && cmp -s "$1/` + PublishedMarker + `" "$2/` + PublishedMarker + `"` +
+			` || exit ` + strconv.Itoa(unfinishedSetExit), "sh", "/d", "/g"},
 		Stderr: &stderr,
 	})
+	if err != nil {
+		_ = d.Docker.Rm(context.WithoutCancel(ctx), helper, true)
+	}
 	switch {
 	case err != nil:
 		return "", fmt.Errorf("checking shared data set %s: %w", name, err)
@@ -529,7 +532,8 @@ func SharedDataProfile(ctx context.Context, d *Deps, name string) (string, error
 			"published or its publish was interrupted; wait for the publish, or remove the set with `pic-sure shared-data remove %s` "+
 			"and publish it again", name, PublishedMarker, name)
 	case code != 0:
-		return "", fmt.Errorf("checking shared data set %s: the helper container exited %d: %s", name, code, strings.TrimSpace(stderr.String()))
+		msg := strings.TrimSpace(stderr.String())
+		return "", fmt.Errorf("checking shared data set %s: the helper container exited %d: %s", name, code, msg[strings.LastIndexByte(msg, '\n')+1:])
 	}
 	return profile, nil
 }

@@ -58,7 +58,8 @@ func (e *ConfigError) Error() string {
 var (
 	// Compose project names, also used for service names.
 	nameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
-	// Docker volume names, which shared data set names become part of.
+	// Shared data set names: shared-data publish's rule (and AIO's), which
+	// is also a compose project name's.
 	sharedNameRE  = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 	hostLabelRE   = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$`)
 	envNameRE     = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
