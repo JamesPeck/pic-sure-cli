@@ -53,7 +53,7 @@ const DefaultWaitDelay = 5 * time.Second
 // Terminal. Children run in a background process group, so a child that
 // opens /dev/tty to prompt (ssh for a passphrase, git for credentials) is
 // stopped by SIGTTIN until ctx ends. Callers must turn such prompts off,
-// for example with GIT_TERMINAL_PROMPT=0.
+// for example with GIT_TERMINAL_PROMPT=0, or use Foreground.
 //
 // Logging. Each call logs its argv, dir and env names at debug level, and
 // then its exit code and duration. Env values and stdin are never logged.
@@ -66,6 +66,16 @@ type ExecRunner struct {
 	// WaitDelay is the grace period described above; zero means
 	// DefaultWaitDelay.
 	WaitDelay time.Duration
+	// Foreground is for an interactive command, such as `pic-sure compose
+	// -- exec hpds sh`. The child stays in the CLI's process group, so it
+	// can read from and control the terminal, and gets Ctrl-C from it
+	// directly. Stream hands its writers to the child as they are, without
+	// line buffering, so an *os.File such as the terminal becomes the
+	// child's own stdout or stderr. When ctx ends, only the child gets
+	// SIGTERM, and SIGKILL WaitDelay later; anything it started is left to
+	// it. Stream's guarantees about whole lines and serialized writes
+	// don't hold.
+	Foreground bool
 }
 
 var _ Runner = (*ExecRunner)(nil)
@@ -85,6 +95,9 @@ func (r *ExecRunner) Run(ctx context.Context, c Cmd) (Result, error) {
 // from returning, though the group is still killed on time. The exit code
 // is -1 when the process never started.
 func (r *ExecRunner) Stream(ctx context.Context, c Cmd, stdout, stderr io.Writer) (int, error) {
+	if r.Foreground {
+		return r.run(ctx, c, stdout, stderr)
+	}
 	var mu sync.Mutex
 	outW, out := newLineWriter(stdout, &mu)
 	errW, errOut := newLineWriter(stderr, &mu)
@@ -112,7 +125,6 @@ func (r *ExecRunner) run(ctx context.Context, c Cmd, stdout, stderr io.Writer) (
 	cmd.Dir = c.Dir
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.WaitDelay = delay
 	// Cancel runs on exec's context watcher, which Wait synchronizes with,
 	// so Wait's caller can read cancelled without a lock. The group is
@@ -120,17 +132,28 @@ func (r *ExecRunner) run(ctx context.Context, c Cmd, stdout, stderr io.Writer) (
 	// blocked on a writer after the command has died.
 	var cancelled bool
 	killed := make(chan struct{})
-	cmd.Cancel = func() error {
-		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
-		if errors.Is(err, syscall.ESRCH) {
-			return os.ErrProcessDone
+	if r.Foreground {
+		// exec itself sends SIGKILL WaitDelay after Cancel.
+		close(killed)
+		cmd.Cancel = func() error {
+			err := cmd.Process.Signal(syscall.SIGTERM)
+			cancelled = !errors.Is(err, os.ErrProcessDone)
+			return err
 		}
-		cancelled = true
-		go func() {
-			killGroupBy(cmd.Process.Pid, time.Now().Add(delay))
-			close(killed)
-		}()
-		return err
+	} else {
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		cmd.Cancel = func() error {
+			err := syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+			if errors.Is(err, syscall.ESRCH) {
+				return os.ErrProcessDone
+			}
+			cancelled = true
+			go func() {
+				killGroupBy(cmd.Process.Pid, time.Now().Add(delay))
+				close(killed)
+			}()
+			return err
+		}
 	}
 
 	r.debug(ctx, "exec", "argv", argv, "dir", c.Dir, "env", envNames(c.Env))

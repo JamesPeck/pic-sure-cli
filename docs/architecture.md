@@ -202,6 +202,15 @@ it.
   logger, so it can log argv. Until the others land, the sink discards
   events.
 
+- `composeverbs.go` (026): `a.stackCompose(runner, st)` is the compose
+  adapter for a command's stack: exit 3 with "run `pic-sure up`" when it
+  isn't rendered, `render.ComposeEnv` from the config and secrets, and
+  `ProgressJSON` under `--json`. `down` and `restart` take the stack lock
+  and run as one step whose `Log` events are compose's output; `logs`
+  writes to stdout (`Log` events under `--json`) and reports Ctrl-C as the
+  signal alone; `compose` runs in the foreground runner without the lock
+  and exits with compose's code.
+
 | File | Commands | Ticket |
 |---|---|---|
 | `init.go` | `init` | 034 |
@@ -908,8 +917,13 @@ is ready to use.
 - **No terminal.** Because the group is in the background, a child that
   opens `/dev/tty` to prompt (ssh passphrase, git credentials) stops on
   SIGTTIN until ctx ends. Callers turn prompts off, as the git client does
-  with `GIT_TERMINAL_PROMPT=0` and `SSH_ASKPASS_REQUIRE=force`. An interactive passthrough would need a foreground mode
-  the runner doesn't have yet.
+  with `GIT_TERMINAL_PROMPT=0` and `SSH_ASKPASS_REQUIRE=force`.
+- **Foreground** (026) is for one interactive command (`pic-sure compose --
+  exec hpds sh`). The child stays in the CLI's process group, so it can
+  read the terminal and gets Ctrl-C from it, and `Stream` hands it the
+  writers as they are (an `*os.File` becomes its stdout), without line
+  buffering. Cancelling sends SIGTERM to the child alone, then SIGKILL
+  `WaitDelay` later.
 - **Environment.** A child gets only `PATH`, `HOME`, `TERM`,
   `SSH_AUTH_SOCK`, every `DOCKER_*` and `XDG_*` variable, and
   `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`/`ALL_PROXY` in either case from the

@@ -42,7 +42,7 @@ func testApp(t *testing.T) (*App, *bytes.Buffer, *bytes.Buffer) {
 // implements it ("" for commands that already work).
 var specCommands = map[string]string{
 	"init": "034", "up": "035",
-	"down": "026", "restart": "026", "ps": "026", "logs": "026", "compose": "026",
+	"down": "", "restart": "", "ps": "", "logs": "", "compose": "",
 	"status": "", "doctor": "", "update": "036", "build": "", "migrate": "032",
 	"config show": "", "config get": "", "config set": "", "config edit": "",
 	"secrets rotate":      "058",
