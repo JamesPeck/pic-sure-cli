@@ -89,6 +89,11 @@ deep_status() {
 	done
 }
 
+# container NAME SERVICE prints the ID of the stack's running SERVICE container.
+container() {
+	docker ps -q --filter "label=com.docker.compose.project=$1" --filter "label=com.docker.compose.service=$2"
+}
+
 # hpds NAME PATH BODY posts BODY to the stack's HPDS from a container on its
 # query network (HPDS publishes no port) and prints the answer.
 hpds() {
@@ -125,6 +130,11 @@ collect() {
 	fi
 }
 
+# e2e_teardown RC removes what a script made besides its stacks and sets; a
+# script that makes more redefines it. Cleanup calls it after destroying the
+# stacks, unless E2E_KEEP keeps them.
+e2e_teardown() { :; }
+
 e2e_cleanup() {
 	local rc=$? i
 	set +e
@@ -142,7 +152,12 @@ e2e_cleanup() {
 		fi
 	done
 	for i in "${!e2e_sets[@]}"; do pic shared-data remove "${e2e_sets[$i]}" > /dev/null 2>&1; done
+	e2e_teardown "$rc"
 	if [ "$rc" -eq 0 ] && [ -n "$e2e_made_work" ]; then rm -rf "$E2E_WORK"; fi
 	exit "$rc"
 }
 trap e2e_cleanup EXIT
+# A signal would reach the EXIT trap with the interrupted command's status,
+# which can be 0; exit non-zero so cleanup collects as for a failure.
+trap 'exit 130' INT
+trap 'exit 143' TERM

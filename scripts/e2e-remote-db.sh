@@ -20,18 +20,15 @@ dir="$E2E_WORK/$name"
 remote="$name-mysql"
 mysql_image=mysql:8.0 # the catalog's (internal/catalog/images.go)
 
-remote_cleanup() {
-	local rc=$?
-	set +e
-	if [ "$rc" -ne 0 ] && [ -n "$E2E_KEEP" ]; then
-		echo "e2e: E2E_KEEP set; left $remote" >&2
-	else
-		docker rm -f -v "$remote" > /dev/null 2>&1
+made_remote=
+e2e_teardown() {
+	[ -n "$made_remote" ] || return 0
+	if [ "$1" -ne 0 ] && [ -n "$E2E_ARTIFACTS" ]; then
+		mkdir -p "$E2E_ARTIFACTS"
+		docker logs --timestamps "$remote" > "$E2E_ARTIFACTS/$remote.log" 2>&1
 	fi
-	(exit "$rc")
-	e2e_cleanup
+	docker rm -f -v "$remote" > /dev/null
 }
-trap remote_cleanup EXIT
 
 db_host="${E2E_DB_HOST:-}" db_bind="${E2E_DB_BIND:-}"
 if [ "$(uname -s)" = Darwin ]; then
@@ -42,7 +39,6 @@ else
 fi
 [ -n "$db_host" ] || fail "can't tell which address containers reach this host on; set E2E_DB_HOST"
 
-# The root password reaches the containers only through the environment.
 MYSQL_PWD="$(openssl rand -hex 16)"
 export MYSQL_PWD
 
@@ -50,11 +46,15 @@ export MYSQL_PWD
 # stack reaches the server, and prints the rows.
 remote_sql() {
 	docker run --rm -e MYSQL_PWD "$mysql_image" \
-		mysql -h "$db_host" -P "$port" -u root -N -B -e "$1" < /dev/null
+		mysql -h "$db_host" -P "$port" -u root --connect-timeout=5 -N -B -e "$1" < /dev/null
 }
 
 say "the remote MySQL: $remote"
-docker run -d --name "$remote" -e MYSQL_ROOT_PASSWORD="$MYSQL_PWD" -p "$db_bind::3306" "$mysql_image" > /dev/null
+if docker container inspect "$remote" > /dev/null 2>&1; then
+	fail "a container named $remote exists; remove it or set E2E_NAME"
+fi
+MYSQL_ROOT_PASSWORD="$MYSQL_PWD" docker run -d --name "$remote" -e MYSQL_ROOT_PASSWORD -p "$db_bind::3306" "$mysql_image" > /dev/null
+made_remote=1
 port="$(docker port "$remote" 3306 | head -n 1 | sed 's/.*://')"
 # The image's entrypoint runs a temporary server without networking first,
 # so wait for a client that comes in over TCP.
@@ -66,10 +66,10 @@ until remote_sql 'SELECT 1' > /dev/null 2>&1; do
 done
 echo "  remote: $db_host:$port" >&2
 
-printf '%s\n' "$MYSQL_PWD" > "$E2E_WORK/root-password"
-pic_stdin="$E2E_WORK/root-password" init_stack "$name" "$dir" --db-mode remote \
+printf '%s\n' "$MYSQL_PWD" > "$E2E_WORK/$name-root-password"
+pic_stdin="$E2E_WORK/$name-root-password" init_stack "$name" "$dir" --db-mode remote \
 	--db-host "$db_host" --db-port "$port" --db-root-user root --db-root-password-stdin
-rm -f "$E2E_WORK/root-password"
+rm -f "$E2E_WORK/$name-root-password"
 
 say "no local database; the remote has the stack's databases, users and migrations"
 [ -z "$(docker ps -aq --filter "label=com.docker.compose.project=$name" --filter label=com.docker.compose.service=picsure-db)" ] ||

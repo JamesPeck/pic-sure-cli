@@ -12,11 +12,7 @@
 
 name="${E2E_NAME:-e2e-dev}"
 dir="$E2E_WORK/$name"
-src="$E2E_WORK/pic-sure"
-
-psama() {
-	docker ps -q --filter "label=com.docker.compose.project=$name" --filter label=com.docker.compose.service=psama
-}
+src="$E2E_WORK/$name-pic-sure"
 
 # jdwp PORT succeeds when 127.0.0.1:PORT answers the JDWP handshake.
 jdwp() {
@@ -41,7 +37,7 @@ say "dev on psama"
 on="$(pic --stack "$dir" --json dev on psama | tail -n 1)"
 port="$(jq -r '.data.port' <<< "$on")"
 [ "$port" -gt 0 ] 2> /dev/null || fail "dev on psama reported no debug port: $on"
-image="$(docker inspect -f '{{.Config.Image}}' "$(psama)")"
+image="$(docker inspect -f '{{.Config.Image}}' "$(container "$name" psama)")"
 case "$image" in
 *:"dev-$name-${commit:0:12}") echo "  psama runs $image" >&2 ;;
 *) fail "psama runs $image, not the source build dev-$name-${commit:0:12}" ;;
@@ -54,7 +50,7 @@ pic --stack "$dir" dev off psama
 if (exec 3<> "/dev/tcp/127.0.0.1/$port") 2> /dev/null; then
 	fail "127.0.0.1:$port still accepts connections after dev off"
 fi
-[ "$(docker inspect -f '{{.Config.Image}}' "$(psama)")" = "$image" ] ||
+[ "$(docker inspect -f '{{.Config.Image}}' "$(container "$name" psama)")" = "$image" ] ||
 	fail "dev off psama changed psama's image; it keeps the source build"
 deep_status "$dir" '.deep.gateway.status != ""' > /dev/null || fail "status --deep: the gateway doesn't answer"
 

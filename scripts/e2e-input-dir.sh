@@ -36,7 +36,6 @@ deep_status "$dir" '.deep.data.ready == true' > /dev/null || fail "status --deep
 say "HPDS has every file's rows"
 expect demographics.csv "\\Synthetic Multi\\Demographics\\Sex\\" Female
 expect lifestyle.csv "\\Synthetic Multi\\Lifestyle\\Smoker\\" Yes
-# Glucose is numeric.
 want="$(awk -F, 'NR > 1 && $3 >= 100 { n[$1] = 1 } END { print length(n) }' "$input/labs.csv")"
 got="$(count '{"conceptPath": "\\Synthetic Multi\\Labs\\Glucose\\", "min": 100}')"
 [ "$got" = "$want" ] || fail "Glucose >= 100: HPDS counts $got patients, labs.csv has $want"

@@ -11,7 +11,7 @@
 
 name="${E2E_NAME:-e2e-truststore}"
 dir="$E2E_WORK/$name"
-certs="$E2E_WORK/certs"
+certs="$E2E_WORK/$name-certs"
 
 # new_ca FILE writes a self-signed CA certificate (its key is discarded).
 new_ca() {
@@ -25,16 +25,13 @@ fingerprint() {
 	openssl x509 -in "$1" -noout -fingerprint -sha256 | sed 's/.*=//' | tr '[:lower:]' '[:upper:]'
 }
 
-psama() {
-	docker ps -q --filter "label=com.docker.compose.project=$name" --filter label=com.docker.compose.service=psama
-}
-
 # trusted ALIAS FILE fails unless the running psama's truststore has FILE's
 # certificate under ALIAS.
 trusted() {
 	local psama out want
-	psama="$(psama)"
+	psama="$(container "$name" psama)"
 	[ -n "$psama" ] || fail "no psama container"
+	# shellcheck disable=SC2016 # expanded by the container's shell
 	docker exec "$psama" sh -c 'echo "$JAVA_OPTS"' | grep -qF -- '-Djavax.net.ssl.trustStore=/truststore/cacerts' ||
 		fail "psama's JAVA_OPTS don't name the truststore"
 	out="$(docker exec "$psama" keytool -list -v -keystore /truststore/cacerts -storepass changeit -alias "$1" 2>&1)" ||
@@ -53,10 +50,10 @@ trusted custom-1-e2e-one.crt "$certs/e2e-one.crt"
 
 say "a second cert, then up"
 new_ca "$certs/e2e-two.pem"
-started="$(docker inspect -f '{{.State.StartedAt}}' "$(psama)")"
+started="$(docker inspect -f '{{.State.StartedAt}}' "$(container "$name" psama)")"
 pic --stack "$dir" up
 # psama reads its truststore at start, so up restarts it.
-[ "$(docker inspect -f '{{.State.StartedAt}}' "$(psama)")" != "$started" ] ||
+[ "$(docker inspect -f '{{.State.StartedAt}}' "$(container "$name" psama)")" != "$started" ] ||
 	fail "up rebuilt the truststore but didn't restart psama"
 trusted custom-1-e2e-one.crt "$certs/e2e-one.crt"
 trusted custom-2-e2e-two.pem "$certs/e2e-two.pem"
