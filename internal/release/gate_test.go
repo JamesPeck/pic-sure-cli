@@ -51,8 +51,8 @@ func TestGateMatrix(t *testing.T) {
 		selfUpdate bool
 		ignore     bool
 		noUpdater  bool
-		wantCode   int // 0 = proceed
-		wantUpdate bool
+		wantCode   int  // 0 = proceed
+		wantUpdate bool // the fake returns instead of re-executing, so the gate then stops
 		wantWarn   string
 		wantErr    string
 	}{
@@ -65,10 +65,10 @@ func TestGateMatrix(t *testing.T) {
 		{name: "older strict", pscli: "v2.0.0", cli: "v2.1.0", strict: true, wantCode: exitcode.CodeIncompatible, wantErr: "strict"},
 		{name: "older strict ignored", pscli: "v2.0.0", cli: "v2.1.0", strict: true, ignore: true, wantWarn: "--ignore-cli-version"},
 		{name: "newer without a TTY", pscli: "v2.1.0", cli: "v2.0.0", wantCode: exitcode.CodeIncompatible, wantErr: "pic-sure update --self-update"},
-		{name: "newer without a TTY, --self-update", pscli: "v2.1.0", cli: "v2.0.0", selfUpdate: true, wantUpdate: true},
-		{name: "newer on a TTY, accepted", pscli: "v2.1.0", cli: "v2.0.0", tty: ttyYes, wantUpdate: true},
+		{name: "newer without a TTY, --self-update", pscli: "v2.1.0", cli: "v2.0.0", selfUpdate: true, wantUpdate: true, wantCode: exitcode.CodeIncompatible, wantErr: "updated to v2.1.0"},
+		{name: "newer on a TTY, accepted", pscli: "v2.1.0", cli: "v2.0.0", tty: ttyYes, wantUpdate: true, wantCode: exitcode.CodeIncompatible, wantErr: "updated to v2.1.0"},
 		{name: "newer on a TTY, declined", pscli: "v2.1.0", cli: "v2.0.0", tty: ttyNo, wantCode: exitcode.CodeIncompatible, wantErr: "self-update --to v2.1.0"},
-		{name: "newer on a TTY with --self-update skips the prompt", pscli: "v2.1.0", cli: "v2.0.0", tty: ttyNo, selfUpdate: true, wantUpdate: true},
+		{name: "newer on a TTY with --self-update skips the prompt", pscli: "v2.1.0", cli: "v2.0.0", tty: ttyNo, selfUpdate: true, wantUpdate: true, wantCode: exitcode.CodeIncompatible, wantErr: "updated to v2.1.0"},
 		{name: "newer ignored", pscli: "v2.1.0", cli: "v2.0.0", ignore: true, selfUpdate: true, wantWarn: "--ignore-cli-version"},
 		{name: "newer strict ignored", pscli: "v2.1.0", cli: "v2.0.0", strict: true, ignore: true, wantWarn: "--ignore-cli-version"},
 		{name: "newer before self-update exists", pscli: "v2.1.0", cli: "v2.0.0", selfUpdate: true, tty: ttyYes, noUpdater: true,

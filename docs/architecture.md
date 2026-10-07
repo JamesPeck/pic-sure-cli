@@ -782,6 +782,10 @@ command holds a lock.
   dead run are removed under the lock. Nothing fsyncs the tree, so after a
   power loss a tree may be incomplete; deleting its directory makes the next
   `EnsureSource` rebuild it.
+- `ResolveRef(ctx, component, ref)` (`ref.go`, 028): a tag, branch or
+  sha to a full commit sha in `git/<repo>.git`, under the repo's fetch
+  lock. It clones, or fetches every branch and tag first so a branch gives
+  its current head; a full sha the clone already has skips the fetch.
 - `ReleaseControlDir()` (028 clones into it under `LockRepo(ctx,
   "release-control")`), `DownloadsDir()`, `BuildDir(sha)` (`build/<sha12>`,
   not created: the build makes and removes it under the reactor lock).
@@ -813,7 +817,8 @@ stack mutation:
   clones or fetches release-control into `cache.ReleaseControlDir()` under
   `LockRepo("release-control")`, takes the branch head or the
   `--release-commit` pin (full or abbreviated sha; a pin already in the
-  clone needs no fetch), and parses `build-spec.json` from that commit. A
+  clone needs no fetch; a re-fetch takes tags too, so a tag-only pin
+  resolves), and parses `build-spec.json` from that commit. A
   malformed pin is exit 2; an unknown pin or branch is exit 3. The
   `Release` it returns carries the repo, branch, full commit and the
   `BuildSpec`.
@@ -826,21 +831,20 @@ stack mutation:
   with `release.cli_compat: strict`; newer asks `Confirm` (set it only on a
   TTY) or needs `SelfUpdate` (`--self-update`), then calls
   `Updater.SelfUpdate(ctx, version)`, and is otherwise exit 5 naming the
-  command to run. A nil `Updater` (until 060) is always exit 5 with
+  command to run. SelfUpdate re-executes on success; if it returns nil
+  anyway, the gate is exit 5 so the old binary doesn't go on. A nil `Updater` (until 060) is always exit 5 with
   instructions. `IgnoreCLIVersion` turns any mismatch into a warning. A CLI
   version `CompareVersions` can't order (`dev`, a bare sha) is treated as
   equal with a warning, and so is a `PSCLI` that isn't a version.
 - `rel.ResolveComponents(ctx, cache, sink, step, cfg.Components)` resolves
-  each component's ref to a commit with `cache.ResolveRef`:
+  each component's ref to a commit with `cache.ResolveRef` (see
+  internal/cache):
   `components.<name>.ref` from pic-sure.yaml if set, else the build-spec's
   key, else `main` with a warning. An unknown ref is exit 3. The commits are
   then in the cache's clones, so `EnsureSource` doesn't fetch again.
 - `rel.Record(state, components)` sets state.json's release and
   components; the caller saves the state.
 
-`cache.ResolveRef(ctx, component, ref)` (`internal/cache/ref.go`, added by
-028) clones or fetches the component's bare clone under its fetch lock and
-resolves ref there. A full sha the clone already has skips the fetch.
 
 ## internal/pki
 

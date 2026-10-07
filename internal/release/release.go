@@ -71,11 +71,11 @@ func Fetch(ctx context.Context, c *cache.Cache, g git.Client, sink events.Sink, 
 	}
 	data, err := readFile(ctx, g, dir, sha, BuildSpecFile)
 	if err != nil {
-		return nil, fmt.Errorf("reading %s at release-control %s: %w", BuildSpecFile, sha[:12], err)
+		return nil, fmt.Errorf("reading %s at release-control %s: %w", BuildSpecFile, short(sha), err)
 	}
 	spec, err := ParseBuildSpec(data)
 	if err != nil {
-		return nil, fmt.Errorf("release-control %s: %w", sha[:12], err)
+		return nil, fmt.Errorf("release-control %s: %w", short(sha), err)
 	}
 	return &Release{Repo: opts.Repo, Branch: opts.Branch, Commit: sha, Spec: spec}, nil
 }
@@ -88,7 +88,9 @@ func fetchCommit(ctx context.Context, g git.Client, sink events.Sink, step, dir 
 	if err != nil {
 		return "", err
 	}
-	progress(sink, step, "fetching release-control from %s", opts.Repo)
+	if !existed {
+		progress(sink, step, "cloning release-control from %s", opts.Repo)
+	}
 	if err := g.EnsureBare(ctx, opts.Repo, dir); err != nil {
 		return "", fmt.Errorf("cloning release-control %s: %w", opts.Repo, err)
 	}
@@ -98,7 +100,10 @@ func fetchCommit(ctx context.Context, g git.Client, sink events.Sink, step, dir 
 		}
 	}
 	if existed {
-		if err := g.Fetch(ctx, dir, nil, false); err != nil {
+		// Tags too: a pin may be reachable only from a tag, as it would be
+		// after a fresh clone.
+		progress(sink, step, "fetching release-control from %s", opts.Repo)
+		if err := g.Fetch(ctx, dir, nil, true); err != nil {
 			return "", fmt.Errorf("fetching release-control %s: %w", opts.Repo, err)
 		}
 	}
@@ -189,7 +194,7 @@ func (r *Release) ResolveComponents(ctx context.Context, c *cache.Cache, sink ev
 			if ref, ok = r.Spec.Ref(comp.SpecKey); !ok {
 				ref = "main"
 				warn(sink, step, "the build-spec at release-control %s has no %s entry; using %s's main branch",
-					r.Commit[:12], comp.SpecKey, comp.Repo)
+					short(r.Commit), comp.SpecKey, comp.Repo)
 			}
 		}
 		progress(sink, step, "resolving %s %s", comp.Name, ref)
@@ -210,6 +215,14 @@ func (r *Release) ResolveComponents(ctx context.Context, c *cache.Cache, sink ev
 func (r *Release) Record(state *stack.State, components map[string]stack.Component) {
 	state.Release = stack.Release{Repo: r.Repo, Branch: r.Branch, Commit: r.Commit}
 	state.Components = components
+}
+
+// short abbreviates a commit sha for messages.
+func short(sha string) string {
+	if len(sha) > 12 {
+		return sha[:12]
+	}
+	return sha
 }
 
 func progress(sink events.Sink, step, format string, args ...any) {

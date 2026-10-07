@@ -53,7 +53,7 @@ func (r *Release) Gate(ctx context.Context, opts GateOptions) error {
 	want, ok := r.Spec.Ref(catalog.CLISpecKey)
 	if !ok {
 		warn(opts.Sink, opts.Step, "the build-spec at release-control %s isn't CLI-aware (no %s entry); "+
-			"it wasn't validated with any pic-sure release", r.Commit[:12], catalog.CLISpecKey)
+			"it wasn't validated with any pic-sure release", short(r.Commit), catalog.CLISpecKey)
 		return nil
 	}
 	order, comparable := stack.CompareVersions(want, opts.CLIVersion)
@@ -69,7 +69,7 @@ func (r *Release) Gate(ctx context.Context, opts GateOptions) error {
 	}
 	if order != 0 && opts.IgnoreCLIVersion {
 		warn(opts.Sink, opts.Step, "release-control %s was validated with pic-sure %s, not %s; "+
-			"continuing because of --ignore-cli-version", r.Commit[:12], want, opts.CLIVersion)
+			"continuing because of --ignore-cli-version", short(r.Commit), want, opts.CLIVersion)
 		return nil
 	}
 	switch {
@@ -77,10 +77,10 @@ func (r *Release) Gate(ctx context.Context, opts GateOptions) error {
 		if opts.Compat == stack.CompatStrict {
 			return exitcode.Incompatible("release-control %s was validated with pic-sure %s, older than this pic-sure %s, "+
 				"and release.cli_compat is strict; set it to warn or pass --ignore-cli-version",
-				r.Commit[:12], want, opts.CLIVersion)
+				short(r.Commit), want, opts.CLIVersion)
 		}
 		warn(opts.Sink, opts.Step, "release-control %s was validated with pic-sure %s, older than this pic-sure %s; "+
-			"this pairing wasn't tested", r.Commit[:12], want, opts.CLIVersion)
+			"this pairing wasn't tested", short(r.Commit), want, opts.CLIVersion)
 		return nil
 	case order > 0:
 		return r.newerCLI(ctx, want, opts)
@@ -90,7 +90,7 @@ func (r *Release) Gate(ctx context.Context, opts GateOptions) error {
 
 // newerCLI handles a build-spec that names a newer CLI than this one.
 func (r *Release) newerCLI(ctx context.Context, want string, opts GateOptions) error {
-	gap := fmt.Sprintf("release-control %s needs pic-sure %s; this is pic-sure %s", r.Commit[:12], want, opts.CLIVersion)
+	gap := fmt.Sprintf("release-control %s needs pic-sure %s; this is pic-sure %s", short(r.Commit), want, opts.CLIVersion)
 	retry := opts.Command
 	if retry == "" {
 		retry = "the command"
@@ -115,7 +115,12 @@ func (r *Release) newerCLI(ctx context.Context, want string, opts GateOptions) e
 		return exitcode.Incompatible("%s. Run %s --self-update to update and continue, "+
 			"or `pic-sure self-update --to %s` first, or pass --ignore-cli-version to use this one", gap, retry, want)
 	}
-	return opts.Updater.SelfUpdate(ctx, want)
+	if err := opts.Updater.SelfUpdate(ctx, want); err != nil {
+		return err
+	}
+	// SelfUpdate re-executes on success, so returning means this old binary
+	// is still running and mustn't go on to change the stack.
+	return exitcode.Incompatible("pic-sure was updated to %s; run %s again", want, retry)
 }
 
 // isVersion reports whether CompareVersions can order v.

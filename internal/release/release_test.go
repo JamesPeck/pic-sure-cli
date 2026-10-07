@@ -22,8 +22,9 @@ import (
 	"github.com/JamesPeck/pic-sure-cli/internal/stack"
 )
 
-// execRunner runs commands for real, for these tests' git.
-type execRunner struct{}
+// execRunner runs commands for real, for these tests' git, and logs each
+// git subcommand it runs.
+type execRunner struct{ log *[]string }
 
 func (r execRunner) Run(ctx context.Context, c docker.Cmd) (docker.Result, error) {
 	var stdout, stderr bytes.Buffer
@@ -31,7 +32,10 @@ func (r execRunner) Run(ctx context.Context, c docker.Cmd) (docker.Result, error
 	return docker.Result{Stdout: stdout.Bytes(), Stderr: stderr.Bytes(), ExitCode: code}, err
 }
 
-func (execRunner) Stream(ctx context.Context, c docker.Cmd, stdout, stderr io.Writer) (int, error) {
+func (r execRunner) Stream(ctx context.Context, c docker.Cmd, stdout, stderr io.Writer) (int, error) {
+	if r.log != nil {
+		*r.log = append(*r.log, strings.Join(c.Argv, " "))
+	}
 	cmd := exec.CommandContext(ctx, c.Argv[0], c.Argv[1:]...)
 	cmd.Env = append(os.Environ(), c.Env...)
 	cmd.Dir, cmd.Stdin, cmd.Stdout, cmd.Stderr = c.Dir, c.Stdin, stdout, stderr
@@ -51,6 +55,7 @@ type world struct {
 	repos map[string]*repo // by component name
 	cache *cache.Cache
 	git   git.Client
+	calls []string // every git command the code under test ran
 }
 
 type repo struct {
@@ -87,7 +92,7 @@ func newWorld(t *testing.T) *world {
 	}
 	t.Setenv("GIT_CONFIG_GLOBAL", path)
 
-	w.git = git.New(execRunner{})
+	w.git = git.New(execRunner{log: &w.calls})
 	c, err := cache.Open(filepath.Join(t.TempDir(), "cache"), cache.Options{Git: w.git})
 	if err != nil {
 		t.Fatal(err)
@@ -120,6 +125,18 @@ func (r *repo) commit(name, content string) string {
 	r.git("add", name)
 	r.git("commit", "--quiet", "-m", "change "+name)
 	return r.git("rev-parse", "HEAD")
+}
+
+// fetches counts the git fetches and clones run since the last call.
+func (w *world) fetches() int {
+	n := 0
+	for _, c := range w.calls {
+		if strings.Contains(c, " fetch ") || strings.Contains(c, " clone ") {
+			n++
+		}
+	}
+	w.calls = nil
+	return n
 }
 
 func (w *world) url() string { return "file://" + w.rc.dir }
@@ -168,9 +185,13 @@ func TestFetchReadsTheBranchHeadAndHonoursAPin(t *testing.T) {
 		t.Errorf("after a push, PSCLI = %q", got)
 	}
 
+	w.fetches()
 	rel, err = w.fetch(release.Options{Commit: first[:10]})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if n := w.fetches(); n != 0 {
+		t.Errorf("a pin the clone has ran %d fetches, want none", n)
 	}
 	if got, _ := rel.Spec.Ref("PSCLI"); rel.Commit != first || got != "v2.0.0" {
 		t.Errorf("pinned: commit %s PSCLI %q, want %s v2.0.0", rel.Commit, got, first)
@@ -190,6 +211,23 @@ func TestFetchFindsAPinPushedAfterTheClone(t *testing.T) {
 	rel, err := w.fetch(release.Options{Commit: later})
 	if err != nil || rel.Commit != later {
 		t.Fatalf("Fetch = %+v, %v; want commit %s", rel, err, later)
+	}
+}
+
+func TestFetchFindsATagOnlyPinAfterTheClone(t *testing.T) {
+	w := newWorld(t)
+	w.rc.commit("build-spec.json", specV1)
+	if _, err := w.fetch(release.Options{}); err != nil {
+		t.Fatal(err)
+	}
+	w.rc.git("switch", "--quiet", "-c", "hotfix")
+	hotfix := w.rc.commit("build-spec.json", specV1+"\n")
+	w.rc.git("tag", "v1-hotfix")
+	w.rc.git("switch", "--quiet", "james_mono")
+	w.rc.git("branch", "-D", "hotfix")
+	rel, err := w.fetch(release.Options{Commit: hotfix})
+	if err != nil || rel.Commit != hotfix {
+		t.Fatalf("Fetch = %+v, %v; want commit %s", rel, err, hotfix)
 	}
 }
 
@@ -269,6 +307,17 @@ func TestResolveComponents(t *testing.T) {
 	want[catalog.Frontend] = stack.Component{Ref: "main", Commit: feNext}
 	want[catalog.DictionaryETL] = stack.Component{Ref: pinned[:8], Commit: pinned}
 	checkComponents(t, got, want)
+
+	// A full sha the clone already has needs no fetch.
+	cfg = stack.Components{}
+	cfg.PicSure.Ref = tagged
+	w.fetches()
+	if _, err := rel.ResolveComponents(context.Background(), w.cache, nil, "release", cfg); err != nil {
+		t.Fatal(err)
+	}
+	if n := w.fetches(); n != 3 {
+		t.Errorf("ran %d fetches, want 3 (none for pic-sure's known sha)", n)
+	}
 
 	// The resolved commits are in the cache's clones, so EnsureSource
 	// needs no fetch.
