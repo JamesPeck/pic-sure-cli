@@ -13,7 +13,7 @@ stderr 'unknown component "hpds"'
 # dictionary-etl is up to date at the recorded commit: nothing is built,
 # and the tag is recorded.
 exec pic-sure --stack stack --plain build dictionary-etl
-stdout '^up-to-date +hms-dbmi/dictionary-etl:444444444444$'
+stdout '^up_to_date +hms-dbmi/dictionary-etl:444444444444$'
 ! grep 'docker build' docker.log
 grep '"dictionary-etl": "444444444444"' stack/.pic-sure/state.json
 grep '"name": "build",\s*$' stack/.pic-sure/state.json
@@ -37,10 +37,10 @@ grep '"status": "failed"' stack/.pic-sure/state.json
 # exists.
 cp prune.scenario docker.scenario
 exec pic-sure --plain cache prune --dry-run
-stdout '^Would remove 0 items, freeing 0 B. Kept 2 in-use.$'
+stdout '^Would remove 0 items, freeing 0 B. Kept 2 in_use.$'
 exec pic-sure cache list
-stdout '^image +hms-dbmi/dictionary-etl:444444444444 .* in-use +stack demo$'
-stdout '^source +src/picsure-dictionary-etl/4{40} .* in-use +stack demo$'
+stdout '^image +hms-dbmi/dictionary-etl:444444444444 .* in_use +stack demo$'
+stdout '^source +src/picsure-dictionary-etl/4{40} .* in_use +stack demo$'
 
 -- docker.scenario --
 docker image inspect hms-dbmi/dictionary-etl:444444444444 => 0 stdout=etl.json

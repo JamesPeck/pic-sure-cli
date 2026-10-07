@@ -174,7 +174,7 @@ func TestBuildKeepsImagesThatAreUpToDate(t *testing.T) {
 	}
 	for ref, a := range actions(r) {
 		if a != ops.ImageUpToDate {
-			t.Errorf("%s: %s, want up-to-date", ref, a)
+			t.Errorf("%s: %s, want up_to_date", ref, a)
 		}
 	}
 	saved, err := x.st.LoadState()
@@ -320,7 +320,7 @@ func TestBuildFromALocalSourceUsesADevTag(t *testing.T) {
 	}
 	x.f.AssertNotCalled(fakerunner.Glob("docker run *"))
 	if a := actions(r)["hms-dbmi/pic-sure-psama:"+tag]; a != ops.ImageUpToDate {
-		t.Errorf("psama: %q, want up-to-date; report %v", a, r.Images)
+		t.Errorf("psama: %q, want up_to_date; report %v", a, r.Images)
 	}
 	if got := x.state.Components[catalog.PicSure]; got != (stack.Component{Commit: localSHA, Source: src}) {
 		t.Errorf("recorded component %+v", got)

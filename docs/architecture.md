@@ -1058,7 +1058,7 @@ those trees exist, which is what `up` needs.
   which it then records) and resolves only the missing components, so `build` never moves a recorded commit (that is
   `update`'s job) and runs no CLI gate. Then the image step without its
   `Check`, so the `BuildReport` lists every selected
-  image as `built`, `pulled` or `up-to-date`. The command holds the stack
+  image as `built`, `pulled` or `up_to_date`. The command holds the stack
   lock, records the operation in state.json and saves it even on failure.
 
 **DB and migrations (032, `migrate.go`).** §9.1 steps 8 and 9, for
@@ -1234,7 +1234,7 @@ Migrations, NoBuild, StartDB})` is the plan, `update --dry-run --json`'s
 data: the pending config migrations (from `Registry.Plan` on the file as
 read; `cfg` is it migrated in memory), the release and each component's
 commit current → target (the caller resolves `Components`; a local source
-keeps its checkout's commit), each image's tag and action (`up-to-date`
+keeps its checkout's commit), each image's tag and action (`up_to_date`
 from the image step's own check; `build`; `pull` for every pulled image,
 since update always pulls; `keep` with `NoBuild`, which moves nothing),
 the Flyway status, the token (renewed when it is valid for less than
@@ -1587,20 +1587,20 @@ the stacks it found and every `CacheItem` with a status.
   has moved, and is unreadable like any labelled stack. So is a registry
   entry that can't be parsed.
 - **Status**, in order:
-  - `in-use`: a container references it (an image by ID or reference, an
+  - `in_use`: a container references it (an image by ID or reference, an
     entry by a bind mount of it, inside it or above it), whether or not
     the container is labelled, or a readable state names it (`images`,
     `dev_images`, a component's commit for a source tree);
   - `recent`: made or changed within `RecentCacheAge` (1 h), because a
     build may not have saved its state yet;
-  - `unknown-stack`: an unreadable stack might use it. That covers every
+  - `unknown_stack`: an unreadable stack might use it. That covers every
     commit-tagged image and source tree, and that stack's own dev images.
     Build contexts, downloads and `tmp/` belong to no stack;
   - `unused`.
 
 `PruneCache(ctx, d, c, PruneOptions{DryRun, Force})` runs one step,
-`prune`. It removes `unused` items, and with `Force` also `unknown-stack`
-ones; `in-use` and `recent` items are never removed. Unless `DryRun`, it
+`prune`. It removes `unused` items, and with `Force` also `unknown_stack`
+ones; `in_use` and `recent` items are never removed. Unless `DryRun`, it
 holds the cache's prune lock (`LockPrune`) from before the inventory to the
 last removal, and fails, removing nothing, if an image step still holds the
 use lock after the cache's `LockTimeout`. Images go through `docker

@@ -33,12 +33,12 @@ const CacheImage = "image"
 const (
 	// CacheInUse: a container references it, or a readable state.json of a
 	// stack names it. Never pruned.
-	CacheInUse = "in-use"
+	CacheInUse = "in_use"
 	// CacheUnknownStack: nothing known uses it, but a labelled or
 	// registered stack whose state.json can't be read might, or an
 	// unparseable registry entry hides which stack. Pruned only with
 	// --force.
-	CacheUnknownStack = "unknown-stack"
+	CacheUnknownStack = "unknown_stack"
 	// CacheRecent: unused, but created or changed within RecentCacheAge,
 	// so a build or load still running may be about to record or mount
 	// it. Never pruned, even with --force.

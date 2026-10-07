@@ -251,7 +251,7 @@ func TestPlanUpdateOfACurrentStackChangesNothing(t *testing.T) {
 	}
 	for name, a := range imageActions(p) {
 		if a != ops.ImageUpToDate {
-			t.Errorf("%s: %s, want up-to-date", name, a)
+			t.Errorf("%s: %s, want up_to_date", name, a)
 		}
 	}
 	if p.Migrations.Status != ops.MigrationsStatusUpToDate || p.Migrations.StartedDB {

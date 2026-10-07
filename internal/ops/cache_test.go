@@ -270,7 +270,7 @@ func TestCacheInventoryInUseRules(t *testing.T) {
 		"hms-dbmi/pic-sure-psama:dev-gone-aaaaaaaaaaaa":      ops.CacheUnknownStack, // gone's own dev image
 		"hms-dbmi/pic-sure-psama:dev-zed-aaaaaaaaaaaa-dirty": ops.CacheUnused,       // no stack zed
 		"hms-dbmi/pic-sure-httpd:dev-new-dddddddddddd":       ops.CacheRecent,
-		"hms-dbmi/pic-sure-visualization:eeeeeeeeeeee":       ops.CacheRecent, // recent wins over unknown-stack
+		"hms-dbmi/pic-sure-visualization:eeeeeeeeeeee":       ops.CacheRecent, // recent wins over unknown_stack
 		"src/pic-sure/" + shaA:                               ops.CacheInUse,
 		"src/pic-sure/" + shaB:                               ops.CacheInUse,
 		"src/pic-sure/" + shaC:                               ops.CacheUnknownStack,
@@ -325,7 +325,7 @@ func TestCacheInventoryCountsTheCurrentStack(t *testing.T) {
 		t.Fatal(err)
 	}
 	if s := statuses(r.Items)["hms-dbmi/pic-sure-hpds:aaaaaaaaaaaa"]; s != ops.CacheInUse {
-		t.Errorf("alpha's image is %s, want in-use", s)
+		t.Errorf("alpha's image is %s, want in_use", s)
 	}
 }
 
@@ -466,7 +466,7 @@ func TestCacheInventoryFindsAStackByItsNetwork(t *testing.T) {
 		t.Fatal(err)
 	}
 	if s := statuses(r.Items)["hms-dbmi/pic-sure-hpds:aaaaaaaaaaaa"]; s != ops.CacheInUse {
-		t.Errorf("alpha's image is %s, want in-use", s)
+		t.Errorf("alpha's image is %s, want in_use", s)
 	}
 }
 
@@ -552,7 +552,7 @@ func TestCacheInventoryCountsARegisteredStack(t *testing.T) {
 	st := statuses(r.Items)
 	for _, name := range []string{"hms-dbmi/pic-sure-hpds:aaaaaaaaaaaa", "hms-dbmi/pic-sure-psama:dev-alpha-aaaaaaaaaaaa", "src/pic-sure/" + shaA} {
 		if st[name] != ops.CacheInUse {
-			t.Errorf("%s is %s, want in-use", name, st[name])
+			t.Errorf("%s is %s, want in_use", name, st[name])
 		}
 	}
 	i := slices.IndexFunc(r.Stacks, func(s ops.CacheStack) bool { return s.Dir == fx.alpha })
@@ -611,7 +611,7 @@ func TestPruneCacheKeepsAMovedRegisteredStack(t *testing.T) {
 		t.Errorf("forgot %+v, want nothing", r.Forgotten)
 	}
 	if st := statuses(r.Items)["hms-dbmi/pic-sure-psama:cccccccccccc"]; st != ops.CacheUnknownStack {
-		t.Errorf("an image the moved stack might use is %s, want unknown-stack", st)
+		t.Errorf("an image the moved stack might use is %s, want unknown_stack", st)
 	}
 	if reg, _ := fx.cache.RegisteredStacks(); len(reg) != 1 {
 		t.Errorf("registry after prune: %+v, want the moved stack", reg)
@@ -633,7 +633,7 @@ func TestPruneCacheKeepsAnUnreadableRegistryEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 	if st := statuses(r.Items)["hms-dbmi/pic-sure-psama:cccccccccccc"]; st != ops.CacheUnknownStack {
-		t.Errorf("an image is %s, want unknown-stack", st)
+		t.Errorf("an image is %s, want unknown_stack", st)
 	}
 	if len(r.Forgotten) != 0 {
 		t.Errorf("forgot %+v without --force", r.Forgotten)
@@ -672,6 +672,6 @@ func TestCacheInventoryKeepsARegisteredStackWithoutItsConfig(t *testing.T) {
 		t.Fatalf("stacks %+v, want alpha unreadable, not gone", r.Stacks)
 	}
 	if st := statuses(r.Items)["hms-dbmi/pic-sure-hpds:aaaaaaaaaaaa"]; st != ops.CacheUnknownStack {
-		t.Errorf("alpha's image is %s, want unknown-stack", st)
+		t.Errorf("alpha's image is %s, want unknown_stack", st)
 	}
 }

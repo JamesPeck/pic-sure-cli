@@ -36,7 +36,7 @@ const (
 // Migration statuses in an UpdatePlan.
 const (
 	MigrationsStatusPending  = "pending"
-	MigrationsStatusUpToDate = "up-to-date"
+	MigrationsStatusUpToDate = "up_to_date"
 	MigrationsStatusUnknown  = "unknown"
 )
 
@@ -129,7 +129,7 @@ type ComponentChange struct {
 }
 
 // ImageChange is one image's tag, current → target, and what the image
-// step will do: build, pull, up-to-date, or keep (--no-build).
+// step will do: build, pull, up_to_date, or keep (--no-build).
 type ImageChange struct {
 	Name      string `json:"name"`
 	Component string `json:"component"`

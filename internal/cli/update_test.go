@@ -34,7 +34,7 @@ func TestWriteUpdatePlan(t *testing.T) {
 		"frontend        v2 (0123456789ab) → v2.1 (777777777777)",
 		"migrations      main (333333333333) (unchanged)",
 		"build:          pic-sure-httpd",
-		"up-to-date:     dictionary-etl",
+		"up_to_date:     dictionary-etl",
 		"migrations:  pending; started the database to check",
 		"token:       renewed",
 		"httpd           recreate: its image is rebuilt",

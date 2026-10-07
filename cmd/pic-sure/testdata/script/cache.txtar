@@ -5,7 +5,7 @@ env XDG_CACHE_HOME=$WORK/cache
 exec pic-sure cache list
 stdout '^Cache: .*/cache/pic-sure$'
 stdout '^  gone +/nonexistent/moved-stack +UNREADABLE: '
-stdout '^image +hms-dbmi/pic-sure-hpds:0123456789ab +425 MB +unknown-stack +maybe gone$'
+stdout '^image +hms-dbmi/pic-sure-hpds:0123456789ab +425 MB +unknown_stack +maybe gone$'
 stdout '^image +hms-dbmi/pic-sure-psama:dev-zed-0123456789ab +1.20 kB +unused +-$'
 stdout '^download +downloads/nhanes.tgz +7 B +recent +-$'
 stdout '^  deleted +/nonexistent/deleted-stack +GONE: '
@@ -13,12 +13,12 @@ stdout '^  deleted +/nonexistent/deleted-stack +GONE: '
 
 exec pic-sure cache list --json
 stdout '^\{"schema_version":2,'
-stdout '"name":"hms-dbmi/pic-sure-hpds:0123456789ab","image_id":"sha256:hpds","size":424693812,"status":"unknown-stack","may_be_used_by":\["gone"\]'
+stdout '"name":"hms-dbmi/pic-sure-hpds:0123456789ab","image_id":"sha256:hpds","size":424693812,"status":"unknown_stack","may_be_used_by":\["gone"\]'
 
 # --dry-run removes nothing.
 exec pic-sure --plain cache prune --dry-run
 stdout '^would remove image hms-dbmi/pic-sure-psama:dev-zed-0123456789ab \(1.20 kB\)$'
-stdout '^Would remove 1 item, freeing 1.20 kB. Kept 1 unknown-stack, 1 recent.$'
+stdout '^Would remove 1 item, freeing 1.20 kB. Kept 1 unknown_stack, 1 recent.$'
 stdout '^would forget the gone stack deleted \(/nonexistent/deleted-stack\)$'
 stderr 'can''t read the state of gone at /nonexistent/moved-stack .*--force removes them'
 ! stderr 'deleted-stack .*--force'

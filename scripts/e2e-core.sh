@@ -27,7 +27,7 @@ result="$(pic --stack "$dir" --json update --release-commit "$release" | tail -n
 jq -e '
 	.type == "result" and .ok and (.data | (
 		(.config.migrations | length) == 0 and .release.from == .release.to and
-		(.restarts | length) == 0 and .migrations.status == "up-to-date" and
+		(.restarts | length) == 0 and .migrations.status == "up_to_date" and
 		(.token.renew | not) and all(.components[]; .changed | not) and
 		all(.images[]; .action != "build" and .action != "pull")))' <<< "$result" > /dev/null ||
 	fail "update wasn't a no-op: $result"

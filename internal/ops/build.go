@@ -41,7 +41,7 @@ const DefaultRegistry = "ghcr.io/hms-dbmi"
 const (
 	ImageBuilt    = "built"
 	ImagePulled   = "pulled"
-	ImageUpToDate = "up-to-date"
+	ImageUpToDate = "up_to_date"
 )
 
 // ImagesOptions configures the image step.
