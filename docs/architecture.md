@@ -1163,6 +1163,9 @@ concatenate its step lists with their own and end with one `RefreshStep()`.
   uses the cache's), then one PUT per dataset, `datasetRef` URL-encoded. `FacetSteps`: `facets`, three PUTs in order.
   `FacetConfigSteps(json)` (046): `facet-config`, POST
   `/api/facet/loader/load`; the answer must be the ETL's JSON result.
+  `Preflight(ctx, WeightsOptions)` (046) checks what hydrate and weights
+  need (dictionary-db healthy, its password, both images, the weights
+  file) without changing anything, for loads that replace HPDS data first.
   `WeightsSteps`: `weights`, the reactor's `dictionary-weights` image with
   the file bind-mounted read-only at `/weights.csv`; the default file is
   the pic-sure tree's (`components.pic-sure.source`, else the cache).
@@ -1227,11 +1230,12 @@ DemoOptions{Dataset, HeapMB, Cache, HTTP})` is `data demo` (§9.6).
   hms-dbmi/pic-sure-public-datasets at `DemoDatasetsCommit`: its path,
   size and SHA-256. `all` is every file, merged in that order. Re-pinning
   means updating all three fields.
-- **Steps.** `demo-download`: each file is reused from the cache's
-  `downloads/<sha16>-<name>` when its SHA-256 matches, else fetched from
-  `raw.githubusercontent.com` (written beside its final name, renamed into
-  place only when size and hash match the pins; a minute with no data
-  abandons it). `demo-prepare`: one file goes through `phenoinput.Resolve`
+- **Steps.** First the dictionary's `Preflight`, so a missing dictionary
+  piece fails before HPDS is touched. `demo-download`: each file is reused
+  from the cache's `downloads/<sha16>-<name>` when its SHA-256 matches,
+  else fetched from `raw.githubusercontent.com` into the cache's `tmp/` and
+  renamed into place only when size and hash match the pins; a minute with
+  no data abandons it. `demo-prepare`: one file goes through `phenoinput.Resolve`
   as `--file` does; for `all`, each is resolved and appended in turn into
   a merged CSV in the cache's `tmp/`, after its header (parsed, so quoting
   may differ) matches the first's. Then `LoadPhenotype` with

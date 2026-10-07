@@ -327,13 +327,14 @@ func (x *Dictionary) FacetConfigSteps(config []byte) []steps.Step {
 				return err
 			}
 			var r struct {
-				CategoriesCreated, CategoriesUpdated, FacetsCreated, FacetsUpdated int
+				CategoriesCreated, CategoriesUpdated, FacetsCreated, FacetsUpdated *int
 			}
-			if err := json.Unmarshal([]byte(resp), &r); err != nil {
+			err = json.Unmarshal([]byte(resp), &r)
+			if err != nil || r.CategoriesCreated == nil || r.CategoriesUpdated == nil || r.FacetsCreated == nil || r.FacetsUpdated == nil {
 				return fmt.Errorf("dictionary-etl's answer to the facet configuration isn't its result: %s", truncate(strings.TrimSpace(resp), 500))
 			}
 			sink.Emit(events.Progress{ID: StepFacetConfig, Text: fmt.Sprintf("%d facet categories created, %d updated; %d facets created, %d updated",
-				r.CategoriesCreated, r.CategoriesUpdated, r.FacetsCreated, r.FacetsUpdated)})
+				*r.CategoriesCreated, *r.CategoriesUpdated, *r.FacetsCreated, *r.FacetsUpdated)})
 			return nil
 		},
 	}}
@@ -410,6 +411,26 @@ func (x *Dictionary) weightsFile(opts WeightsOptions) (string, error) {
 		return "", exitcode.Precondition("the default weights file is missing (%v); pass --weights FILE, or run `pic-sure build` to fetch the pic-sure source", err)
 	}
 	return file, nil
+}
+
+// Preflight checks, without changing anything, what HydrateSteps and
+// WeightsSteps need: a healthy dictionary-db, its password, the ETL and
+// weights images and the weights file. A load that replaces the HPDS data
+// first calls it, so a missing piece fails before the data is gone.
+func (x *Dictionary) Preflight(ctx context.Context, weights WeightsOptions) error {
+	if _, err := x.dictionaryDB(ctx); err != nil {
+		return err
+	}
+	if x.sec.DictionaryDBPassword == "" {
+		return exitcode.Precondition("secrets.yaml has no dictionary_db_password; run `pic-sure up`")
+	}
+	for _, name := range []string{"dictionary-etl", "dictionary-weights"} {
+		if _, err := x.image(ctx, name); err != nil {
+			return err
+		}
+	}
+	_, err := x.weightsFile(weights)
+	return err
 }
 
 // RefreshStep, ID "dictionary-refresh", ends every dictionary operation:

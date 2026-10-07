@@ -137,16 +137,19 @@ func DataDemo(ctx context.Context, d *Deps, st *stack.Stack, cfg *stack.Config, 
 	if err != nil {
 		return "", err
 	}
-	dataset, err := demoLoad(ctx, d, st, cfg, state, opts, files)
-	if err != nil {
-		return "", err
-	}
 	x := NewDictionary(d, st, cfg, sec, state)
 	defer func() {
 		if cerr := x.Close(ctx); cerr != nil {
 			d.Sink.Emit(events.Warning{Text: cerr.Error()})
 		}
 	}()
+	if err := x.Preflight(ctx, WeightsOptions{Cache: opts.Cache}); err != nil {
+		return "", err
+	}
+	dataset, err := demoLoad(ctx, d, st, cfg, state, opts, files)
+	if err != nil {
+		return "", err
+	}
 	if err := steps.Run(ctx, d.Sink, demoDictionarySteps(x, opts, facets), steps.Options{}); err != nil {
 		var se *steps.Error
 		if errors.As(err, &se) && !se.Interrupted {
@@ -172,13 +175,13 @@ func demoDictionarySteps(x *Dictionary, opts DemoOptions, facets []byte) []steps
 // the cache's use lock from picking a download until the load returns, so
 // a prune can't remove the file in between.
 func demoLoad(ctx context.Context, d *Deps, st *stack.Stack, cfg *stack.Config, state *stack.State, opts DemoOptions, files []DemoFile) (string, error) {
-	lock, err := opts.Cache.LockUse(ctx)
+	lock, err := opts.Cache.WithEvents(d.Sink, "").LockUse(ctx)
 	if err != nil {
 		return "", err
 	}
 	defer func() { _ = lock.Unlock() }()
 
-	var paths []string
+	var paths, names []string
 	var csvPath string
 	cleanup := func() error { return nil }
 	defer func() { _ = cleanup() }()
@@ -192,6 +195,7 @@ func demoLoad(ctx context.Context, d *Deps, st *stack.Stack, cfg *stack.Config, 
 					return err
 				}
 				paths = append(paths, p)
+				names = append(names, f.Path)
 			}
 			return nil
 		},
@@ -199,9 +203,12 @@ func demoLoad(ctx context.Context, d *Deps, st *stack.Stack, cfg *stack.Config, 
 		ID:    StepDemoPrepare,
 		Title: "Prepare the demo CSV",
 		Apply: func(ctx context.Context, sink events.Sink) error {
-			var err error
-			csvPath, cleanup, err = prepareDemoCSV(ctx, sink, opts.Cache, paths)
-			return err
+			p, done, err := prepareDemoCSV(ctx, sink, opts.Cache, paths, names)
+			if err != nil {
+				return err
+			}
+			csvPath, cleanup = p, done
+			return nil
 		},
 	}}
 	if err := steps.Run(ctx, d.Sink, plan, steps.Options{}); err != nil {
@@ -218,8 +225,8 @@ func demoLoad(ctx context.Context, d *Deps, st *stack.Stack, cfg *stack.Config, 
 
 // fetchDemoFile returns f's path in the cache's downloads/, downloading it
 // unless a file with the pinned SHA-256 is there. A download is written
-// beside its final name and renamed into place only once its size and
-// hash match the pins.
+// in the cache's tmp/ and renamed into place only once its size and hash
+// match the pins.
 func fetchDemoFile(ctx context.Context, sink events.Sink, opts DemoOptions, f DemoFile) (string, error) {
 	path := filepath.Join(opts.Cache.DownloadsDir(), f.cacheName())
 	sum, err := fileSHA256(ctx, path)
@@ -233,14 +240,16 @@ func fetchDemoFile(ctx context.Context, sink events.Sink, opts DemoOptions, f De
 		return "", err
 	}
 
-	tmp, err := os.CreateTemp(opts.Cache.DownloadsDir(), f.cacheName()+".tmp-*")
+	dir, err := opts.Cache.TempDir("download-*")
 	if err != nil {
 		return "", err
 	}
-	defer func() {
-		_ = tmp.Close()
-		_ = os.Remove(tmp.Name())
-	}()
+	defer func() { _ = os.RemoveAll(dir) }()
+	tmp, err := os.Create(filepath.Join(dir, f.cacheName()))
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = tmp.Close() }()
 	if err := download(ctx, sink, opts.HTTP, f.URL(opts.BaseURL), f, tmp); err != nil {
 		return "", fmt.Errorf("downloading %s: %w", f.Path, err)
 	}
@@ -324,11 +333,12 @@ func (p *downloadProgress) Write(b []byte) (int, error) {
 }
 
 // prepareDemoCSV returns the CSV to load from the downloaded files, and a
-// cleanup func for the temp files it made. One file is resolved as
+// cleanup func for the temp files it made; names are the files' names
+// for messages. One file is resolved as
 // load-phenotype resolves --file (extracted from its archive, or used in
 // place); several are each extracted in turn and appended to one merged
 // CSV, so at most one extraction is on disk beside the merge.
-func prepareDemoCSV(ctx context.Context, sink events.Sink, c *cache.Cache, paths []string) (string, func() error, error) {
+func prepareDemoCSV(ctx context.Context, sink events.Sink, c *cache.Cache, paths, names []string) (string, func() error, error) {
 	resolve := func(p string) (string, func() error, error) {
 		in, cleanup, err := phenoinput.Resolve(ctx, p, phenoinput.Options{MkdirTemp: c.TempDir})
 		if err != nil {
@@ -355,11 +365,11 @@ func prepareDemoCSV(ctx context.Context, sink events.Sink, c *cache.Cache, paths
 			return err
 		}
 		m := &csvMerge{w: bufio.NewWriterSize(out, 1<<20), last: '\n'}
-		for _, p := range paths {
-			sink.Emit(events.Progress{ID: StepDemoPrepare, Text: "merging " + filepath.Base(p)})
+		for i, p := range paths {
+			sink.Emit(events.Progress{ID: StepDemoPrepare, Text: "merging " + names[i]})
 			src, done, err := resolve(p)
 			if err == nil {
-				err = m.append(ctx, src, filepath.Base(p))
+				err = m.append(ctx, src, names[i])
 				err = errors.Join(err, done())
 			}
 			if err != nil {
@@ -429,8 +439,7 @@ func (m *csvMerge) append(ctx context.Context, path, name string) error {
 	return nil
 }
 
-// Write writes rows, remembering the last byte so a file without a final
-// newline gets one before the next file's rows.
+// Write writes rows, remembering their last byte.
 func (m *csvMerge) Write(b []byte) (int, error) {
 	if len(b) > 0 {
 		m.last = b[len(b)-1]

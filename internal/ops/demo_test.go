@@ -6,9 +6,12 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -25,6 +28,7 @@ import (
 	"github.com/JamesPeck/pic-sure-cli/internal/events"
 	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
 	"github.com/JamesPeck/pic-sure-cli/internal/render"
+	"github.com/JamesPeck/pic-sure-cli/internal/stack"
 	"github.com/JamesPeck/pic-sure-cli/internal/steps"
 )
 
@@ -67,7 +71,7 @@ func TestDemoDatasets(t *testing.T) {
 	}
 }
 
-// demoServer serves body as /f.csv and counts the requests.
+// demoServer serves body as "/f one.csv" and counts the requests.
 func demoServer(t *testing.T, body []byte) (*httptest.Server, *atomic.Int32) {
 	t.Helper()
 	var hits atomic.Int32
@@ -271,7 +275,7 @@ func TestPrepareDemoCSVMergesLikeTheDatasets(t *testing.T) {
 	genomes := writeDemoFile(t, filepath.Join(dir, "1000g.csv"),
 		[]byte("\"PATIENT_NUM\",\"CONCEPT_PATH\",\"NVAL_NUM\",\"TVAL_CHAR\",\"TIMESTAMP\"\n\"731234\",\"µ1000Genomesµ\",\"\",\"TRUE\",\"\"\n"))
 
-	csv, cleanup, err := prepareDemoCSV(context.Background(), &events.Recorder{}, c, []string{nhanes, synthea, genomes})
+	csv, cleanup, err := prepareDemoCSV(context.Background(), &events.Recorder{}, c, []string{nhanes, synthea, genomes}, []string{"nhanes.tgz", "synthea.zip", "1000g.csv"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,7 +311,7 @@ func TestPrepareDemoCSVRefusesOtherHeaders(t *testing.T) {
 	dir := t.TempDir()
 	a := writeDemoFile(t, filepath.Join(dir, "a.csv"), []byte("PATIENT_NUM,CONCEPT_PATH,NVAL_NUM,TVAL_CHAR,TIMESTAMP\n1,\\a\\,1,,\n"))
 	b := writeDemoFile(t, filepath.Join(dir, "b.csv"), []byte("PATIENT_NUM,CONCEPT_PATH,NUMERIC_VALUE,TEXT_VALUE\n2,\\b\\,1,\n"))
-	_, _, err = prepareDemoCSV(context.Background(), &events.Recorder{}, c, []string{a, b})
+	_, _, err = prepareDemoCSV(context.Background(), &events.Recorder{}, c, []string{a, b}, []string{"a.csv", "b.csv"})
 	if err == nil || !strings.Contains(err.Error(), "b.csv's header") || !strings.Contains(err.Error(), "doesn't match a.csv's") {
 		t.Fatalf("err = %v", err)
 	}
@@ -322,7 +326,7 @@ func TestPrepareDemoCSVSingleFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	plain := writeDemoFile(t, filepath.Join(t.TempDir(), "g.csv"), []byte("PATIENT_NUM,CONCEPT_PATH,NVAL_NUM,TVAL_CHAR,TIMESTAMP\n"))
-	csv, cleanup, err := prepareDemoCSV(context.Background(), &events.Recorder{}, c, []string{plain})
+	csv, cleanup, err := prepareDemoCSV(context.Background(), &events.Recorder{}, c, []string{plain}, []string{"g.csv"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -392,12 +396,14 @@ func TestDemoDictionarySteps(t *testing.T) {
 func TestFacetConfigRejectsAnUnexpectedAnswer(t *testing.T) {
 	x := newDictFixture(t)
 	x.stackUp()
-	x.curl = []docker.Result{{Stdout: []byte("<html>oops</html>")}}
-	d := x.dict()
-	defer func() { _ = d.Close(context.Background()) }()
-	err := steps.Run(context.Background(), x.d.Sink, d.FacetConfigSteps([]byte("[]")), steps.Options{})
-	if err == nil || !strings.Contains(err.Error(), "isn't its result: <html>oops</html>") {
-		t.Fatalf("err = %v", err)
+	for _, answer := range []string{"<html>oops</html>", "{}", "null"} {
+		x.curl = []docker.Result{{Stdout: []byte(answer)}}
+		d := x.dict()
+		err := steps.Run(context.Background(), x.d.Sink, d.FacetConfigSteps([]byte("[]")), steps.Options{})
+		if err == nil || !strings.Contains(err.Error(), "isn't its result: "+answer) {
+			t.Errorf("%s: err = %v", answer, err)
+		}
+		_ = d.Close(context.Background())
 	}
 }
 
@@ -414,5 +420,179 @@ func TestDemoFilesMatchTheirPins(t *testing.T) {
 		if _, err := fetchDemoFile(context.Background(), &events.Recorder{}, opts, f); err != nil {
 			t.Error(err)
 		}
+	}
+}
+
+// demoFixture is a dictFixture whose stack also has its HPDS key, the
+// weights file and the loader's containers, with DemoFiles replaced by
+// files served from a test server.
+type demoFixture struct {
+	*dictFixture
+	opts   DemoOptions
+	hits   *atomic.Int32
+	marker []byte
+	// duringLoad runs inside the fake loader container.
+	duringLoad func()
+}
+
+func newDemoFixture(t *testing.T, files map[string][]byte) *demoFixture {
+	t.Helper()
+	x := &demoFixture{dictFixture: newDictFixture(t)}
+	// The loader writes only to a volume labelled as the stack's.
+	x.f.On(fakerunner.Exact("docker", "volume", "inspect", "demo_hpds-data")).Stdout(
+		`[{"Name":"demo_hpds-data","CreatedAt":"2026-10-07T12:00:00Z","Labels":{"` + stack.LabelStack + `":"demo"}}]`)
+	x.stackUp()
+	if _, err := x.st.EnsureSecrets(rand.Reader, stack.EnsureOptions{OpenAuth: true}); err != nil {
+		t.Fatal(err)
+	}
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		_, _ = w.Write(files[strings.TrimPrefix(r.URL.Path, "/")])
+	}))
+	t.Cleanup(srv.Close)
+	x.hits = &hits
+	old := DemoFiles
+	t.Cleanup(func() { DemoFiles = old })
+	DemoFiles = nil
+	for _, name := range slices.Sorted(maps.Keys(files)) {
+		f := pinned(files[name])
+		f.Dataset, f.Path = strings.TrimSuffix(name, ".csv"), name
+		DemoFiles = append(DemoFiles, f)
+	}
+
+	x.opts = demoOpts(t, srv.URL)
+	src, err := x.opts.Cache.SourceDir("pic-sure", strings.Repeat("a", 40))
+	if err != nil {
+		t.Fatal(err)
+	}
+	weights := filepath.Join(src, filepath.FromSlash(defaultWeightsFile))
+	if err := os.MkdirAll(filepath.Dir(weights), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeDemoFile(t, weights, []byte("concept_node.DISPLAY,A\n"))
+
+	f := x.f
+	f.On(fakerunner.Glob("docker run --rm --name demo-hpds-input-* *")).Do(func(_ context.Context, c fakerunner.Call) (docker.Result, error) {
+		for _, a := range c.Argv {
+			if src, ok := strings.CutSuffix(a, ":/input.csv:ro"); ok {
+				fi, err := os.Stat(src)
+				if err != nil {
+					return docker.Result{ExitCode: 1}, nil
+				}
+				return docker.Result{Stdout: []byte(fmt.Sprintf("%d\n", fi.Size()))}, nil
+			}
+		}
+		return docker.Result{ExitCode: 1}, nil
+	})
+	f.On(fakerunner.Glob("docker rm -v -f demo-hpds-*"))
+	f.On(fakerunner.Glob("docker compose * stop hpds"))
+	f.On(fakerunner.Glob("docker run --rm --name demo-hpds-wipe-* *"))
+	f.On(fakerunner.Glob("docker run -i --rm --name demo-hpds-key-* *"))
+	f.On(fakerunner.Glob("docker run --rm --name demo-hpds-etl-* *")).Do(func(context.Context, fakerunner.Call) (docker.Result, error) {
+		if x.duringLoad != nil {
+			x.duringLoad()
+		}
+		return docker.Result{}, nil
+	})
+	f.On(fakerunner.Glob("docker run -i --rm --name demo-hpds-marker-* *")).Do(func(_ context.Context, c fakerunner.Call) (docker.Result, error) {
+		x.marker = c.Stdin
+		return docker.Result{}, nil
+	})
+	f.On(fakerunner.Glob("docker compose * up -d --wait --wait-timeout 900 hpds"))
+	f.On(fakerunner.Glob("docker compose * ps --all --format json hpds")).Stdout(dictPs("hpds", "running", "healthy"))
+	f.On(fakerunner.Glob("docker run * --name demo-columnmeta-* *"))
+	f.On(fakerunner.Glob("docker run * --name demo-dictionary-weights-* *"))
+	x.curl = []docker.Result{{Stdout: []byte("Success")}, {Stdout: []byte(`{"categoriesCreated":2,"categoriesUpdated":0,"facetsCreated":0,"facetsUpdated":0}`)}}
+	return x
+}
+
+func (x *demoFixture) run(dataset string) (string, error) {
+	x.opts.Dataset = dataset
+	return DataDemo(context.Background(), x.d, x.st, x.cfg, x.sec, x.state, x.opts)
+}
+
+// pruneLockFree reports whether cache prune could take its lock now.
+func (x *demoFixture) pruneLockFree() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	l, err := x.opts.Cache.LockPrune(ctx)
+	if err != nil {
+		return false
+	}
+	_ = l.Unlock()
+	return true
+}
+
+func TestDataDemoLoadsThenRebuildsTheDictionary(t *testing.T) {
+	csv := []byte("PATIENT_NUM,CONCEPT_PATH,NVAL_NUM,TVAL_CHAR,TIMESTAMP\n1,\\a\\,1,,\n")
+	x := newDemoFixture(t, map[string][]byte{"a.csv": csv, "b.csv": csv})
+	var lockedDuringLoad bool
+	x.duringLoad = func() { lockedDuringLoad = !x.pruneLockFree() }
+
+	dataset, err := x.run(DemoAll)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dataset != "demo:all" || strings.TrimSpace(string(x.marker)) != "demo:all" {
+		t.Errorf("dataset = %q, marker %q", dataset, x.marker)
+	}
+	x.f.AssertOrder(
+		fakerunner.Glob("docker compose * stop hpds"),
+		fakerunner.Glob("docker run --rm --name demo-hpds-etl-* *"),
+		fakerunner.Glob("docker compose * up -d --wait --wait-timeout 900 hpds"),
+		fakerunner.Glob("docker run * --name demo-columnmeta-* *"),
+		fakerunner.Glob("docker run * --name demo-dictionary-curl-* *"),
+		fakerunner.Glob("docker run * --name demo-dictionary-weights-* *"),
+		fakerunner.Glob("docker compose * restart dictionary-api"),
+	)
+	if len(x.curlCalls()) != 2 {
+		t.Errorf("curl calls = %d, want hydrate and facet-config", len(x.curlCalls()))
+	}
+	if !lockedDuringLoad {
+		t.Error("the cache use lock wasn't held while the loader ran")
+	}
+	if !x.pruneLockFree() {
+		t.Error("the cache use lock is still held")
+	}
+	if tmp, _ := os.ReadDir(filepath.Join(filepath.Dir(x.opts.Cache.DownloadsDir()), "tmp")); len(tmp) != 0 {
+		t.Errorf("tmp/ not cleaned: %d entries", len(tmp))
+	}
+	// hpds's start is a compose up, which refreshed() forbids.
+	if state, err := x.st.LoadState(); err != nil || slices.Contains(state.PendingRestarts, dictionaryAPI) {
+		t.Errorf("pending restarts after the refresh: %v, %v", state, err)
+	}
+	x.noSecretInArgv()
+}
+
+func TestDataDemoChecksTheDictionaryBeforeTouchingHPDS(t *testing.T) {
+	x := newDemoFixture(t, map[string][]byte{"a.csv": []byte("PATIENT_NUM\n1\n")})
+	delete(x.state.Images, "dictionary-weights")
+	_, err := x.run("a")
+	if exitcode.FromError(err) != exitcode.CodePrecondition || !strings.Contains(err.Error(), "no dictionary-weights image") {
+		t.Fatalf("err = %v", err)
+	}
+	if x.hits.Load() != 0 {
+		t.Errorf("downloaded %d files before the preflight failed", x.hits.Load())
+	}
+	x.f.AssertNotCalled(fakerunner.Glob("docker compose * stop hpds"))
+}
+
+func TestDataDemoMergeFailureLeavesHPDSAlone(t *testing.T) {
+	x := newDemoFixture(t, map[string][]byte{
+		"a.csv": []byte("PATIENT_NUM,CONCEPT_PATH\n1,\\a\\\n"),
+		"b.csv": []byte("PATIENT_NUM,OTHER\n2,x\n"),
+	})
+	_, err := x.run(DemoAll)
+	var se *steps.Error
+	if !errors.As(err, &se) || se.Step != StepDemoPrepare || !strings.Contains(err.Error(), "b.csv's header") {
+		t.Fatalf("err = %v", err)
+	}
+	x.f.AssertNotCalled(fakerunner.Glob("docker compose * stop hpds"))
+	if !x.pruneLockFree() {
+		t.Error("the cache use lock is still held")
+	}
+	if tmp, _ := os.ReadDir(filepath.Join(filepath.Dir(x.opts.Cache.DownloadsDir()), "tmp")); len(tmp) != 0 {
+		t.Errorf("tmp/ not cleaned: %d entries", len(tmp))
 	}
 }
