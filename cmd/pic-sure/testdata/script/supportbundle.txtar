@@ -1,7 +1,128 @@
-# Not implemented yet: exit 1, naming ticket 059.
-exitcode 1 pic-sure support-bundle
-stderr '^pic-sure: not implemented \(ticket 059\)$'
-! stdout .
-exitcode 1 pic-sure support-bundle -o bundle.tar.gz
-stderr '^pic-sure: not implemented \(ticket 059\)$'
-! stdout .
+# support-bundle writes a tar.gz of diagnostics with every secret
+# redacted, prints its path, and exits 0 even when parts are missing.
+env XDG_CACHE_HOME=/nonexistent-pic-sure-supportbundle/cache
+chmod 600 stack/.pic-sure/secrets.yaml
+
+exec pic-sure --stack stack support-bundle -o out.tar.gz
+stdout '^Wrote .*/out\.tar\.gz \(\d+ files\)$'
+stdout '^1 secret\(s\) are shorter than 4 characters'
+stdout '^Not collected:$'
+stdout 'compose logs hpds: .*password \[REDACTED\] rejected'
+! stdout 'Hpds0Auth0password0aaaa'
+exec tar -xzf out.tar.gz
+exists out/README.txt out/status.json out/doctor.json out/compose/ps.json out/compose/logs/gateway.log
+exists out/stack/pic-sure.yaml out/stack/state.json out/stack/manifest.json out/logs/cli-20261007T100000.000Z-1.log
+grep '"deep":' out/status.json
+grep 'GATEWAY_DB=\[REDACTED\]' out/compose/logs/gateway.log
+grep 'EMAIL=\[REDACTED\] ok' out/compose/logs/gateway.log
+# Every value in secrets.yaml and the HPDS key, in every file.
+! exec grep -r 'Root0password0aaaaaaaaaa' out
+! exec grep -r 'Remote"root\\pw' out
+! exec grep -r 'Remote\\"root\\\\pw' out
+! exec grep -r '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef' out
+! exec grep -r 'Hpds0Auth0password0aaaa' out
+! exec grep -r 'Future0secret0bbbbbbbb' out
+! exec grep -r 'fedcba9876543210fedcba9876543210' out
+! exec grep -r 'Proxy0pass0cccc' out
+! exec grep -rw 'z9' out
+
+# --json: one report, for scripts.
+exec pic-sure --stack stack --json support-bundle -o json.tar.gz
+stdout '^\{"schema_version":2,"path":".*/json\.tar\.gz","files":\[.*"README.txt"\],"problems":\[.*\],"short_secrets":1\}$'
+
+# Without -o, the name says the stack and the time, in the current directory.
+cd stack
+exec pic-sure support-bundle
+stdout '^Wrote .*/stack/pic-sure-support-demo-\d{8}T\d{6}Z\.tar\.gz'
+exec sh -c 'ls pic-sure-support-demo-*.tar.gz'
+cd ..
+
+# On a stack a newer pic-sure rendered: a warning, and the bundle.
+exec pic-sure --stack newer support-bundle -o newer.tar.gz
+stderr 'warning: .*upgrade pic-sure'
+stdout 'compose logs: left out'
+exists newer.tar.gz
+
+# No stack here: the host checks alone. A --stack that isn't one is exit 3.
+mkdir empty
+cd empty
+exec pic-sure support-bundle -o host.tar.gz
+stdout 'no stack: only the host checks are included'
+exec tar -tzf host.tar.gz
+stdout '^host/doctor.json$'
+! stdout status.json
+cd ..
+exitcode 3 pic-sure --stack empty support-bundle
+
+# An archive that can't be written is exit 1, and leaves nothing behind.
+exitcode 1 pic-sure --stack stack support-bundle -o nodir/x.tar.gz
+stderr 'writing the support bundle'
+! exists nodir
+
+-- docker.scenario --
+docker info --format json => 0 stdout=info.json
+docker version --format json => 0 stdout=version.json
+docker image inspect alpine:* => 0 stdout=image.json
+docker run * df -Pk / => 0 stdout=df.txt
+docker rm -v -f pic-sure-doctor-* => 0
+docker compose * ps --all --format json => 0 stdout=ps.json
+docker compose * logs --tail 500 gateway => 0 stdout=gateway.log
+docker compose * logs --tail 500 hpds => 1 stderr=hpds-err.txt
+docker compose * exec * => 1 stderr=exec-err.txt
+docker compose * => 0
+docker * => 1
+-- ps.json --
+{"Name":"demo-gateway-1","Service":"gateway","State":"running"}
+{"Name":"demo-hpds-1","Service":"hpds","State":"exited","ExitCode":1}
+-- gateway.log --
+gateway-1  | GATEWAY_DB=Root0password0aaaaaaaaaa
+gateway-1  | remote {"pw":"Remote\"root\\pw"} and raw Remote"root\pw
+gateway-1  | client 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+gateway-1  | future Future0secret0bbbbbbbb key fedcba9876543210fedcba9876543210
+gateway-1  | proxy http://u:Proxy0pass0cccc@proxy.example.com:3128
+gateway-1  | EMAIL=z9 ok
+-- hpds-err.txt --
+password Hpds0Auth0password0aaaa rejected
+-- exec-err.txt --
+service not running
+-- info.json --
+{"ServerVersion":"28.5.1","OperatingSystem":"Docker Desktop","OSType":"linux","Architecture":"x86_64","MemTotal":17179869184,"DockerRootDir":"/var/lib/docker","ClientInfo":{"Context":"desktop-linux","Plugins":[{"Name":"compose","Version":"v2.29.7"},{"Name":"buildx","Version":"v0.17.1"}]}}
+-- version.json --
+{"Client":{"Version":"28.5.1"},"Server":{"Platform":{"Name":"Docker Desktop 4.48.0"},"Version":"28.5.1"}}
+-- image.json --
+[{"Id":"sha256:a1"}]
+-- df.txt --
+Filesystem 1024-blocks Used Available Capacity Mounted on
+overlay 200000000 1000 104857600 1% /
+-- stack/pic-sure.yaml --
+schema: 1
+name: demo
+auth: {mode: open, admin_email: admin@example.com}
+proxy: {http: "http://u:Proxy0pass0cccc@proxy.example.com:3128"}
+-- stack/.pic-sure/state.json --
+{"cli_version": "dev", "schema_version": 1}
+-- stack/.pic-sure/manifest.json --
+{"version": 1, "entries": []}
+-- stack/.pic-sure/secrets.yaml --
+db_root_password: Root0password0aaaaaaaaaa
+db_remote_root_password: "Remote\"root\\pw"
+db_auth_password: Hpds0Auth0password0aaaa
+auth0_client_secret: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+auth0_client_secret_generated: true
+email_password: z9
+future_secret: Future0secret0bbbbbbbb
+application_uuid: 7f2c0e8a-1111-4222-8333-944445555666
+-- stack/.pic-sure/hpds/encryption_key --
+fedcba9876543210fedcba9876543210
+-- stack/.pic-sure/render/compose.yaml --
+services: {}
+-- stack/.pic-sure/logs/cli-20261007T100000.000Z-1.log --
+{"msg":"run","db":"Root0password0aaaaaaaaaa"}
+-- newer/pic-sure.yaml --
+schema: 1
+name: newer
+auth: {mode: open, admin_email: admin@example.com}
+-- newer/.pic-sure/state.json --
+{"cli_version": "99.0.0", "schema_version": 99}
+-- newer/.pic-sure/render/compose.yaml --
+services: {}

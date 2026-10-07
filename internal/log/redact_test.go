@@ -20,7 +20,7 @@ func TestRedactorReplacesRegisteredValues(t *testing.T) {
 		t.Errorf("Redact = %q, want %q", got, want)
 	}
 	if got := r.Redact("abc"); got != "abc" {
-		t.Errorf("a value shorter than minSecret redacted %q", got)
+		t.Errorf("a value shorter than MinSecret redacted %q", got)
 	}
 }
 

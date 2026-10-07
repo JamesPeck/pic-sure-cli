@@ -1,6 +1,6 @@
 # JSON output
 
-`status --json`, `doctor --json`, `ps --json` and `version --json` print one JSON object
+`status --json`, `doctor --json`, `ps --json`, `support-bundle --json` and `version --json` print one JSON object
 on stdout with `schema_version` first. Commands that stream print NDJSON
 events instead, ending with a `result` event. Within `schema_version` 2,
 changes are additive only: fields are added, never renamed, removed or
@@ -102,3 +102,17 @@ no stack or it hasn't been rendered, and 1 when compose can't be asked.
 |---|---|---|
 | `schema_version` | int | Always 2. |
 | `services` | array | The containers, in the shape and order of `status --json`'s `services`. |
+
+## `support-bundle --json`
+
+The archive `support-bundle` wrote. Exit code 0 once it is written, even
+when parts couldn't be collected; 1 when it can't be written; 3 when
+`--stack` names no stack.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `schema_version` | int | Always 2. |
+| `path` | string | The archive's absolute path. |
+| `files` | array of strings | The archive's files, relative to its top directory, such as `status.json` or `compose/logs/hpds.log`. |
+| `problems` | array of strings | What couldn't be collected, and why; also in the archive's `README.txt`. Empty when everything was. |
+| `short_secrets` | int | How many secrets are shorter than 4 characters. They are redacted only where no letter or digit touches them, so check the archive for them before sharing it. |

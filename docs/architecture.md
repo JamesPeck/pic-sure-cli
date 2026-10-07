@@ -379,6 +379,17 @@ it.
   `--prune-images` it doesn't create a missing cache, and one it can't open
   is only a warning.
 
+- `supportbundle.go` (059): `support-bundle [-o FILE]`, read-only (no
+  lock; a newer stack only warns). It opens the stack like doctor (none
+  found and no `--stack` gives a host-only bundle; a `--stack` that isn't
+  one is exit 3), builds one `stackCompose` for status and doctor, and
+  runs `ops.SupportBundle` into a temporary file beside FILE (default
+  `./pic-sure-support-<name>-<UTC ts>.tar.gz`; the archive's top directory
+  is FILE's base name without `.tar.gz`/`.tgz`), renamed into place once
+  complete. It prints the absolute path, or with `--json` the
+  `SupportBundleReport` (docs/json-schemas.md). Exit 0 once written, even
+  with problems; 1 when it can't be written.
+
 - `data_genomic.go` (049): `data load-genomic --partition P --vcf-index F
   [--vcf-dir D] [--heap MB] [--promote [--all-partitions] [--backup]]
   [--enable-profile]`. Usage checks first (`GenomicLoadOptions.Check`, the
@@ -1553,6 +1564,30 @@ whose `com.docker.compose.volume` is a catalog `SharedData` or
   with `PruneOptions.CommitImagesOnly`: commit-tagged images only, under
   `LockPrune`, by §7.1's rules, once the stack's state and labelled
   resources are gone. `TeardownReport` is the `--json` data.
+
+**Support bundle (059, `supportbundle.go`).** §9.9. `SupportBundle(ctx, d,
+w, SupportBundleOptions{Stack, Status, Doctor, Prefix})` writes a tar.gz
+to w, every file under `Prefix/` with mode 0600: `status.json` (Status
+with the caller's options, `Deep` set by the cli) and `doctor.json`, as
+`--json` prints them; the newest `BundleRunLogs` (5) run logs, by name;
+`compose/ps.json` and `compose/logs/<service>.log` (`compose logs --tail
+500` per service compose ps lists, 30 s each); `stack/` with pic-sure.yaml,
+state.json and manifest.json; and `README.txt`. It only reads. Whatever it
+can't collect is a `Problems` line, in the report and README, and only
+failing to write w is an error. With no Stack it holds doctor alone.
+- **Redaction.** Every file, and every problem, passes through a redactor
+  of each scalar in secrets.yaml, read as plain YAML so a key a newer
+  pic-sure added counts too (the UUIDs, the token expiry and the generated
+  flag excepted), the HPDS key file, and the value of each secret-named
+  key (`log.IsSecretName`) in pic-sure.yaml, which `stack/pic-sure.yaml`
+  shows as `[REDACTED]`. A secrets.yaml that isn't valid YAML has each
+  line's value taken. Values of `log.MinSecret` (4) bytes or more go
+  through a `log.Redactor` (escaped forms, plus encoding/json's
+  HTML-escaped one, and URL userinfo); a shorter one, which only an
+  operator can supply, is replaced only where no ASCII letter or digit
+  touches it, and `ShortSecrets` counts them for a warning. Without a
+  readable secrets.yaml the compose logs are left out, since the
+  redactor wouldn't know what they may quote.
 
 ## internal/steps
 

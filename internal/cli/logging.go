@@ -24,6 +24,7 @@ func init() { stack.SetSecretRegistrar(log.RegisterSecrets) }
 var readOnlyCommands = map[string]bool{
 	"status": true, "ps": true, "logs": true, "doctor": true,
 	"config show": true, "config get": true, "version": true,
+	"support-bundle": true,
 }
 
 func quietRunLog(cmd *cobra.Command, path string) bool {

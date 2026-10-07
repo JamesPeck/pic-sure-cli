@@ -43,12 +43,12 @@ func RegisterSecrets(values ...string) { registry.Register(values...) }
 // s with Redacted.
 func Redact(s string) string { return registry.Redact(s) }
 
-// minSecret is the shortest value Register accepts. A shorter one would
+// MinSecret is the shortest value Register accepts. A shorter one would
 // match all through unrelated text and make the log unreadable. Such a
 // value is left to secret-named attrs and stack.Secret's own redaction.
-const minSecret = 4
+const MinSecret = 4
 
-// Register adds values to r, ignoring those shorter than minSecret. Each value is also
+// Register adds values to r, ignoring those shorter than MinSecret. Each value is also
 // registered as slog's JSON and text handlers escape it, so one containing
 // quotes, backslashes or control characters is caught in their output too.
 func (r *Redactor) Register(values ...string) {
@@ -59,7 +59,7 @@ func (r *Redactor) Register(values ...string) {
 	}
 	before := len(r.patterns)
 	for _, v := range values {
-		if len(v) < minSecret {
+		if len(v) < MinSecret {
 			continue
 		}
 		for _, p := range escapedForms(v) {

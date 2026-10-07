@@ -56,7 +56,7 @@ var specCommands = map[string]string{
 	"reset":        "", "destroy": "",
 	"cache list": "", "cache prune": "",
 	"self-update":    "",
-	"support-bundle": "059",
+	"support-bundle": "",
 	"version":        "",
 }
 
