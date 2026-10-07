@@ -137,7 +137,7 @@ func LoadPhenotype(ctx context.Context, d *Deps, st *stack.Stack, cfg *stack.Con
 			opts.HeapMB = DefaultDirLoaderHeapMB
 		}
 	}
-	l := &loader{d: d, st: st, cfg: cfg, state: state, opts: opts, csv: opts.CSV, dir: opts.InputDir}
+	l := &loader{d: d, st: st, cfg: cfg, state: state, opts: opts, csv: opts.CSV}
 	defer l.removeCopy()
 	var plan []steps.Step
 	if opts.InputDir == "" {
@@ -195,11 +195,12 @@ type loader struct {
 	state *stack.State
 	opts  PhenotypeLoadOptions
 	// csv is what the loader mounts: opts.CSV, or a copy the daemon can
-	// see, in copyDir. dir is the same for opts.InputDir.
-	csv, dir string
-	copyDir  string
-	useLock  *cache.Lock
-	image    string
+	// see, in copyDir. inputs are the same for opts.InputDir's files.
+	csv     string
+	inputs  []string
+	copyDir string
+	useLock *cache.Lock
+	image   string
 	// tempVolume is loadDir's volume, once created.
 	tempVolume string
 }
@@ -229,35 +230,53 @@ func (l *loader) input(ctx context.Context, sink events.Sink) error {
 		l.opts.Dataset = "phenotype:" + sum
 	}
 
-	size, err := fileSize(l.opts.CSV)
+	csv, err := l.ensureVisible(ctx, sink, l.opts.CSV, []string{l.opts.CSV}, []string{"allConcepts.csv"}, "phenotype-")
 	if err != nil {
 		return err
 	}
-	if ok, err := l.visible(ctx, l.opts.CSV, size); ok || err != nil {
-		return err
+	l.csv = csv[0]
+	return nil
+}
+
+// ensureVisible returns where the loader can bind-mount srcs, the host
+// files it reads: srcs, or if the daemon can't see them, their copies,
+// named names, in a MkdirTemp directory. what names them in messages.
+func (l *loader) ensureVisible(ctx context.Context, sink events.Sink, what string, srcs, names []string, pattern string) ([]string, error) {
+	sizes := make([]int64, len(srcs))
+	for i, src := range srcs {
+		var err error
+		if sizes[i], err = fileSize(src); err != nil {
+			return nil, err
+		}
+	}
+	if ok, err := l.visible(ctx, srcs, names, sizes); ok || err != nil {
+		return srcs, err
 	}
 	// A daemon in a VM sees only the host directories shared with it
 	// (Colima and Lima share $HOME), and a bind mount of any other file
 	// silently shows an empty directory. The cache is one it must see.
 	if l.opts.MkdirTemp == nil {
-		return exitcode.Precondition("the Docker daemon can't read %s; move it under your home directory", l.opts.CSV)
+		return nil, exitcode.Precondition("the Docker daemon can't read %s; move it under your home directory", what)
 	}
-	sink.Emit(events.Progress{ID: LoaderInputStepID, Text: "the Docker daemon can't read " + l.opts.CSV + "; copying it into the cache"})
-	if err := l.makeCopyDir(ctx, "phenotype-"); err != nil {
-		return err
+	sink.Emit(events.Progress{ID: LoaderInputStepID, Text: "the Docker daemon can't read " + what + "; copying into the cache"})
+	if err := l.makeCopyDir(ctx, pattern); err != nil {
+		return nil, err
 	}
-	l.csv = filepath.Join(l.copyDir, "allConcepts.csv")
-	if err := copyInput(ctx, l.opts.CSV, l.csv); err != nil {
-		return err
-	}
-	if ok, err := l.visible(ctx, l.csv, size); err != nil || !ok {
-		if err != nil {
-			return err
+	dsts := make([]string, len(srcs))
+	for i, src := range srcs {
+		dsts[i] = filepath.Join(l.copyDir, names[i])
+		if err := copyInput(ctx, src, dsts[i]); err != nil {
+			return nil, err
 		}
-		return exitcode.Precondition("the Docker daemon can't read %s or its copy in the cache (%s); "+
-			"move it under a directory the daemon shares", l.opts.CSV, l.csv)
 	}
-	return nil
+	if ok, err := l.visible(ctx, dsts, names, sizes); err != nil || !ok {
+		if err != nil {
+			return nil, err
+		}
+		return nil, exitcode.Precondition("the Docker daemon can't read %s or its copy in the cache (%s); "+
+			"move it under a directory the daemon shares", what, l.copyDir)
+	}
+	return dsts, nil
 }
 
 // findImage sets l.image to the stack's hpds-etl image, which must exist.
@@ -278,27 +297,35 @@ func (l *loader) findImage(ctx context.Context) error {
 	return nil
 }
 
-// visible reports whether a container that bind-mounts path sees a regular
-// file of the given size there.
-func (l *loader) visible(ctx context.Context, path string, size int64) (bool, error) {
-	return l.daemonSees(ctx, "hpds-input", docker.Mount{Source: path, Target: "/input.csv", ReadOnly: true},
-		[]string{"/input.csv"}, []int64{size})
+// visible reports whether a container that bind-mounts each of paths, as
+// /input/<name>, sees a regular file of the matching size there.
+func (l *loader) visible(ctx context.Context, paths, names []string, sizes []int64) (bool, error) {
+	mounts := make([]docker.Mount, len(paths))
+	files := make([]string, len(paths))
+	for i, p := range paths {
+		files[i] = "/input/" + names[i]
+		mounts[i] = docker.Mount{Source: p, Target: files[i], ReadOnly: true}
+	}
+	return l.daemonSees(ctx, "hpds-input", mounts, files, sizes)
 }
 
-// daemonSees reports whether a container with mount sees each of files, a
+// daemonSees reports whether a container with mounts sees each of files, a
 // path in the container, as a regular file of the matching size. A daemon
 // that refuses the mount (Docker Desktop's "Mounts denied: The path … is
 // not shared from the host") counts as not seeing them; any other docker
 // failure is an error.
-func (l *loader) daemonSees(ctx context.Context, prefix string, mount docker.Mount, files []string, sizes []int64) (bool, error) {
-	var out bytes.Buffer
+func (l *loader) daemonSees(ctx context.Context, prefix string, mounts []docker.Mount, files []string, sizes []int64) (bool, error) {
+	var out, stderr bytes.Buffer
 	script := `for f; do if test -f "$f"; then stat -c %s "$f"; else echo -1; fi; done`
-	code, err := l.container(ctx, prefix, []docker.Mount{mount}, append([]string{"sh", "-c", script, "sh"}, files...), nil, &out, nil)
+	code, err := l.container(ctx, prefix, mounts, append([]string{"sh", "-c", script, "sh"}, files...), nil, &out, &stderr)
 	if err != nil {
-		if msg := strings.ToLower(err.Error()); strings.Contains(msg, "mounts denied") || strings.Contains(msg, "not shared from the host") {
+		// docker's error quotes only the last line of its stderr, which on
+		// Docker Desktop is a link to the file-sharing docs.
+		msg := strings.ToLower(err.Error() + "\n" + stderr.String())
+		if strings.Contains(msg, "mounts denied") || strings.Contains(msg, "not shared from the host") {
 			return false, nil
 		}
-		return false, fmt.Errorf("checking that the Docker daemon can read %s: %w", mount.Source, err)
+		return false, fmt.Errorf("checking that the Docker daemon can read %s: %w", mounts[0].Source, err)
 	}
 	got := strings.Fields(out.String())
 	if code != 0 || len(got) != len(sizes) {
@@ -375,7 +402,6 @@ func (l *loader) load(ctx context.Context, sink events.Sink) error {
 	return nil
 }
 
-// runETL runs the hpds-etl image's loader with mounts.
 func (l *loader) runETL(ctx context.Context, sink events.Sink, loader string, mounts []docker.Mount) error {
 	name, err := docker.UniqueName(l.cfg.Name+"-hpds-etl", l.d.Rand)
 	if err != nil {

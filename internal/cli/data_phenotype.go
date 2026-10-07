@@ -62,6 +62,9 @@ func phenotypeFlags(f *pflag.FlagSet) (phenotypeArgs, error) {
 			return p, exitcode.Usage("--entry is for --file")
 		}
 		dir, _ := f.GetString("input-dir")
+		if dir == "" {
+			return p, exitcode.Usage("--input-dir needs a directory")
+		}
 		if p.inputDir, err = filepath.Abs(dir); err != nil {
 			return p, exitcode.Usage("--input-dir: %w", err)
 		}

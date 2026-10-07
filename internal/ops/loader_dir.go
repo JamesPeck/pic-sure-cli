@@ -19,7 +19,7 @@ import (
 
 const (
 	dirLoaderName = "SequentialLoader"
-	// dirLoaderInput is where the sequential loader reads its input files.
+	// dirLoaderInput is the directory the sequential loader reads.
 	dirLoaderInput = "/opt/local/hpds_input"
 	// dirLoaderConfig is the loader's optional per-file CSV settings.
 	dirLoaderConfig = "config.json"
@@ -38,8 +38,11 @@ var dirLoaderOutput = []string{
 // sorted: every *.csv and config.json, following symlinks. It refuses a
 // directory with no CSV, and SQL inputs: the loader runs with no network,
 // and SQL loading was dropped (D26). It also returns the other top-level
-// entries, which the loader ignores.
+// entries, which the loader never sees.
 func dirInputs(dir string) (files, ignored []string, err error) {
+	if dir == "" {
+		return nil, nil, exitcode.Usage("--input-dir needs a directory")
+	}
 	fi, err := os.Stat(dir)
 	if err != nil {
 		return nil, nil, exitcode.Usage("--input-dir: %w", err)
@@ -58,19 +61,23 @@ func dirInputs(dir string) (files, ignored []string, err error) {
 		if strings.HasSuffix(lower, ".sql") || lower == "sql.properties" {
 			return nil, nil, exitcode.Usage("--input-dir: %s is an SQL input, which pic-sure doesn't load; export the data as CSV", filepath.Join(dir, name))
 		}
+		isCSV := strings.HasSuffix(lower, ".csv")
+		if !isCSV && name != dirLoaderConfig {
+			ignored = append(ignored, name)
+			continue
+		}
 		fi, err := os.Stat(filepath.Join(dir, name))
 		if err != nil {
 			return nil, nil, exitcode.Usage("--input-dir: %w", err)
 		}
-		switch {
-		case !fi.Mode().IsRegular() || !strings.HasSuffix(lower, ".csv") && name != dirLoaderConfig:
+		if !fi.Mode().IsRegular() {
 			ignored = append(ignored, name)
-		default:
-			if strings.HasSuffix(lower, ".csv") {
-				csvs++
-			}
-			files = append(files, name)
+			continue
 		}
+		if isCSV {
+			csvs++
+		}
+		files = append(files, name)
 	}
 	if csvs == 0 {
 		return nil, nil, exitcode.Usage("--input-dir: %s holds no .csv file", dir)
@@ -115,7 +122,7 @@ func (l *loader) inputDir(ctx context.Context, sink events.Sink) error {
 		return err
 	}
 	if len(ignored) > 0 {
-		sink.Emit(events.Warning{ID: LoaderInputStepID, Text: "the loader ignores these entries of " + l.opts.InputDir + ": " + strings.Join(ignored, ", ")})
+		sink.Emit(events.Warning{ID: LoaderInputStepID, Text: "not loading these entries of " + l.opts.InputDir + ": " + strings.Join(ignored, ", ")})
 	}
 	if l.opts.Dataset == "" {
 		sink.Emit(events.Progress{ID: LoaderInputStepID, Text: "hashing the files in " + l.opts.InputDir})
@@ -125,49 +132,12 @@ func (l *loader) inputDir(ctx context.Context, sink events.Sink) error {
 		}
 		l.opts.Dataset = "phenotype:" + sum
 	}
-
-	paths := make([]string, len(files))
-	sizes := make([]int64, len(files))
+	srcs := make([]string, len(files))
 	for i, f := range files {
-		paths[i] = path.Join(dirLoaderInput, f)
-		if sizes[i], err = fileSize(filepath.Join(l.opts.InputDir, f)); err != nil {
-			return err
-		}
+		srcs[i] = filepath.Join(l.opts.InputDir, f)
 	}
-	visible := func(dir string) (bool, error) {
-		return l.daemonSees(ctx, "hpds-input", docker.Mount{Source: dir, Target: dirLoaderInput, ReadOnly: true}, paths, sizes)
-	}
-	if ok, err := visible(l.dir); ok || err != nil {
-		return err
-	}
-	// As for a CSV: a daemon in a VM may not see the directory, or a
-	// symlink in it may point outside it.
-	if l.opts.MkdirTemp == nil {
-		return exitcode.Precondition("the Docker daemon can't read the files in %s; move it under your home directory", l.opts.InputDir)
-	}
-	sink.Emit(events.Progress{ID: LoaderInputStepID, Text: "the Docker daemon can't read the files in " + l.opts.InputDir + "; copying them into the cache"})
-	if err := l.makeCopyDir(ctx, "phenotype-dir-"); err != nil {
-		return err
-	}
-	// The copy's directory is private, so the loader mounts one inside it
-	// that a container can list.
-	l.dir = filepath.Join(l.copyDir, "input")
-	if err := os.Mkdir(l.dir, 0o755); err != nil {
-		return err
-	}
-	for _, f := range files {
-		if err := copyInput(ctx, filepath.Join(l.opts.InputDir, f), filepath.Join(l.dir, f)); err != nil {
-			return err
-		}
-	}
-	if ok, err := visible(l.dir); err != nil || !ok {
-		if err != nil {
-			return err
-		}
-		return exitcode.Precondition("the Docker daemon can't read the files in %s or their copy in the cache (%s); "+
-			"move it under a directory the daemon shares", l.opts.InputDir, l.dir)
-	}
-	return nil
+	l.inputs, err = l.ensureVisible(ctx, sink, "the files in "+l.opts.InputDir, srcs, files, "phenotype-dir-")
+	return err
 }
 
 // loadDir runs the sequential loader over the input directory into a new
@@ -189,13 +159,21 @@ func (l *loader) loadDir(ctx context.Context, sink events.Sink) error {
 	if err := l.helper(ctx, name, "hpds-load-key", "umask 077; cat > /data/encryption_key", strings.NewReader(string(key)+"\n")); err != nil {
 		return fmt.Errorf("copying the HPDS key into volume %s: %w", name, err)
 	}
-	if err := l.runETL(ctx, sink, dirLoaderName, []docker.Mount{
-		{Source: name, Target: hpdsDir},
-		{Source: l.dir, Target: dirLoaderInput, ReadOnly: true},
-	}); err != nil {
+	// Each input is mounted on its own: SequentialLoader reads any other
+	// file in its input directory with a different CSV parser.
+	mounts := []docker.Mount{{Source: name, Target: hpdsDir}}
+	for _, in := range l.inputs {
+		mounts = append(mounts, docker.Mount{Source: in, Target: path.Join(dirLoaderInput, filepath.Base(in)), ReadOnly: true})
+	}
+	if err := l.runETL(ctx, sink, dirLoaderName, mounts); err != nil {
 		return err
 	}
-	if err := l.helper(ctx, name, "hpds-check", "test -s /data/"+dirLoaderOutput[0]+" && test -s /data/"+dirLoaderOutput[1], nil); err != nil {
+	check := []string{"sh", "-c", "test -s /data/" + dirLoaderOutput[0] + " && test -s /data/" + dirLoaderOutput[1]}
+	code, err := l.container(ctx, "hpds-check", []docker.Mount{{Source: name, Target: "/data"}}, check, nil, nil, nil)
+	if err != nil {
+		return fmt.Errorf("checking the loader's output in volume %s: %w", name, err)
+	}
+	if code != 0 {
 		return fmt.Errorf("the HPDS loader wrote no %s or %s; its output is above and in the run log", dirLoaderOutput[0], dirLoaderOutput[1])
 	}
 	return nil

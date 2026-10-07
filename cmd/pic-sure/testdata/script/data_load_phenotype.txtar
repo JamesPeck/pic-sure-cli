@@ -3,6 +3,8 @@
 env XDG_CACHE_HOME=$WORK/cache
 
 # --input-dir must be a directory holding a CSV and no SQL input.
+exitcode 2 pic-sure data load-phenotype --input-dir ''
+stderr '--input-dir needs a directory'
 exitcode 2 pic-sure data load-phenotype --input-dir missing
 stderr '--input-dir: .*missing'
 exitcode 2 pic-sure data load-phenotype --input-dir pheno.csv

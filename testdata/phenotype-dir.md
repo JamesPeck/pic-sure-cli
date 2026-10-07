@@ -3,8 +3,7 @@
 `phenotype-dir/` is an input directory for
 `pic-sure data load-phenotype --input-dir testdata/phenotype-dir`: three
 allConcepts-format CSVs about 20 made-up patients under `\Synthetic Multi\`,
-no real data. This note lives outside the directory because the loader reads
-every file in it.
+no real data.
 
 - `demographics.csv`: `Age` (numeric) and `Sex` (Female for even patient
   numbers, Male for odd).

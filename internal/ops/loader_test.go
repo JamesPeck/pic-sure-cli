@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -98,36 +97,31 @@ func newLoaderFixture(t *testing.T) *loaderFixture {
 		return docker.Result{Stdout: []byte(`[{"Id":"sha256:1"}]`)}, nil
 	})
 	f.On(fakerunner.Glob("docker run --rm --name demo-hpds-input-* --network none * alpine:* sh -c *")).Do(func(_ context.Context, c fakerunner.Call) (docker.Result, error) {
-		var src, dir string
+		// Each input is mounted as /input/<name>; the probe prints the
+		// size of each.
+		var srcs []string
 		for _, a := range c.Argv {
-			if s, ok := strings.CutSuffix(a, ":/input.csv:ro"); ok {
-				src = s
-			}
-			if s, ok := strings.CutSuffix(a, ":/opt/local/hpds_input:ro"); ok {
-				src, dir = s, s
+			if i := strings.Index(a, ":/input/"); i > 0 && strings.HasSuffix(a, ":ro") {
+				srcs = append(srcs, a[:i])
 			}
 		}
-		fx.probed = append(fx.probed, src)
+		fx.probed = append(fx.probed, srcs[0])
 		if fx.probeFails {
 			return docker.Result{Stderr: []byte("docker: Error response from daemon: pull access denied for alpine\n"), ExitCode: 125}, nil
 		}
-		if fx.hidden != "" && strings.HasPrefix(src, fx.hidden+string(filepath.Separator)) {
-			if fx.denied {
-				return docker.Result{Stderr: []byte("docker: Error response from daemon: Mounts denied: \nThe path " + src + " is not shared from the host and is not known to Docker.\n"), ExitCode: 125}, nil
-			}
-			return docker.Result{ExitCode: 1}, nil
-		}
-		if dir == "" {
-			return docker.Result{Stdout: []byte(strconv.Itoa(len(loaderCSV)) + "\n")}, nil
-		}
-		// An input directory's probe lists each file's size.
 		var out strings.Builder
-		for _, f := range c.Argv[slices.Index(c.Argv, "-c")+3:] {
-			size := int64(-1)
-			if fi, err := os.Stat(filepath.Join(dir, filepath.Base(f))); err == nil {
-				size = fi.Size()
+		for _, src := range srcs {
+			if fx.hidden != "" && strings.HasPrefix(src, fx.hidden+string(filepath.Separator)) {
+				if fx.denied {
+					return docker.Result{Stderr: []byte("docker: Error response from daemon: Mounts denied: \nThe path " + src + " is not shared from the host and is not known to Docker.\nYou can configure shared paths from Docker -> Preferences... -> Resources -> File Sharing.\nSee https://docs.docker.com/go/mac-file-sharing/ for more info.\n"), ExitCode: 125}, nil
+				}
+				return docker.Result{ExitCode: 1}, nil
 			}
-			_, _ = fmt.Fprintln(&out, size)
+			fi, err := os.Stat(src)
+			if err != nil {
+				return docker.Result{}, err
+			}
+			_, _ = fmt.Fprintln(&out, fi.Size())
 		}
 		return docker.Result{Stdout: []byte(out.String())}, nil
 	})
@@ -173,7 +167,7 @@ func TestLoadPhenotypeRunsTheLoaderBetweenStopAndStart(t *testing.T) {
 		t.Fatal(err)
 	}
 	fx.f.AssertOrder(
-		fakerunner.Glob("docker run * demo-hpds-input-* -v "+fx.csv+":/input.csv:ro *"),
+		fakerunner.Glob("docker run * demo-hpds-input-* -v "+fx.csv+":/input/allConcepts.csv:ro *"),
 		fakerunner.Glob("docker compose * stop hpds"),
 		fakerunner.Glob("docker run * demo-hpds-wipe-* sh -c set -eu; cd /data && rm -f allObservationsStore.javabin allObservationsTemp.javabin columnMeta.javabin columnMeta.csv columnMetaErrors.csv .picsure-dataset"),
 		fakerunner.Glob("docker run * demo-hpds-key-*"),

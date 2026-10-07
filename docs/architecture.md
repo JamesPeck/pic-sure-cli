@@ -1268,7 +1268,8 @@ steps depend on each other, so the command refuses `--skip-step`:
   (`pic-sure-hpds-etl`; exit 3 if unrecorded or missing), the stack's HPDS
   key file (checked here so a missing key fails before the wipe), the provenance
   (`Dataset`, or `phenotype:<sha256 of the CSV>` when empty), and whether
-  the daemon sees the CSV: an alpine probe bind-mounts it and compares the
+  the daemon sees the CSV: an alpine probe bind-mounts it (as
+  `/input/allConcepts.csv`) and compares the
   size. If it doesn't (a file outside `$HOME` under Colima or Lima shows
   up as an empty directory; Docker Desktop answers "mounts denied"), the CSV is copied into a `MkdirTemp` dir (the
   cache's `TempDir`) and probed again; the copy is removed when the load
@@ -1306,16 +1307,19 @@ loader runs before hpds stops, so a failed load leaves HPDS as it was.
 - `hpds-input`: as above, for the directory's inputs (`dirInputs`): its
   top-level `*.csv` files and `config.json`, following symlinks. No CSV, or
   an `*.sql`/`sql.properties` (D26), is exit 2; other entries get a warning
-  that the loader ignores them. The provenance is `phenotype:<sha256 of the
+  that they aren't loaded. The provenance is `phenotype:<sha256 of the
   manifest>`, one `<sha256>  <name>` line per input in name order. The
-  probe mounts the directory and checks each input's size; the fallback
-  copies the inputs into `<MkdirTemp>/input` (0755, so a container can list
-  it).
+  probe and fallback are `ensureVisible`, shared with the CSV: each input
+  is bind-mounted on its own and its size checked, and the fallback copies
+  the inputs into a `MkdirTemp` dir.
 - `hpds-load`: a new volume `<stack>-hpds-load-<hex>`, stack-labelled, gets
   a copy of the key; then `LOADER_NAME=SequentialLoader` (default heap
   `DefaultDirLoaderHeapMB`, 8000, as AIO) with the volume at
-  `/opt/local/hpds` and the directory read-only at
-  `/opt/local/hpds_input`. A helper then checks the store and
+  `/opt/local/hpds` and each input read-only at
+  `/opt/local/hpds_input/<name>`, not the directory: upstream
+  SequentialLoader switches from LowRAMMultiCSVLoader to its own CSV
+  parser when its input directory holds anything but CSVs and
+  `config.json`. A helper then checks the store and
   `columnMeta.javabin` exist (the loader can exit 0 without them).
 - `hpds-stop`, `hpds-wipe`, `hpds-key` as above.
 - `hpds-copy`: copies `dirLoaderOutput` (the store and columnMeta files,

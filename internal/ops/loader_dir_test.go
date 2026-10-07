@@ -104,12 +104,14 @@ func TestLoadPhenotypeDirLoadsIntoATempVolumeBeforeStopping(t *testing.T) {
 		t.Fatal(err)
 	}
 	vol := fx.volumes[0]
+	in := func(name string) string { return filepath.Join(fx.dir, name) }
 	fx.f.AssertOrder(
-		fakerunner.Glob("docker run * demo-hpds-input-* -v "+fx.dir+":/opt/local/hpds_input:ro alpine:* sh -c * sh /opt/local/hpds_input/a.csv /opt/local/hpds_input/b.csv /opt/local/hpds_input/config.json"),
+		fakerunner.Glob("docker run * demo-hpds-input-* -v "+in("a.csv")+":/input/a.csv:ro -v "+in("b.csv")+":/input/b.csv:ro -v "+in("config.json")+":/input/config.json:ro alpine:* sh -c * sh /input/a.csv /input/b.csv /input/config.json"),
 		fakerunner.Glob("docker volume create --label * "+vol),
 		fakerunner.Glob("docker run -i * demo-hpds-load-key-* -v "+vol+":/data alpine:* sh -c set -eu; umask 077; cat > /data/encryption_key"),
-		fakerunner.Glob("docker run --rm --name demo-hpds-etl-* --user 0:0 --network none * -v "+vol+":/opt/local/hpds -v "+fx.dir+":/opt/local/hpds_input:ro hms-dbmi/pic-sure-hpds-etl:abc123abc123"),
-		fakerunner.Glob("docker run * demo-hpds-check-* sh -c set -eu; test -s /data/allObservationsStore.javabin && test -s /data/columnMeta.javabin"),
+		fakerunner.Glob("docker run --rm --name demo-hpds-etl-* --user 0:0 --network none * -v "+vol+":/opt/local/hpds -v "+in("a.csv")+":/opt/local/hpds_input/a.csv:ro -v "+
+			in("b.csv")+":/opt/local/hpds_input/b.csv:ro -v "+in("config.json")+":/opt/local/hpds_input/config.json:ro hms-dbmi/pic-sure-hpds-etl:abc123abc123"),
+		fakerunner.Glob("docker run * demo-hpds-check-* sh -c test -s /data/allObservationsStore.javabin && test -s /data/columnMeta.javabin"),
 		fakerunner.Glob("docker compose * stop hpds"),
 		fakerunner.Glob("docker run * demo-hpds-wipe-*"),
 		fakerunner.Glob("docker run * demo-hpds-key-*"),
@@ -136,7 +138,7 @@ func TestLoadPhenotypeDirLoadsIntoATempVolumeBeforeStopping(t *testing.T) {
 	}
 	var warned bool
 	for _, e := range fx.rec.Events() {
-		if w, ok := e.(events.Warning); ok && strings.Contains(w.Text, "ignores") && strings.HasSuffix(w.Text, ": notes.txt, sub") {
+		if w, ok := e.(events.Warning); ok && strings.Contains(w.Text, "not loading") && strings.HasSuffix(w.Text, ": notes.txt, sub") {
 			warned = true
 		}
 	}
@@ -234,13 +236,19 @@ func TestLoadPhenotypeDirCopiesFilesTheDaemonCantSee(t *testing.T) {
 		t.Fatal(err)
 	}
 	var copyDir string
-	var lockedWhileCopying bool
+	var pruneErr error
+	fx.onLoader = func() error {
+		lock, err := c.LockPrune(context.Background())
+		if err == nil {
+			_ = lock.Unlock()
+		}
+		pruneErr = err
+		return nil
+	}
 	_, err = fx.loadDir(context.Background(), ops.PhenotypeLoadOptions{
 		MkdirTemp: func(pattern string) (string, error) {
 			var err error
 			copyDir, err = c.TempDir(pattern)
-			_, perr := c.LockPrune(context.Background())
-			lockedWhileCopying = perr != nil
 			return copyDir, err
 		},
 		LockUse: c.LockUse,
@@ -248,14 +256,14 @@ func TestLoadPhenotypeDirCopiesFilesTheDaemonCantSee(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !lockedWhileCopying {
-		t.Error("the use lock wasn't held while the copy existed")
+	if pruneErr == nil {
+		t.Error("a prune could run while the loader read the copy")
 	}
-	copied := filepath.Join(copyDir, "input")
-	if !slices.Equal(fx.probed, []string{fx.dir, copied}) {
+	copied := filepath.Join(copyDir, "a.csv")
+	if !slices.Equal(fx.probed, []string{filepath.Join(fx.dir, "a.csv"), copied}) {
 		t.Errorf("probed %q", fx.probed)
 	}
-	fx.f.AssertCalled(fakerunner.Glob("docker run * demo-hpds-etl-* -v " + copied + ":/opt/local/hpds_input:ro *"))
+	fx.f.AssertCalled(fakerunner.Glob("docker run * demo-hpds-etl-* -v " + copied + ":/opt/local/hpds_input/a.csv:ro *"))
 	if _, err := os.Stat(copyDir); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("the copy's directory is still there: %v", err)
 	}

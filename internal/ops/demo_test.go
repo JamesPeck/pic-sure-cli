@@ -475,7 +475,7 @@ func newDemoFixture(t *testing.T, files map[string][]byte) *demoFixture {
 	f := x.f
 	f.On(fakerunner.Glob("docker run --rm --name demo-hpds-input-* *")).Do(func(_ context.Context, c fakerunner.Call) (docker.Result, error) {
 		for _, a := range c.Argv {
-			if src, ok := strings.CutSuffix(a, ":/input.csv:ro"); ok {
+			if src, ok := strings.CutSuffix(a, ":/input/allConcepts.csv:ro"); ok {
 				fi, err := os.Stat(src)
 				if err != nil {
 					return docker.Result{ExitCode: 1}, nil

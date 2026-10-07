@@ -312,7 +312,7 @@ func vcfIndexFiles(index string, data []byte, vcfDir string) ([]string, []int64,
 // dir, which is mounted at the same path instead.
 func (g *genomicLoad) checkVisible(ctx context.Context, sink events.Sink) error {
 	mount := docker.Mount{Source: g.opts.VCFDir, Target: g.opts.VCFDir, ReadOnly: true}
-	if ok, err := g.daemonSees(ctx, "genomic-input", mount, g.vcfs, g.sizes); ok || err != nil {
+	if ok, err := g.daemonSees(ctx, "genomic-input", []docker.Mount{mount}, g.vcfs, g.sizes); ok || err != nil {
 		return err
 	}
 	if g.opts.MkdirTemp == nil {
@@ -337,7 +337,7 @@ func (g *genomicLoad) checkVisible(ctx context.Context, sink events.Sink) error 
 		}
 	}
 	mount.Source = g.copyDir
-	if ok, err := g.daemonSees(ctx, "genomic-input", mount, g.vcfs, g.sizes); err != nil || !ok {
+	if ok, err := g.daemonSees(ctx, "genomic-input", []docker.Mount{mount}, g.vcfs, g.sizes); err != nil || !ok {
 		if err != nil {
 			return err
 		}
