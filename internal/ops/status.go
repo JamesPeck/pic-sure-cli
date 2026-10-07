@@ -394,7 +394,7 @@ func StatusServices(ps []docker.ComposeService) []StatusService {
 const statusMigrationsTimeout = 30 * time.Second
 
 // statusMigrations checks the Flyway histories when both databases are
-// running. A remote database isn't queried, since status reaches no
+// running and healthy. A remote database isn't queried, since status reaches no
 // further than the local daemon.
 func statusMigrations(ctx context.Context, d *Deps, r *StatusReport, st *stack.Stack, cfg *stack.Config) {
 	if cfg == nil || d.Compose == nil || r.ServicesError != "" {
@@ -404,11 +404,13 @@ func statusMigrations(ctx context.Context, d *Deps, r *StatusReport, st *stack.S
 		r.Migrations.Error = "not checked for a remote database"
 		return
 	}
-	running := func(service string) bool {
-		return slices.ContainsFunc(r.Services, func(s StatusService) bool { return s.Service == service && s.State == "running" })
+	healthy := func(service string) bool {
+		return slices.ContainsFunc(r.Services, func(s StatusService) bool {
+			return s.Service == service && s.State == "running" && s.Health == "healthy"
+		})
 	}
-	if !running(picsureDB) || !running(dictionaryDB) {
-		r.Migrations.Error = "the databases aren't running"
+	if !healthy(picsureDB) || !healthy(dictionaryDB) {
+		r.Migrations.Error = "the databases aren't running and healthy"
 		return
 	}
 	sec, err := st.LoadSecrets()

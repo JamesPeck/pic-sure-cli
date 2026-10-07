@@ -122,20 +122,24 @@ func TestDBStepFailsAtOnceOnAccessDenied(t *testing.T) {
 	}
 }
 
-func TestDBStepReportsACrashLoopWithItsLogs(t *testing.T) {
-	f := fakerunner.New(t)
-	f.On(fakerunner.Glob("docker compose * up -d picsure-db"))
-	f.On(fakerunner.Glob("docker compose * ps *")).Stdout(`{"ID":"x","Service":"picsure-db","State":"restarting","ExitCode":1}` + "\n")
-	f.On(fakerunner.Glob("docker compose * logs --tail 30 picsure-db")).Stdout("[ERROR] [MY-010119] Aborting\n")
-	d, rec := migrateDeps(f)
-	cfg, sec := migrateConfig()
+func TestDBStepReportsAStoppedContainerWithItsLogs(t *testing.T) {
+	for _, state := range []string{"restarting", "exited", "dead"} {
+		t.Run(state, func(t *testing.T) {
+			f := fakerunner.New(t)
+			f.On(fakerunner.Glob("docker compose * up -d picsure-db"))
+			f.On(fakerunner.Glob("docker compose * ps *")).Stdout(fmt.Sprintf(`{"ID":"x","Service":"picsure-db","State":%q,"ExitCode":1}`+"\n", state))
+			f.On(fakerunner.Glob("docker compose * logs --tail 30 picsure-db")).Stdout("[ERROR] [MY-010119] Aborting\n")
+			d, rec := migrateDeps(f)
+			cfg, sec := migrateConfig()
 
-	err := steps.Run(context.Background(), d.Sink, []steps.Step{ops.DBStep(d, cfg, sec, fastDB)}, steps.Options{})
-	if err == nil || !strings.Contains(err.Error(), "stopped (restarting, exit 1)") {
-		t.Fatalf("err %v", err)
-	}
-	if !hasLog(rec, "Aborting") {
-		t.Error("the container's log tail wasn't shown")
+			err := steps.Run(context.Background(), d.Sink, []steps.Step{ops.DBStep(d, cfg, sec, fastDB)}, steps.Options{})
+			if err == nil || !strings.Contains(err.Error(), "stopped ("+state+", exit 1)") {
+				t.Fatalf("err %v", err)
+			}
+			if !hasLog(rec, "Aborting") {
+				t.Error("the container's log tail wasn't shown")
+			}
+		})
 	}
 }
 
@@ -560,7 +564,8 @@ func TestStatusReportsTheMigrationState(t *testing.T) {
 	}{
 		{"up to date", func(*migrationsWorld) {}, "up_to_date", ""},
 		{"pending", func(w *migrationsWorld) { w.pgTable = "" }, "pending", ""},
-		{"databases down", func(w *migrationsWorld) { w.dictUp = false }, "unknown", "the databases aren't running"},
+		{"databases down", func(w *migrationsWorld) { w.dictUp = false }, "unknown", "the databases aren't running and healthy"},
+		{"a database still starting", func(w *migrationsWorld) { w.dictHealth = "starting" }, "unknown", "the databases aren't running and healthy"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			st := newStatusStack(t, "schema: 1\nname: demo\nauth: {mode: open, admin_email: admin@example.com}\n")
@@ -579,7 +584,7 @@ func TestStatusReportsTheMigrationState(t *testing.T) {
 			w.f.On(fakerunner.Glob("docker compose * ps --all --format json")).Do(func(context.Context, fakerunner.Call) (docker.Result, error) {
 				out := psLine("picsure-db", "running", "healthy")
 				if w.dictUp {
-					out += psLine("dictionary-db", "running", "healthy")
+					out += psLine("dictionary-db", "running", w.dictHealth)
 				}
 				return docker.Result{Stdout: []byte(out)}, nil
 			})

@@ -809,8 +809,9 @@ init, up and update to add, and the `migrate` command.
   running and healthy, a missing table, an `R__` repeatable migration (no
   checksum compare), or a mount source that is missing or still holds a
   `${VAR}` (compose interpolates it only when it runs) means not up to
-  date, so the step applies and Flyway decides. Status bounds it at 30 s
-  and skips it for a remote database.
+  date, so the step applies and Flyway decides. Both steps' Checks, and
+  status, bound it at 30 s; status reports `unknown` unless both databases
+  are healthy, and skips a remote database.
 - `MigrateCheck` is `migrate --check`, ported from AIO's
   `run-migrations.sh --check`: the mounted SQL directories, dictionary-db's
   `schema.sql`, the project UUIDs, the remote DB settings, and `compose

@@ -42,6 +42,10 @@ const (
 	DefaultDBInterval = 2 * time.Second
 )
 
+// checkTimeout bounds a step's Check and a failure's log tail, so a wedged
+// daemon can't hang them.
+const checkTimeout = 30 * time.Second
+
 // DBOptions bounds the wait for the database.
 type DBOptions struct {
 	// Timeout is how long to wait for picsure-db to be healthy and accept
@@ -95,6 +99,8 @@ type dbStep struct {
 }
 
 func (s *dbStep) check(ctx context.Context) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, checkTimeout)
+	defer cancel()
 	if s.cfg.DB.Mode == stack.DBRemote {
 		return s.probe(ctx, "") == nil, nil
 	}
@@ -148,7 +154,9 @@ func (s *dbStep) apply(ctx context.Context, sink events.Sink) error {
 					"the matching secrets.yaml, or remove the volume if its data is disposable",
 					picsureDB, err, s.volume())
 			}
-			last = "it is healthy but doesn't accept TCP connections yet: " + err.Error()
+			if wait.Err() == nil {
+				last = "it is healthy but doesn't accept TCP connections yet: " + err.Error()
+			}
 			err = nil
 		}
 		if err == nil {
@@ -188,6 +196,8 @@ func (s *dbStep) volume() string {
 
 // logTail shows picsure-db's last log lines, for a failure.
 func (s *dbStep) logTail(ctx context.Context, sink events.Sink) {
+	ctx, cancel := context.WithTimeout(ctx, checkTimeout)
+	defer cancel()
 	out := events.NewLogWriter(sink, StepDB, events.StreamStderr)
 	_ = s.d.Compose.Logs(ctx, docker.ComposeLogsOpts{Services: []string{picsureDB}, Tail: 30, Out: out})
 	_ = out.Close()
@@ -249,7 +259,11 @@ func MigrateStep(d *Deps, cfg *stack.Config, sec *stack.Secrets, opts MigrateOpt
 		return migrate(ctx, d, sink, opts)
 	}}
 	if opts.Action == FlywayMigrate {
-		s.Check = func(ctx context.Context) (bool, error) { return MigrationsUpToDate(ctx, d, cfg, sec) }
+		s.Check = func(ctx context.Context) (bool, error) {
+			ctx, cancel := context.WithTimeout(ctx, checkTimeout)
+			defer cancel()
+			return MigrationsUpToDate(ctx, d, cfg, sec)
+		}
 	} else {
 		s.Title = "Repair the Flyway history"
 	}
@@ -287,8 +301,14 @@ func migrate(ctx context.Context, d *Deps, sink events.Sink, opts MigrateOptions
 		if ctx.Err() != nil {
 			return err
 		}
+		var names []string
+		for _, c := range catalog.Services() {
+			if c.RestartAfterMigrate {
+				names = append(names, c.Name)
+			}
+		}
 		sink.Emit(events.Warning{ID: StepMigrate, Text: "the migrations ran, but restarting the services that cache " +
-			"migrated data failed: " + err.Error() + "; run `pic-sure restart psama dictionary-api`"})
+			"migrated data failed: " + err.Error() + "; run `pic-sure restart " + strings.Join(names, " ") + "` for those running"})
 	}
 	return nil
 }
@@ -635,15 +655,15 @@ func MigrateCheck(ctx context.Context, d *Deps, cfg *stack.Config, sec *stack.Se
 		in.OK = in.Problem == ""
 		r.Inputs = append(r.Inputs, in)
 	}
+	config := MigrateCheckInput{Name: "compose config"}
 	if _, err := d.Compose.Config(ctx, true); err != nil {
-		add(MigrateCheckInput{Name: "compose config", Problem: err.Error()})
-	} else {
-		add(MigrateCheckInput{Name: "compose config"})
+		config.Problem = err.Error()
 	}
+	add(config)
 	mounts, err := composeMounts(ctx, d)
 	if err != nil {
 		// Without the mounts, there are no paths to check.
-		if r.Inputs[0].OK {
+		if config.Problem == "" {
 			add(MigrateCheckInput{Name: "migration mounts", Problem: err.Error()})
 		}
 	} else {
@@ -722,17 +742,21 @@ func checkMounts(r *MigrateCheckReport, mounts map[string]map[string]string, pro
 		add(in)
 	}
 	schema := MigrateCheckInput{Name: "dictionary baseline schema", Path: mounts[dictionaryDB]["/docker-entrypoint-initdb.d/schema.sql"]}
-	switch fi, err := os.Stat(schema.Path); {
+	switch {
 	case schema.Path == "":
 		schema.Problem = dictionaryDB + " mounts no schema.sql"
 	case strings.Contains(schema.Path, "$"):
 		r.Warnings = append(r.Warnings, schema.Name+": "+schema.Path+" holds a variable compose interpolates only when it runs, so it wasn't checked")
-	case errors.Is(err, fs.ErrNotExist):
-		schema.Problem = "missing"
-	case err != nil:
-		schema.Problem = err.Error()
-	case !fi.Mode().IsRegular():
-		schema.Problem = "not a file"
+	default:
+		fi, err := os.Stat(schema.Path)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			schema.Problem = "missing"
+		case err != nil:
+			schema.Problem = err.Error()
+		case !fi.Mode().IsRegular():
+			schema.Problem = "not a file"
+		}
 	}
 	add(schema)
 }

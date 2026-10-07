@@ -64,7 +64,7 @@ an `omitted` field is left out when empty.
 | `db.host` | string, omitted | The remote database host. |
 | `db.port` | int, omitted | The remote database port. |
 | `migrations.status` | string | `up_to_date` when every Flyway history records every migration in the mounted source trees with no failed entry; `pending` otherwise; `unknown` when it couldn't be checked. |
-| `migrations.error` | string, omitted | Why `status` is `unknown`: the databases aren't running, the database is remote (status doesn't query it), or the check failed. Omitted when the stack isn't rendered or compose couldn't list its services. |
+| `migrations.error` | string, omitted | Why `status` is `unknown`: the databases aren't running and healthy, the database is remote (status doesn't query it), or the check failed. Omitted when the stack isn't rendered or compose couldn't list its services. |
 | `token.expires_at` | string or null | When the introspection token expires; null when none has been issued. |
 | `token.expired` | bool | Whether it has expired. |
 | `token.error` | string, omitted | Why secrets.yaml couldn't be read. |
