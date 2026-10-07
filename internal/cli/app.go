@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
+	"github.com/JamesPeck/pic-sure-cli/internal/log"
 	"github.com/JamesPeck/pic-sure-cli/internal/stack"
 	"github.com/JamesPeck/pic-sure-cli/internal/tty"
 	"github.com/JamesPeck/pic-sure-cli/internal/tui"
@@ -46,6 +47,9 @@ type App struct {
 	// out is the run's output mode and event sink (output.go), created on
 	// first use.
 	out *output
+	// runLog is the running command's logging (logging.go), from the start
+	// of its RunE until Run returns.
+	runLog *log.Run
 }
 
 // NewApp returns an App wired to the process's streams and terminal.
@@ -85,6 +89,7 @@ func (a *App) execute(ctx context.Context, root *cobra.Command, args []string) i
 	root.SetErr(a.Stderr)
 
 	cmd, err := root.ExecuteContextC(ctx)
+	defer func() { a.endRunLog(err) }()
 	var coded *exitcode.Error
 	switch cause := context.Cause(ctx); {
 	case cause != nil && errors.As(cause, &coded):

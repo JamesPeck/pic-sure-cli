@@ -25,7 +25,8 @@ type GlobalOptions struct {
 	NonInteractive bool
 	// NoAnimations is --no-animations: a static TUI.
 	NoAnimations bool
-	// LogLevel is --log-level: the stderr log level (ticket 005).
+	// LogLevel is --log-level: the stderr log level, in lower case. The
+	// per-run log file always records debug (logging.go).
 	LogLevel string
 	// SkipSteps is --skip-step ID, repeatable: steps a converging command
 	// must skip (ticket 011).
@@ -41,7 +42,8 @@ func (g *GlobalOptions) register(cmd *cobra.Command) {
 	f.BoolVar(&g.Yes, "yes", false, "answer yes to every confirmation, including destructive ones")
 	f.BoolVar(&g.NonInteractive, "non-interactive", false, "never prompt; fail when an answer is needed")
 	f.BoolVar(&g.NoAnimations, "no-animations", false, "static TUI, without animation")
-	f.StringVar(&g.LogLevel, "log-level", "info", "stderr log `LEVEL`: debug, info, warn or error")
+	g.LogLevel = "info"
+	f.Var(levelFlag{&g.LogLevel}, "log-level", "stderr log `LEVEL`: debug, info, warn or error")
 	f.StringArrayVar(&g.SkipSteps, "skip-step", nil, "skip the step with this `ID` (repeatable; converging commands only)")
 	cmd.MarkFlagsMutuallyExclusive("json", "plain")
 }

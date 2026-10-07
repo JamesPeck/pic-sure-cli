@@ -15,6 +15,7 @@ import (
 
 	"github.com/JamesPeck/pic-sure-cli/internal/events"
 	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
+	"github.com/JamesPeck/pic-sure-cli/internal/log"
 )
 
 // outputMode is how a command reports to the user (spec §10.3).
@@ -163,18 +164,20 @@ func (a *App) succeed() error {
 // failed Result, which --json prints as the last line on stdout: the exit
 // code, the message, and the first step that failed. A usage error gets the
 // "Run --help" hint when the command line itself was wrong: cobra rejected
-// it, or the command marked its error with withUsageHint.
+// it, or the command marked its error with withUsageHint. The message is
+// redacted as logs are (log.Redact), since an error can quote a secret.
 func (a *App) reportError(cmd *cobra.Command, err error) {
 	code := exitcode.FromError(err)
+	msg := log.Redact(err.Error())
 	if o := a.output(); !o.final {
 		o.final = true
 		o.sink.Emit(events.Result{Error: &events.ErrorInfo{
 			ExitCode: code,
-			Message:  err.Error(),
+			Message:  msg,
 			Step:     o.sink.failedStep(),
 		}})
 	}
-	_, _ = fmt.Fprintf(a.Stderr, "pic-sure: %v\n", err)
+	_, _ = fmt.Fprintf(a.Stderr, "pic-sure: %s\n", msg)
 	var hint usageHint
 	if code == exitcode.CodeUsage && cmd != nil && (!a.running || errors.As(err, &hint)) {
 		_, _ = fmt.Fprintf(a.Stderr, "Run '%s --help' for usage.\n", cmd.CommandPath())

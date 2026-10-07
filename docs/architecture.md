@@ -197,10 +197,10 @@ it.
   `--json`.
 - `deps.go`: `newDeps` assembles `ops.Deps`. Each field comes from a
   constructor in its owner's file: `runner.go` (003), `output.go` (004, which
-  also reports errors), `logging.go` (005), `engine.go` (016, landed) and
-  `gitclient.go` (018, landed). The runner is built with the logger, so it
-  can log argv. Until the others land, the sink discards events and the
-  logger discards logs.
+  also reports errors), `logging.go` (005, landed), `engine.go` (016,
+  landed) and `gitclient.go` (018, landed). The runner is built with the
+  logger, so it can log argv. Until the others land, the sink discards
+  events.
 
 | File | Commands | Ticket |
 |---|---|---|
@@ -1281,7 +1281,51 @@ them.
 
 ## internal/log
 
-_Ticket 005 fills this in._
+Ticket 005. Debug logging that is safe to attach to a bug report (§6.1,
+§6.3).
+
+- **A run.** `log.New(Options{Level, Stderr, File})` starts one command's
+  logging; `Run.Logger()` is what `Deps.Log` holds. Records at the
+  `--log-level` go to stderr as text. With `File`, every record down to
+  debug also goes, as JSON lines, to `<stack>/.pic-sure/logs/cli-<UTC
+  ts>.log` (0600, directories 0700, confined with `os.Root`), once
+  `Run.OpenFile(stackDir, now)` is called. Records from before that are
+  held in memory (up to 1 MiB) and written first. `OpenFile` then prunes
+  the stack's run logs to the newest that fit in both 50 files and 50 MiB,
+  always keeping the current one. Failing to open or prune is never a
+  command failure. `Run.Path()` is the file, for showing to the user.
+- **Secret values.** `log.RegisterSecrets(values...)` adds to a
+  process-wide registry. Every byte a run writes, to stderr or the file,
+  passes through it, so a registered value is replaced with `[REDACTED]`
+  wherever it appears: message, attr, error, struct, or an attr added with
+  `Logger.With` before the value was registered. Its JSON-escaped and
+  Go-quoted forms are caught too. Register a secret as soon as it is read
+  or generated (008 does it when secrets load; whoever reads one from stdin
+  does it there). `log.Redact(s)` applies the registry to any string, for
+  `support-bundle` (059). Values shorter than 4 bytes aren't registered:
+  they would match all through unrelated text. The registry also scrubs the
+  userinfo of every URL (`http://user:pw@host` becomes
+  `http://[REDACTED]@host`), so a proxy or Git password reaches no log
+  even unregistered. The cli registers the stack's secrets through
+  `stack.SetSecretRegistrar(log.RegisterSecrets)`, and redacts the error
+  message it prints and puts in the `--json` result the same way.
+- **Secret names.** An attr whose name ends in a secret word (`password`,
+  `secret`, `token`, `salt`, `api_key`, `encryption_key` and so on; see
+  `IsSecretName`) has its value replaced, as has every attr in a group with
+  such a name. `token_expiry` and `password_file` aren't secret names.
+- `log.ParseLevel` accepts `debug`, `info`, `warn` and `error`, in any
+  case.
+
+**Wiring (`internal/cli/logging.go`).** `markRunning` starts the run's
+logging when a command's `RunE` starts, and `App.Run` closes it, writing
+the exit code and error as the last record. The first record has the
+version, OS, command, flags and arguments. `a.openStack` calls
+`a.openRunLog(stackDir)` once it has found the stack, before the version
+gate; `init` (034) must call it once `.pic-sure/` exists. Until something
+calls it, nothing is written to disk. The read-only commands (`status`, `ps`,
+`logs`, `doctor`, `config show/get`, `version`) get a file only at
+`--log-level debug`, so polling never fills the directory. A bad
+`--log-level` is a usage error.
 
 ## internal/tui
 

@@ -1,0 +1,14 @@
+# --log-level takes debug, info, warn or error, in any case. Anything else
+# is a usage error.
+exitcode 2 pic-sure --log-level verbose version
+stderr '^pic-sure: invalid argument "verbose" for "--log-level" flag: unknown log level "verbose"'
+! stdout .
+
+# The default level, info, keeps the run's debug records off stderr.
+exec pic-sure version
+! stderr .
+
+# At debug, stderr has them, starting and ending the run.
+exec pic-sure --log-level DEBUG version
+stderr '^time=\S+ level=DEBUG msg="pic-sure run" .*command="pic-sure version"'
+stderr '^time=\S+ level=DEBUG msg="pic-sure exit" code=0$'
