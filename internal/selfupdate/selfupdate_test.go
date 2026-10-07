@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -31,9 +32,11 @@ const newBinary = "#!/bin/sh\necho new pic-sure\n"
 
 // fakeRelease is one release the fake GitHub serves.
 type fakeRelease struct {
-	tag     string
-	files   map[string][]byte // asset name -> content
-	noAsset bool              // leave the platform's archive out
+	tag        string
+	files      map[string][]byte // asset name -> content
+	noAsset    bool              // leave the platform's archive out
+	draft      bool
+	prerelease bool
 }
 
 // newFakeRelease is a release of newBinary for linux/amd64 with a correct
@@ -50,18 +53,19 @@ func newFakeRelease(t *testing.T, tag string) *fakeRelease {
 	}}
 }
 
-// fakeGitHub serves the releases API and the release assets.
+// fakeGitHub serves the releases API and the release assets. It lists
+// releases in the order given, as GitHub lists them newest-published first.
 type fakeGitHub struct {
 	*httptest.Server
 	mu       sync.Mutex
 	releases map[string]*fakeRelease // by tag
-	latest   string
+	order    []*fakeRelease
 	requests []string // request paths
 	proxied  int      // requests sent as a proxy request (absolute URI)
 }
 
-func newFakeGitHub(t *testing.T, latest string, rels ...*fakeRelease) *fakeGitHub {
-	g := &fakeGitHub{releases: map[string]*fakeRelease{}, latest: latest}
+func newFakeGitHub(t *testing.T, rels ...*fakeRelease) *fakeGitHub {
+	g := &fakeGitHub{releases: map[string]*fakeRelease{}, order: rels}
 	for _, r := range rels {
 		g.releases[r.tag] = r
 	}
@@ -79,8 +83,8 @@ func (g *fakeGitHub) serve(w http.ResponseWriter, r *http.Request) {
 	g.mu.Unlock()
 	base := "http://" + r.Host
 	switch p := r.URL.Path; {
-	case p == "/repos/"+DefaultRepo+"/releases/latest":
-		g.serveRelease(w, base, g.latest)
+	case p == "/repos/"+DefaultRepo+"/releases":
+		g.serveList(w, r, base)
 	case strings.HasPrefix(p, "/repos/"+DefaultRepo+"/releases/tags/"):
 		g.serveRelease(w, base, strings.TrimPrefix(p, "/repos/"+DefaultRepo+"/releases/tags/"))
 	case strings.HasPrefix(p, "/download/"):
@@ -102,14 +106,35 @@ func (g *fakeGitHub) serveRelease(w http.ResponseWriter, base, tag string) {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
-	out := release{Tag: rel.tag}
-	for name := range rel.files {
-		if rel.noAsset && strings.HasSuffix(name, ".tar.gz") {
-			continue
-		}
-		out.Assets = append(out.Assets, asset{Name: name, URL: base + "/download/" + rel.tag + "/" + name})
+	_ = json.NewEncoder(w).Encode(rel.api(base))
+}
+
+// serveList serves one page of the release list, paged like GitHub's
+// (per_page defaults to 30, page to 1).
+func (g *fakeGitHub) serveList(w http.ResponseWriter, r *http.Request, base string) {
+	perPage, page := 30, 1
+	if v, err := strconv.Atoi(r.URL.Query().Get("per_page")); err == nil {
+		perPage = v
+	}
+	if v, err := strconv.Atoi(r.URL.Query().Get("page")); err == nil {
+		page = v
+	}
+	out := []release{}
+	for i := (page - 1) * perPage; i < page*perPage && i < len(g.order); i++ {
+		out = append(out, g.order[i].api(base))
 	}
 	_ = json.NewEncoder(w).Encode(out)
+}
+
+func (r *fakeRelease) api(base string) release {
+	out := release{Tag: r.tag, Draft: r.draft, Prerelease: r.prerelease}
+	for name := range r.files {
+		if r.noAsset && strings.HasSuffix(name, ".tar.gz") {
+			continue
+		}
+		out.Assets = append(out.Assets, asset{Name: name, URL: base + "/download/" + r.tag + "/" + name})
+	}
+	return out
 }
 
 func (g *fakeGitHub) downloads() int {
@@ -209,7 +234,7 @@ func wantCode(t *testing.T, err error, code int, substr string) {
 }
 
 func TestInstallReplacesTheBinary(t *testing.T) {
-	g := newFakeGitHub(t, "v2.1.0", newFakeRelease(t, "v2.1.0"))
+	g := newFakeGitHub(t, newFakeRelease(t, "v2.1.0"))
 	exe := installed(t, "")
 	var rec events.Recorder
 	res, err := newUpdater(g, exe, &rec).Install(context.Background(), "")
@@ -237,7 +262,7 @@ func TestInstallReplacesTheBinary(t *testing.T) {
 }
 
 func TestInstallFollowsSymlinks(t *testing.T) {
-	g := newFakeGitHub(t, "v2.1.0", newFakeRelease(t, "v2.1.0"))
+	g := newFakeGitHub(t, newFakeRelease(t, "v2.1.0"))
 	real := installed(t, "")
 	link := filepath.Join(t.TempDir(), "pic-sure")
 	if err := os.Symlink(real, link); err != nil {
@@ -257,7 +282,7 @@ func TestInstallFollowsSymlinks(t *testing.T) {
 func TestInstallRejectsAChecksumMismatch(t *testing.T) {
 	rel := newFakeRelease(t, "v2.1.0")
 	rel.files[AssetName("linux", "amd64")] = tarGz(t, map[string]string{"pic-sure": "tampered"})
-	g := newFakeGitHub(t, "v2.1.0", rel)
+	g := newFakeGitHub(t, rel)
 	exe := installed(t, "")
 	_, err := newUpdater(g, exe, nil).Install(context.Background(), "v2.1.0")
 	wantCode(t, err, exitcode.CodeFailed, "doesn't match its SHA-256 in checksums.txt")
@@ -296,7 +321,7 @@ func TestInstallFailures(t *testing.T) {
 				tt.edit(rel)
 			}
 			exe := installed(t, "")
-			_, err := newUpdater(newFakeGitHub(t, "v2.1.0", rel), exe, nil).Install(context.Background(), tt.to)
+			_, err := newUpdater(newFakeGitHub(t, rel), exe, nil).Install(context.Background(), tt.to)
 			wantCode(t, err, tt.code, tt.substr)
 			if got := readFile(t, exe); got != "old" {
 				t.Errorf("binary = %q, want it untouched", got)
@@ -307,15 +332,17 @@ func TestInstallFailures(t *testing.T) {
 }
 
 func TestInstallNothingToDo(t *testing.T) {
-	for _, tt := range []struct{ name, latest, to string }{
-		{name: "already the latest", latest: "v2.0.0"},
-		{name: "newer than the latest", latest: "v1.9.0"},
-		{name: "--to the running version", latest: "v2.1.0", to: "v2.0.0"},
+	for _, tt := range []struct{ name, current, to string }{
+		{name: "already the newest", current: "v2.1.0"},
+		{name: "newer than the newest", current: "v2.2.0"},
+		{name: "--to the running version", current: "v2.0.0", to: "v2.0.0"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			g := newFakeGitHub(t, tt.latest, newFakeRelease(t, tt.latest), newFakeRelease(t, "v2.0.0"))
+			g := newFakeGitHub(t, newFakeRelease(t, "v2.1.0"), newFakeRelease(t, "v2.0.0"))
 			exe := installed(t, "")
-			res, err := newUpdater(g, exe, nil).Install(context.Background(), tt.to)
+			u := newUpdater(g, exe, nil)
+			u.Current = tt.current
+			res, err := u.Install(context.Background(), tt.to)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -326,8 +353,84 @@ func TestInstallNothingToDo(t *testing.T) {
 	}
 }
 
+func TestInstallPicksTheNewestStableV2(t *testing.T) {
+	stub := func(tag string) *fakeRelease { return &fakeRelease{tag: tag} }
+	pre := newFakeRelease(t, "v2.3.0")
+	pre.prerelease = true
+	draft := newFakeRelease(t, "v2.4.0")
+	draft.draft = true
+	var filler []*fakeRelease
+	for i := range releasesPerPage {
+		filler = append(filler, stub(fmt.Sprintf("v1.%d.0", i)))
+	}
+	tests := []struct {
+		name string
+		rels []*fakeRelease
+		want string
+	}{
+		// Listed newest-published first, so the backport comes before v2.2.0.
+		{name: "a backport published after a newer release",
+			rels: []*fakeRelease{newFakeRelease(t, "v2.1.5"), newFakeRelease(t, "v2.2.0"), newFakeRelease(t, "v2.1.0")}, want: "v2.2.0"},
+		{name: "a prerelease or draft newer than the newest stable",
+			rels: []*fakeRelease{pre, draft, newFakeRelease(t, "v2.2.0")}, want: "v2.2.0"},
+		{name: "tags that aren't stable v2.x.y",
+			rels: []*fakeRelease{stub("v3.0.0"), stub("v2.9.0-rc.1"), stub("2.9.0"), stub("v2.9"), stub("v10.0.0"),
+				newFakeRelease(t, "v2.2.0")}, want: "v2.2.0"},
+		{name: "minor and patch compare as numbers",
+			rels: []*fakeRelease{newFakeRelease(t, "v2.9.0"), newFakeRelease(t, "v2.10.0"), newFakeRelease(t, "v2.9.10")}, want: "v2.10.0"},
+		{name: "the newest is past the first page",
+			rels: append(append([]*fakeRelease{newFakeRelease(t, "v2.1.0")}, filler...), newFakeRelease(t, "v2.2.0")), want: "v2.2.0"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			res, err := newUpdater(newFakeGitHub(t, tt.rels...), installed(t, ""), nil).Install(context.Background(), "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.To != tt.want || !res.Updated {
+				t.Errorf("installed %s (updated %v), want %s", res.To, res.Updated, tt.want)
+			}
+		})
+	}
+}
+
+func TestInstallWithoutAStableV2Release(t *testing.T) {
+	pre := newFakeRelease(t, "v2.0.1-rc.1")
+	pre.prerelease = true
+	for _, tt := range []struct {
+		name string
+		rels []*fakeRelease
+	}{
+		{name: "no releases"},
+		{name: "only other lines and prereleases", rels: []*fakeRelease{newFakeRelease(t, "v3.0.0"), newFakeRelease(t, "v1.9.0"), pre}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			g := newFakeGitHub(t, tt.rels...)
+			exe := installed(t, "")
+			_, err := newUpdater(g, exe, nil).Install(context.Background(), "")
+			wantCode(t, err, exitcode.CodePrecondition, "has no stable v2.x.y release; pass --to")
+			if got := readFile(t, exe); got != "old" || g.downloads() != 0 {
+				t.Errorf("binary = %q after %d downloads, want it untouched", got, g.downloads())
+			}
+		})
+	}
+}
+
+func TestInstallReadsAtMostTenPages(t *testing.T) {
+	var rels []*fakeRelease
+	for i := range maxReleasePages * releasesPerPage {
+		rels = append(rels, &fakeRelease{tag: fmt.Sprintf("v1.%d.0", i)})
+	}
+	g := newFakeGitHub(t, append(rels, newFakeRelease(t, "v2.1.0"))...)
+	_, err := newUpdater(g, installed(t, ""), nil).Install(context.Background(), "")
+	wantCode(t, err, exitcode.CodePrecondition, "no stable v2.x.y release")
+	if n := len(g.requests); n != maxReleasePages {
+		t.Errorf("%d requests, want %d pages", n, maxReleasePages)
+	}
+}
+
 func TestInstallDowngradesOnRequest(t *testing.T) {
-	g := newFakeGitHub(t, "v2.0.0", newFakeRelease(t, "v1.9.0"))
+	g := newFakeGitHub(t, newFakeRelease(t, "v1.9.0"))
 	exe := installed(t, "")
 	res, err := newUpdater(g, exe, nil).Install(context.Background(), "v1.9.0")
 	if err != nil || !res.Updated {
@@ -336,7 +439,7 @@ func TestInstallDowngradesOnRequest(t *testing.T) {
 }
 
 func TestInstallRefusesPackageManagedBinaries(t *testing.T) {
-	g := newFakeGitHub(t, "v2.1.0", newFakeRelease(t, "v2.1.0"))
+	g := newFakeGitHub(t, newFakeRelease(t, "v2.1.0"))
 	exe := installed(t, filepath.Join(t.TempDir(), "Cellar", "pic-sure", "2.0.0", "bin"))
 	link := filepath.Join(t.TempDir(), "pic-sure")
 	if err := os.Symlink(exe, link); err != nil {
@@ -370,7 +473,7 @@ func TestInstallRefusesAnUnwritableDirectory(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root can write anywhere")
 	}
-	g := newFakeGitHub(t, "v2.1.0", newFakeRelease(t, "v2.1.0"))
+	g := newFakeGitHub(t, newFakeRelease(t, "v2.1.0"))
 	exe := installed(t, "")
 	dir := filepath.Dir(exe)
 	if err := os.Chmod(dir, 0o555); err != nil {
@@ -385,7 +488,7 @@ func TestInstallRefusesAnUnwritableDirectory(t *testing.T) {
 }
 
 func TestInstallGoesThroughTheProxy(t *testing.T) {
-	g := newFakeGitHub(t, "v2.1.0", newFakeRelease(t, "v2.1.0"))
+	g := newFakeGitHub(t, newFakeRelease(t, "v2.1.0"))
 	proxy, err := url.Parse(g.URL)
 	if err != nil {
 		t.Fatal(err)
@@ -429,7 +532,7 @@ func TestInstallSignature(t *testing.T) {
 				delete(rel.files, BundleName)
 			}
 			exe := installed(t, "")
-			u := newUpdater(newFakeGitHub(t, "v2.1.0", rel), exe, nil)
+			u := newUpdater(newFakeGitHub(t, rel), exe, nil)
 			var gotBundle string
 			if tt.verify != nil {
 				u.VerifyBundle = func(ctx context.Context, tag, sums, bundle string) error {
@@ -466,7 +569,7 @@ func TestInstallSignature(t *testing.T) {
 }
 
 func TestSelfUpdateReExecs(t *testing.T) {
-	g := newFakeGitHub(t, "v2.1.0", newFakeRelease(t, "v2.1.0"))
+	g := newFakeGitHub(t, newFakeRelease(t, "v2.1.0"))
 	exe := installed(t, "")
 	u := newUpdater(g, exe, nil)
 	u.Args = []string{"pic-sure", "update", "--self-update"}
@@ -490,7 +593,7 @@ func TestSelfUpdateReExecs(t *testing.T) {
 }
 
 func TestSelfUpdateRefusals(t *testing.T) {
-	g := newFakeGitHub(t, "v2.1.0", newFakeRelease(t, "v2.1.0"))
+	g := newFakeGitHub(t, newFakeRelease(t, "v2.1.0"))
 	t.Run("package-managed", func(t *testing.T) {
 		u := newUpdater(g, installed(t, filepath.Join(t.TempDir(), "Cellar", "bin")), nil)
 		u.Getenv = func(string) string { return "" }
@@ -547,7 +650,7 @@ func (c cancelAfter) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 func TestInstallStopsWhenCancelledAfterDownloading(t *testing.T) {
-	g := newFakeGitHub(t, "v2.1.0", newFakeRelease(t, "v2.1.0"))
+	g := newFakeGitHub(t, newFakeRelease(t, "v2.1.0"))
 	exe := installed(t, "")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -584,7 +687,7 @@ func TestDownloadAbandonsAStalledServer(t *testing.T) {
 }
 
 func TestErrorsDontShowProxyCredentials(t *testing.T) {
-	g := newFakeGitHub(t, "v2.1.0", newFakeRelease(t, "v2.1.0"))
+	g := newFakeGitHub(t, newFakeRelease(t, "v2.1.0"))
 	u := newUpdater(g, installed(t, ""), nil)
 	u.APIBase = "http://api.github.invalid"
 	u.Proxy = http.ProxyURL(&url.URL{Scheme: "http", User: url.UserPassword("me", "s3cret"), Host: "127.0.0.1:1"})

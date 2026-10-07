@@ -119,6 +119,7 @@ trap 'rm -rf "$TMP"' EXIT
 # --- choose the release ------------------------------------------------------
 # Without --version, install the newest stable v2.x.y. GitHub's "latest"
 # release could belong to another major line, so pick from the list.
+# `pic-sure self-update` picks by the same rule (internal/selfupdate).
 # tag_name precedes prerelease in each release object, and nested objects
 # (author, assets) have neither.
 if [ -z "$VERSION" ]; then

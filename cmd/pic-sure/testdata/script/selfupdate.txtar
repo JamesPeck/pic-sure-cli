@@ -4,7 +4,7 @@
 env PIC_SURE_RELEASE_API=http://127.0.0.1:1
 
 exitcode 1 pic-sure self-update
-stderr '^pic-sure: looking up the latest pic-sure release: .*connection refused'
+stderr '^pic-sure: looking up the newest pic-sure release: .*connection refused'
 ! stdout .
 
 exitcode 1 pic-sure self-update --to 2.0.1

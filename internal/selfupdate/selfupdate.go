@@ -94,9 +94,10 @@ type Result struct {
 	Signature string `json:"signature,omitempty"`
 }
 
-// Install replaces the binary with release version (the latest when empty)
-// and returns without re-executing. Installing the running version, or
-// "upgrading" to a latest release older than it, does nothing. A binary
+// Install replaces the binary with release version (the newest stable v2
+// release when empty) and returns without re-executing. Installing the
+// running version, or "upgrading" to a newest release older than it, does
+// nothing. A binary
 // pic-sure mustn't replace is an exit-3 error that says what to do.
 func (u *Updater) Install(ctx context.Context, version string) (*Result, error) {
 	version = normalize(version)

@@ -15,22 +15,27 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
+	"github.com/JamesPeck/pic-sure-cli/internal/stack"
 )
 
 // Size limits on what a release may serve.
 const (
-	maxMetadata = 4 << 20   // release JSON, checksums.txt, the cosign bundle
-	maxArchive  = 512 << 20 // the tar.gz, and the binary inside it
+	maxMetadata    = 4 << 20   // release JSON, checksums.txt, the cosign bundle
+	maxReleasePage = 32 << 20  // one page of the release list
+	maxArchive     = 512 << 20 // the tar.gz, and the binary inside it
 )
 
 // release is the part of the GitHub releases API response pic-sure reads.
 type release struct {
-	Tag    string  `json:"tag_name"`
-	Assets []asset `json:"assets"`
+	Tag        string  `json:"tag_name"`
+	Draft      bool    `json:"draft"`
+	Prerelease bool    `json:"prerelease"`
+	Assets     []asset `json:"assets"`
 }
 
 type asset struct {
@@ -48,38 +53,90 @@ func (r *release) find(name string) (asset, bool) {
 	return asset{}, false
 }
 
-// resolve fetches the release for version, or the latest release when
-// version is empty.
+// Release listing: GitHub's largest page, and how many pages to read.
+const (
+	releasesPerPage = 100
+	maxReleasePages = 10
+)
+
+// stableV2 matches the tags the newest-release search considers.
+var stableV2 = regexp.MustCompile(`^v2\.[0-9]+\.[0-9]+$`)
+
+// resolve fetches the release for version, or the newest stable v2 release
+// when version is empty.
 func (u *Updater) resolve(ctx context.Context, version string) (*release, error) {
-	what := "the latest pic-sure release"
-	endpoint := fmt.Sprintf("%s/repos/%s/releases/latest", u.apiBase(), u.repo())
-	if version != "" {
-		what = "pic-sure release " + version
-		endpoint = fmt.Sprintf("%s/repos/%s/releases/tags/%s", u.apiBase(), u.repo(), url.PathEscape(version))
+	if version == "" {
+		return u.newest(ctx)
 	}
-	body, status, err := u.get(ctx, endpoint, "application/vnd.github+json")
-	if err != nil {
-		return nil, fmt.Errorf("looking up %s: %w", what, err)
-	}
-	defer func() { _ = body.Close() }()
-	if status == http.StatusNotFound {
-		return nil, exitcode.Precondition("%s doesn't exist on github.com/%s", what, u.repo())
-	}
-	if status == http.StatusForbidden || status == http.StatusTooManyRequests {
-		return nil, exitcode.Failed("looking up %s: GitHub answered HTTP %d, probably its rate limit "+
-			"for unauthenticated requests; try again later", what, status)
-	}
-	if status != http.StatusOK {
-		return nil, exitcode.Failed("looking up %s: GitHub answered HTTP %d", what, status)
-	}
+	what := "pic-sure release " + version
 	var r release
-	if err := json.NewDecoder(io.LimitReader(body, maxMetadata)).Decode(&r); err != nil {
-		return nil, exitcode.Failed("looking up %s: reading GitHub's answer: %v", what, err)
+	endpoint := fmt.Sprintf("%s/repos/%s/releases/tags/%s", u.apiBase(), u.repo(), url.PathEscape(version))
+	if err := u.getJSON(ctx, endpoint, what, maxMetadata, &r); err != nil {
+		return nil, err
 	}
 	if r.Tag == "" {
 		return nil, exitcode.Failed("looking up %s: GitHub's answer has no tag", what)
 	}
 	return &r, nil
+}
+
+// newest lists the repo's releases and returns the highest vX.Y.Z with
+// major 2 that is neither a draft nor a prerelease. GitHub's
+// releases/latest is whichever release was published last, which may be a
+// backport to an older v2.x or a release from another line. install.sh
+// picks its default version by the same rule.
+func (u *Updater) newest(ctx context.Context) (*release, error) {
+	const what = "the newest pic-sure release"
+	var best *release
+	for page := 1; page <= maxReleasePages; page++ {
+		var rels []release
+		endpoint := fmt.Sprintf("%s/repos/%s/releases?per_page=%d&page=%d", u.apiBase(), u.repo(), releasesPerPage, page)
+		if err := u.getJSON(ctx, endpoint, what, maxReleasePage, &rels); err != nil {
+			return nil, err
+		}
+		for i := range rels {
+			r := &rels[i]
+			if r.Draft || r.Prerelease || !stableV2.MatchString(r.Tag) {
+				continue
+			}
+			if best == nil {
+				best = r
+			} else if order, _ := stack.CompareVersions(r.Tag, best.Tag); order > 0 {
+				best = r
+			}
+		}
+		if len(rels) < releasesPerPage {
+			break
+		}
+	}
+	if best == nil {
+		return nil, exitcode.Precondition("github.com/%s has no stable v2.x.y release; pass --to to choose one", u.repo())
+	}
+	return best, nil
+}
+
+// getJSON decodes the GitHub API's answer at endpoint, at most limit bytes,
+// into v. what names the lookup in errors.
+func (u *Updater) getJSON(ctx context.Context, endpoint, what string, limit int64, v any) error {
+	body, status, err := u.get(ctx, endpoint, "application/vnd.github+json")
+	if err != nil {
+		return fmt.Errorf("looking up %s: %w", what, err)
+	}
+	defer func() { _ = body.Close() }()
+	if status == http.StatusNotFound {
+		return exitcode.Precondition("%s doesn't exist on github.com/%s", what, u.repo())
+	}
+	if status == http.StatusForbidden || status == http.StatusTooManyRequests {
+		return exitcode.Failed("looking up %s: GitHub answered HTTP %d, probably its rate limit "+
+			"for unauthenticated requests; try again later", what, status)
+	}
+	if status != http.StatusOK {
+		return exitcode.Failed("looking up %s: GitHub answered HTTP %d", what, status)
+	}
+	if err := json.NewDecoder(io.LimitReader(body, limit)).Decode(v); err != nil {
+		return exitcode.Failed("looking up %s: reading GitHub's answer: %v", what, err)
+	}
+	return nil
 }
 
 // download writes asset a to the file dst and returns its SHA-256.
