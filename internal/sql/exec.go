@@ -20,9 +20,11 @@ type MySQLTarget struct {
 	// Otherwise the client runs in a throwaway MySQLClientImage container
 	// (`docker run --rm`) and connects to Host.
 	Container string
-	// Host is the server to connect to, and a remote target needs it. On a
-	// local target, setting it (to 127.0.0.1, say) makes the client connect
-	// over TCP instead of the socket.
+	// Host is the server to connect to, and a remote target needs it. A
+	// remote client resolves it from inside its own container on the
+	// default bridge network, where 127.0.0.1 is that container. On a local
+	// target, setting it (to 127.0.0.1, say) makes the client connect over
+	// TCP instead of the socket.
 	Host string
 	// Port is the server's port; 0 leaves the client's default, 3306.
 	Port int
@@ -59,11 +61,17 @@ func QueryMySQL(ctx context.Context, e docker.Engine, t MySQLTarget, query strin
 	return parseBatch(out), nil
 }
 
+// clearBackslashMode drops NO_BACKSLASH_ESCAPES from the session's sql_mode,
+// which a remote server may set, since QuoteMySQL's escapes need it off.
+const clearBackslashMode = "SET SESSION sql_mode = TRIM(BOTH ',' FROM " +
+	"REPLACE(CONCAT(',', @@SESSION.sql_mode, ','), ',NO_BACKSLASH_ESCAPES,', ','))"
+
 func runMySQL(ctx context.Context, e docker.Engine, t MySQLTarget, statements []string) ([]byte, error) {
 	in := script(statements)
 	if in == "" {
 		return nil, nil
 	}
+	in = script([]string{clearBackslashMode}) + in
 	if t.Container == "" && t.Host == "" {
 		return nil, errors.New("sql: a MySQL target needs a container or a host")
 	}
@@ -161,8 +169,9 @@ func ExecPostgres(ctx context.Context, e docker.Engine, t PostgresTarget, statem
 	return clientError(args, code, stderr.Bytes(), err)
 }
 
-// script joins statements into client input, one per line, each ending in
-// a semicolon. Empty statements are dropped.
+// script joins statements into client input, each followed by a semicolon
+// on its own line, so a statement ending in a -- comment keeps its
+// terminator. Empty statements are dropped.
 func script(statements []string) string {
 	var b strings.Builder
 	for _, s := range statements {
@@ -171,7 +180,7 @@ func script(statements []string) string {
 			continue
 		}
 		b.WriteString(s)
-		b.WriteString(";\n")
+		b.WriteString("\n;\n")
 	}
 	return b.String()
 }

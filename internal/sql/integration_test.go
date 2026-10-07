@@ -89,6 +89,21 @@ func TestMySQLIntegration(t *testing.T) {
 		}
 	})
 
+	t.Run("values survive a server-wide NO_BACKSLASH_ESCAPES", func(t *testing.T) {
+		orig := query(t, e, root, "SELECT @@GLOBAL.sql_mode")
+		mustExec(t, e, root, "SET GLOBAL sql_mode = CONCAT_WS(',', NULLIF(@@GLOBAL.sql_mode, ''), 'NO_BACKSLASH_ESCAPES')")
+		t.Cleanup(func() { mustExec(t, e, root, "SET GLOBAL sql_mode = "+sql.QuoteMySQL(orig)) })
+		if got := query(t, e, root, "SELECT @@SESSION.sql_mode"); strings.Contains(got, "NO_BACKSLASH_ESCAPES") {
+			t.Fatalf("session sql_mode = %s, want NO_BACKSLASH_ESCAPES cleared", got)
+		}
+		for _, v := range nastyValues {
+			got := query(t, e, root, "SELECT HEX("+sql.QuoteMySQL(v)+")")
+			if want := strings.ToUpper(hex.EncodeToString([]byte(v))); got != want {
+				t.Errorf("%q: server got bytes %s, want %s", v, got, want)
+			}
+		}
+	})
+
 	t.Run("seed is idempotent", func(t *testing.T) {
 		mustExec(t, e, root,
 			"CREATE DATABASE auth",
@@ -106,9 +121,10 @@ func TestMySQLIntegration(t *testing.T) {
 			"INSERT INTO auth.application VALUES (0x01, 'PICSURE', NULL)",
 		)
 		email := `o'brien"\@example.org`
-		for i := range 2 {
+		// The same id twice (a replay), then a fresh one (a later run).
+		for _, first := range []byte{1, 1, 2} {
 			var id [16]byte
-			id[0] = byte(i + 1)
+			id[0] = first
 			mustExec(t, e, root, sql.SeedAdminUser(email, id)...)
 		}
 

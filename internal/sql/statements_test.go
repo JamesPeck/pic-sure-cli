@@ -20,8 +20,10 @@ func TestSeedAdminUser(t *testing.T) {
 		"INSERT INTO auth.user (uuid, auth0_metadata, general_metadata, acceptedTOS, connectionId, email, matched, subject, is_active, long_term_token) " +
 			"SELECT " + uuid + `, NULL, '{"email":"o''brien@example.org"}', NULL, (SELECT uuid FROM auth.connection WHERE label = 'Google'), 'o''brien@example.org', 0, NULL, 1, NULL ` +
 			"FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM auth.user WHERE email = 'o''brien@example.org')",
-		"INSERT INTO auth.user_role (user_id, role_id) SELECT uuid, UNHEX('002DC366B0D8420F998F885D0ED797FD') FROM auth.user WHERE uuid = " + uuid,
-		"INSERT INTO auth.user_role (user_id, role_id) SELECT uuid, UNHEX('797FD002DC366B0D8420F998F885D0ED') FROM auth.user WHERE uuid = " + uuid,
+		"INSERT INTO auth.user_role (user_id, role_id) SELECT uuid, UNHEX('002DC366B0D8420F998F885D0ED797FD') FROM auth.user WHERE uuid = " + uuid +
+			" AND NOT EXISTS (SELECT 1 FROM auth.user_role WHERE user_id = " + uuid + " AND role_id = UNHEX('002DC366B0D8420F998F885D0ED797FD'))",
+		"INSERT INTO auth.user_role (user_id, role_id) SELECT uuid, UNHEX('797FD002DC366B0D8420F998F885D0ED') FROM auth.user WHERE uuid = " + uuid +
+			" AND NOT EXISTS (SELECT 1 FROM auth.user_role WHERE user_id = " + uuid + " AND role_id = UNHEX('797FD002DC366B0D8420F998F885D0ED'))",
 		"COMMIT",
 	}
 	if !reflect.DeepEqual(got, want) {

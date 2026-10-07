@@ -11,8 +11,9 @@ import (
 // server's sql_mode. Backslash, NUL, newline, carriage return and Ctrl-Z
 // become backslash escapes, as mysql_real_escape_string writes them. Under
 // the NO_BACKSLASH_ESCAPES sql_mode the server would keep those escapes
-// verbatim, but the literal still ends where it should, so a value can
-// never break out of its quotes.
+// verbatim, storing a different value, so ExecMySQL and QueryMySQL clear
+// that mode for their session. The literal still ends where it should
+// under it, so a value can never break out of its quotes.
 //
 // The escaping relies on the connection character set being utf8mb4, in
 // which no multibyte character contains the byte for a quote or a
@@ -68,9 +69,9 @@ func QuotePostgres(s string) (string, error) {
 	return "E'" + strings.ReplaceAll(quoted, `\`, `\\`) + "'", nil
 }
 
-// QuotePostgresIdent returns name as a double-quoted Postgres identifier.
+// quotePostgresIdent returns name as a double-quoted Postgres identifier.
 // It fails with ErrNUL for a name with a NUL byte.
-func QuotePostgresIdent(name string) (string, error) {
+func quotePostgresIdent(name string) (string, error) {
 	if strings.IndexByte(name, 0) >= 0 {
 		return "", ErrNUL
 	}

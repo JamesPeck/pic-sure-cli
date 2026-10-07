@@ -55,11 +55,11 @@ func TestQuotePostgres(t *testing.T) {
 }
 
 func TestQuotePostgresIdent(t *testing.T) {
-	got, err := QuotePostgresIdent(`pic"sure`)
+	got, err := quotePostgresIdent(`pic"sure`)
 	if err != nil || got != `"pic""sure"` {
-		t.Errorf("QuotePostgresIdent = %s, %v", got, err)
+		t.Errorf("quotePostgresIdent = %s, %v", got, err)
 	}
-	if _, err := QuotePostgresIdent("a\x00b"); !errors.Is(err, ErrNUL) {
-		t.Errorf("QuotePostgresIdent with NUL: err = %v, want ErrNUL", err)
+	if _, err := quotePostgresIdent("a\x00b"); !errors.Is(err, ErrNUL) {
+		t.Errorf("quotePostgresIdent with NUL: err = %v, want ErrNUL", err)
 	}
 }

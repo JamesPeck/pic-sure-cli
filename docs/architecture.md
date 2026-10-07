@@ -1053,12 +1053,17 @@ than `ops.Deps` so that operations can import this package.
   switches to `E'...'` when the value has a backslash. It fails with
   `ErrNUL` on a NUL, which Postgres text can't hold. Both escapers assume a
   UTF-8 connection, and the clients force one (`utf8mb4`,
-  `PGCLIENTENCODING=UTF8`).
+  `PGCLIENTENCODING=UTF8`). The MySQL clients also drop
+  `NO_BACKSLASH_ESCAPES` from the session's `sql_mode`, so a remote server
+  that sets it stores the values unchanged.
 - **Builders** return SQL text containing escaped secrets. Never log it.
+  A server error can quote part of a statement, so treat an error's stderr
+  with the same care.
   - Seed (033): `AppliedMigrationsQuery`, `CountUsersWithEmail`,
     `SeedAdminUser(email, id)` and `SetApplicationToken`. `SeedAdminUser`
     is one transaction that inserts the user only if the email is absent,
-    and gives it the Top Admin and User roles only when it inserted it.
+    and gives it the Top Admin and User roles only when it inserted it. A
+    replay with the same id changes nothing.
   - Bootstrap (054): `Bootstrap(AppUsers(AppPasswords{...}), syncPasswords)`.
     It creates the databases and users with `IF NOT EXISTS`, plus the
     grants. With `syncPasswords` it adds an `ALTER USER` for each user.

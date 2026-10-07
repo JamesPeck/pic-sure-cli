@@ -1,6 +1,7 @@
 package sql
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"strings"
@@ -36,25 +37,32 @@ func CountUsersWithEmail(email string) string {
 // SeedAdminUser returns the statements that create the admin user, with id
 // as its UUID, and give it the PIC-SURE Top Admin and PIC-SURE User roles.
 // The user is linked to the Google connection, as the bash seed does. If a
-// user with the email already exists, the statements change nothing, and
-// they run as one transaction, so a failure part-way never leaves a user
+// user with the email already exists, the statements change nothing, even
+// when replayed with the same id, and they run as one transaction, so a failure part-way never leaves a user
 // without its roles.
 func SeedAdminUser(email string, id [16]byte) []string {
 	e := QuoteMySQL(email)
 	uuid := "UNHEX('" + strings.ToUpper(hex.EncodeToString(id[:])) + "')"
-	// json.Marshal of a struct of strings cannot fail.
-	meta, _ := json.Marshal(struct {
+	// Without HTML escaping, the metadata matches the bash seed's bytes for
+	// an email with <, > or &. Encoding a struct of strings cannot fail.
+	var meta bytes.Buffer
+	enc := json.NewEncoder(&meta)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(struct {
 		Email string `json:"email"`
 	}{email})
-	// The role rows are keyed on the new UUID rather than the email, so
-	// they are inserted only when this run inserted the user.
+	// The role rows are keyed on the new UUID rather than the email, so a
+	// user that already had the email gets none; a replay with the same id
+	// skips the rows it already added.
 	grant := func(role string) string {
-		return "INSERT INTO auth.user_role (user_id, role_id) SELECT uuid, UNHEX('" + role + "') FROM auth.user WHERE uuid = " + uuid
+		r := "UNHEX('" + role + "')"
+		return "INSERT INTO auth.user_role (user_id, role_id) SELECT uuid, " + r + " FROM auth.user WHERE uuid = " + uuid +
+			" AND NOT EXISTS (SELECT 1 FROM auth.user_role WHERE user_id = " + uuid + " AND role_id = " + r + ")"
 	}
 	return []string{
 		"START TRANSACTION",
 		"INSERT INTO auth.user (uuid, auth0_metadata, general_metadata, acceptedTOS, connectionId, email, matched, subject, is_active, long_term_token) " +
-			"SELECT " + uuid + ", NULL, " + QuoteMySQL(string(meta)) + ", NULL, (SELECT uuid FROM auth.connection WHERE label = 'Google'), " + e + ", 0, NULL, 1, NULL " +
+			"SELECT " + uuid + ", NULL, " + QuoteMySQL(strings.TrimSuffix(meta.String(), "\n")) + ", NULL, (SELECT uuid FROM auth.connection WHERE label = 'Google'), " + e + ", 0, NULL, 1, NULL " +
 			"FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM auth.user WHERE email = " + e + ")",
 		grant(topAdminRoleID),
 		grant(userRoleID),
@@ -139,7 +147,7 @@ func Bootstrap(users []AppUser, syncPasswords bool) []string {
 // AlterPostgresPassword returns the statement that sets the role's
 // password. It fails with ErrNUL if either value holds a NUL byte.
 func AlterPostgresPassword(role, password string) (string, error) {
-	r, err := QuotePostgresIdent(role)
+	r, err := quotePostgresIdent(role)
 	if err != nil {
 		return "", err
 	}

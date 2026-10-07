@@ -39,8 +39,12 @@ func TestExecMySQLLocalRunsTheClientInThePicsureDBContainer(t *testing.T) {
 	if !reflect.DeepEqual(c.Env, []string{"MYSQL_PWD"}) {
 		t.Errorf("env names = %q, want [MYSQL_PWD]", c.Env)
 	}
-	if got, want := string(c.Stdin), "SELECT 1;\nSELECT 2;\n"; got != want {
-		t.Errorf("stdin = %q, want %q", got, want)
+	stdin := string(c.Stdin)
+	if !strings.HasPrefix(stdin, "SET SESSION sql_mode = ") || !strings.Contains(stdin, "NO_BACKSLASH_ESCAPES") {
+		t.Errorf("stdin = %q, want it to clear NO_BACKSLASH_ESCAPES first", stdin)
+	}
+	if want := "\n;\nSELECT 1\n;\nSELECT 2\n;\n"; !strings.HasSuffix(stdin, want) {
+		t.Errorf("stdin = %q, want it to end %q", stdin, want)
 	}
 }
 
@@ -145,8 +149,8 @@ func TestSecretsAndEmailNeverReachArgv(t *testing.T) {
 					}
 				}
 				assertBareEnvFlag(t, c.Argv, "MYSQL_PWD")
-				if want := strings.Join(stmts, ";\n") + ";\n"; string(c.Stdin) != want {
-					t.Errorf("stdin = %q, want %q", c.Stdin, want)
+				if want := "\n;\n" + strings.Join(stmts, "\n;\n") + "\n;\n"; !strings.HasSuffix(string(c.Stdin), want) {
+					t.Errorf("stdin = %q, want it to end %q", c.Stdin, want)
 				}
 			})
 		}
@@ -248,7 +252,7 @@ func TestExecPostgresRunsPsqlInTheDictionaryDBContainer(t *testing.T) {
 			t.Errorf("argv element %q contains a secret", a)
 		}
 	}
-	if got, want := string(c.Stdin), stmt+";\n"; got != want {
+	if got, want := string(c.Stdin), stmt+"\n;\n"; got != want {
 		t.Errorf("stdin = %q, want %q", got, want)
 	}
 }
