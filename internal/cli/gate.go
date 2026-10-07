@@ -12,18 +12,22 @@ import (
 
 // commandClasses is every command's class for the version gate (§10.6),
 // keyed by its path without "pic-sure". The read-only ones are §10.6's
-// list; everything else is mutating, and update migrates. openStack
+// list, including the list subcommands; everything else is mutating, and
+// update migrates. openStack
 // applies the gate, so a command that never opens a stack, such as version
 // or cache, isn't gated whatever its class.
 var commandClasses = map[string]stack.CommandClass{
-	"status":         stack.ReadOnly,
-	"ps":             stack.ReadOnly,
-	"logs":           stack.ReadOnly,
-	"doctor":         stack.ReadOnly,
-	"support-bundle": stack.ReadOnly,
-	"config show":    stack.ReadOnly,
-	"config get":     stack.ReadOnly,
-	"version":        stack.ReadOnly,
+	"status":           stack.ReadOnly,
+	"ps":               stack.ReadOnly,
+	"logs":             stack.ReadOnly,
+	"doctor":           stack.ReadOnly,
+	"support-bundle":   stack.ReadOnly,
+	"config show":      stack.ReadOnly,
+	"config get":       stack.ReadOnly,
+	"version":          stack.ReadOnly,
+	"dev list":         stack.ReadOnly,
+	"shared-data list": stack.ReadOnly,
+	"cache list":       stack.ReadOnly,
 
 	"update": stack.Migrating,
 
@@ -45,15 +49,12 @@ var commandClasses = map[string]stack.CommandClass{
 	"dictionary load-facets": stack.Mutating,
 	"dictionary weights":     stack.Mutating,
 	"shared-data publish":    stack.Mutating,
-	"shared-data list":       stack.Mutating,
 	"shared-data remove":     stack.Mutating,
-	"dev list":               stack.Mutating,
 	"dev on":                 stack.Mutating,
 	"dev off":                stack.Mutating,
 	"db bootstrap":           stack.Mutating,
 	"reset":                  stack.Mutating,
 	"destroy":                stack.Mutating,
-	"cache list":             stack.Mutating,
 	"cache prune":            stack.Mutating,
 	"self-update":            stack.Mutating,
 }

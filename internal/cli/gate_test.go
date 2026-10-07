@@ -47,7 +47,7 @@ func TestEveryCommandHasAClass(t *testing.T) {
 		t.Errorf("classified commands:\n got  %q\n want %q", classified, leaves)
 	}
 	// §10.6's read-only list.
-	want := []string{"config get", "config show", "doctor", "logs", "ps", "status", "support-bundle", "version"}
+	want := []string{"cache list", "config get", "config show", "dev list", "doctor", "logs", "ps", "shared-data list", "status", "support-bundle", "version"}
 	if !slices.Equal(readOnly, want) {
 		t.Errorf("read-only commands = %q, want %q", readOnly, want)
 	}
