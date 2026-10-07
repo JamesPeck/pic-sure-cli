@@ -154,7 +154,9 @@ func TestDashboardActionsUnderPTY(t *testing.T) {
 
 // TestDashboardOnARealStackUnderPTY drives the dashboard on a running stack
 // (PICSURE_TUI_DASH_DIR) and writes the screens it saw to
-// PICSURE_TUI_DASH_CAPTURE. It restarts the stack's second service.
+// PICSURE_TUI_DASH_CAPTURE. It restarts the stack's second service, and runs
+// migrate and update. With PICSURE_TUI_DASH_DESTROY set to the stack's name,
+// it then destroys the stack.
 func TestDashboardOnARealStackUnderPTY(t *testing.T) {
 	dir := os.Getenv("PICSURE_TUI_DASH_DIR")
 	if dir == "" {
@@ -165,8 +167,11 @@ func TestDashboardOnARealStackUnderPTY(t *testing.T) {
 	var captured []string
 	capture := func(title string, timeout time.Duration, want ...string) {
 		t.Helper()
-		time.Sleep(500 * time.Millisecond) // let the frame settle
+		w.wait(timeout, want...)
+		// Redraw the whole screen once it settles: the emulator renders
+		// that more faithfully than the incremental updates.
 		w.repaint()
+		time.Sleep(time.Second)
 		captured = append(captured, "=== "+title+"\n"+w.wait(timeout, want...))
 	}
 	defer func() {
@@ -192,6 +197,30 @@ func TestDashboardOnARealStackUnderPTY(t *testing.T) {
 	s.send("R")
 	capture("reset confirmation", 10*time.Second, "Type the stack's name")
 	s.send(keyEsc)
+	time.Sleep(500 * time.Millisecond) // esc and the next key together read as alt+key
+	s.send("m")
+	w.wait(10*time.Second, "Migrating the databases?")
+	s.send("y")
+	capture("migrate finished", 5*time.Minute, "enter to go back")
+	s.send(keyEnter)
+	w.wait(30*time.Second, "Health: h checks")
+	s.send("u")
+	w.wait(10*time.Second, "Updating PIC-SURE?")
+	s.send("y")
+	capture("update finished", 20*time.Minute, "enter to go back")
+	s.send(keyEnter)
+	w.wait(30*time.Second, "Health: h checks")
+	if os.Getenv("PICSURE_TUI_DASH_DESTROY") == "" {
+		s.send("q")
+		s.waitExit0()
+		return
+	}
+	s.send("X")
+	w.wait(10*time.Second, "Type the stack's name")
+	s.send(os.Getenv("PICSURE_TUI_DASH_DESTROY") + keyEnter)
+	capture("destroy finished", 5*time.Minute, "enter to go back")
+	s.send(keyEnter)
+	capture("landing after destroy", 30*time.Second, "Set up")
 	s.send("q")
 	s.waitExit0()
 }
