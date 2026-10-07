@@ -1,0 +1,136 @@
+name: Template drift
+
+# Informational (spec §14): diffs the bash All-in-One's compose and config
+# files between the commit the embedded templates were ported from
+# (internal/render/templates/README.md) and the AIO branch head, and keeps
+# one issue open while they differ. It never fails: a fetch or diff error is
+# reported in the run summary and the issue instead.
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: AIO repository
+        default: hms-dbmi/pic-sure-all-in-one
+      branch:
+        description: AIO branch
+        default: aio-compose
+      commit:
+        description: AIO commit the templates match (empty reads the templates README)
+        default: ""
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+env:
+  # Scheduled runs have no inputs, so the defaults are repeated here.
+  AIO_REPO: ${{ inputs.repo || 'hms-dbmi/pic-sure-all-in-one' }}
+  AIO_BRANCH: ${{ inputs.branch || 'aio-compose' }}
+  AIO_COMMIT: ${{ inputs.commit }}
+  ISSUE_TITLE: "Template drift: AIO compose or config changed upstream"
+
+jobs:
+  drift:
+    name: Diff templates against AIO
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      # status: clean, drift or error. report.md is the full report (or the
+      # error), issue.md the same within GitHub's issue body limit.
+      - name: Fetch and diff
+        id: diff
+        run: |
+          fail() {
+            { echo "Couldn't compare the templates with \`$AIO_REPO@$AIO_BRANCH\`: $1"; echo; echo '```'; cat "$2"; echo '```'; } > report.md
+            cp report.md issue.md
+            echo "status=error" >> "$GITHUB_OUTPUT"
+            echo "::warning::template drift check failed: $1"
+            exit 0
+          }
+          url="https://github.com/$AIO_REPO.git"
+          git init -q "$RUNNER_TEMP/aio"
+          git -C "$RUNNER_TEMP/aio" fetch -q --no-tags "$url" "+refs/heads/$AIO_BRANCH:refs/remotes/aio/head" 2> err.txt ||
+            fail "the branch couldn't be fetched." err.txt
+          # A full commit ID that isn't on the branch may still be fetchable.
+          if [[ "$AIO_COMMIT" =~ ^[0-9a-f]{40}$ ]] && ! git -C "$RUNNER_TEMP/aio" cat-file -e "$AIO_COMMIT^{commit}" 2> /dev/null; then
+            git -C "$RUNNER_TEMP/aio" fetch -q --no-tags "$url" "$AIO_COMMIT" 2> /dev/null || true
+          fi
+          go build -o "$RUNNER_TEMP/templatedrift" ./tools/templatedrift 2> err.txt ||
+            fail "the drift tool didn't build." err.txt
+          args=(-aio "$RUNNER_TEMP/aio" -to refs/remotes/aio/head -name "$AIO_REPO@$AIO_BRANCH")
+          if [ -n "$AIO_COMMIT" ]; then args+=(-from "$AIO_COMMIT"); fi
+          code=0
+          "$RUNNER_TEMP/templatedrift" "${args[@]}" > report.md 2> err.txt || code=$?
+          case "$code" in
+            0) echo "status=clean" >> "$GITHUB_OUTPUT" ;;
+            1)
+              "$RUNNER_TEMP/templatedrift" "${args[@]}" -max-bytes 60000 > issue.md 2> /dev/null || true
+              echo "status=drift" >> "$GITHUB_OUTPUT"
+              echo "::warning::AIO compose or config files changed since the templates were ported; see the run summary"
+              ;;
+            *) fail "the recorded commit or the branch head isn't available." err.txt ;;
+          esac
+
+      - name: Summary
+        if: always()
+        env:
+          STATUS: ${{ steps.diff.outputs.status || 'error' }}
+        run: |
+          {
+            echo "## Template drift: $STATUS"
+            echo
+            cat report.md 2> /dev/null || echo "The diff step didn't produce a report."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # One issue, found by its title: created or updated while there's
+      # drift or an error, closed once the recorded commit matches again.
+      - name: Open, update or close the issue
+        if: always() && steps.diff.outputs.status != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STATUS: ${{ steps.diff.outputs.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          number="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$ISSUE_TITLE\"" \
+            --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')" || {
+            echo "::warning::couldn't search the issues"
+            exit 0
+          }
+          if [ "$STATUS" = clean ]; then
+            if [ -n "$number" ]; then
+              gh issue close "$number" --repo "$GITHUB_REPOSITORY" \
+                --comment "The templates match \`$AIO_REPO@$AIO_BRANCH\` again ($RUN_URL)." ||
+                echo "::warning::couldn't close issue #$number"
+            fi
+            exit 0
+          fi
+          {
+            cat issue.md
+            echo
+            echo "---"
+            echo "From $RUN_URL. To clear it, port the changes and bump the AIO commit as \`internal/render/templates/README.md\` describes."
+          } > body.md
+          if [ -n "$number" ]; then
+            gh issue edit "$number" --repo "$GITHUB_REPOSITORY" --body-file body.md ||
+              echo "::warning::couldn't update issue #$number"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$ISSUE_TITLE" --body-file body.md ||
+              echo "::warning::couldn't open the issue"
+          fi

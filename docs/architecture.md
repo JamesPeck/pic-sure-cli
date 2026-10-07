@@ -1759,6 +1759,17 @@ and a test fails when it's stale. `TestFixtureLoadsInHPDS` runs the real
 loaders over it when `PICSURE_HPDS_ETL_IMAGE` names a pic-sure-hpds-etl
 image.
 
+## tools/templatedrift
+
+The drift check behind `.github/workflows/template-drift.yml` (ticket 066,
+spec §14). It reads the AIO commit and the template → AIO source table from
+`internal/render/templates/README.md` (so that table's format is its input),
+diffs an AIO git checkout between that commit and `-to`, and prints a
+Markdown report: exit 0 for no drift, 1 for drift, 2 for an error. It only
+reads the AIO repository. The workflow fetches the AIO branch, runs it, and
+writes the run summary and the one tracking issue; the repository, branch
+and commit are dispatch inputs.
+
 ## v1 leftovers
 
 These packages exist only until the TUI tickets replace what uses them:

@@ -7,9 +7,21 @@ fixes the bash's behaviour (spec §6.4, §13).
 
 AIO commit: `f7ff8b8`
 
-The drift job (ticket 066) diffs each AIO source below between this commit
-and the branch head. After porting an upstream change, update the template,
-the deviations below if they changed, and this commit.
+The drift job (`.github/workflows/template-drift.yml`, ticket 066) runs
+weekly. It diffs each AIO source below, plus any other AIO compose file,
+`config/` file or `.env.example`, between this commit and the head of
+`aio-compose`, and keeps one "Template drift" issue open while they differ.
+It never fails the build; when the branch or this commit can't be fetched,
+the run summary and the issue say so.
+
+To catch up with upstream:
+
+1. See what changed: `go run ./tools/templatedrift -aio <AIO checkout> -to
+   aio-compose` (exit 1 means drift), or read the issue.
+2. Port what applies to the templates, and update the table and the
+   deviations below if they changed.
+3. Set the commit above to the head you compared with (`git -C <AIO
+   checkout> rev-parse --short aio-compose`). The next run closes the issue.
 
 ## Layout and format
 
