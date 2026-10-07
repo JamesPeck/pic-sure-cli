@@ -45,9 +45,14 @@ format. --file takes a CSV, or a gzip, tar, tar.gz or zip holding one; an
 archive with several CSVs needs --entry. HPDS is stopped for the load and
 started again once the loader has finished.
 
-The previous load's files are removed before the loader runs, so if it
-fails HPDS stays stopped with no phenotype data: fix the problem and run the
-load again.
+--input-dir instead takes a directory of such CSVs (and the loader's
+optional config.json), which the sequential loader reads into a temporary
+volume while HPDS keeps running. HPDS is then stopped, and the loader's
+output replaces its phenotype data.
+
+With --file, the previous load's files are removed before the loader runs,
+so if it fails HPDS stays stopped with no phenotype data: fix the problem and
+run the load again. With --input-dir, a failed loader leaves HPDS as it was.
 
 Then the dictionary is rebuilt. --dictionary auto (the default) builds it
 from the loaded data. --dictionary custom loads --datasets and --concepts
@@ -63,8 +68,8 @@ load.`,
 	f := c.Flags()
 	f.String("file", "", "phenotype CSV, or a tar.gz, gzip or zip `FILE` holding one")
 	f.String("entry", "", "the CSV `ENTRY` to load from an archive with several")
-	f.String("input-dir", "", "`DIR` of phenotype files for the sequential loader (ticket 043)")
-	f.Int("heap", 0, "JVM heap in `MB` of the loader and of the auto dictionary's CreateColumnmetaCSV (default 4096 for --file)")
+	f.String("input-dir", "", "`DIR` of phenotype CSVs for the sequential loader")
+	f.Int("heap", 0, "JVM heap in `MB` of the loader and of the auto dictionary's CreateColumnmetaCSV (default 4096 for --file, 8000 for --input-dir)")
 	f.String("dictionary", ops.DictionaryAuto, "dictionary `SOURCE`: auto (built from the loaded data) or custom")
 	f.String("datasets", "", "custom dictionary: the datasets CSV `FILE`")
 	f.String("concepts", "", "custom dictionary: a zip `FILE` of concepts_*.csv")

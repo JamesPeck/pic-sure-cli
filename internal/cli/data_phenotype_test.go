@@ -31,6 +31,8 @@ func TestPhenotypeRerunHint(t *testing.T) {
 		{"hpds custom", custom, exitcode.Precondition("boom"),
 			"boom; to retry the load, run: " + pic + "data load-phenotype --file /data/p.csv --entry 'x'\\''s.csv' --dictionary custom " +
 				"--datasets /d/datasets.csv --concepts /d/c.zip --facets-categories /d/cat.csv --facets /d/f.csv --facet-concepts /d/fc.csv"},
+		{"input dir", phenotypeArgs{inputDir: "/data/in dir", dictionary: ops.DictionaryAuto}, errors.New("boom"),
+			"boom; to retry the load, run: " + pic + "data load-phenotype --input-dir '/data/in dir'"},
 		{"usage", auto, exitcode.Usage("boom"), "boom"},
 		{"hydrate", auto, dictErr(ops.StepColumnMeta),
 			"dictionary step columnmeta failed: boom. HPDS has the new data (phenotype:abc); to finish the load, run: " +

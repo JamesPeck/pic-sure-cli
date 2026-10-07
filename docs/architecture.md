@@ -341,8 +341,10 @@ it.
   operation in state.json.
 - `data_phenotype.go` (042, 045): `data load-phenotype --file F [--entry E]
   [--heap MB] [--dictionary auto|custom --datasets F --concepts Z
-  [--facets-categories F --facets F --facet-concepts F]] [--skip-weights]`
-  (043 adds `--input-dir`). `phenotypeFlags` checks the flags first, as
+  [--facets-categories F --facets F --facet-concepts F]] [--skip-weights]`,
+  or `--input-dir D` instead of `--file` (043; `--entry` with it is exit 2,
+  and `ops.CheckPhenotypeDir` checks the directory before the stack is
+  opened). `phenotypeFlags` checks the flags first, as
   AIO's `etl.sh load_phenotype` does (all exit 2): `--heap` positive,
   `--dictionary` auto or custom, custom needs `--datasets` and `--concepts`,
   auto takes none of the custom flags, the facet trio is all or none, and
@@ -1256,8 +1258,8 @@ warns, leaving the start to `up`. `CheckDevOn` makes `on` of httpd-hmr exit
 
 **Phenotype loader (042, `loader.go`).** §9.6's one loader, for `data
 demo` (046) and `data load-phenotype`. `LoadPhenotype(ctx, d, st, cfg,
-state, PhenotypeLoadOptions{CSV, Dataset, HeapMB, LoaderArgs,
-MkdirTemp})` returns the provenance it wrote. The caller holds the stack lock and
+state, PhenotypeLoadOptions{CSV | InputDir, Dataset, HeapMB, LoaderArgs,
+MkdirTemp, LockUse})` returns the provenance it wrote. The caller holds the stack lock and
 sets `d.Compose`. `RefuseSharedHPDS(cfg)` is its shared-mode refusal (a
 plain error, exit 1), for a command to call before any slow work. The
 steps depend on each other, so the command refuses `--skip-step`:
@@ -1290,10 +1292,39 @@ steps depend on each other, so the command refuses `--skip-step`:
 A failure after `hpds-stop` leaves hpds stopped, and the error says how to
 recover: run the load again (or `up` to start HPDS without data), or, when
 only the start failed, check the logs and run `up`. A load holds no cache
-lock: a plain CSV isn't in the cache, and an extracted or copied one is in
-a fresh `tmp/` dir that prune keeps while it is recent or mounted. A caller
-that reuses an older cache file (046's downloads) must hold `c.LockUse`
-until the loader runs.
+lock for a plain CSV, which isn't in the cache, or an extracted one, which
+is in a fresh `tmp/` dir that prune keeps while it is recent or mounted. A
+copy made because the daemon can't see the input is held under `LockUse`
+(the cache's shared use lock) until it is removed. A caller that reuses an
+older cache file (046's downloads) must hold `c.LockUse` until the loader
+runs.
+
+**Input directory (043, `loader_dir.go`).** With `InputDir` (`data
+load-phenotype --input-dir`), AIO's `etl.sh load_multiple`: the sequential
+loader runs before hpds stops, so a failed load leaves HPDS as it was.
+
+- `hpds-input`: as above, for the directory's inputs (`dirInputs`): its
+  top-level `*.csv` files and `config.json`, following symlinks. No CSV, or
+  an `*.sql`/`sql.properties` (D26), is exit 2; other entries get a warning
+  that the loader ignores them. The provenance is `phenotype:<sha256 of the
+  manifest>`, one `<sha256>  <name>` line per input in name order. The
+  probe mounts the directory and checks each input's size; the fallback
+  copies the inputs into `<MkdirTemp>/input` (0755, so a container can list
+  it).
+- `hpds-load`: a new volume `<stack>-hpds-load-<hex>`, stack-labelled, gets
+  a copy of the key; then `LOADER_NAME=SequentialLoader` (default heap
+  `DefaultDirLoaderHeapMB`, 8000, as AIO) with the volume at
+  `/opt/local/hpds` and the directory read-only at
+  `/opt/local/hpds_input`. A helper then checks the store and
+  `columnMeta.javabin` exist (the loader can exit 0 without them).
+- `hpds-stop`, `hpds-wipe`, `hpds-key` as above.
+- `hpds-copy`: copies `dirLoaderOutput` (the store and columnMeta files,
+  never the inputs or the key) from the volume into `hpds-data`, then
+  writes `.picsure-dataset`.
+- `hpds-start` as above.
+
+The volume is removed when the load ends, on success, failure or
+interrupt (a warning names it if it can't be).
 
 **Phenotype load (045, `load_phenotype.go`).** `DataLoadPhenotype(ctx, d,
 st, cfg, sec, state, PhenotypeOptions{Load, Dictionary, Datasets,

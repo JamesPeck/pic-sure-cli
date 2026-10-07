@@ -78,6 +78,7 @@ type loaderFixture struct {
 	probeFails   bool   // docker can't run the probe at all
 	probed       []string
 	loaderExit   int
+	onLoader     func() error // runs in the loader's docker run, if set
 	health       string
 	marker       []byte
 }
@@ -97,10 +98,13 @@ func newLoaderFixture(t *testing.T) *loaderFixture {
 		return docker.Result{Stdout: []byte(`[{"Id":"sha256:1"}]`)}, nil
 	})
 	f.On(fakerunner.Glob("docker run --rm --name demo-hpds-input-* --network none * alpine:* sh -c *")).Do(func(_ context.Context, c fakerunner.Call) (docker.Result, error) {
-		var src string
+		var src, dir string
 		for _, a := range c.Argv {
 			if s, ok := strings.CutSuffix(a, ":/input.csv:ro"); ok {
 				src = s
+			}
+			if s, ok := strings.CutSuffix(a, ":/opt/local/hpds_input:ro"); ok {
+				src, dir = s, s
 			}
 		}
 		fx.probed = append(fx.probed, src)
@@ -113,12 +117,29 @@ func newLoaderFixture(t *testing.T) *loaderFixture {
 			}
 			return docker.Result{ExitCode: 1}, nil
 		}
-		return docker.Result{Stdout: []byte(strconv.Itoa(len(loaderCSV)) + "\n")}, nil
+		if dir == "" {
+			return docker.Result{Stdout: []byte(strconv.Itoa(len(loaderCSV)) + "\n")}, nil
+		}
+		// An input directory's probe lists each file's size.
+		var out strings.Builder
+		for _, f := range c.Argv[slices.Index(c.Argv, "-c")+3:] {
+			size := int64(-1)
+			if fi, err := os.Stat(filepath.Join(dir, filepath.Base(f))); err == nil {
+				size = fi.Size()
+			}
+			_, _ = fmt.Fprintln(&out, size)
+		}
+		return docker.Result{Stdout: []byte(out.String())}, nil
 	})
 	f.On(fakerunner.Glob("docker rm -v -f demo-hpds-input-*"))
 	f.On(fakerunner.Glob("docker compose * stop hpds"))
 	f.On(fakerunner.Glob("docker run --rm --name demo-hpds-wipe-* --network none * -v demo_hpds-data:/data alpine:* sh -c *"))
 	f.On(fakerunner.Glob("docker run --rm --name demo-hpds-etl-* --user 0:0 --network none *")).Do(func(context.Context, fakerunner.Call) (docker.Result, error) {
+		if fx.onLoader != nil {
+			if err := fx.onLoader(); err != nil {
+				return docker.Result{}, err
+			}
+		}
 		return docker.Result{Stdout: []byte("loading\n"), ExitCode: fx.loaderExit}, nil
 	})
 	f.On(fakerunner.Glob("docker run -i --rm --name demo-hpds-marker-* --network none * -v demo_hpds-data:/data alpine:* sh -c *")).Do(func(_ context.Context, c fakerunner.Call) (docker.Result, error) {

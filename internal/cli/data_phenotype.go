@@ -24,7 +24,7 @@ import (
 // phenotypeReport is load-phenotype's --json data.
 type phenotypeReport struct {
 	// Dataset is the provenance marker the load wrote:
-	// phenotype:<sha256 of the CSV loaded>.
+	// phenotype:<sha256 of the CSV loaded, or of --input-dir's manifest>.
 	Dataset string `json:"dataset"`
 	// Dictionary is the dictionary source: auto or custom.
 	Dictionary string `json:"dictionary"`
@@ -32,10 +32,11 @@ type phenotypeReport struct {
 	Weights bool `json:"weights"`
 }
 
-// phenotypeArgs are load-phenotype's --file flags, checked; the paths are
-// absolute.
+// phenotypeArgs are load-phenotype's flags, checked; the paths are
+// absolute. One of file and inputDir is set.
 type phenotypeArgs struct {
 	file, entry        string
+	inputDir           string
 	heap               int
 	dictionary         string
 	datasets, concepts string
@@ -56,7 +57,18 @@ func phenotypeFlags(f *pflag.FlagSet) (phenotypeArgs, error) {
 		return p, exitcode.Usage("--heap must be a positive number of MB, not %d", p.heap)
 	}
 	var err error
-	if p.file, err = filepath.Abs(file); err != nil {
+	if f.Changed("input-dir") {
+		if f.Changed("entry") {
+			return p, exitcode.Usage("--entry is for --file")
+		}
+		dir, _ := f.GetString("input-dir")
+		if p.inputDir, err = filepath.Abs(dir); err != nil {
+			return p, exitcode.Usage("--input-dir: %w", err)
+		}
+		if err := ops.CheckPhenotypeDir(p.inputDir); err != nil {
+			return p, err
+		}
+	} else if p.file, err = filepath.Abs(file); err != nil {
 		return p, exitcode.Usage("--file: %w", err)
 	}
 	if p.dictionary != ops.DictionaryAuto && p.dictionary != ops.DictionaryCustom {
@@ -104,11 +116,7 @@ func phenotypeFlags(f *pflag.FlagSet) (phenotypeArgs, error) {
 }
 
 func (a *App) loadPhenotype(cmd *cobra.Command, args []string) error {
-	f := cmd.Flags()
-	if f.Changed("input-dir") {
-		return notImplemented("043")(cmd, args)
-	}
-	p, err := phenotypeFlags(f)
+	p, err := phenotypeFlags(cmd.Flags())
 	if err != nil {
 		return err
 	}
@@ -156,17 +164,22 @@ func (a *App) loadPhenotype(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	in, cleanup, err := phenoinput.Resolve(ctx, p.file, phenoinput.Options{Entry: p.entry, MkdirTemp: c.TempDir})
-	var entryErr *phenoinput.EntryError
-	switch {
-	case errors.As(err, &entryErr), errors.Is(err, fs.ErrNotExist):
-		return exitcode.Usage("%w", err)
-	case err != nil:
-		return err
-	}
-	defer func() { _ = cleanup() }()
-	for _, w := range in.Warnings {
-		d.Sink.Emit(events.Warning{Text: w})
+	load := ops.PhenotypeLoadOptions{InputDir: p.inputDir, HeapMB: p.heap, MkdirTemp: c.TempDir,
+		LockUse: c.WithEvents(d.Sink, ops.LoaderInputStepID).LockUse}
+	if p.file != "" {
+		in, cleanup, err := phenoinput.Resolve(ctx, p.file, phenoinput.Options{Entry: p.entry, MkdirTemp: c.TempDir})
+		var entryErr *phenoinput.EntryError
+		switch {
+		case errors.As(err, &entryErr), errors.Is(err, fs.ErrNotExist):
+			return exitcode.Usage("%w", err)
+		case err != nil:
+			return err
+		}
+		defer func() { _ = cleanup() }()
+		for _, w := range in.Warnings {
+			d.Sink.Emit(events.Warning{Text: w})
+		}
+		load.CSV = in.CSV
 	}
 
 	state.StartOperation("data load-phenotype", d.Clock.Now())
@@ -174,7 +187,7 @@ func (a *App) loadPhenotype(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	dataset, err := ops.DataLoadPhenotype(ctx, d, st, cfg, sec, state, ops.PhenotypeOptions{
-		Load:        ops.PhenotypeLoadOptions{CSV: in.CSV, HeapMB: p.heap, MkdirTemp: c.TempDir},
+		Load:        load,
 		Dictionary:  p.dictionary,
 		Datasets:    p.datasets,
 		Concepts:    p.concepts,
@@ -197,7 +210,7 @@ func (a *App) loadPhenotype(cmd *cobra.Command, args []string) error {
 	}
 	return a.finish(phenotypeReport{Dataset: dataset, Dictionary: p.dictionary, Weights: !p.skipWeights}, func(w io.Writer) error {
 		_, err := fmt.Fprintf(w, "Loaded %s into HPDS (%s) and the %s dictionary, with %s; HPDS and dictionary-api are healthy.\n",
-			p.file, dataset, p.dictionary, weights)
+			p.input(), dataset, p.dictionary, weights)
 		return err
 	})
 }
@@ -252,9 +265,20 @@ func (p phenotypeArgs) rerunHint(dir, dataset string, err error) error {
 	return fmt.Errorf("%w. HPDS has the new data (%s); to finish the load, run: %s", err, dataset, strings.Join(cmds, " && "))
 }
 
+// input is the file or directory loaded.
+func (p phenotypeArgs) input() string {
+	if p.inputDir != "" {
+		return p.inputDir
+	}
+	return p.file
+}
+
 // command is the load-phenotype command line for p.
 func (p phenotypeArgs) command() string {
 	parts := []string{"data", "load-phenotype", "--file", shellQuote(p.file)}
+	if p.inputDir != "" {
+		parts = []string{"data", "load-phenotype", "--input-dir", shellQuote(p.inputDir)}
+	}
 	if p.entry != "" {
 		parts = append(parts, "--entry", shellQuote(p.entry))
 	}

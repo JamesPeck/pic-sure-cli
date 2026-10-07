@@ -2,9 +2,18 @@
 # covered by the ops tests and the real runs.
 env XDG_CACHE_HOME=$WORK/cache
 
-# --input-dir is ticket 043.
-exitcode 1 pic-sure data load-phenotype --input-dir phenotypes
-stderr '^pic-sure: not implemented \(ticket 043\)$'
+# --input-dir must be a directory holding a CSV and no SQL input.
+exitcode 2 pic-sure data load-phenotype --input-dir missing
+stderr '--input-dir: .*missing'
+exitcode 2 pic-sure data load-phenotype --input-dir pheno.csv
+stderr '--input-dir: .*pheno.csv isn''t a directory'
+mkdir empty
+exitcode 2 pic-sure data load-phenotype --input-dir empty
+stderr '--input-dir: .*empty holds no .csv file'
+exitcode 2 pic-sure data load-phenotype --input-dir sqldir
+stderr 'load.sql is an SQL input, which pic-sure doesn''t load'
+exitcode 2 pic-sure data load-phenotype --input-dir indir --entry a.csv
+stderr '--entry is for --file'
 
 # Exactly one of --file and --input-dir is required.
 exitcode 2 pic-sure data load-phenotype
@@ -59,6 +68,11 @@ stderr 'isn''t initialised; run `pic-sure init .*partial` to finish it'
 exitcode 3 pic-sure --stack stack data load-phenotype --file pheno.csv
 stderr 'run `pic-sure up`'
 
+# An --input-dir is checked before the stack is looked at, and again by the
+# load.
+exitcode 3 pic-sure data load-phenotype --input-dir indir
+stderr 'no pic-sure stack found'
+
 # A missing file is exit 2.
 mkdir stack/.pic-sure/render
 cp compose.yaml stack/.pic-sure/render/compose.yaml
@@ -69,6 +83,13 @@ stderr 'missing.csv'
 -- pheno.csv --
 PATIENT_NUM,CONCEPT_PATH,NUMERIC_VALUE,TEXT_VALUE
 1,\demo\age\,42,
+-- indir/a.csv --
+PATIENT_NUM,CONCEPT_PATH,NUMERIC_VALUE,TEXT_VALUE
+1,\demo\age\,42,
+-- sqldir/a.csv --
+PATIENT_NUM,CONCEPT_PATH,NUMERIC_VALUE,TEXT_VALUE
+-- sqldir/load.sql --
+select 1
 -- datasets.csv --
 ref,full_name,abbreviation,description
 -- concepts.zip --

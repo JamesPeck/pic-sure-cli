@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/JamesPeck/pic-sure-cli/internal/cache"
 	"github.com/JamesPeck/pic-sure-cli/internal/catalog"
 	"github.com/JamesPeck/pic-sure-cli/internal/docker"
 	"github.com/JamesPeck/pic-sure-cli/internal/events"
@@ -29,11 +30,16 @@ const (
 	LoaderStopStepID  = "hpds-stop"
 	LoaderWipeStepID  = "hpds-wipe"
 	LoaderRunStepID   = "hpds-load"
+	LoaderCopyStepID  = "hpds-copy"
 	LoaderStartStepID = "hpds-start"
 )
 
 // DefaultLoaderHeapMB is the loader's JVM heap when --heap isn't given.
 const DefaultLoaderHeapMB = 4096
+
+// DefaultDirLoaderHeapMB is the sequential loader's heap for an input
+// directory when --heap isn't given, as in AIO's etl.sh load_multiple.
+const DefaultDirLoaderHeapMB = 8000
 
 // HPDSStartTimeout bounds the wait for hpds to turn healthy after a load.
 // HPDS reads the whole phenotype store at startup, so it is generous.
@@ -72,10 +78,15 @@ var loaderStaleFiles = []string{
 type PhenotypeLoadOptions struct {
 	// CSV is the absolute host path of the allConcepts CSV to load.
 	CSV string
+	// InputDir, instead of CSV, is the absolute host path of a directory of
+	// phenotype CSVs for the sequential loader.
+	InputDir string
 	// Dataset is the provenance marker's content: demo:<name> for a demo
-	// load. Empty means phenotype:<sha256 of CSV>.
+	// load. Empty means phenotype:<sha256 of CSV>, or for InputDir the
+	// sha256 of its manifest (see dirManifest).
 	Dataset string
-	// HeapMB is the loader's heap; zero means DefaultLoaderHeapMB.
+	// HeapMB is the loader's heap; zero means DefaultLoaderHeapMB, or
+	// DefaultDirLoaderHeapMB for InputDir.
 	HeapMB int
 	// LoaderArgs is the loader's LOADER_ARGS: DemoLoaderArgs for a demo
 	// load, empty for a custom one.
@@ -84,6 +95,9 @@ type PhenotypeLoadOptions struct {
 	// CSV it can't (a file outside $HOME under Colima or Lima): the cache's
 	// TempDir.
 	MkdirTemp func(pattern string) (string, error)
+	// LockUse, if set, takes the cache's use lock, held while a copy made
+	// in a MkdirTemp directory exists, so `cache prune` leaves it alone.
+	LockUse func(context.Context) (*cache.Lock, error)
 }
 
 // RefuseSharedHPDS returns the error a loader that writes HPDS data gives on
@@ -103,6 +117,10 @@ func RefuseSharedHPDS(cfg *stack.Config) error {
 // loader, writes the provenance marker, then starts hpds and waits until it
 // is healthy. If a step after the stop fails, hpds stays stopped and the
 // error says how to recover. It returns the provenance marker's content.
+//
+// With InputDir, the sequential loader runs before hpds stops, into a
+// temporary volume that is removed afterwards, and its output replaces the
+// previous load's files once hpds is stopped (see loadDir).
 func LoadPhenotype(ctx context.Context, d *Deps, st *stack.Stack, cfg *stack.Config, state *stack.State, opts PhenotypeLoadOptions) (string, error) {
 	if err := RefuseSharedHPDS(cfg); err != nil {
 		return "", err
@@ -110,18 +128,38 @@ func LoadPhenotype(ctx context.Context, d *Deps, st *stack.Stack, cfg *stack.Con
 	if opts.HeapMB < 0 {
 		return "", exitcode.Usage("--heap must be a positive number of MB, not %d", opts.HeapMB)
 	}
+	if (opts.CSV == "") == (opts.InputDir == "") {
+		return "", exitcode.Usage("give either a phenotype CSV or an input directory")
+	}
 	if opts.HeapMB == 0 {
 		opts.HeapMB = DefaultLoaderHeapMB
+		if opts.InputDir != "" {
+			opts.HeapMB = DefaultDirLoaderHeapMB
+		}
 	}
-	l := &loader{d: d, st: st, cfg: cfg, state: state, opts: opts, csv: opts.CSV}
+	l := &loader{d: d, st: st, cfg: cfg, state: state, opts: opts, csv: opts.CSV, dir: opts.InputDir}
 	defer l.removeCopy()
-	plan := []steps.Step{
-		{ID: LoaderInputStepID, Title: "Check the phenotype input", Apply: l.input},
-		{ID: LoaderStopStepID, Title: "Stop HPDS", Apply: l.stop},
-		{ID: LoaderWipeStepID, Title: "Remove the previous HPDS data", Apply: l.wipe},
-		HPDSKeyStep(d, st, cfg),
-		{ID: LoaderRunStepID, Title: "Load the phenotype data", Apply: l.load},
-		{ID: LoaderStartStepID, Title: "Start HPDS", Apply: l.start},
+	var plan []steps.Step
+	if opts.InputDir == "" {
+		plan = []steps.Step{
+			{ID: LoaderInputStepID, Title: "Check the phenotype input", Apply: l.input},
+			{ID: LoaderStopStepID, Title: "Stop HPDS", Apply: l.stop},
+			{ID: LoaderWipeStepID, Title: "Remove the previous HPDS data", Apply: l.wipe},
+			HPDSKeyStep(d, st, cfg),
+			{ID: LoaderRunStepID, Title: "Load the phenotype data", Apply: l.load},
+			{ID: LoaderStartStepID, Title: "Start HPDS", Apply: l.start},
+		}
+	} else {
+		defer l.removeTempVolume(ctx)
+		plan = []steps.Step{
+			{ID: LoaderInputStepID, Title: "Check the phenotype input directory", Apply: l.inputDir},
+			{ID: LoaderRunStepID, Title: "Load the phenotype data into a temporary volume", Apply: l.loadDir},
+			{ID: LoaderStopStepID, Title: "Stop HPDS", Apply: l.stop},
+			{ID: LoaderWipeStepID, Title: "Remove the previous HPDS data", Apply: l.wipe},
+			HPDSKeyStep(d, st, cfg),
+			{ID: LoaderCopyStepID, Title: "Copy the loaded data into HPDS", Apply: l.copyLoaded},
+			{ID: LoaderStartStepID, Title: "Start HPDS", Apply: l.start},
+		}
 	}
 	err := steps.Run(ctx, d.Sink, plan, steps.Options{})
 	if err == nil {
@@ -137,14 +175,17 @@ func LoadPhenotype(ctx context.Context, d *Deps, st *stack.Stack, cfg *stack.Con
 	switch se.Step {
 	case LoaderInputStepID, LoaderStopStepID:
 		return "", failed
+	case LoaderRunStepID:
+		if opts.InputDir != "" {
+			return "", fmt.Errorf("%w. HPDS and its data are unchanged", failed)
+		}
 	case LoaderWipeStepID:
 		return "", fmt.Errorf("%w. HPDS is stopped: fix the problem and run the load again, or `pic-sure up` to start HPDS", failed)
 	case LoaderStartStepID:
 		return l.opts.Dataset, fmt.Errorf("%w. The data is loaded; see `pic-sure logs hpds`, then start HPDS with `pic-sure up`", failed)
-	default:
-		return "", fmt.Errorf("%w. HPDS is stopped and its phenotype data was removed: fix the problem and run the load again, "+
-			"or `pic-sure up` to start HPDS with no data", failed)
 	}
+	return "", fmt.Errorf("%w. HPDS is stopped and its phenotype data was removed: fix the problem and run the load again, "+
+		"or `pic-sure up` to start HPDS with no data", failed)
 }
 
 type loader struct {
@@ -154,10 +195,13 @@ type loader struct {
 	state *stack.State
 	opts  PhenotypeLoadOptions
 	// csv is what the loader mounts: opts.CSV, or a copy the daemon can
-	// see, in copyDir.
-	csv     string
-	copyDir string
-	image   string
+	// see, in copyDir. dir is the same for opts.InputDir.
+	csv, dir string
+	copyDir  string
+	useLock  *cache.Lock
+	image    string
+	// tempVolume is loadDir's volume, once created.
+	tempVolume string
 }
 
 func (l *loader) volume() string {
@@ -199,7 +243,7 @@ func (l *loader) input(ctx context.Context, sink events.Sink) error {
 		return exitcode.Precondition("the Docker daemon can't read %s; move it under your home directory", l.opts.CSV)
 	}
 	sink.Emit(events.Progress{ID: LoaderInputStepID, Text: "the Docker daemon can't read " + l.opts.CSV + "; copying it into the cache"})
-	if l.copyDir, err = l.opts.MkdirTemp("phenotype-"); err != nil {
+	if err := l.makeCopyDir(ctx, "phenotype-"); err != nil {
 		return err
 	}
 	l.csv = filepath.Join(l.copyDir, "allConcepts.csv")
@@ -268,9 +312,26 @@ func (l *loader) daemonSees(ctx context.Context, prefix string, mount docker.Mou
 	return true, nil
 }
 
+// makeCopyDir makes copyDir, holding the cache's use lock first.
+func (l *loader) makeCopyDir(ctx context.Context, pattern string) error {
+	if l.opts.LockUse != nil {
+		lock, err := l.opts.LockUse(ctx)
+		if err != nil {
+			return err
+		}
+		l.useLock = lock
+	}
+	var err error
+	l.copyDir, err = l.opts.MkdirTemp(pattern)
+	return err
+}
+
 func (l *loader) removeCopy() {
 	if l.copyDir != "" {
 		_ = os.RemoveAll(l.copyDir)
+	}
+	if l.useLock != nil {
+		_ = l.useLock.Unlock()
 	}
 }
 
@@ -296,6 +357,26 @@ func (l *loader) wipe(ctx context.Context, _ events.Sink) error {
 }
 
 func (l *loader) load(ctx context.Context, sink events.Sink) error {
+	if err := l.runETL(ctx, sink, loaderName, []docker.Mount{
+		{Source: l.volume(), Target: hpdsDir},
+		{Source: l.csv, Target: loaderCSVTarget, ReadOnly: true},
+	}); err != nil {
+		return err
+	}
+
+	// Docker leaves an empty file in the volume where it mounted the CSV;
+	// it isn't HPDS data. The marker comes last, so it always describes a
+	// complete load.
+	marker := strings.NewReader(l.opts.Dataset + "\n")
+	script := "rm -f /data/allConcepts.csv; cat > /data/" + datasetMarker
+	if err := l.helper(ctx, l.volume(), "hpds-marker", script, marker); err != nil {
+		return fmt.Errorf("writing %s in volume %s: %w", datasetMarker, l.volume(), err)
+	}
+	return nil
+}
+
+// runETL runs the hpds-etl image's loader with mounts.
+func (l *loader) runETL(ctx context.Context, sink events.Sink, loader string, mounts []docker.Mount) error {
 	name, err := docker.UniqueName(l.cfg.Name+"-hpds-etl", l.d.Rand)
 	if err != nil {
 		return err
@@ -310,13 +391,10 @@ func (l *loader) load(ctx context.Context, sink events.Sink) error {
 		Remove:  true,
 		Network: "none",
 		Labels:  l.st.Labels(l.cfg.Name),
-		Mounts: []docker.Mount{
-			{Source: l.volume(), Target: hpdsDir},
-			{Source: l.csv, Target: loaderCSVTarget, ReadOnly: true},
-		},
+		Mounts:  mounts,
 		Env: []string{
 			"HEAPSIZE=" + strconv.Itoa(l.opts.HeapMB),
-			"LOADER_NAME=" + loaderName,
+			"LOADER_NAME=" + loader,
 			"LOADER_ARGS=" + l.opts.LoaderArgs,
 		},
 		Stdout: stdout,
@@ -330,15 +408,6 @@ func (l *loader) load(ctx context.Context, sink events.Sink) error {
 	}
 	if code != 0 {
 		return fmt.Errorf("the HPDS loader exited %d; its output is above and in the run log", code)
-	}
-
-	// Docker leaves an empty file in the volume where it mounted the CSV;
-	// it isn't HPDS data. The marker comes last, so it always describes a
-	// complete load.
-	marker := strings.NewReader(l.opts.Dataset + "\n")
-	script := "rm -f /data/allConcepts.csv; cat > /data/" + datasetMarker
-	if err := l.helper(ctx, l.volume(), "hpds-marker", script, marker); err != nil {
-		return fmt.Errorf("writing %s in volume %s: %w", datasetMarker, l.volume(), err)
 	}
 	return nil
 }
