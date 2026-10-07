@@ -1608,6 +1608,21 @@ matches exits 97 with the reason on stderr.
 The fakes find their scenario through `HOME`, which the exec runner (003)
 passes through to subprocesses.
 
+## internal/testfixtures/genomic
+
+Ticket 048. Generates the synthetic genomic fixture checked into
+`testdata/genomic`: two single-contig VCFs (one BGZF, one plain),
+`vcfIndex.tsv`, a phenotype CSV for the same patients, and
+`expected.json`, the patients each documented genomic query returns.
+`Write(dir, indexDir)` writes it; `indexDir` prefixes the VCF names in the
+index, because the loaders open those paths inside their container. The
+`genomic-fixture -abs DIR` command writes a loadable copy.
+`testdata/genomic/README.md` records the input format HPDS expects.
+`go generate ./internal/testfixtures/genomic` refreshes the checked-in copy,
+and a test fails when it's stale. `TestFixtureLoadsInHPDS` runs the real
+loaders over it when `PICSURE_HPDS_ETL_IMAGE` names a pic-sure-hpds-etl
+image.
+
 ## v1 leftovers
 
 These packages exist only until the TUI tickets replace what uses them:

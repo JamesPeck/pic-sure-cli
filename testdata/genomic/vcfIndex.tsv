@@ -1,0 +1,3 @@
+filename	chromosome	annotated	gzip	sample_ids	patient_ids	sample_relationship	related_sample_ids
+chr21.vcf.gz	21	1	1	SYN_S01,SYN_S02,SYN_S03,SYN_S04,SYN_S05,SYN_S06,SYN_S07,SYN_S08	101,102,103,104,105,106,107,108
+chr22.vcf	22	1	0	SYN_S01,SYN_S02,SYN_S03,SYN_S04,SYN_S05,SYN_S06,SYN_S07,SYN_S08	101,102,103,104,105,106,107,108

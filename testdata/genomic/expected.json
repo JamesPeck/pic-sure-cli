@@ -1,0 +1,241 @@
+{
+  "genomicPatients": [
+    101,
+    102,
+    103,
+    104,
+    105,
+    106,
+    107,
+    108
+  ],
+  "phenotypePatients": [
+    101,
+    102,
+    103,
+    104,
+    105,
+    106,
+    107,
+    108,
+    109,
+    110
+  ],
+  "queries": [
+    {
+      "name": "gene-SYNTHA",
+      "genomicFilters": [
+        {
+          "key": "Gene_with_variant",
+          "values": [
+            "SYNTHA"
+          ]
+        }
+      ],
+      "patients": [
+        102,
+        103,
+        104
+      ]
+    },
+    {
+      "name": "gene-SYNTHB",
+      "genomicFilters": [
+        {
+          "key": "Gene_with_variant",
+          "values": [
+            "SYNTHB"
+          ]
+        }
+      ],
+      "patients": [
+        105,
+        106
+      ]
+    },
+    {
+      "name": "gene-SYNTHC",
+      "genomicFilters": [
+        {
+          "key": "Gene_with_variant",
+          "values": [
+            "SYNTHC"
+          ]
+        }
+      ],
+      "patients": [
+        103,
+        107,
+        108
+      ]
+    },
+    {
+      "name": "gene-SYNTHD",
+      "genomicFilters": [
+        {
+          "key": "Gene_with_variant",
+          "values": [
+            "SYNTHD"
+          ]
+        }
+      ],
+      "patients": [
+        108
+      ]
+    },
+    {
+      "name": "gene-SYNTHA-or-SYNTHD",
+      "genomicFilters": [
+        {
+          "key": "Gene_with_variant",
+          "values": [
+            "SYNTHA",
+            "SYNTHD"
+          ]
+        }
+      ],
+      "patients": [
+        102,
+        103,
+        104,
+        108
+      ]
+    },
+    {
+      "name": "gene-unknown",
+      "genomicFilters": [
+        {
+          "key": "Gene_with_variant",
+          "values": [
+            "NOSUCHGENE"
+          ]
+        }
+      ],
+      "patients": []
+    },
+    {
+      "name": "consequence-stop_gained",
+      "genomicFilters": [
+        {
+          "key": "Variant_consequence_calculated",
+          "values": [
+            "stop_gained"
+          ]
+        }
+      ],
+      "patients": [
+        104,
+        105,
+        107,
+        108
+      ]
+    },
+    {
+      "name": "frequency-Novel",
+      "genomicFilters": [
+        {
+          "key": "Variant_frequency_as_text",
+          "values": [
+            "Novel"
+          ]
+        }
+      ],
+      "patients": [
+        102,
+        104,
+        105,
+        107,
+        108
+      ]
+    },
+    {
+      "name": "gene-SYNTHA-and-stop_gained",
+      "genomicFilters": [
+        {
+          "key": "Gene_with_variant",
+          "values": [
+            "SYNTHA"
+          ]
+        },
+        {
+          "key": "Variant_consequence_calculated",
+          "values": [
+            "stop_gained"
+          ]
+        }
+      ],
+      "patients": [
+        104
+      ]
+    },
+    {
+      "name": "variant-chr21-33001877-het",
+      "genomicFilters": [
+        {
+          "key": "chr21,33001877,C,T",
+          "values": [
+            "0/1"
+          ]
+        }
+      ],
+      "patients": [
+        102,
+        103
+      ]
+    },
+    {
+      "name": "variant-chr21-33001877-hom",
+      "genomicFilters": [
+        {
+          "key": "chr21,33001877,C,T",
+          "values": [
+            "1/1"
+          ]
+        }
+      ],
+      "patients": [
+        104
+      ]
+    },
+    {
+      "name": "variant-chr21-33001877-any",
+      "genomicFilters": [
+        {
+          "key": "chr21,33001877,C,T",
+          "values": [
+            "0/1",
+            "1/1"
+          ]
+        }
+      ],
+      "patients": [
+        102,
+        103,
+        104
+      ]
+    },
+    {
+      "name": "gene-SYNTHC-female",
+      "genomicFilters": [
+        {
+          "key": "Gene_with_variant",
+          "values": [
+            "SYNTHC"
+          ]
+        }
+      ],
+      "phenotypeFilters": [
+        {
+          "conceptPath": "\\Genomic Fixture\\Sex\\",
+          "values": [
+            "Female"
+          ]
+        }
+      ],
+      "patients": [
+        103,
+        107
+      ]
+    }
+  ]
+}

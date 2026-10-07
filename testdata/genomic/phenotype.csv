@@ -1,0 +1,21 @@
+PATIENT_NUM,CONCEPT_PATH,NVAL_NUM,TVAL_CHAR
+101,\Genomic Fixture\Age\,34,
+102,\Genomic Fixture\Age\,51,
+103,\Genomic Fixture\Age\,47,
+104,\Genomic Fixture\Age\,29,
+105,\Genomic Fixture\Age\,62,
+106,\Genomic Fixture\Age\,38,
+107,\Genomic Fixture\Age\,55,
+108,\Genomic Fixture\Age\,44,
+109,\Genomic Fixture\Age\,40,
+110,\Genomic Fixture\Age\,33,
+101,\Genomic Fixture\Sex\,,Female
+102,\Genomic Fixture\Sex\,,Male
+103,\Genomic Fixture\Sex\,,Female
+104,\Genomic Fixture\Sex\,,Male
+105,\Genomic Fixture\Sex\,,Female
+106,\Genomic Fixture\Sex\,,Male
+107,\Genomic Fixture\Sex\,,Female
+108,\Genomic Fixture\Sex\,,Male
+109,\Genomic Fixture\Sex\,,Female
+110,\Genomic Fixture\Sex\,,Male

@@ -1,0 +1,24 @@
+##fileformat=VCFv4.2
+##source=pic-sure-cli synthetic genomic fixture; not real data
+##contig=<ID=chr22,length=50818468>
+##FILTER=<ID=PASS,Description="All filters passed">
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+##INFO=<ID=Gene_with_variant,Number=1,Type=String,Description="Official symbol of the gene the variant affects (synthetic)">
+##INFO=<ID=Variant_severity,Number=1,Type=String,Description="Severity of the calculated consequence: HIGH, MODERATE or LOW">
+##INFO=<ID=Variant_consequence_calculated,Number=1,Type=String,Description="Sequence Ontology term for the calculated consequence">
+##INFO=<ID=Variant_class,Number=1,Type=String,Description="Variant type: SNV, deletion or insertion">
+##INFO=<ID=Variant_frequency_in_gnomAD,Number=1,Type=Float,Description="Allele frequency in gnomAD (synthetic)">
+##INFO=<ID=Variant_frequency_as_text,Number=1,Type=String,Description="Frequency category: Novel, Rare (below 1%) or Common">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	SYN_S01	SYN_S02	SYN_S03	SYN_S04	SYN_S05	SYN_S06	SYN_S07	SYN_S08
+chr22	41010210	.	C	T	.	PASS	Gene_with_variant=SYNTHC;Variant_severity=MODERATE;Variant_consequence_calculated=missense_variant;Variant_class=SNV;Variant_frequency_in_gnomAD=0.0009;Variant_frequency_as_text=Rare	GT	0/0	0/0	0/1	0/0	0/0	0/0	0/0	0/0
+chr22	41011045	.	A	G	.	PASS	Gene_with_variant=SYNTHC;Variant_severity=LOW;Variant_consequence_calculated=synonymous_variant;Variant_class=SNV;Variant_frequency_in_gnomAD=0.0277;Variant_frequency_as_text=Common	GT	0/0	0/0	0/1	0/0	0/0	0/0	1/1	0/1
+chr22	41011890	.	G	A	.	PASS	Gene_with_variant=SYNTHC;Variant_severity=HIGH;Variant_consequence_calculated=stop_gained;Variant_class=SNV;Variant_frequency_as_text=Novel	GT	./.	0/0	0/0	0/0	0/0	0/0	1/1	0/0
+chr22	41012433	.	T	C	.	PASS	Gene_with_variant=SYNTHC;Variant_severity=MODERATE;Variant_consequence_calculated=missense_variant;Variant_class=SNV;Variant_frequency_in_gnomAD=0.0016;Variant_frequency_as_text=Rare	GT	0/0	0/0	0/0	0/0	0/0	0/0	0/0	0/1
+chr22	41013720	.	AG	A	.	PASS	Gene_with_variant=SYNTHC;Variant_severity=HIGH;Variant_consequence_calculated=frameshift_variant;Variant_class=deletion;Variant_frequency_as_text=Novel	GT	0/0	0/0	0/0	0/0	0/0	0/0	0/1	0/0
+chr22	41014388	.	C	A	.	PASS	Gene_with_variant=SYNTHC;Variant_severity=MODERATE;Variant_consequence_calculated=missense_variant;Variant_class=SNV;Variant_frequency_in_gnomAD=0.0005;Variant_frequency_as_text=Rare	GT	0/0	0/0	0/1	0/0	0/0	./.	0/0	0/1
+chr22	41015061	.	G	T	.	PASS	Gene_with_variant=SYNTHC;Variant_severity=LOW;Variant_consequence_calculated=splice_region_variant;Variant_class=SNV;Variant_frequency_in_gnomAD=0.0102;Variant_frequency_as_text=Common	GT	0/0	0/0	0/0	0/0	0/0	0/0	1/1	0/0
+chr22	41016900	.	A	T	.	PASS	Gene_with_variant=SYNTHC;Variant_severity=MODERATE;Variant_consequence_calculated=missense_variant;Variant_class=SNV;Variant_frequency_in_gnomAD=0.0031;Variant_frequency_as_text=Rare	GT	0/0	0/0	0/0	0/0	0/0	0/0	0/0	0/1
+chr22	41030140	.	T	C	.	PASS	Gene_with_variant=SYNTHD;Variant_severity=MODERATE;Variant_consequence_calculated=missense_variant;Variant_class=SNV;Variant_frequency_in_gnomAD=0.0004;Variant_frequency_as_text=Rare	GT	0/0	0/0	0/0	0/0	0/0	0/0	0/0	1/1
+chr22	41031555	.	C	CT	.	PASS	Gene_with_variant=SYNTHD;Variant_severity=HIGH;Variant_consequence_calculated=frameshift_variant;Variant_class=insertion;Variant_frequency_as_text=Novel	GT	0/0	0/0	0/0	0/0	0/0	0/0	0/0	0/1
+chr22	41032780	.	G	A	.	PASS	Gene_with_variant=SYNTHD;Variant_severity=LOW;Variant_consequence_calculated=synonymous_variant;Variant_class=SNV;Variant_frequency_in_gnomAD=0.0601;Variant_frequency_as_text=Common	GT	0/0	0/0	0/0	0/0	0/0	0/0	0/0	1/1
+chr22	41033415	.	A	G	.	PASS	Gene_with_variant=SYNTHD;Variant_severity=HIGH;Variant_consequence_calculated=stop_gained;Variant_class=SNV;Variant_frequency_as_text=Novel	GT	0/0	0/0	0/0	0/0	0/0	0/0	0/0	0/1
