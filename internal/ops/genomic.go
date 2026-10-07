@@ -1,0 +1,497 @@
+package ops
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"slices"
+	"strconv"
+	"strings"
+
+	"github.com/JamesPeck/pic-sure-cli/internal/catalog"
+	"github.com/JamesPeck/pic-sure-cli/internal/docker"
+	"github.com/JamesPeck/pic-sure-cli/internal/events"
+	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
+	"github.com/JamesPeck/pic-sure-cli/internal/stack"
+	"github.com/JamesPeck/pic-sure-cli/internal/steps"
+)
+
+// The genomic loader's step IDs, besides LoaderStopStepID,
+// LoaderStartStepID and RenderStepID. Its steps depend on each other, so
+// none can be skipped.
+const (
+	GenomicInputStepID    = "genomic-input"
+	GenomicStageStepID    = "genomic-stage"
+	GenomicSplitStepID    = "genomic-split"
+	GenomicMetadataStepID = "genomic-metadata"
+	GenomicFinalizeStepID = "genomic-finalize"
+	GenomicPromoteStepID  = "genomic-promote"
+	GenomicProfileStepID  = "hpds-profile"
+)
+
+// GenomicProfile is the HPDS Spring profile that reads the genomic store.
+const GenomicProfile = "bch-dev"
+
+const (
+	genomicStagingVolume = "genomic-staging"
+	hpdsGenomicVolume    = "hpds-genomic"
+	// genomicBackup is the directory in genomic-staging that --backup
+	// copies the live store into. AIO's promote-genomic keeps it in the
+	// live store, where HPDS loads it as one more partition. It can't be a
+	// partition name, since shared-data publish skips it.
+	genomicBackup = "all-bak"
+	// hpdsMaxPartitions is the most partitions HPDS's
+	// localPatientDistributed genomic processor starts with: it reads every
+	// top-level directory of its genomic dir as one.
+	hpdsMaxPartitions = 10
+)
+
+var partitionName = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
+// GenomicLoadOptions configures LoadGenomic.
+type GenomicLoadOptions struct {
+	// Partition names the genomic partition the VCFs are loaded into.
+	Partition string
+	// VCFIndex is the absolute host path of the vcfIndex.tsv.
+	VCFIndex string
+	// VCFDir is the absolute host directory holding every VCF the index
+	// names. Containers see it at the same path, since the index names the
+	// VCFs by host path. Empty means VCFIndex's directory.
+	VCFDir string
+	// HeapMB is each loader's heap; zero means DefaultLoaderHeapMB.
+	HeapMB int
+	// Promote copies the partition into hpds-genomic, with HPDS stopped.
+	Promote bool
+	// AllPartitions makes Promote copy every staged partition, not only
+	// this run's.
+	AllPartitions bool
+	// Backup makes Promote first copy the live store into all-bak in the
+	// staging volume.
+	Backup bool
+	// EnableProfile sets hpds.profile to GenomicProfile, renders, and
+	// starts HPDS on it.
+	EnableProfile bool
+	// Converge holds the render step's cache, CLI version and Composer, for
+	// EnableProfile.
+	Converge ConvergeOptions
+	// MkdirTemp makes a directory the Docker daemon can see, for a copy of
+	// VCFs it can't: the cache's TempDir.
+	MkdirTemp func(pattern string) (string, error)
+}
+
+// Check returns a usage error for options no load can run with.
+func (o GenomicLoadOptions) Check() error {
+	switch {
+	case !partitionName.MatchString(o.Partition):
+		return exitcode.Usage("--partition must match ^[A-Za-z0-9_-]+$, not %q", o.Partition)
+	case o.Partition == genomicBackup:
+		return exitcode.Usage("--partition %s is reserved for --backup's copy", genomicBackup)
+	case o.HeapMB < 0:
+		return exitcode.Usage("--heap must be a positive number of MB, not %d", o.HeapMB)
+	case o.AllPartitions && !o.Promote:
+		return exitcode.Usage("--all-partitions needs --promote")
+	case o.Backup && !o.Promote:
+		return exitcode.Usage("--backup needs --promote")
+	case strings.ContainsRune(o.VCFDir, ':'):
+		// Docker's -v syntax can't take it.
+		return exitcode.Usage("--vcf-dir %s contains ':', which Docker can't mount", o.VCFDir)
+	}
+	return nil
+}
+
+// LoadGenomic is §9.6's genomic load. The caller holds the stack lock and
+// sets d.Compose. It runs SplitChromosomeVcfLoader, VariantMetadataLoader
+// and GenomicDatasetFinalizer over the VCFs into the stack's staging
+// volume, where the partition replaces any earlier load of it, with HPDS
+// still running on its live data. With Promote or EnableProfile it then
+// stops hpds, copies the partition (or every staged one) into hpds-genomic,
+// switches the profile and re-renders, and starts hpds again. It returns
+// the partitions it promoted.
+func LoadGenomic(ctx context.Context, d *Deps, st *stack.Stack, cfg *stack.Config, state *stack.State, opts GenomicLoadOptions) ([]string, error) {
+	if err := RefuseSharedHPDS(cfg); err != nil {
+		return nil, err
+	}
+	if opts.VCFDir == "" {
+		opts.VCFDir = filepath.Dir(opts.VCFIndex)
+	}
+	if err := opts.Check(); err != nil {
+		return nil, err
+	}
+	if opts.HeapMB == 0 {
+		opts.HeapMB = DefaultLoaderHeapMB
+	}
+	g := &genomicLoad{loader: &loader{d: d, st: st, cfg: cfg, state: state}, opts: opts, vcfMount: opts.VCFDir}
+	defer g.removeCopy()
+	plan := []steps.Step{
+		{ID: GenomicInputStepID, Title: "Check the VCF input", Apply: g.input},
+		{ID: GenomicStageStepID, Title: "Stage the VCF index", Apply: g.stage},
+		{ID: GenomicSplitStepID, Title: "Load the VCFs by chromosome", Apply: g.runLoader(GenomicSplitStepID, "SplitChromosomeVcfLoader", true)},
+		{ID: GenomicMetadataStepID, Title: "Load the variant metadata", Apply: g.runLoader(GenomicMetadataStepID, "VariantMetadataLoader", true)},
+		{ID: GenomicFinalizeStepID, Title: "Finalize partition " + opts.Partition, Apply: g.finalize},
+	}
+	restart := opts.Promote || opts.EnableProfile
+	if restart {
+		plan = append(plan, steps.Step{ID: LoaderStopStepID, Title: "Stop HPDS", Apply: g.stop})
+	}
+	if opts.Promote {
+		plan = append(plan, steps.Step{ID: GenomicPromoteStepID, Title: "Promote the genomic data", Apply: g.promote})
+	}
+	if opts.EnableProfile {
+		r := &upRestarts{d: d, st: st, cfg: cfg, opts: opts.Converge}
+		plan = append(plan,
+			steps.Step{ID: GenomicProfileStepID, Title: "Set hpds.profile to " + GenomicProfile, Apply: g.setProfile},
+			r.watchRender(RenderStep(d, st, cfg, state, opts.Converge)))
+	}
+	if restart {
+		plan = append(plan, withCompose(d, opts.Converge, steps.Step{ID: LoaderStartStepID, Title: "Start HPDS", Apply: g.start}))
+	}
+
+	err := steps.Run(ctx, d.Sink, plan, steps.Options{})
+	if err == nil {
+		return g.promoted, nil
+	}
+	// steps.Error's own advice, that a re-run skips the steps already done,
+	// doesn't hold here: a re-run loads again from the start.
+	var se *steps.Error
+	if !errors.As(err, &se) || se.Interrupted {
+		return nil, err
+	}
+	failed := fmt.Errorf("step %s failed: %w", se.Step, se.Err)
+	switch se.Step {
+	case GenomicInputStepID, LoaderStopStepID:
+		return nil, failed
+	case GenomicStageStepID, GenomicSplitStepID, GenomicMetadataStepID, GenomicFinalizeStepID:
+		return nil, fmt.Errorf("%w. HPDS and its data are unchanged; fix the problem and run the load again", failed)
+	case GenomicPromoteStepID:
+		return nil, fmt.Errorf("%w. HPDS is stopped; each partition is replaced only once its copy is complete. "+
+			"Fix the problem and run the load again, or `pic-sure up` to start HPDS", failed)
+	case LoaderStartStepID:
+		return g.promoted, fmt.Errorf("%w. See `pic-sure logs hpds`, then start HPDS with `pic-sure up`", failed)
+	default: // the profile and render steps
+		return g.promoted, fmt.Errorf("%w. HPDS is stopped: fix the problem, then `pic-sure up` renders the stack and starts HPDS "+
+			"(hpds.profile is %q)", failed, cfg.HPDS.Profile)
+	}
+}
+
+type genomicLoad struct {
+	*loader
+	opts  GenomicLoadOptions
+	index []byte
+	vcfs  []string
+	sizes []int64
+	// vcfMount is what the loaders mount at opts.VCFDir: the directory
+	// itself, or a copy the daemon can see, in copyDir.
+	vcfMount string
+	// toPromote is what Promote copies, and promoted what it has copied.
+	toPromote []string
+	promoted  []string
+}
+
+func (g *genomicLoad) volume(name string) string {
+	v, _ := catalog.LookupVolume(name)
+	return v.DockerName(g.cfg.Name)
+}
+
+// input finds the loader image, reads the index, and makes sure the daemon
+// sees every VCF it names. Nothing has changed yet if it fails.
+func (g *genomicLoad) input(ctx context.Context, sink events.Sink) error {
+	if err := g.findImage(ctx); err != nil {
+		return err
+	}
+	var err error
+	if g.index, err = os.ReadFile(g.opts.VCFIndex); err != nil {
+		return err
+	}
+	if g.vcfs, g.sizes, err = vcfIndexFiles(g.opts.VCFIndex, g.index, g.opts.VCFDir); err != nil {
+		return err
+	}
+	if err := g.checkVisible(ctx, sink); err != nil {
+		return err
+	}
+	if !g.opts.Promote && !g.opts.EnableProfile {
+		return nil
+	}
+	live, err := g.livePartitions(ctx)
+	if err != nil {
+		return err
+	}
+	if !g.opts.Promote {
+		if len(live) == 0 {
+			sink.Emit(events.Warning{ID: GenomicInputStepID, Text: "--enable-profile without --promote, and " + g.volume(hpdsGenomicVolume) +
+				" holds no genomic partition: HPDS's " + GenomicProfile + " profile won't start without one"})
+		}
+		return nil
+	}
+	g.toPromote = []string{g.opts.Partition}
+	if g.opts.AllPartitions {
+		staged, err := g.partitions(ctx, g.volume(genomicStagingVolume), "/data/genomic")
+		if err != nil {
+			return err
+		}
+		if !slices.Contains(staged, g.opts.Partition) {
+			staged = append(staged, g.opts.Partition)
+		}
+		g.toPromote = staged
+	}
+	after := slices.Clone(live)
+	for _, p := range g.toPromote {
+		if !slices.Contains(after, p) {
+			after = append(after, p)
+		}
+	}
+	if len(after) > hpdsMaxPartitions {
+		return exitcode.Precondition("promoting %s would leave %d genomic partitions (%s), and HPDS starts with at most %d",
+			strings.Join(g.toPromote, ", "), len(after), strings.Join(after, ", "), hpdsMaxPartitions)
+	}
+	return nil
+}
+
+// livePartitions lists the partitions in hpds-genomic, creating the volume
+// if it is missing, as compose would.
+func (g *genomicLoad) livePartitions(ctx context.Context) ([]string, error) {
+	vol, err := g.st.EnsureVolume(ctx, g.d.Docker, g.cfg.Name, g.volume(hpdsGenomicVolume), hpdsGenomicVolume)
+	if err != nil {
+		return nil, err
+	}
+	return g.partitions(ctx, vol.Name, "/data")
+}
+
+// vcfIndexFiles returns the VCFs a vcfIndex.tsv names, and their sizes. The
+// loaders skip its first line, a header, and read the file name from the
+// first tab-separated column. Each must be an existing file under vcfDir.
+func vcfIndexFiles(index string, data []byte, vcfDir string) ([]string, []int64, error) {
+	var files []string
+	var sizes []int64
+	for i, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSuffix(line, "\r")
+		if i == 0 || strings.TrimSpace(line) == "" {
+			continue
+		}
+		name, _, _ := strings.Cut(line, "\t")
+		bad := func(format string, args ...any) error {
+			return exitcode.Usage("%s line %d: %s", index, i+1, fmt.Sprintf(format, args...))
+		}
+		switch {
+		case !filepath.IsAbs(name):
+			return nil, nil, bad("%q isn't an absolute path; the loaders open each VCF by the path in the index", name)
+		case !within(filepath.Clean(name), vcfDir):
+			return nil, nil, bad("%s isn't under --vcf-dir %s, the only directory the loaders see", name, vcfDir)
+		}
+		fi, err := os.Stat(name)
+		if err != nil {
+			return nil, nil, bad("%v", err)
+		}
+		if !fi.Mode().IsRegular() {
+			return nil, nil, bad("%s isn't a regular file", name)
+		}
+		files = append(files, filepath.Clean(name))
+		sizes = append(sizes, fi.Size())
+	}
+	if len(files) == 0 {
+		return nil, nil, exitcode.Usage("%s names no VCF files", index)
+	}
+	return files, sizes, nil
+}
+
+// checkVisible makes sure a container that mounts the VCF directory at its
+// own path sees every VCF. If the daemon doesn't share it (a directory
+// outside $HOME under Colima or Lima), the VCFs are copied into a MkdirTemp
+// dir, which is mounted at the same path instead.
+func (g *genomicLoad) checkVisible(ctx context.Context, sink events.Sink) error {
+	mount := docker.Mount{Source: g.opts.VCFDir, Target: g.opts.VCFDir, ReadOnly: true}
+	if ok, err := g.daemonSees(ctx, "genomic-input", mount, g.vcfs, g.sizes); ok || err != nil {
+		return err
+	}
+	if g.opts.MkdirTemp == nil {
+		return exitcode.Precondition("the Docker daemon can't read the VCFs in %s; move them under your home directory", g.opts.VCFDir)
+	}
+	sink.Emit(events.Progress{ID: GenomicInputStepID, Text: "the Docker daemon can't read " + g.opts.VCFDir + "; copying the VCFs into the cache"})
+	var err error
+	if g.copyDir, err = g.opts.MkdirTemp("genomic-"); err != nil {
+		return err
+	}
+	for _, f := range g.vcfs {
+		rel, err := filepath.Rel(g.opts.VCFDir, f)
+		if err != nil {
+			return err
+		}
+		dst := filepath.Join(g.copyDir, rel)
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return err
+		}
+		if err := copyInput(ctx, f, dst); err != nil {
+			return err
+		}
+	}
+	mount.Source = g.copyDir
+	if ok, err := g.daemonSees(ctx, "genomic-input", mount, g.vcfs, g.sizes); err != nil || !ok {
+		if err != nil {
+			return err
+		}
+		return exitcode.Precondition("the Docker daemon can't read the VCFs in %s or their copy in the cache (%s); "+
+			"move them under a directory the daemon shares", g.opts.VCFDir, g.copyDir)
+	}
+	g.vcfMount = g.copyDir
+	return nil
+}
+
+// stage clears the loaders' working directories in the staging volume,
+// left by an earlier load that failed, and writes the index there.
+func (g *genomicLoad) stage(ctx context.Context, _ events.Sink) error {
+	vol, err := g.st.EnsureVolume(ctx, g.d.Docker, g.cfg.Name, g.volume(genomicStagingVolume), genomicStagingVolume)
+	if err != nil {
+		return err
+	}
+	script := "rm -rf /data/all /data/merged; mkdir -p /data/all /data/merged; cat > /data/vcfIndex.tsv"
+	if err := g.helper(ctx, vol.Name, "genomic-stage", script, bytes.NewReader(g.index)); err != nil {
+		return fmt.Errorf("staging the VCF index in volume %s: %w", vol.Name, err)
+	}
+	return nil
+}
+
+// runLoader returns a step that runs the hpds-etl loader name with the
+// staging volume at /opt/local/hpds and, if withVCFs, the VCF directory at
+// its own path. The loaders write the partition's contigs under all/.
+func (g *genomicLoad) runLoader(id, name string, withVCFs bool) func(context.Context, events.Sink) error {
+	return func(ctx context.Context, sink events.Sink) error {
+		cname, err := docker.UniqueName(g.cfg.Name+"-"+id, g.d.Rand)
+		if err != nil {
+			return err
+		}
+		mounts := []docker.Mount{{Source: g.volume(genomicStagingVolume), Target: hpdsDir}}
+		if withVCFs {
+			mounts = append(mounts, docker.Mount{Source: g.vcfMount, Target: g.opts.VCFDir, ReadOnly: true})
+		}
+		stdout := events.NewLogWriter(sink, id, events.StreamStdout)
+		stderr := events.NewLogWriter(sink, id, events.StreamStderr)
+		code, err := g.d.Docker.Run(ctx, docker.RunOpts{
+			Image:   g.image,
+			Name:    cname,
+			User:    "0:0",
+			Remove:  true,
+			Network: "none",
+			Labels:  g.st.Labels(g.cfg.Name),
+			Mounts:  mounts,
+			Env:     []string{"HEAPSIZE=" + strconv.Itoa(g.opts.HeapMB), "LOADER_NAME=" + name},
+			Stdout:  stdout,
+			Stderr:  stderr,
+		})
+		_ = stdout.Close()
+		_ = stderr.Close()
+		if err != nil {
+			_ = g.d.Docker.Rm(context.WithoutCancel(ctx), cname, true)
+			return fmt.Errorf("running %s: %w", name, err)
+		}
+		if code != 0 {
+			return fmt.Errorf("%s exited %d; its output is above and in the run log", name, code)
+		}
+		return nil
+	}
+}
+
+// finalize runs GenomicDatasetFinalizer, then moves the loaded contigs to
+// genomic/<partition> in the staging volume, replacing any earlier load
+// of the partition.
+func (g *genomicLoad) finalize(ctx context.Context, sink events.Sink) error {
+	if err := g.runLoader(GenomicFinalizeStepID, "GenomicDatasetFinalizer", false)(ctx, sink); err != nil {
+		return err
+	}
+	script := `rm -rf "/data/genomic/$1"; mkdir -p /data/genomic; mv /data/all "/data/genomic/$1"; rm -rf /data/merged`
+	if err := g.script(ctx, "genomic-move", []docker.Mount{{Source: g.volume(genomicStagingVolume), Target: "/data"}},
+		script, []string{g.opts.Partition}, nil, nil); err != nil {
+		return fmt.Errorf("moving partition %s into place in volume %s: %w", g.opts.Partition, g.volume(genomicStagingVolume), err)
+	}
+	return nil
+}
+
+// promote copies toPromote from the staging volume into hpds-genomic,
+// each partition replacing the live one only once its copy is complete;
+// a failed copy is removed, so HPDS never reads a partial one. With Backup
+// it first copies the live store into the staging volume's all-bak.
+func (g *genomicLoad) promote(ctx context.Context, sink events.Sink) error {
+	staging, live := g.volume(genomicStagingVolume), g.volume(hpdsGenomicVolume)
+	if g.opts.Backup {
+		sink.Emit(events.Progress{ID: GenomicPromoteStepID, Text: "backing up " + live + " into " + genomicBackup + " in " + staging})
+		mounts := []docker.Mount{{Source: live, Target: "/live", ReadOnly: true}, {Source: staging, Target: "/staged"}}
+		script := `rm -rf /staged/` + genomicBackup + `; mkdir /staged/` + genomicBackup + `; cp -a /live/. /staged/` + genomicBackup + `/`
+		if err := g.script(ctx, "genomic-backup", mounts, script, nil, nil, nil); err != nil {
+			return fmt.Errorf("backing up volume %s into %s in volume %s: %w", live, genomicBackup, staging, err)
+		}
+	}
+	sink.Emit(events.Progress{ID: GenomicPromoteStepID, Text: "promoting " + strings.Join(g.toPromote, ", ")})
+	mounts := []docker.Mount{{Source: live, Target: "/live"}, {Source: staging, Target: "/staged", ReadOnly: true}}
+	script := `cd /live; rm -rf .promote-*; for p; do ` +
+		`if ! cp -a "/staged/genomic/$p" ".promote-$p"; then rm -rf ".promote-$p"; exit 1; fi; ` +
+		`rm -rf "$p"; mv ".promote-$p" "$p"; done`
+	if err := g.script(ctx, "genomic-promote", mounts, script, g.toPromote, nil, nil); err != nil {
+		return fmt.Errorf("copying %s into volume %s: %w", strings.Join(g.toPromote, ", "), live, err)
+	}
+	g.promoted = g.toPromote
+	return nil
+}
+
+// partitions lists the partition directories under dir in volume.
+func (g *genomicLoad) partitions(ctx context.Context, volume, dir string) ([]string, error) {
+	var out bytes.Buffer
+	script := `cd "$1" 2>/dev/null || exit 0; for e in *; do if [ -d "$e" ]; then echo "$e"; fi; done`
+	mounts := []docker.Mount{{Source: volume, Target: "/data", ReadOnly: true}}
+	if err := g.script(ctx, "genomic-list", mounts, script, []string{dir}, nil, &out); err != nil {
+		return nil, fmt.Errorf("listing the partitions in volume %s: %w", volume, err)
+	}
+	var parts []string
+	for _, p := range strings.Split(out.String(), "\n") {
+		if partitionName.MatchString(p) && p != genomicBackup {
+			parts = append(parts, p)
+		}
+	}
+	return parts, nil
+}
+
+// setProfile sets hpds.profile in pic-sure.yaml, and in cfg for the render.
+func (g *genomicLoad) setProfile(context.Context, events.Sink) error {
+	if g.cfg.HPDS.Profile == GenomicProfile {
+		return nil
+	}
+	doc, err := g.st.ReadConfigDoc()
+	if err != nil {
+		return err
+	}
+	if err := doc.SetValue("hpds.profile", GenomicProfile); err != nil {
+		return err
+	}
+	data, err := doc.Bytes()
+	if err != nil {
+		return err
+	}
+	if err := g.st.WriteConfig(data); err != nil {
+		return err
+	}
+	g.cfg.HPDS.Profile = GenomicProfile
+	return nil
+}
+
+// start starts hpds and waits until it is healthy. HPDS was stopped, so it
+// has read any file the render changed: it comes off PendingRestarts. Any
+// other service the render marked is left for `pic-sure up`.
+func (g *genomicLoad) start(ctx context.Context, sink events.Sink) error {
+	if err := g.loader.start(ctx, sink); err != nil {
+		return err
+	}
+	state, err := g.st.LoadState()
+	if err != nil {
+		return err
+	}
+	if len(state.PendingRestarts) == 0 {
+		return nil
+	}
+	state.PendingRestarts = slices.DeleteFunc(state.PendingRestarts, func(s string) bool { return s == hpdsService })
+	if len(state.PendingRestarts) > 0 {
+		sink.Emit(events.Warning{ID: LoaderStartStepID, Text: "the render changed files " + strings.Join(state.PendingRestarts, ", ") +
+			" read; run `pic-sure up` to restart them"})
+	}
+	return g.st.SaveState(state)
+}

@@ -53,17 +53,33 @@ load again.`,
 
 func newDataLoadGenomicCmd(a *App) *cobra.Command {
 	c := &cobra.Command{
-		Use:   "load-genomic --partition P --vcf-index F",
+		Use:   "load-genomic --partition P --vcf-index F [--vcf-dir D] [--promote] [--enable-profile]",
 		Short: "Load VCF data into a genomic partition",
-		Args:  cobra.NoArgs,
-		RunE:  notImplemented("049"),
+		Long: `Load the VCFs a vcfIndex.tsv names into a genomic partition, staged in
+the stack's genomic-staging volume, where it replaces any earlier load of
+the partition. HPDS keeps running on its live data while the loaders run.
+
+The index names each VCF by its host path, so every VCF must be under
+--vcf-dir (default: the index's directory), which the loaders see at the
+same path.
+
+--promote then stops HPDS, copies the partition into its live genomic data
+(every staged partition with --all-partitions, after copying the live data
+into all-bak with --backup), and starts HPDS again. --enable-profile sets
+hpds.profile to bch-dev, the profile that reads the genomic data, re-renders
+the stack and starts HPDS on it.`,
+		Args: cobra.NoArgs,
+		RunE: a.loadGenomic,
 	}
 	f := c.Flags()
-	f.String("partition", "", "genomic partition `NAME`")
+	f.String("partition", "", "genomic partition `NAME`: letters, digits, _ and -")
 	f.String("vcf-index", "", "vcfIndex.tsv `FILE`")
-	f.String("vcf-dir", "", "`DIR` holding the VCFs the index names")
-	f.Bool("promote", false, "promote the loaded partitions into the live HPDS data")
-	f.Bool("enable-profile", false, "switch HPDS to the genomic profile")
+	f.String("vcf-dir", "", "`DIR` holding the VCFs the index names (default: the index's directory)")
+	f.Int("heap", 0, "each loader's JVM heap in `MB` (default 4096)")
+	f.Bool("promote", false, "promote the loaded partition into the live HPDS data")
+	f.Bool("all-partitions", false, "with --promote, promote every staged partition")
+	f.Bool("backup", false, "with --promote, first copy the live genomic data into all-bak")
+	f.Bool("enable-profile", false, "switch HPDS to the genomic profile (bch-dev)")
 	_ = c.MarkFlagRequired("partition")
 	_ = c.MarkFlagRequired("vcf-index")
 	return c

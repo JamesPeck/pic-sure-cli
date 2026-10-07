@@ -168,22 +168,12 @@ func (l *loader) volume() string {
 // input finds the loader image, works out the provenance, and makes sure the
 // daemon sees the CSV. Nothing has changed yet if it fails.
 func (l *loader) input(ctx context.Context, sink events.Sink) error {
-	img, _ := catalog.LookupImage(hpdsETLImage)
-	tag := l.state.Images[img.Name]
-	if tag == "" {
-		return exitcode.Precondition("state.json records no %s image; run `pic-sure up` to build the stack's images", img.Name)
-	}
-	l.image = img.Repository() + ":" + tag
 	// The hpds-key step would find a missing key only after the wipe.
 	if _, err := l.st.LoadHPDSKey(); err != nil {
 		return fmt.Errorf("the stack's HPDS key (%s): %w", l.st.Path(stack.HPDSKeyFile), err)
 	}
-	ok, err := l.d.Docker.ImageExists(ctx, l.image)
-	if err != nil {
+	if err := l.findImage(ctx); err != nil {
 		return err
-	}
-	if !ok {
-		return exitcode.Precondition("the loader image %s is missing; run `pic-sure build` to rebuild it", l.image)
 	}
 
 	if l.opts.Dataset == "" {
@@ -213,7 +203,7 @@ func (l *loader) input(ctx context.Context, sink events.Sink) error {
 		return err
 	}
 	l.csv = filepath.Join(l.copyDir, "allConcepts.csv")
-	if err := copyCSV(ctx, l.opts.CSV, l.csv); err != nil {
+	if err := copyInput(ctx, l.opts.CSV, l.csv); err != nil {
 		return err
 	}
 	if ok, err := l.visible(ctx, l.csv, size); err != nil || !ok {
@@ -226,36 +216,56 @@ func (l *loader) input(ctx context.Context, sink events.Sink) error {
 	return nil
 }
 
-// visible reports whether a container that bind-mounts path sees a regular
-// file of the given size there. A daemon that refuses to mount it (Docker
-// Desktop's "Mounts denied: The path … is not shared from the host") counts
-// as not seeing it; any other docker failure is an error.
-func (l *loader) visible(ctx context.Context, path string, size int64) (bool, error) {
-	alpine, _ := catalog.LookupImage("alpine")
-	name, err := docker.UniqueName(l.cfg.Name+"-hpds-input", l.d.Rand)
-	if err != nil {
-		return false, err
+// findImage sets l.image to the stack's hpds-etl image, which must exist.
+func (l *loader) findImage(ctx context.Context) error {
+	img, _ := catalog.LookupImage(hpdsETLImage)
+	tag := l.state.Images[img.Name]
+	if tag == "" {
+		return exitcode.Precondition("state.json records no %s image; run `pic-sure up` to build the stack's images", img.Name)
 	}
-	var out bytes.Buffer
-	code, err := l.d.Docker.Run(ctx, docker.RunOpts{
-		Image:   alpine.Ref,
-		Name:    name,
-		Remove:  true,
-		Network: "none",
-		Labels:  l.st.Labels(l.cfg.Name),
-		Mounts:  []docker.Mount{{Source: path, Target: "/input.csv", ReadOnly: true}},
-		Args:    []string{"sh", "-c", `test -f /input.csv && stat -c %s /input.csv`},
-		Stdout:  &out,
-	})
+	l.image = img.Repository() + ":" + tag
+	ok, err := l.d.Docker.ImageExists(ctx, l.image)
 	if err != nil {
-		_ = l.d.Docker.Rm(context.WithoutCancel(ctx), name, true)
+		return err
+	}
+	if !ok {
+		return exitcode.Precondition("the loader image %s is missing; run `pic-sure build` to rebuild it", l.image)
+	}
+	return nil
+}
+
+// visible reports whether a container that bind-mounts path sees a regular
+// file of the given size there.
+func (l *loader) visible(ctx context.Context, path string, size int64) (bool, error) {
+	return l.daemonSees(ctx, "hpds-input", docker.Mount{Source: path, Target: "/input.csv", ReadOnly: true},
+		[]string{"/input.csv"}, []int64{size})
+}
+
+// daemonSees reports whether a container with mount sees each of files, a
+// path in the container, as a regular file of the matching size. A daemon
+// that refuses the mount (Docker Desktop's "Mounts denied: The path … is
+// not shared from the host") counts as not seeing them; any other docker
+// failure is an error.
+func (l *loader) daemonSees(ctx context.Context, prefix string, mount docker.Mount, files []string, sizes []int64) (bool, error) {
+	var out bytes.Buffer
+	script := `for f; do if test -f "$f"; then stat -c %s "$f"; else echo -1; fi; done`
+	code, err := l.container(ctx, prefix, []docker.Mount{mount}, append([]string{"sh", "-c", script, "sh"}, files...), nil, &out, nil)
+	if err != nil {
 		if msg := strings.ToLower(err.Error()); strings.Contains(msg, "mounts denied") || strings.Contains(msg, "not shared from the host") {
 			return false, nil
 		}
-		return false, fmt.Errorf("checking that the Docker daemon can read %s: %w", path, err)
+		return false, fmt.Errorf("checking that the Docker daemon can read %s: %w", mount.Source, err)
 	}
-	got, perr := strconv.ParseInt(strings.TrimSpace(out.String()), 10, 64)
-	return code == 0 && perr == nil && got == size, nil
+	got := strings.Fields(out.String())
+	if code != 0 || len(got) != len(sizes) {
+		return false, nil
+	}
+	for i, s := range got {
+		if n, err := strconv.ParseInt(s, 10, 64); err != nil || n != sizes[i] {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func (l *loader) removeCopy() {
@@ -361,25 +371,20 @@ func (l *loader) start(ctx context.Context, sink events.Sink) error {
 
 // helper runs script in an alpine container with volume at /data.
 func (l *loader) helper(ctx context.Context, volume, prefix, script string, stdin io.Reader) error {
-	name, err := docker.UniqueName(l.cfg.Name+"-"+prefix, l.d.Rand)
-	if err != nil {
-		return err
+	return l.script(ctx, prefix, []docker.Mount{{Source: volume, Target: "/data"}}, script, nil, stdin, nil)
+}
+
+// script runs `sh -c "set -eu; SCRIPT" sh ARGS...` in an alpine container
+// with mounts. A non-zero exit is an error ending with the last line of
+// its stderr.
+func (l *loader) script(ctx context.Context, prefix string, mounts []docker.Mount, script string, args []string, stdin io.Reader, stdout io.Writer) error {
+	argv := []string{"sh", "-c", "set -eu; " + script}
+	if len(args) > 0 {
+		argv = append(append(argv, "sh"), args...)
 	}
-	alpine, _ := catalog.LookupImage("alpine")
 	var stderr bytes.Buffer
-	code, err := l.d.Docker.Run(ctx, docker.RunOpts{
-		Image:   alpine.Ref,
-		Name:    name,
-		Remove:  true,
-		Network: "none",
-		Labels:  l.st.Labels(l.cfg.Name),
-		Mounts:  []docker.Mount{{Source: volume, Target: "/data"}},
-		Args:    []string{"sh", "-c", "set -eu; " + script},
-		Stdin:   stdin,
-		Stderr:  &stderr,
-	})
+	code, err := l.container(ctx, prefix, mounts, argv, stdin, stdout, &stderr)
 	if err != nil {
-		_ = l.d.Docker.Rm(context.WithoutCancel(ctx), name, true)
 		return err
 	}
 	if code != 0 {
@@ -389,6 +394,33 @@ func (l *loader) helper(ctx context.Context, volume, prefix, script string, stdi
 		}
 	}
 	return err
+}
+
+// container runs a uniquely named, self-removing alpine container with no
+// network, removing it if docker fails, and returns its exit code.
+func (l *loader) container(ctx context.Context, prefix string, mounts []docker.Mount, args []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+	name, err := docker.UniqueName(l.cfg.Name+"-"+prefix, l.d.Rand)
+	if err != nil {
+		return 0, err
+	}
+	alpine, _ := catalog.LookupImage("alpine")
+	opts := docker.RunOpts{
+		Image:   alpine.Ref,
+		Name:    name,
+		Remove:  true,
+		Network: "none",
+		Labels:  l.st.Labels(l.cfg.Name),
+		Mounts:  mounts,
+		Args:    args,
+		Stdin:   stdin,
+		Stdout:  stdout,
+		Stderr:  stderr,
+	}
+	code, err := l.d.Docker.Run(ctx, opts)
+	if err != nil {
+		_ = l.d.Docker.Rm(context.WithoutCancel(ctx), name, true)
+	}
+	return code, err
 }
 
 func fileSize(path string) (int64, error) {
@@ -412,7 +444,7 @@ func fileSHA256(ctx context.Context, path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-func copyCSV(ctx context.Context, src, dst string) (err error) {
+func copyInput(ctx context.Context, src, dst string) (err error) {
 	in, err := os.Open(src)
 	if err != nil {
 		return err

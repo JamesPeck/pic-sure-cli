@@ -1,8 +1,66 @@
-# Not implemented yet: exit 1, naming ticket 049.
-exitcode 1 pic-sure data load-genomic --partition chr1 --vcf-index vcfIndex.tsv
-stderr '^pic-sure: not implemented \(ticket 049\)$'
-! stdout .
+# load-genomic's refusals, before it changes anything. The load itself is
+# covered by the ops tests and the real runs.
+env XDG_CACHE_HOME=$WORK/cache
 
 # --partition and --vcf-index are required.
 exitcode 2 pic-sure data load-genomic --partition chr1
 stderr 'required flag\(s\) "vcf-index" not set'
+
+# Flag checks come before the stack is opened.
+exitcode 2 pic-sure data load-genomic --partition 'a b' --vcf-index vcfs/vcfIndex.tsv
+stderr '--partition must match \^\[A-Za-z0-9_-\]\+\$, not "a b"'
+exitcode 2 pic-sure data load-genomic --partition p --vcf-index missing.tsv
+stderr '--vcf-index: .*missing.tsv'
+exitcode 2 pic-sure data load-genomic --partition p --vcf-index vcfs
+stderr '--vcf-index vcfs isn''t a regular file'
+exitcode 2 pic-sure data load-genomic --partition p --vcf-index vcfs/vcfIndex.tsv --vcf-dir vcfs/vcfIndex.tsv
+stderr '--vcf-dir vcfs/vcfIndex.tsv isn''t a directory'
+exitcode 2 pic-sure data load-genomic --partition p --vcf-index vcfs/vcfIndex.tsv --all-partitions
+stderr '--all-partitions needs --promote'
+exitcode 2 pic-sure data load-genomic --partition p --vcf-index vcfs/vcfIndex.tsv --heap 0
+stderr '--heap must be a positive number of MB, not 0'
+exitcode 2 pic-sure data load-genomic --partition p --vcf-index vcfs/vcfIndex.tsv --skip-step genomic-split
+stderr 'load-genomic''s steps depend on each other, so none can be skipped'
+
+# No stack: exit 3.
+exitcode 3 pic-sure data load-genomic --partition p --vcf-index vcfs/vcfIndex.tsv
+stderr 'no pic-sure stack found'
+
+# A stack using shared HPDS data is read-only: exit 1.
+exitcode 1 pic-sure --stack shared data load-genomic --partition p --vcf-index vcfs/vcfIndex.tsv
+stderr 'uses the shared data set "demo-set" \(hpds.data: shared\), which is read-only'
+
+# A stack init hasn't finished is exit 3.
+exitcode 3 pic-sure --stack partial data load-genomic --partition p --vcf-index vcfs/vcfIndex.tsv
+stderr 'isn''t initialised; run `pic-sure init .*partial` to finish it'
+
+# An unrendered stack is exit 3.
+exitcode 3 pic-sure --stack stack data load-genomic --partition p --vcf-index vcfs/vcfIndex.tsv
+stderr 'run `pic-sure up`'
+! exists docker.log
+
+-- vcfs/vcfIndex.tsv --
+filename	chromosome
+-- stack/pic-sure.yaml --
+schema: 1
+name: demo
+auth: {mode: open, admin_email: admin@example.com}
+-- stack/.pic-sure/state.json --
+{"cli_version": "dev", "schema_version": 1, "initialized_at": "2026-10-07T12:00:00Z"}
+-- stack/.pic-sure/secrets.yaml --
+db_root_password: rootpw
+auth0_client_secret: generated-0123456789abcdef0123456789abcdef
+auth0_client_secret_generated: true
+-- partial/pic-sure.yaml --
+schema: 1
+name: partial
+auth: {mode: open, admin_email: admin@example.com}
+-- partial/.pic-sure/state.json --
+{"cli_version": "dev", "schema_version": 1}
+-- shared/pic-sure.yaml --
+schema: 1
+name: shared
+auth: {mode: open, admin_email: admin@example.com}
+hpds: {data: shared, shared_name: demo-set}
+-- shared/.pic-sure/state.json --
+{"cli_version": "dev", "schema_version": 1, "initialized_at": "2026-10-07T12:00:00Z"}

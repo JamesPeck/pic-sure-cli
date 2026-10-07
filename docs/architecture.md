@@ -326,6 +326,17 @@ it.
   `--prune-images` it doesn't create a missing cache, and one it can't open
   is only a warning.
 
+- `data_genomic.go` (049): `data load-genomic --partition P --vcf-index F
+  [--vcf-dir D] [--heap MB] [--promote [--all-partitions] [--backup]]
+  [--enable-profile]`. Usage checks first (`GenomicLoadOptions.Check`, the
+  paths made absolute, the index a regular file, `--vcf-dir` a directory
+  defaulting to the index's, no `--skip-step`); then, under the stack lock,
+  the same refusals as load-phenotype, and `ops.LoadGenomic` with the
+  cache's `TempDir` and, for `--enable-profile`, up's `ConvergeOptions`
+  (cache, CLI version, lazy-env Composer). It records the `data
+  load-genomic` operation. `--json`'s data is `{"partition", "promoted":
+  [...], "profile"}`.
+
 | File | Commands | Ticket |
 |---|---|---|
 | `init.go` | `init` | 034 |
@@ -338,7 +349,7 @@ it.
 | `migrate.go` | `migrate` | 032 |
 | `config.go` | `config show/get/set/edit` | 006 |
 | `secrets.go` | `secrets rotate` | 058 |
-| `data.go`, `data_phenotype.go` | `data demo`, `load-phenotype`, `load-genomic` | 046, 042/043/045, 049 |
+| `data.go`, `data_phenotype.go`, `data_genomic.go` | `data demo`, `load-phenotype`, `load-genomic` | 046, 042/043/045, 049 |
 | `dictionary.go` | `dictionary hydrate/load-csv/load-facets/weights` | 044 |
 | `shareddata.go` | `shared-data publish/list/remove` | 050 |
 | `dev.go` | `dev list/on/off` | 052 |
@@ -1153,6 +1164,50 @@ concatenate its step lists with their own and end with one `RefreshStep()`.
   dictionary-api if it is running and polls `compose ps` until it is
   healthy (not `up --wait`, which could recreate it from a newer render),
   then clears the mark; if it never runs, the next `up` restarts it.
+
+**Genomic loader (049, `genomic.go`).** §9.6's genomic load.
+`LoadGenomic(ctx, d, st, cfg, state, GenomicLoadOptions{Partition,
+VCFIndex, VCFDir, HeapMB, Promote, AllPartitions, Backup, EnableProfile,
+Converge, MkdirTemp})` returns the partitions it promoted. The caller holds
+the stack lock and sets `d.Compose`. It shares the phenotype loader's
+helpers (`findImage`, `daemonSees`, `script`, `stop`, `start`). Steps, none
+skippable:
+
+- `genomic-input`: the hpds-etl image; the index (header line skipped,
+  first tab-separated column), whose every VCF must be an absolute path to
+  a file under `VCFDir` (exit 2 otherwise), since the loaders open them by
+  the path in the index; and the daemon must see them with `VCFDir`
+  mounted at its own path, or they are copied (keeping their relative
+  paths) into a `MkdirTemp` dir that is mounted at that path instead. With
+  `Promote`, it works out what to promote and refuses (exit 3) to leave
+  more than `hpdsMaxPartitions` (10) in `hpds-genomic`, HPDS's limit; with
+  only `EnableProfile`, it warns if `hpds-genomic` holds no partition.
+- `genomic-stage`: in the per-stack `genomic-staging` volume, clears `all/`
+  and `merged/` and writes `vcfIndex.tsv` from stdin.
+- `genomic-split`, `genomic-metadata`, `genomic-finalize`:
+  SplitChromosomeVcfLoader, VariantMetadataLoader and
+  GenomicDatasetFinalizer, each with the staging volume at
+  `/opt/local/hpds` (the first two also with the VCFs), `--user 0:0`,
+  `--network none`, `HEAPSIZE`, `LOADER_NAME`; each exit code is checked.
+  The loaders write the contigs under `all/`; finalize then moves `all/` to
+  `genomic/<partition>/`, replacing an earlier load of it. HPDS runs
+  throughout, and a failure here leaves it and its data unchanged.
+- With `Promote` or `EnableProfile`, `hpds-stop`.
+- `genomic-promote` (`Promote`): with `Backup`, the live store is first
+  copied into `all-bak/` in the staging volume, not into `hpds-genomic` as
+  AIO does: HPDS's `localPatientDistributed` processor reads every
+  top-level directory of `hpds-genomic` as a partition, so an `all-bak`
+  there gets loaded. Then this run's partition, or with `AllPartitions`
+  every staged one, is copied to `.promote-<p>` and renamed over `<p>`, so
+  a partition is replaced only once its copy is complete; a failed copy is
+  removed. HPDS reads `<genomic dir>/<partition>/<contig>/`.
+- `hpds-profile` and `render` (`EnableProfile`): `hpds.profile` is set to
+  `GenomicProfile` (`bch-dev`) in pic-sure.yaml and cfg, and up's render
+  step, wrapped by `watchRender`, re-renders and marks the services whose
+  files changed in `PendingRestarts`.
+- `hpds-start`: `compose up -d --wait hpds` (which recreates it on the new
+  profile) and the health check; hpds comes off `PendingRestarts`, since it
+  was stopped, and any other pending service gets a warning to run `up`.
 
 **Cache list and prune (057, `cache.go`).** §7.1's in-use rules.
 `CacheInventory(ctx, d, c, CacheOptions{Stacks})` returns a `CacheReport`:
