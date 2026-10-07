@@ -190,7 +190,7 @@ func (r *initRun) run(ctx context.Context) (_ *ops.InitSummary, err error) {
 	}
 	if err := registerStack(ctx, r.cache, r.d.Sink, r.st, r.cfg.Name); err != nil {
 		_ = r.finishOperation(err)
-		return err
+		return nil, err
 	}
 
 	plan := ops.InitSteps(r.d, r.st, r.cfg, r.sec, r.state, ops.ConvergeOptions{
