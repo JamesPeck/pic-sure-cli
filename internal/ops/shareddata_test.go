@@ -5,6 +5,8 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -36,6 +38,10 @@ type sharedFixture struct {
 	probe    string // the probe helper's stdout
 	copyExit int
 	copies   [][]string
+	// probeFn, if set, answers the probe instead of probe.
+	probeFn func(ctx context.Context, argv []string) ([]byte, error)
+	// inspectFail makes the next inspect of that volume fail.
+	inspectFail string
 	// onCreate runs before a volume is created, under mu.
 	onCreate func(name string)
 }
@@ -75,6 +81,10 @@ func newSharedFixture(t *testing.T) *sharedFixture {
 			labels, ok := fx.vols[name]
 			if !ok {
 				return docker.Result{Stderr: []byte("Error response from daemon: get " + name + ": no such volume\n"), ExitCode: 1}, nil
+			}
+			if name == fx.inspectFail {
+				fx.inspectFail = ""
+				return docker.Result{Stderr: []byte("Error response from daemon: context canceled\n"), ExitCode: 1}, nil
 			}
 			vols = append(vols, map[string]any{"Name": name, "Labels": labels})
 		}
@@ -128,7 +138,11 @@ func newSharedFixture(t *testing.T) *sharedFixture {
 	})
 	f.On(fakerunner.Glob("docker compose * stop hpds"))
 	f.On(fakerunner.Glob("docker compose * up -d --wait --wait-timeout 900 hpds"))
-	f.On(fakerunner.Glob("docker run --rm --name demo-shared-probe-* --network none *")).Do(func(context.Context, fakerunner.Call) (docker.Result, error) {
+	f.On(fakerunner.Glob("docker run --rm --name demo-shared-probe-* --network none *")).Do(func(ctx context.Context, c fakerunner.Call) (docker.Result, error) {
+		if fx.probeFn != nil {
+			out, err := fx.probeFn(ctx, c.Argv)
+			return docker.Result{Stdout: out}, err
+		}
 		return docker.Result{Stdout: []byte(fx.probe)}, nil
 	})
 	f.On(fakerunner.Glob("docker run --rm --name demo-shared-copy-* --network none *")).Do(func(_ context.Context, c fakerunner.Call) (docker.Result, error) {
@@ -212,7 +226,8 @@ func TestPublishSharedDataPhenotypeOnlyWithHPDSStopped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fx.f.AssertNotCalled(fakerunner.Glob("docker compose * stop hpds"))
+	// Stopped all the same, in case it is about to restart; not started.
+	fx.f.AssertCalled(fakerunner.Glob("docker compose * stop hpds"))
 	fx.f.AssertNotCalled(fakerunner.Glob("docker compose * up *"))
 	if set.Contents != "phenotype=unknown genomic=none" || set.HPDSProfile != "" || set.PicsureCommit != "statecommit" {
 		t.Errorf("set = %+v", set)
@@ -309,7 +324,9 @@ func TestPublishSharedDataRemovesOnlyItsOwnVolumes(t *testing.T) {
 func TestListSharedData(t *testing.T) {
 	fx := newSharedFixture(t)
 	fx.vols["b_hpds-genomic"] = map[string]string{ops.SharedDataLabel: "b", ops.SharedDataContentsLabel: "phenotype=demo:nhanes genomic=false"}
-	fx.vols["b_hpds-data"] = map[string]string{ops.SharedDataLabel: "b", ops.SharedDataContentsLabel: "phenotype=demo:nhanes genomic=false"}
+	// AIO's sets name their source project in .source-project.
+	fx.vols["b_hpds-data"] = map[string]string{ops.SharedDataLabel: "b", ops.SharedDataContentsLabel: "phenotype=demo:nhanes genomic=false",
+		ops.SharedDataLabel + ".source-project": "picsure"}
 	fx.vols["a_hpds-data"] = map[string]string{ops.SharedDataLabel: "a", ops.SharedDataProfileLabel: "bch-dev"}
 	sets, err := ops.ListSharedData(context.Background(), fx.d)
 	if err != nil {
@@ -321,7 +338,7 @@ func TestListSharedData(t *testing.T) {
 	if !slices.Equal(sets[0].Volumes, []string{"a_hpds-data"}) || sets[0].HPDSProfile != "bch-dev" {
 		t.Errorf("a = %+v", sets[0])
 	}
-	if !slices.Equal(sets[1].Volumes, []string{"b_hpds-data", "b_hpds-genomic"}) || sets[1].Contents != "phenotype=demo:nhanes genomic=false" {
+	if !slices.Equal(sets[1].Volumes, []string{"b_hpds-data", "b_hpds-genomic"}) || sets[1].Contents != "phenotype=demo:nhanes genomic=false" || sets[1].SourceStack != "picsure" {
 		t.Errorf("b = %+v", sets[1])
 	}
 }
@@ -369,5 +386,95 @@ func TestRemoveSharedData(t *testing.T) {
 	}
 	if _, err := ops.RemoveSharedData(context.Background(), newSharedFixture(t).d, "../x"); exitcode.FromError(err) != exitcode.CodeUsage {
 		t.Errorf("bad name: %v", err)
+	}
+}
+
+func TestPublishSharedDataRemovesAVolumeItCouldNotConfirm(t *testing.T) {
+	fx := newSharedFixture(t)
+	fx.inspectFail = "x_hpds-genomic"
+	if _, err := fx.publish("x"); err == nil {
+		t.Fatal("publish succeeded")
+	}
+	if !slices.Equal(fx.removed, []string{"x_hpds-data", "x_hpds-genomic"}) {
+		t.Errorf("removed %q, want both", fx.removed)
+	}
+}
+
+func TestPublishSharedDataRestartsARestartingHPDS(t *testing.T) {
+	fx := newSharedFixture(t)
+	fx.hpds = "restarting"
+	if _, err := fx.publish("x"); err != nil {
+		t.Fatal(err)
+	}
+	fx.f.AssertOrder(fakerunner.Glob("docker compose * stop hpds"), fakerunner.Glob("docker run * demo-shared-copy-*"),
+		fakerunner.Glob("docker compose * up -d --wait --wait-timeout 900 hpds"))
+}
+
+// TestPublishSharedDataProbeScript runs the probe's script with the local
+// sh over a directory tree standing in for the two volumes.
+func TestPublishSharedDataProbeScript(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("no sh")
+	}
+	data, genomic := t.TempDir(), t.TempDir()
+	files := map[string]string{
+		"encryption_key": "k", "allObservationsStore.javabin": "o", "columnMeta.javabin": "m", "columnMeta.csv": "",
+		".picsure-dataset":                       "demo:nhanes\n",
+		"stray.txt":                              "x",
+		"synth/chr21/variantIndex_fbbis.javabin": "i", "synth/chr21/BucketIndexBySample.javabin": "b",
+		"-dash/chr22/variantIndex_fbbis.javabin":  "i",
+		".hidden/chr1/variantIndex_fbbis.javabin": "i", ".hidden/chr1/BucketIndexBySample.javabin": "b",
+		"all-bak/chr21/x": "", ".promote-synth/chr21/x": "",
+	}
+	for name, content := range files {
+		dir := genomic
+		if !strings.Contains(name, "/") && name != "stray.txt" {
+			dir = data
+		}
+		p := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(genomic, "empty"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fx := newSharedFixture(t)
+	fx.probeFn = func(ctx context.Context, argv []string) ([]byte, error) {
+		return exec.CommandContext(ctx, "sh", "-c", argv[slices.Index(argv, "-c")+1], "sh", data, genomic).Output()
+	}
+	write := func(path, content string) {
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	steps := []struct {
+		want string
+		fix  func()
+	}{
+		{"is missing columnMeta.csv", func() { write(filepath.Join(data, "columnMeta.csv"), "c") }},
+		{"genomic partition empty", func() { _ = os.Remove(filepath.Join(genomic, "empty")) }},
+		{"lacks the indexes HPDS writes on its first start: -dash/chr22/BucketIndexBySample.javabin",
+			func() { write(filepath.Join(genomic, "-dash/chr22/BucketIndexBySample.javabin"), "b") }},
+	}
+	for _, step := range steps {
+		if _, err := fx.publish("x"); err == nil || !strings.Contains(err.Error(), step.want) {
+			t.Fatalf("err = %v, want %q", err, step.want)
+		}
+		step.fix()
+	}
+	set, err := fx.publish("x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// all-bak and the unfinished promote are left out; hidden partitions aren't.
+	if want := "phenotype=demo:nhanes genomic=-dash,synth,.hidden"; set.Contents != want {
+		t.Errorf("contents %q, want %q", set.Contents, want)
+	}
+	if args := fx.copies[0][len(fx.copies[0])-3:]; !slices.Equal(args, []string{"-dash", "synth", ".hidden"}) {
+		t.Errorf("copied partitions %q", args)
 	}
 }

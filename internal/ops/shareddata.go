@@ -2,11 +2,13 @@ package ops
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"regexp"
 	"slices"
 	"strings"
@@ -28,7 +30,9 @@ const (
 )
 
 // The labels on a published data set's volumes. They are AIO's, so `list`
-// also shows sets AIO's publish-shared-hpds-data.sh made. A data set never
+// also shows sets AIO's publish-shared-hpds-data.sh made, except
+// .cli-version and .source-stack, which replace AIO's .aio-commit and
+// .source-project. A data set never
 // carries the publishing stack's labels: destroying that stack would remove
 // it.
 const (
@@ -50,11 +54,12 @@ const (
 	// sharedDataRunLabel tells this run's volumes from ones another publish
 	// created under the same name at the same moment.
 	sharedDataRunLabel = SharedDataLabel + ".publish-id"
+	// aioSourceProjectLabel is .source-stack on a set AIO published.
+	aioSourceProjectLabel = SharedDataLabel + ".source-project"
 )
 
 // PublishedMarker is the file publish writes at the top of both volumes:
-// "name=<set> created=<RFC 3339>". Stacks mounting the set re-seed their
-// genomic copy when it changes.
+// "name=<set> created=<RFC 3339>".
 const PublishedMarker = ".picsure-published"
 
 var sharedDataName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
@@ -96,7 +101,6 @@ func CheckSharedDataName(name string) error {
 	return nil
 }
 
-// sharedVolumes returns the set's data and genomic volume names.
 func sharedVolumes(name string) (data, genomic string) {
 	d, _ := catalog.LookupVolume("shared-hpds-data")
 	g, _ := catalog.LookupVolume("shared-hpds-genomic")
@@ -115,7 +119,6 @@ func RefusePublishFromShared(cfg *stack.Config) error {
 
 // PublishOptions configures PublishSharedData.
 type PublishOptions struct {
-	// Name is the data set's name.
 	Name string
 	// CLIVersion is recorded on the volumes.
 	CLIVersion string
@@ -141,7 +144,9 @@ func PublishSharedData(ctx context.Context, d *Deps, st *stack.Stack, cfg *stack
 	notRunning := func(context.Context) (bool, error) { return !p.wasRunning, nil }
 	plan := []steps.Step{
 		{ID: SharedCheckStepID, Title: "Check the data to publish", Apply: p.check},
-		{ID: LoaderStopStepID, Title: "Stop HPDS", Check: notRunning, Apply: p.stop},
+		// Stopped even when it isn't running: one in a restart loop
+		// could start in the middle of the copy.
+		{ID: LoaderStopStepID, Title: "Stop HPDS", Apply: p.stop},
 		{ID: SharedCopyStepID, Title: "Copy the data into data set " + opts.Name, Apply: p.copy},
 		{ID: LoaderStartStepID, Title: "Start HPDS", Check: notRunning, Apply: p.start},
 	}
@@ -153,12 +158,12 @@ func PublishSharedData(ctx context.Context, d *Deps, st *stack.Stack, cfg *stack
 	if !errors.As(err, &se) {
 		return SharedDataSet{}, err
 	}
-	// steps.Error's own advice, that a re-run skips the steps already done,
-	// doesn't hold here: a re-run publishes again from the start, and is
-	// refused once the set exists.
-	failed := err
-	if !se.Interrupted {
-		failed = fmt.Errorf("step %s failed: %w", se.Step, se.Err)
+	// steps.Error's own advice, that a re-run resumes or skips the steps
+	// already done, doesn't hold here: a re-run publishes again from the
+	// start, and is refused once the set exists.
+	failed := fmt.Errorf("step %s failed: %w", se.Step, se.Err)
+	if se.Interrupted {
+		failed = fmt.Errorf("stopped at step %s: %w", se.Step, se.Err)
 	}
 	switch {
 	case se.Step == LoaderStartStepID:
@@ -237,7 +242,7 @@ func (p *publish) check(ctx context.Context, sink events.Sink) error {
 	if err != nil {
 		return err
 	}
-	p.wasRunning = svc != nil && svc.State == "running"
+	p.wasRunning = svc != nil && (svc.State == "running" || svc.State == "restarting")
 
 	id := make([]byte, 8)
 	if _, err := io.ReadFull(p.d.Rand, id); err != nil {
@@ -285,16 +290,16 @@ type publishProbe struct {
 // probe reads both source volumes in one helper container.
 func (p *publish) probe(ctx context.Context) (publishProbe, error) {
 	// Every top-level directory of the genomic volume is a partition to
-	// HPDS, hidden ones too, except a backup AIO left there and a promote
-	// 049 didn't finish.
-	script := `cd /d; for f in ` + strings.Join(sharedPhenotypeFiles, " ") + `; do [ -s "$f" ] || printf 'missing %s\n' "$f"; done; ` +
+	// HPDS, hidden ones too, except a backup AIO left there and an
+	// unfinished promote's copy.
+	script := `cd "$1"; for f in ` + strings.Join(sharedPhenotypeFiles, " ") + `; do [ -s "$f" ] || printf 'missing %s\n' "$f"; done; ` +
 		`if [ -f ` + datasetMarker + ` ]; then printf 'dataset %s\n' "$(head -n 1 ` + datasetMarker + `)"; fi; ` +
-		`cd /g; for p in * .[!.]* ..?*; do [ -d "$p" ] || continue; case "$p" in ` + genomicBackup + `|` + promotePrefix + `*) continue;; esac; ` +
+		`cd "$2"; for p in * .[!.]* ..?*; do [ -d "$p" ] || continue; case "$p" in ` + genomicBackup + `|` + promotePrefix + `*) continue;; esac; ` +
 		`printf 'partition %s\n' "$p"; for c in "./$p"/*/; do [ -d "$c" ] || continue; c=${c#./}; printf 'contig %s\n' "${c%/}"; ` +
 		`for f in ` + strings.Join(sharedGenomicIndexes, " ") + `; do [ -s "$c$f" ] || printf 'unindexed %s\n' "$c$f"; done; done; done`
 	mounts := []docker.Mount{{Source: p.srcData, Target: "/d", ReadOnly: true}, {Source: p.srcGenomic, Target: "/g", ReadOnly: true}}
 	var out bytes.Buffer
-	if err := p.script(ctx, "shared-probe", mounts, script, nil, nil, &out); err != nil {
+	if err := p.script(ctx, "shared-probe", mounts, script, []string{"/d", "/g"}, nil, &out); err != nil {
 		return publishProbe{}, fmt.Errorf("reading volumes %s and %s: %w", p.srcData, p.srcGenomic, err)
 	}
 	var r publishProbe
@@ -334,36 +339,26 @@ func (p *publish) picsureCommit(ctx context.Context) string {
 // copy creates the set's volumes and copies the data into them. If it
 // fails, even when interrupted, it removes the volumes it created.
 func (p *publish) copy(ctx context.Context, sink events.Sink) (err error) {
-	var created []string
+	var tried []string
 	defer func() {
-		if err == nil {
-			return
-		}
-		for _, vol := range created {
-			if rerr := p.d.Docker.VolumeRemove(context.WithoutCancel(ctx), vol); rerr != nil {
-				err = errors.Join(err, fmt.Errorf("removing volume %s, which this run created: %w; remove it with `docker volume rm %s`", vol, rerr, vol))
-			}
+		if err != nil {
+			err = p.removeOwn(context.WithoutCancel(ctx), tried, err)
 		}
 	}()
-	for _, v := range [][2]string{{p.dstData, hpdsDataVolume}, {p.dstGenomic, hpdsGenomicVolume}} {
-		vol := v[0]
-		labels := map[string]string{SharedDataKindLabel: v[1]}
-		for k, v := range p.labels {
-			labels[k] = v
+	for _, v := range []struct{ name, kind string }{{p.dstData, hpdsDataVolume}, {p.dstGenomic, hpdsGenomicVolume}} {
+		labels := maps.Clone(p.labels)
+		labels[SharedDataKindLabel] = v.kind
+		tried = append(tried, v.name)
+		if err := p.d.Docker.VolumeCreate(ctx, v.name, labels); err != nil {
+			return fmt.Errorf("creating volume %s: %w", v.name, err)
 		}
-		if err := p.d.Docker.VolumeCreate(ctx, vol, labels); err != nil {
-			return fmt.Errorf("creating volume %s: %w", vol, err)
-		}
-		// Creating a volume that exists succeeds, so make sure this run
-		// made it before ever removing it.
-		got, err := p.d.Docker.VolumeInspect(ctx, vol)
+		got, err := p.d.Docker.VolumeInspect(ctx, v.name)
 		if err != nil {
 			return err
 		}
 		if got.Labels[sharedDataRunLabel] != p.labels[sharedDataRunLabel] {
-			return exitcode.Precondition("volume %s appeared while publishing; is another publish of %s running?", vol, p.opts.Name)
+			return exitcode.Precondition("volume %s appeared while publishing; is another publish of %s running?", v.name, p.opts.Name)
 		}
-		created = append(created, vol)
 	}
 
 	sink.Emit(events.Progress{ID: SharedCopyStepID, Text: "copying " + p.srcData + " and " + p.srcGenomic})
@@ -387,6 +382,26 @@ func (p *publish) copy(ctx context.Context, sink events.Sink) (err error) {
 	return nil
 }
 
+// removeOwn removes those of vols that carry this run's publish-id, adding
+// any failure to err. Creating a volume that exists succeeds, so only the
+// label tells which ones this run made.
+func (p *publish) removeOwn(ctx context.Context, vols []string, err error) error {
+	for _, vol := range vols {
+		v, rerr := p.d.Docker.VolumeInspect(ctx, vol)
+		if errors.Is(rerr, docker.ErrNotFound) || rerr == nil && v.Labels[sharedDataRunLabel] != p.labels[sharedDataRunLabel] {
+			continue
+		}
+		if rerr == nil {
+			rerr = p.d.Docker.VolumeRemove(ctx, vol)
+		}
+		if rerr != nil {
+			err = errors.Join(err, fmt.Errorf("removing volume %s, which this run may have created: %w; "+
+				"if it has no %s, remove it with `docker volume rm %s`", vol, rerr, PublishedMarker, vol))
+		}
+	}
+	return err
+}
+
 // ListSharedData returns every published data set on the daemon, by name.
 func ListSharedData(ctx context.Context, d *Deps) ([]SharedDataSet, error) {
 	vols, err := d.Docker.VolumeList(ctx, SharedDataLabel)
@@ -404,7 +419,7 @@ func ListSharedData(ctx context.Context, d *Deps) ([]SharedDataSet, error) {
 				HPDSProfile:   v.Labels[SharedDataProfileLabel],
 				PicsureCommit: v.Labels[SharedDataCommitLabel],
 				CLIVersion:    v.Labels[SharedDataCLIVersionLabel],
-				SourceStack:   v.Labels[SharedDataSourceStackLabel],
+				SourceStack:   cmp.Or(v.Labels[SharedDataSourceStackLabel], v.Labels[aioSourceProjectLabel]),
 				Created:       v.Labels[SharedDataCreatedLabel],
 			})
 			i = len(sets) - 1

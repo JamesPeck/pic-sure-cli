@@ -1352,17 +1352,20 @@ and sets `d.Compose`. Steps, none skippable:
   which must hold a `<contig>/` with `variantIndex_fbbis.javabin` and
   `BucketIndexBySample.javabin`, at most 10 partitions. Any gap is exit 3.
   It records whether hpds is running, and works out the labels.
-- `hpds-stop` / `hpds-start`: skipped (Check) when hpds wasn't running.
+- `hpds-stop` always runs (one in a restart loop could start mid-copy);
+  `hpds-start` is skipped (Check) unless hpds was running or restarting.
 - `shared-copy`: creates both volumes, then re-inspects each and requires
-  this run's random `publish-id` label, so a volume another publish created
-  meanwhile is never removed. One helper copies only the loader output
+  this run's random `publish-id` label. Cleanup removes only volumes
+  carrying that label, so one another publish created meanwhile is kept,
+  and one whose confirming inspect failed is still removed. One helper copies only the loader output
   (`sharedDataFiles`) plus an empty `all/` (HPDS's genomic mount point) and
   the partitions, then writes `PublishedMarker` (`.picsure-published`,
   `name=<set> created=<RFC 3339>`) in both. On failure, even an interrupted
   one, it removes the volumes this run created; a copy failure then starts
   hpds again if it was running.
 
-Labels are AIO's (`SharedDataLabel` = `org.hms-dbmi.picsure.shared-hpds-data`
+Labels are AIO's, with `.cli-version` and `.source-stack` replacing
+`.aio-commit` and `.source-project` (`list` falls back to the latter) (`SharedDataLabel` = `org.hms-dbmi.picsure.shared-hpds-data`
 plus `.kind`, `.contents` = `phenotype=<marker|unknown>
 genomic=<partitions|none>`, `.hpds-profile` (`bch-dev` with genomic data,
 else empty: 051 reads it when `hpds.profile` is empty), `.picsure-commit`
