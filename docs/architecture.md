@@ -816,10 +816,13 @@ is ready to use.
   process holding stdout or stderr, the runner stops reading `WaitDelay`
   after the exit and returns the command's result, leaving that process
   alone.
+- **Stdin.** A `Cmd.Stdin` that isn't an `*os.File` is copied in by the
+  runner, so a reader that blocks forever can't hold up a cancelled call.
+  A read error fails the call.
 - **No terminal.** Because the group is in the background, a child that
   opens `/dev/tty` to prompt (ssh passphrase, git credentials) stops on
-  SIGTTIN until ctx ends. Callers turn prompts off (`GIT_TERMINAL_PROMPT=0`,
-  ssh `BatchMode`). An interactive passthrough would need a foreground mode
+  SIGTTIN until ctx ends. Callers turn prompts off, as the git client does
+  with `GIT_TERMINAL_PROMPT=0` and `SSH_ASKPASS_REQUIRE=force`. An interactive passthrough would need a foreground mode
   the runner doesn't have yet.
 - **Environment.** A child gets only `PATH`, `HOME`, `TERM`,
   `SSH_AUTH_SOCK`, every `DOCKER_*` and `XDG_*` variable, and
@@ -837,9 +840,10 @@ is ready to use.
 - **Logging.** Argv, dir and env names at debug level, then the exit code
   and duration. Never env values or stdin.
 
-**WithTimeout** (`timeout.go`) wraps any `Runner` so each call gets at most
-d: `docker.WithTimeout(d.Runner, 10*time.Second)` for `compose ps`, 5–10 s
-for probes (§10.2). Long operations take no timeout and end only with their
+**WithTimeout** (`timeout.go`) wraps any `Runner` so each call is cancelled
+after d (over `ExecRunner`, it returns up to `WaitDelay` later):
+`docker.WithTimeout(d.Runner, 10*time.Second)` for `compose ps`, 5–10 s for
+probes (§10.2). Long operations take no timeout and end only with their
 context. A call that runs out of time returns a `*TimeoutError`
 (`"ARGV timed out after 10s"`), which matches `context.DeadlineExceeded`; a
 caller's own cancellation stays a plain context error.

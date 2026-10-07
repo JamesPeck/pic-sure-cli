@@ -40,6 +40,11 @@ const DefaultWaitDelay = 5 * time.Second
 // nothing the command started (the compose plugin under docker, say)
 // outlives it or keeps its output pipes open.
 //
+// Stdin. A Cmd.Stdin that isn't an *os.File is copied to the child by the
+// runner. If ctx ends while a read from it is blocked, the call returns
+// anyway and the read is left to finish on its own; a read error otherwise
+// fails the call.
+//
 // Lingering pipes. If a command exits on its own but leaves a background
 // process holding stdout or stderr, the runner stops reading WaitDelay
 // after the exit and returns the command's own result. It leaves that
@@ -104,35 +109,48 @@ func (r *ExecRunner) run(ctx context.Context, c Cmd, stdout, stderr io.Writer) (
 	cmd := exec.CommandContext(ctx, c.Argv[0], c.Argv[1:]...)
 	cmd.Env = append(baseEnv(r.environ()), c.Env...)
 	cmd.Dir = c.Dir
-	cmd.Stdin = c.Stdin
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.WaitDelay = delay
 	// Cancel runs on exec's context watcher, which Wait synchronizes with,
-	// so Wait's caller can read these without a lock.
+	// so Wait's caller can read cancelled without a lock. The group is
+	// killed on its own timer, not after Wait, because Wait can still be
+	// blocked on a writer after the command has died.
 	var cancelled bool
-	var killAt time.Time
+	killed := make(chan struct{})
 	cmd.Cancel = func() error {
 		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
 		if errors.Is(err, syscall.ESRCH) {
 			return os.ErrProcessDone
 		}
-		cancelled, killAt = true, time.Now().Add(delay)
+		cancelled = true
+		go func() {
+			killGroupBy(cmd.Process.Pid, time.Now().Add(delay))
+			close(killed)
+		}()
 		return err
 	}
 
 	r.debug(ctx, "exec", "argv", argv, "dir", c.Dir, "env", envNames(c.Env))
 	start := time.Now()
+	stdin, err := startStdin(cmd, c.Stdin)
+	if err != nil {
+		return -1, fmt.Errorf("%s: %w", argv, err)
+	}
 	if err := cmd.Start(); err != nil {
+		_ = stdin.abandon()
+		r.debug(ctx, "exec failed to start", "argv", argv, "err", err)
 		if ctx.Err() != nil {
 			return -1, ctxError(ctx, argv)
 		}
 		return -1, fmt.Errorf("%s: %w", argv, err)
 	}
+	stdin.started()
 	waitErr := cmd.Wait()
+	stdinErr := stdin.abandon()
 	if cancelled {
-		killGroupBy(cmd.Process.Pid, killAt)
+		<-killed
 	}
 	code := exitCode(cmd.ProcessState)
 	r.debug(ctx, "exec done", "argv", argv, "exit", code, "elapsed", time.Since(start).Round(time.Millisecond))
@@ -141,6 +159,8 @@ func (r *ExecRunner) run(ctx context.Context, c Cmd, stdout, stderr io.Writer) (
 	switch {
 	case cancelled:
 		return code, ctxError(ctx, argv)
+	case waitErr == nil && stdinErr != nil:
+		return code, fmt.Errorf("%s: reading stdin: %w", argv, stdinErr)
 	case waitErr == nil, errors.As(waitErr, &exitErr):
 		return code, nil
 	case errors.Is(waitErr, exec.ErrWaitDelay):
@@ -148,6 +168,62 @@ func (r *ExecRunner) run(ctx context.Context, c Cmd, stdout, stderr io.Writer) (
 		return code, nil
 	default:
 		return code, fmt.Errorf("%s: %w", argv, waitErr)
+	}
+}
+
+// stdinCopy feeds a Cmd.Stdin that isn't an *os.File to the child through
+// a pipe the runner owns. Left to os/exec, the copy would make Wait block
+// until the reader returns, which for a stalled producer is never.
+type stdinCopy struct {
+	pr, pw *os.File
+	src    io.Reader
+	done   chan error
+}
+
+// startStdin sets cmd.Stdin from src.
+func startStdin(cmd *exec.Cmd, src io.Reader) (*stdinCopy, error) {
+	if f, ok := src.(*os.File); ok || src == nil {
+		cmd.Stdin = f
+		return &stdinCopy{}, nil
+	}
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		return nil, err
+	}
+	cmd.Stdin = pr
+	return &stdinCopy{pr: pr, pw: pw, src: src, done: make(chan error, 1)}, nil
+}
+
+// started closes the child's end in the parent and starts the copy.
+func (s *stdinCopy) started() {
+	if s.pw == nil {
+		return
+	}
+	_ = s.pr.Close()
+	go func() {
+		_, err := io.Copy(s.pw, s.src)
+		if errors.Is(err, syscall.EPIPE) || errors.Is(err, os.ErrClosed) {
+			err = nil // the child stopped reading
+		}
+		s.done <- err // before the close, so a child that exits on EOF sees it
+		_ = s.pw.Close()
+	}()
+}
+
+// abandon closes the pipe once the child is done and returns the copy's read
+// error if it has finished. A copy still blocked in src.Read is left
+// behind; it ends when the read returns.
+func (s *stdinCopy) abandon() error {
+	if s.pw == nil {
+		return nil
+	}
+	_ = s.pr.Close() // already closed if the child started
+	_ = s.pw.Close()
+	select {
+	case err := <-s.done:
+		return err
+	default:
+		return nil
 	}
 }
 

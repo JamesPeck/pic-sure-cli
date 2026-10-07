@@ -14,6 +14,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/docker"
@@ -170,6 +171,49 @@ func TestExecCancelEscalatesToSIGKILL(t *testing.T) {
 		t.Errorf("returned %v after cancel, want just over the %v grace period", elapsed, delay)
 	}
 	assertGone(t, <-pids)
+}
+
+// A stdin reader that never returns must not keep a cancelled call, or the
+// group's SIGKILL, waiting.
+func TestExecCancelNotBlockedByStalledStdin(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	const delay = 300 * time.Millisecond
+	r := &docker.ExecRunner{WaitDelay: delay}
+	stdinR, stdinW := io.Pipe()
+	defer func() { _ = stdinW.Close() }()
+	pids := make(chan int, 1)
+	var cancelled time.Time
+	stdout := writerFunc(func(p []byte) (int, error) {
+		if pid, err := strconv.Atoi(strings.TrimSpace(string(p))); err == nil {
+			pids <- pid
+			cancelled = time.Now()
+			cancel()
+		}
+		return len(p), nil
+	})
+
+	c := sh("trap '' TERM; sleep 60 & echo $!; wait")
+	c.Stdin = stdinR
+	_, err := r.Stream(ctx, c, stdout, nil)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if elapsed := time.Since(cancelled); elapsed > delay+5*time.Second {
+		t.Errorf("returned %v after cancel, want just over the %v grace period", elapsed, delay)
+	}
+	assertGone(t, <-pids)
+}
+
+func TestExecReturnsStdinReadError(t *testing.T) {
+	t.Parallel()
+	c := sh("cat >/dev/null")
+	c.Stdin = io.MultiReader(strings.NewReader("data"), iotest.ErrReader(errors.New("disk gone")))
+	_, err := (&docker.ExecRunner{}).Run(context.Background(), c)
+	if err == nil || !strings.Contains(err.Error(), "disk gone") {
+		t.Errorf("err = %v, want the stdin read error", err)
+	}
 }
 
 func TestExecCancelSendsSIGTERMFirst(t *testing.T) {

@@ -8,9 +8,9 @@ import (
 	"time"
 )
 
-// WithTimeout returns a Runner that gives each call to r at most d. A call
-// that runs out of time is cancelled like any other (see ExecRunner) and
-// returns a *TimeoutError. Spec §10.2's budgets are 10 s for `compose ps`
+// WithTimeout returns a Runner that cancels each call to r after d. A call
+// that runs out of time is cancelled like any other, so over ExecRunner it
+// can take up to WaitDelay longer to return, and returns a *TimeoutError. Spec §10.2's budgets are 10 s for `compose ps`
 // and 5–10 s per probe; long operations get no timeout and end only with
 // their context.
 func WithTimeout(r Runner, d time.Duration) Runner {

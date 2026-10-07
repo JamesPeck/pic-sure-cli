@@ -41,12 +41,14 @@ func TestEveryCallDisablesPromptsAndCarriesCallerEnv(t *testing.T) {
 
 func TestTheUsersOwnAskpassIsKept(t *testing.T) {
 	t.Setenv("SSH_ASKPASS", "/usr/local/bin/my-askpass")
+	t.Setenv("DISPLAY", ":0")
 	f := fakerunner.New(t)
 	f.On(fakerunner.Glob("git ls-remote *"))
 	if _, err := git.New(f).LsRemote(context.Background(), "https://example.com/r.git"); err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"GIT_TERMINAL_PROMPT", "SSH_ASKPASS_REQUIRE"}; !slices.Equal(f.Calls()[0].Env, want) {
+	// The runner doesn't pass them on, so the client must.
+	if want := []string{"GIT_TERMINAL_PROMPT", "SSH_ASKPASS_REQUIRE", "SSH_ASKPASS", "DISPLAY"}; !slices.Equal(f.Calls()[0].Env, want) {
 		t.Errorf("env = %v, want %v", f.Calls()[0].Env, want)
 	}
 }

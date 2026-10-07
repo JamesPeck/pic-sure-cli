@@ -66,9 +66,16 @@ func New(r docker.Runner) Client {
 	// when it reads from it. GIT_TERMINAL_PROMPT=0 makes git fail instead.
 	// SSH_ASKPASS_REQUIRE=force sends ssh's passphrase and host-key prompts
 	// to the askpass program, which fails unless the user has their own.
-	// Credential helpers and ssh-agent keys still work.
+	// Credential helpers and ssh-agent keys still work. The runner passes
+	// on only a few variables, so the user's askpass, and the display a
+	// graphical one needs, go through Cmd.Env.
 	env := []string{"GIT_TERMINAL_PROMPT=0", "SSH_ASKPASS_REQUIRE=force"}
-	if os.Getenv("SSH_ASKPASS") == "" {
+	if askpass := os.Getenv("SSH_ASKPASS"); askpass != "" {
+		env = append(env, "SSH_ASKPASS="+askpass)
+		if display := os.Getenv("DISPLAY"); display != "" {
+			env = append(env, "DISPLAY="+display)
+		}
+	} else {
 		env = append(env, "SSH_ASKPASS=false")
 	}
 	return &client{runner: r, env: env}
