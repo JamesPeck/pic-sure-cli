@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
+	"github.com/JamesPeck/pic-sure-cli/internal/stack"
 	"github.com/JamesPeck/pic-sure-cli/internal/tty"
 	"github.com/JamesPeck/pic-sure-cli/internal/tui"
 )
@@ -34,6 +35,9 @@ type App struct {
 	IsTerminal func() bool
 	// StartTUI runs the full-screen TUI until the user quits or ctx is done.
 	StartTUI func(context.Context, tui.Options) error
+
+	// migrations replaces stack.ConfigMigrations() in tests (gate.go).
+	migrations *stack.Registry
 
 	// running is set when a command's RunE starts. An error from before
 	// that point came from cobra rejecting the command line, so Run reports

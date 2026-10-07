@@ -26,7 +26,7 @@ func newConfigCmd(a *App) *cobra.Command {
 			Short: "Print the stack's config, defaults included",
 			Args:  cobra.NoArgs,
 			RunE: func(cmd *cobra.Command, _ []string) error {
-				return a.configShow(cmd.OutOrStdout())
+				return a.configShow(cmd)
 			},
 		},
 		&cobra.Command{
@@ -36,7 +36,7 @@ func newConfigCmd(a *App) *cobra.Command {
 such as network. Secrets aren't config; they live in .pic-sure/secrets.yaml.`,
 			Args: cobra.ExactArgs(1),
 			RunE: func(cmd *cobra.Command, args []string) error {
-				return a.configGet(cmd.OutOrStdout(), args[0])
+				return a.configGet(cmd, args[0])
 			},
 		},
 		newConfigSetCmd(a),
@@ -72,23 +72,43 @@ Flags go before KEY, so a VALUE such as -Xmx4g needs no quoting.`,
 	return cmd
 }
 
-func (a *App) configShow(w io.Writer) error {
-	cfg, err := a.loadConfig()
-	if err != nil {
+func (a *App) configShow(cmd *cobra.Command) error {
+	w := cmd.OutOrStdout()
+	cfg, doc, err := a.readConfig(cmd)
+	switch {
+	case err != nil:
 		return err
-	}
-	if a.Global.JSON {
+	case cfg == nil && a.Global.JSON:
+		v, err := doc.Raw("")
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(w).Encode(v)
+	case cfg == nil:
+		data, err := doc.Bytes()
+		if err != nil {
+			return err
+		}
+		_, err = w.Write(data)
+		return err
+	case a.Global.JSON:
 		return json.NewEncoder(w).Encode(cfg)
 	}
 	return writeYAML(w, cfg)
 }
 
-func (a *App) configGet(w io.Writer, key string) error {
-	cfg, err := a.loadConfig()
+func (a *App) configGet(cmd *cobra.Command, key string) error {
+	w := cmd.OutOrStdout()
+	cfg, doc, err := a.readConfig(cmd)
 	if err != nil {
 		return err
 	}
-	v, err := cfg.Get(key)
+	var v any
+	if cfg != nil {
+		v, err = cfg.Get(key)
+	} else {
+		v, err = doc.Raw(key)
+	}
 	if err != nil {
 		return withUsageHint(configError(err))
 	}
@@ -104,21 +124,36 @@ func (a *App) configGet(w io.Writer, key string) error {
 	}
 }
 
-func (a *App) loadConfig() (*stack.Config, error) {
-	st, err := a.openStack()
+// readConfig loads the config for show and get. A pic-sure.yaml in an older
+// schema is migrated in memory, as update would migrate it. One in a newer
+// schema can't be decoded, so cfg is nil and doc holds the file as written.
+func (a *App) readConfig(cmd *cobra.Command) (cfg *stack.Config, doc *stack.ConfigDoc, err error) {
+	st, err := a.openStack(cmd)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer func() { _ = st.Close() }()
-	cfg, err := st.LoadConfig()
+	doc, err = st.ReadConfigDoc()
 	if err != nil {
-		return nil, configError(err)
+		return nil, nil, configError(err)
 	}
-	return cfg, nil
+	reg := a.configMigrations()
+	if _, err := reg.Migrate(doc); err != nil {
+		var se *stack.SchemaVersionError
+		if errors.As(err, &se) && se.Found > reg.Target {
+			a.warnStderr("this pic-sure can't decode %s schema %d, so this is the file as written, without defaults", stack.ConfigFile, se.Found)
+			return nil, doc, nil
+		}
+		return nil, nil, configError(err)
+	}
+	if cfg, err = doc.Config(); err != nil {
+		return nil, nil, configError(err)
+	}
+	return cfg, nil, nil
 }
 
 func (a *App) configSet(cmd *cobra.Command, key, value string) error {
-	st, err := a.openStack()
+	st, err := a.openStack(cmd)
 	if err != nil {
 		return err
 	}
@@ -168,7 +203,7 @@ func (a *App) configEdit(cmd *cobra.Command) error {
 	if a.Global.JSON || a.Global.NonInteractive || !a.IsTerminal() {
 		return exitcode.Usage("config edit needs a terminal; use pic-sure config set KEY VALUE instead")
 	}
-	st, err := a.openStack()
+	st, err := a.openStack(cmd)
 	if err != nil {
 		return err
 	}

@@ -12,9 +12,11 @@ import (
 	"github.com/JamesPeck/pic-sure-cli/internal/stack"
 )
 
-// openStack opens the stack the command acts on: --stack DIR, or the one
-// containing the current directory. No stack there is exit 3.
-func (a *App) openStack() (*stack.Stack, error) {
+// openStack opens the stack cmd acts on: --stack DIR, or the one containing
+// the current directory. No stack there is exit 3. It then applies the
+// version gate for cmd's class (gate.go), so a command the gate refuses
+// gets exit 5.
+func (a *App) openStack(cmd *cobra.Command) (*stack.Stack, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return nil, err
@@ -23,7 +25,15 @@ func (a *App) openStack() (*stack.Stack, error) {
 	if err != nil {
 		return nil, err
 	}
-	return stack.Open(dir)
+	st, err := stack.Open(dir)
+	if err != nil {
+		return nil, err
+	}
+	if err := a.gate(cmd, st); err != nil {
+		_ = st.Close()
+		return nil, err
+	}
+	return st, nil
 }
 
 // initDir returns the directory init creates its stack in, from its

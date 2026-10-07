@@ -80,10 +80,12 @@ stdout '^\{"type":"result","ok":true,"data":\{"key":"network.http_port","value":
 exec pic-sure --stack stack config get network.http_port
 stdout '^80$'
 
-# A file in another schema is incompatible.
+# A file in a newer schema can be read but not changed (gate.txtar has more).
 cp schema2.yaml stack/pic-sure.yaml
-exitcode 5 pic-sure --stack stack config get name
-stderr 'pic-sure.yaml is schema 2, but this pic-sure reads schema 1'
+exec pic-sure --stack stack config get name
+stdout '^demo$'
+stderr 'warning: this stack uses pic-sure.yaml schema 2'
+exitcode 5 pic-sure --stack stack config set network.http_port 80
 
 # edit needs a terminal.
 exitcode 2 pic-sure --stack stack config edit

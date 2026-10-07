@@ -1,0 +1,62 @@
+# The version gate (spec §10.6). This binary is version dev, which doesn't
+# order against releases, so the stacks here are newer by schema.
+
+# A stack rendered by a newer pic-sure with schema 2: read-only commands run
+# with a warning on stderr, and show the file as written.
+exec pic-sure --stack newer config get network.http_port
+stdout '^8080$'
+stderr '^pic-sure: warning: this stack uses pic-sure.yaml schema 2, last rendered by pic-sure v9.0.0, but this pic-sure \(dev\) reads schema 1; upgrade pic-sure before changing the stack$'
+stderr 'warning: this pic-sure can''t decode pic-sure.yaml schema 2, so this is the file as written, without defaults'
+exec pic-sure --stack newer config show
+cmp stdout newer/pic-sure.yaml
+exec pic-sure --stack newer --json config show
+stdout '^\{"future":\{"key":"value"\},"name":"demo","network":\{"http_port":8080\},"schema":2\}$'
+stderr 'warning: this stack uses pic-sure.yaml schema 2'
+
+# Mutating commands are refused with exit 5, and change nothing.
+exitcode 5 pic-sure --stack newer config set network.http_port 80
+stderr '^pic-sure: this stack uses pic-sure.yaml schema 2, last rendered by pic-sure v9.0.0, but this pic-sure \(dev\) reads schema 1; upgrade pic-sure \(see pic-sure self-update\) to change the stack$'
+! stderr warning
+cmp newer/pic-sure.yaml newer.yaml
+
+# state.json alone is enough to tell: here pic-sure.yaml says schema 1.
+exec pic-sure --stack newerstate config get name
+stdout '^demo$'
+stderr 'warning: this stack uses pic-sure.yaml schema 2, last rendered by pic-sure v9.0.0'
+exitcode 5 pic-sure --stack newerstate config set network.http_port 80
+
+# A stack this pic-sure rendered is unaffected.
+exec pic-sure --stack current config set network.http_port 80
+! stderr .
+exec pic-sure --stack current config get network.http_port
+stdout '^80$'
+! stderr .
+
+-- newer/.pic-sure/state.json --
+{"cli_version": "v9.0.0", "schema_version": 2}
+-- newer/pic-sure.yaml --
+schema: 2
+name: demo
+network:
+  http_port: 8080
+future:
+  key: value
+-- newer.yaml --
+schema: 2
+name: demo
+network:
+  http_port: 8080
+future:
+  key: value
+-- newerstate/.pic-sure/state.json --
+{"cli_version": "v9.0.0", "schema_version": 2}
+-- newerstate/pic-sure.yaml --
+schema: 1
+name: demo
+auth: {admin_email: admin@example.org, auth0: {client_id: abc}}
+-- current/.pic-sure/state.json --
+{"cli_version": "dev", "schema_version": 1}
+-- current/pic-sure.yaml --
+schema: 1
+name: demo
+auth: {admin_email: admin@example.org, auth0: {client_id: abc}}

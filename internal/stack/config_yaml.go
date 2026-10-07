@@ -199,18 +199,25 @@ func (d *ConfigDoc) Config() (*Config, error) {
 // checkSchema reports a missing or non-integer schema as a problem, and a
 // different schema as a *SchemaVersionError.
 func checkSchema(top *yaml.Node) error {
+	v, err := schemaOf(top)
+	if err == nil && v != ConfigSchema {
+		return &SchemaVersionError{Found: v}
+	}
+	return err
+}
+
+// schemaOf returns the schema in the top-level mapping, or a *ConfigError
+// when it is missing or isn't a whole number.
+func schemaOf(top *yaml.Node) (int, error) {
 	n := lookupNode(top, []string{"schema"})
 	if n == nil {
-		return &ConfigError{Problems: []Problem{{Path: "schema", Msg: fmt.Sprintf("required; this pic-sure writes schema %d", ConfigSchema)}}}
+		return 0, &ConfigError{Problems: []Problem{{Path: "schema", Msg: fmt.Sprintf("required; this pic-sure writes schema %d", ConfigSchema)}}}
 	}
 	var v int
 	if !scalarFits(n, reflect.Int) || n.Decode(&v) != nil {
-		return &ConfigError{Problems: []Problem{{Path: "schema", Line: n.Line, Msg: "want a whole number, got " + describeNode(n)}}}
+		return 0, &ConfigError{Problems: []Problem{{Path: "schema", Line: n.Line, Msg: "want a whole number, got " + describeNode(n)}}}
 	}
-	if v != ConfigSchema {
-		return &SchemaVersionError{Found: v}
-	}
-	return nil
+	return v, nil
 }
 
 // ReadOnlyChanges returns a *ConfigError naming each read-only key whose

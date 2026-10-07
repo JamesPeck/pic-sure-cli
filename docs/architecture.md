@@ -144,11 +144,17 @@ it.
   `--non-interactive`, and `--json` and `--plain` are mutually exclusive.
   `--wait-lock` (007) makes a mutating command wait for the stack lock
   instead of failing.
-- `stack.go` (007): `a.openStack()` finds and opens the stack the command
-  acts on (exit 3 when there is none), `a.initDir(args)` resolves init's
+- `stack.go` (007): `a.openStack(cmd)` finds and opens the stack the command
+  acts on (exit 3 when there is none) and applies the version gate for
+  `cmd` (009), `a.initDir(args)` resolves init's
   directory, and `a.lockStack(ctx, cmd, st, sink)` takes the stack lock
   for a mutating command: exit 1 if it is held, or a wait with
   `--wait-lock`.
+- `gate.go` (009): `commandClasses`, the version-gate class of every
+  command (§10.6; a test keeps it complete): read-only, mutating, or
+  `update`'s own class. `openStack` runs `a.gate`, so every command that
+  opens a stack is gated. A read-only command's warning goes to stderr, so
+  `--json` output stays clean. A new command needs a row here.
 - `root.go`: registers every command. It wraps each `RunE` so that any
   error raised before a `RunE` starts is reported as a usage error. A
   `PreRunE` that fails for any other reason must return an
@@ -356,6 +362,40 @@ the manifest.
   `LoadHPDSKey` pass every non-empty secret to the function set with
   `SetSecretRegistrar`. The cli layer sets it to `log.RegisterSecrets`
   (ticket 005; until then it is a TODO in `internal/cli/deps.go`).
+
+### Version gate and config migrations (009)
+
+`gate.go` and `migrate.go`. D13: a stack records the pic-sure version and
+schema that last rendered it, and each command class reacts to a
+difference (§10.6).
+
+- **Migrations.** A `Migration{From, Summary, Apply}` rewrites the
+  document's top-level mapping from schema `From` to `From+1`; the
+  framework then sets `schema`. A `Registry{Target, Steps}` chains them,
+  and `ConfigMigrations()` is the one this pic-sure runs (Target
+  `ConfigSchema`, no steps yet). Add a step there when `ConfigSchema` goes
+  up. `Plan(doc)` lists the pending steps; a schema above Target, or one no
+  step starts from, is a `*SchemaVersionError`. `Migrate(doc)` runs them in
+  memory, which read-only commands use to read an older config.
+  `Apply(st, now)` (for `update`, under the stack lock) migrates in memory,
+  validates when Target is `ConfigSchema`, then copies `pic-sure.yaml` and
+  `state.json` as they were to `.pic-sure/backups/<UTC ts>/` and writes the
+  config. With nothing pending it does nothing. It leaves state.json's
+  `schema_version` to the next render.
+- **Comparing versions.** `CompareVersions(a, b)` orders versions as semver,
+  ignoring a leading `v`, `+build` and a git-describe suffix (`-N-gSHA`,
+  `-dirty`). It reports not-ok for anything else, such as `dev`. 028 uses it
+  for PSCLI.
+- **The gate.** `st.CheckVersions(cli, reg)` reads state.json (missing is
+  fine, corrupt is an error) and pic-sure.yaml's schema. On the result,
+  `Newer()` is true if either schema is above this pic-sure's or
+  `cli_version` is a later version, and `Pending` lists the migrations.
+  `Gate(class)`: `ReadOnly` always runs, with a warning when newer;
+  `Mutating` is exit 5 when newer or when migrations are pending ("run
+  pic-sure update"); `Migrating` (update) is exit 5 only when newer. A
+  config without a readable schema doesn't gate; the command reports it.
+- `doc.Raw(key)` reads a value as written, with no defaults. `config
+  show/get` use it on a newer schema, which this pic-sure can't decode.
 
 ## internal/render
 

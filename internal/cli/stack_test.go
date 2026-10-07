@@ -39,7 +39,7 @@ func TestOpenStack(t *testing.T) {
 	t.Run("from a subdirectory", func(t *testing.T) {
 		t.Chdir(sub)
 		a, _, _ := testApp(t)
-		st, err := a.openStack()
+		st, err := a.openStack(findCmd(t, "status"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -52,7 +52,7 @@ func TestOpenStack(t *testing.T) {
 		t.Chdir(t.TempDir())
 		a, _, _ := testApp(t)
 		a.Global.Stack = dir
-		st, err := a.openStack()
+		st, err := a.openStack(findCmd(t, "status"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -61,7 +61,7 @@ func TestOpenStack(t *testing.T) {
 	t.Run("no stack is exit 3", func(t *testing.T) {
 		t.Chdir(t.TempDir())
 		a, _, _ := testApp(t)
-		if _, err := a.openStack(); exitcode.FromError(err) != exitcode.CodePrecondition {
+		if _, err := a.openStack(findCmd(t, "status")); exitcode.FromError(err) != exitcode.CodePrecondition {
 			t.Errorf("err = %v, want exit 3", err)
 		}
 	})
