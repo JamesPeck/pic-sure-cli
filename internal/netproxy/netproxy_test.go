@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -52,6 +53,11 @@ func TestParseURL(t *testing.T) {
 		{in: "http://user:hunter2@proxy:0", wantErr: `has a port outside 1-65535: "http://user:xxxxx@proxy:0"`},
 		{in: "http://user:hunter2@proxy:65536", wantErr: "has a port outside 1-65535"},
 		{in: " http://proxy", wantErr: "is not a valid URL"},
+		{in: "http://user:hunter2@proxy.example.org;3128", wantErr: `has an invalid host: "http://user:xxxxx@proxy.example.org;3128"`},
+		{in: "http://proxy.example.org,3128", wantErr: "has an invalid host"},
+		{in: `http://pr"oxy:3128`, wantErr: "has an invalid host"},
+		{in: "http://a$(id)b:3128", wantErr: "has an invalid host"},
+		{in: "http://10.1.2.300:3128", wantErr: "has an invalid host"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.in, func(t *testing.T) {
@@ -104,6 +110,8 @@ func TestParseNoProxy(t *testing.T) {
 		{in: "host:0", wantErr: `has an entry with an invalid port: "host:0"`},
 		{in: "host:http", wantErr: `has an entry with an invalid port: "host:http"`},
 		{in: "[::1", wantErr: `"[::1"`},
+		{in: "999.1.1.1", wantErr: `"999.1.1.1"`},
+		{in: "1.2.3", wantErr: `"1.2.3"`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.in, func(t *testing.T) {
@@ -240,6 +248,10 @@ func TestEnvAddsServices(t *testing.T) {
 	}
 }
 
+// fixedJava is the end of every nonProxyHosts for a stack with one service,
+// psama: the service, localhost, 127.0.0.1, and the JVM's loopback defaults.
+const fixedJava = "psama|*.psama|localhost|*.localhost|127.0.0.1|127.*|[::1]"
+
 func TestJVMOpts(t *testing.T) {
 	tests := []struct {
 		name string
@@ -248,31 +260,32 @@ func TestJVMOpts(t *testing.T) {
 	}{
 		{"http only", netproxy.Config{HTTP: "http://proxy.example.org:3128"}, []string{
 			"-Dhttp.proxyHost=proxy.example.org", "-Dhttp.proxyPort=3128",
-			"-Dhttp.nonProxyHosts=psama|localhost|127.0.0.1",
+			"-Dhttp.nonProxyHosts=" + fixedJava,
 		}},
 		{"both, credentials dropped, missing ports", netproxy.Config{
 			HTTP: "http://user:hunter2@proxy.example.org", HTTPS: "https://user:hunter2@proxy.example.org",
 		}, []string{
 			"-Dhttp.proxyHost=proxy.example.org", "-Dhttp.proxyPort=80",
 			"-Dhttps.proxyHost=proxy.example.org", "-Dhttps.proxyPort=443",
-			"-Dhttp.nonProxyHosts=psama|localhost|127.0.0.1",
+			"-Dhttp.nonProxyHosts=" + fixedJava,
 		}},
 		{"IPv6 proxy", netproxy.Config{HTTPS: "http://[2001:db8::1]:3128"}, []string{
 			"-Dhttps.proxyHost=2001:db8::1", "-Dhttps.proxyPort=3128",
-			"-Dhttp.nonProxyHosts=psama|localhost|127.0.0.1",
+			"-Dhttp.nonProxyHosts=" + fixedJava,
 		}},
 		{"no_proxy translated", netproxy.Config{
 			HTTP: "http://proxy:3128",
-			NoProxy: "example.com,.sub.example,*.star.example,registry.example:5000,10.0.0.0/8,172.16.0.0/12," +
-				"192.168.1.0/24,10.9.8.7/32,2001:db8::/32,10.0.0.1:8080,2001:db8::5,[::1]:8443,single",
+			NoProxy: "example.com,.sub.example,*.star.example,registry.example:5000,10.0.0.0/8," +
+				"192.168.1.0/24,2001:db8::/32,10.0.0.1:8080,2001:db8::5,[::1]:8443,single",
 		}, []string{
 			"-Dhttp.proxyHost=proxy", "-Dhttp.proxyPort=3128",
 			"-Dhttp.nonProxyHosts=example.com|*.example.com|*.sub.example|*.star.example|registry.example|*.registry.example|" +
-				"10.*|192.168.1.*|10.9.8.7|10.0.0.1|[2001:db8::5]|[::1]|single|psama|localhost|127.0.0.1",
+				// [::1] is already listed, so it isn't repeated at the end.
+				"10.*|192.168.1.*|10.0.0.1|[2001:db8::5]|[::1]|single|*.single|psama|*.psama|localhost|*.localhost|127.0.0.1|127.*",
 		}},
 		{"star", netproxy.Config{HTTP: "http://proxy:3128", NoProxy: "*"}, []string{
 			"-Dhttp.proxyHost=proxy", "-Dhttp.proxyPort=3128",
-			"-Dhttp.nonProxyHosts=*|psama|localhost|127.0.0.1",
+			"-Dhttp.nonProxyHosts=*|" + fixedJava,
 		}},
 	}
 	for _, tt := range tests {
@@ -290,22 +303,60 @@ func TestJVMOpts(t *testing.T) {
 	}
 }
 
+// Every IPv4 range is written exactly, as prefix patterns or addresses.
+func TestJVMOptsIPv4Ranges(t *testing.T) {
+	octets := func(from, to int) string {
+		var p []string
+		for i := from; i <= to; i++ {
+			p = append(p, strconv.Itoa(i)+".*")
+		}
+		return strings.Join(p, "|")
+	}
+	tests := []struct {
+		cidr string
+		want string
+	}{
+		{"10.0.0.0/8", "10.*|" + fixedJava},
+		{"172.16.0.0/12", "172.16.*|172.17.*|172.18.*|172.19.*|172.20.*|172.21.*|172.22.*|172.23.*|" +
+			"172.24.*|172.25.*|172.26.*|172.27.*|172.28.*|172.29.*|172.30.*|172.31.*|" + fixedJava},
+		{"10.20.0.0/15", "10.20.*|10.21.*|" + fixedJava},
+		{"192.168.1.0/24", "192.168.1.*|" + fixedJava},
+		{"10.9.8.4/30", "10.9.8.4|10.9.8.5|10.9.8.6|10.9.8.7|" + fixedJava},
+		{"10.9.8.7/32", "10.9.8.7|" + fixedJava},
+		{"128.0.0.0/1", octets(128, 255) + "|" + fixedJava},
+		// 127.* is among the range's patterns, so it isn't repeated.
+		{"0.0.0.0/0", octets(0, 255) + "|psama|*.psama|localhost|*.localhost|127.0.0.1|[::1]"},
+		{"2001:db8::/32", fixedJava},
+	}
+	for _, tt := range tests {
+		t.Run(tt.cidr, func(t *testing.T) {
+			want := "-Dhttp.nonProxyHosts=" + tt.want
+			opts := mustNew(t, netproxy.Config{HTTP: "http://proxy:3128", NoProxy: tt.cidr}, "psama").JVMOpts()
+			if got := opts[len(opts)-1]; got != want {
+				t.Errorf("got  %s\nwant %s", got, want)
+			}
+		})
+	}
+}
+
 func TestMavenSettings(t *testing.T) {
 	tests := []struct {
 		name string
 		c    netproxy.Config
 		want string
 	}{
-		{"http only, no credentials", netproxy.Config{HTTP: "http://proxy.example.org:3128", NoProxy: ".corp.example"}, `<?xml version="1.0" encoding="UTF-8"?>
+		// Maven would send https through the http proxy.
+		{"http only", netproxy.Config{HTTP: "http://proxy.example.org:3128"}, ""},
+		{"https only, no credentials", netproxy.Config{HTTPS: "http://proxy.example.org:3128", NoProxy: ".corp.example,2001:db8::5"}, `<?xml version="1.0" encoding="UTF-8"?>
 <settings xmlns="http://maven.apache.org/SETTINGS/1.0.0">
   <proxies>
     <proxy>
-      <id>http-proxy</id>
+      <id>https-proxy</id>
       <active>true</active>
-      <protocol>http</protocol>
+      <protocol>https</protocol>
       <host>proxy.example.org</host>
       <port>3128</port>
-      <nonProxyHosts>*.corp.example|psama|localhost|127.0.0.1</nonProxyHosts>
+      <nonProxyHosts>*.corp.example|psama|*.psama|localhost|*.localhost|127.0.0.1|127.*</nonProxyHosts>
     </proxy>
   </proxies>
 </settings>
@@ -324,7 +375,7 @@ func TestMavenSettings(t *testing.T) {
       <port>80</port>
       <username>us&lt;er</username>
       <password>p&amp;ss&lt;&#34;</password>
-      <nonProxyHosts>psama|localhost|127.0.0.1</nonProxyHosts>
+      <nonProxyHosts>psama|*.psama|localhost|*.localhost|127.0.0.1|127.*</nonProxyHosts>
     </proxy>
     <proxy>
       <id>https-proxy</id>
@@ -333,7 +384,7 @@ func TestMavenSettings(t *testing.T) {
       <host>proxy.example.org</host>
       <port>443</port>
       <username>other</username>
-      <nonProxyHosts>psama|localhost|127.0.0.1</nonProxyHosts>
+      <nonProxyHosts>psama|*.psama|localhost|*.localhost|127.0.0.1|127.*</nonProxyHosts>
     </proxy>
   </proxies>
 </settings>
@@ -353,7 +404,7 @@ func TestMavenSettings(t *testing.T) {
 func TestMavenSettingsRoundTripsCredentials(t *testing.T) {
 	pass := `a&b<c>d"e'f]]>g`
 	u := url.URL{Scheme: "http", User: url.UserPassword("me", pass), Host: "proxy:3128"}
-	p := mustNew(t, netproxy.Config{HTTP: u.String()})
+	p := mustNew(t, netproxy.Config{HTTPS: u.String()})
 	var s struct {
 		Proxies []struct {
 			Username string `xml:"username"`

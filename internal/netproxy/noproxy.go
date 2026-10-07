@@ -1,6 +1,7 @@
 package netproxy
 
 import (
+	"encoding/binary"
 	"fmt"
 	"net"
 	"net/url"
@@ -21,9 +22,26 @@ type entry struct {
 	port    string // only this port; empty for any
 }
 
-// domainRE is a host or domain name: dot-separated labels of letters,
-// digits, - and _, with no - at either end of a label.
-var domainRE = regexp.MustCompile(`^[a-z0-9_]([a-z0-9_-]*[a-z0-9_])?(\.[a-z0-9_]([a-z0-9_-]*[a-z0-9_])?)*$`)
+// labelRE is one label of a lower-case host or domain name: letters,
+// digits, - and _, with no - at either end.
+var labelRE = regexp.MustCompile(`^[a-z0-9_]([a-z0-9_-]*[a-z0-9_])?$`)
+
+// validHostName reports whether s, in lower case, is a host or domain name.
+// A last label of only digits is refused, because the name is then most
+// likely a mistyped IP address such as 10.1.2.300.
+func validHostName(s string) bool {
+	if len(s) > 253 {
+		return false
+	}
+	labels := strings.Split(s, ".")
+	for _, l := range labels {
+		if len(l) > 63 || !labelRE.MatchString(l) {
+			return false
+		}
+	}
+	_, err := strconv.Atoi(labels[len(labels)-1])
+	return err != nil
+}
 
 // ParseNoProxy parses the user's no_proxy setting: comma-separated entries,
 // each "*" (every host), a host or domain name (it and its subdomains), a
@@ -91,7 +109,7 @@ func parseEntry(s string) (entry, error) {
 	} else if d, ok := strings.CutPrefix(host, "."); ok {
 		e.domain, e.subOnly = d, true
 	}
-	if !domainRE.MatchString(e.domain) {
+	if !validHostName(e.domain) {
 		return entry{}, fmt.Errorf("has an entry that isn't a host, domain, IP address or CIDR range: %q", s)
 	}
 	e.text = e.domain
@@ -138,19 +156,24 @@ func (e entry) matches(host string, ip net.IP, port string) bool {
 	}
 }
 
-// javaNonProxyHosts is the no-proxy list as the JVM's and Maven's
-// nonProxyHosts: "|"-separated patterns whose only wildcard is a leading or
-// trailing "*". The ports go, so an entry with a port covers every port of
-// its host. IPv4 ranges become prefix patterns (10.0.0.0/8 is 10.*); ranges
-// on other than an octet boundary and IPv6 ranges can't be written and are
-// left out.
-func (p *Proxy) javaNonProxyHosts() string {
+// nonProxyHosts is the no-proxy list as a JVM's or Maven's nonProxyHosts:
+// "|"-separated patterns whose only wildcard is a leading or trailing "*".
+// Ports are dropped, so an entry with a port covers every port of its
+// host. An IPv4 range becomes prefix patterns. IPv6 ranges can't be
+// written and are left out.
+//
+// Maven gets no IPv6 entries: it makes each pattern a regular expression
+// with only "." escaped, so brackets would be a character class, and it
+// can't parse an IPv6 host from a repository URL anyway.
+func (p *Proxy) nonProxyHosts(maven bool) string {
 	var out []string
 	seen := map[string]bool{}
-	add := func(pattern string) {
-		if !seen[pattern] {
-			seen[pattern] = true
-			out = append(out, pattern)
+	add := func(patterns ...string) {
+		for _, pattern := range patterns {
+			if !seen[pattern] {
+				seen[pattern] = true
+				out = append(out, pattern)
+			}
 		}
 	}
 	for _, e := range p.noProxy {
@@ -158,40 +181,55 @@ func (p *Proxy) javaNonProxyHosts() string {
 		case e.all:
 			add("*")
 		case e.cidr != nil:
-			if pattern, ok := ipv4Prefix(e.cidr); ok {
-				add(pattern)
-			}
+			add(ipv4Patterns(e.cidr)...)
 		case e.ip != nil && e.ip.To4() == nil:
 			// The JVM matches an IPv6 host in brackets, as in its default
-			// nonProxyHosts, [::1].
-			add("[" + e.ip.String() + "]")
+			// nonProxyHosts.
+			if !maven {
+				add("[" + e.ip.String() + "]")
+			}
 		case e.ip != nil:
 			add(e.ip.String())
 		case e.subOnly:
 			add("*." + e.domain)
 		default:
-			add(e.domain)
-			// A bare single-label name such as a service has no subdomains
-			// worth listing.
-			if strings.Contains(e.domain, ".") {
-				add("*." + e.domain)
-			}
+			add(e.domain, "*."+e.domain)
 		}
+	}
+	// Setting nonProxyHosts replaces the JVM's default list, which sends
+	// all of loopback direct, as ProxyURL does.
+	add("127.*")
+	if !maven {
+		add("[::1]")
 	}
 	return strings.Join(out, "|")
 }
 
-// ipv4Prefix writes an IPv4 range on an octet boundary, /8 to /32, as a
-// nonProxyHosts pattern.
-func ipv4Prefix(n *net.IPNet) (string, bool) {
+// ipv4Patterns writes an IPv4 range as nonProxyHosts patterns, one for each
+// block at the next octet boundary: 10.0.0.0/8 is 10.*, 172.16.0.0/12 is
+// 172.16.* to 172.31.*, and a range of /25 or longer is its addresses. It
+// returns nil for an IPv6 range.
+func ipv4Patterns(n *net.IPNet) []string {
 	ones, bits := n.Mask.Size()
 	ip := n.IP.To4()
-	if ip == nil || bits != 32 || ones == 0 || ones%8 != 0 {
-		return "", false
+	if ip == nil || bits != 32 {
+		return nil
 	}
-	octets := strings.Split(ip.String(), ".")
-	if ones == 32 {
-		return ip.String(), true
+	octets := max(1, (ones+7)/8) // the octets each pattern spells out
+	step := uint64(1) << (32 - 8*octets)
+	base := uint64(binary.BigEndian.Uint32(ip))
+	var out []string
+	for i := range uint64(1) << (8*octets - ones) {
+		a := base + i*step
+		parts := make([]string, octets)
+		for j := range parts {
+			parts[j] = strconv.FormatUint(a>>(24-8*j)&0xff, 10)
+		}
+		pattern := strings.Join(parts, ".")
+		if octets < 4 {
+			pattern += ".*"
+		}
+		out = append(out, pattern)
 	}
-	return strings.Join(octets[:ones/8], ".") + ".*", true
+	return out
 }

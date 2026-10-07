@@ -785,16 +785,22 @@ just `proxy.http` set, https traffic goes direct.
   credentials (the JVM has no property for them).
 - `MavenSettings()`: a `settings.xml` with a `<proxy>` per scheme, for the
   reactor container's `/root/.m2`. It holds the credentials: write it 0600.
+  Maven sends https through an http proxy when it has no https one, so with
+  only `proxy.http` set it is nil and Maven's (all https) downloads go
+  direct, as https does on every other path.
 - The JVM and Maven get the no-proxy list as `|`-separated patterns whose
   only wildcard is a leading or trailing `*`: `example.com` becomes
-  `example.com|*.example.com`, IPv6 addresses are bracketed, ports are
-  dropped, `10.0.0.0/8` becomes `10.*`, and ranges that aren't on an octet
-  boundary, and IPv6 ranges, are left out.
+  `example.com|*.example.com`, ports are dropped, IPv4 ranges become prefix
+  patterns (`172.16.0.0/12` is `172.16.*` to `172.31.*`), and IPv6 ranges
+  are left out. The JVM gets IPv6 addresses in brackets; Maven can't match
+  IPv6 hosts and gets none. Both get `127.*` (and the JVM `[::1]`), because
+  setting the property replaces the JVM's own loopback defaults.
 - `String()` and `LogValue()` redact the passwords, so a `*Proxy` can be
   logged.
 
 `ParseURL` and `ParseNoProxy` are the parsers `New` uses. `stack.Validate`
-calls them too, so a config that validates always resolves. The package
+calls them too, so a config that validates always resolves. A proxy host
+must be an IP address or a host name whose last label isn't all digits. The package
 imports only the catalog.
 
 ## internal/selfupdate

@@ -99,6 +99,9 @@ func ParseURL(s string) (*url.URL, error) {
 	case (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "":
 		return nil, fmt.Errorf("want only a scheme, host and port, got %q", u.Redacted())
 	}
+	if host := u.Hostname(); net.ParseIP(host) == nil && !validHostName(strings.ToLower(host)) {
+		return nil, fmt.Errorf("has an invalid host: %q", u.Redacted())
+	}
 	port := u.Port()
 	if port == "" {
 		port = defaultPort(u.Scheme)
@@ -135,7 +138,7 @@ func (p *Proxy) NoProxy() []string {
 // case, as NAME=value entries for git, node and runtime containers. A proxy
 // that isn't set has no entries. The proxy URLs keep their user and
 // password, so pass the entries as secrets are passed (Cmd.Env, or ${VAR}
-// in the rendered compose file), never in argv or a file.
+// in the rendered compose file), never in argv or a rendered file.
 func (p *Proxy) Env() []string {
 	if !p.Enabled() {
 		return nil
@@ -178,7 +181,7 @@ func (p *Proxy) JVMOpts() []string {
 	if p.https != nil {
 		opts = append(opts, "-Dhttps.proxyHost="+p.https.Hostname(), "-Dhttps.proxyPort="+p.https.Port())
 	}
-	return append(opts, "-Dhttp.nonProxyHosts="+p.javaNonProxyHosts())
+	return append(opts, "-Dhttp.nonProxyHosts="+p.nonProxyHosts(false))
 }
 
 // ProxyURL is an http.Transport.Proxy for the CLI's own HTTP. It returns

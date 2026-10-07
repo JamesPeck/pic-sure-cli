@@ -113,6 +113,7 @@ func TestValidate(t *testing.T) {
 		{"proxy bad port", func(c *Config) { c.Proxy.HTTP = "http://user:hunter2@proxy:port" }, []string{"proxy.http: is not a valid URL"}},
 		{"proxy password redacted", func(c *Config) { c.Proxy.HTTP = "ftp://user:hunter2@proxy:21" }, []string{`proxy.http: want an http:// or https:// URL, got "ftp://user:xxxxx@proxy:21"`}},
 		{"proxy port out of range", func(c *Config) { c.Proxy.HTTPS = "http://user:hunter2@proxy:65536" }, []string{`proxy.https: has a port outside 1-65535: "http://user:xxxxx@proxy:65536"`}},
+		{"proxy host typo", func(c *Config) { c.Proxy.HTTP = "http://user:hunter2@proxy.example.org;3128" }, []string{`proxy.http: has an invalid host: "http://user:xxxxx@proxy.example.org;3128"`}},
 		{"no_proxy bad entry", func(c *Config) { c.Proxy.NoProxy = "ok.example.org, bad host" }, []string{`proxy.no_proxy: has an entry that isn't a host, domain, IP address or CIDR range: "bad host"`}},
 	}
 	for _, tt := range tests {
