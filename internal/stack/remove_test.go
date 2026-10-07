@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -72,8 +73,9 @@ func TestRemoveCreatedKeepsOperatorFiles(t *testing.T) {
 			t.Errorf("%s: err = %v, want it gone", p, err)
 		}
 	}
-	// Deepest first, the config after the rest, .pic-sure/ last.
-	if n := len(r.Removed); n < 3 || r.Removed[n-3] != ConfigFile || r.Removed[n-1] != CLIDir {
+	// Deepest first, the config after the rest, then the lock, the
+	// manifest and .pic-sure/.
+	if n := len(r.Removed); n < 4 || !slices.Equal(r.Removed[n-4:], []string{ConfigFile, LockFile, ManifestFile, CLIDir}) {
 		t.Errorf("Removed = %v", r.Removed)
 	}
 }
@@ -175,7 +177,7 @@ func TestRemoveCreatedKeepsTheManifestWhileCLIDirHoldsOtherFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []Entry{{Path: CLIDir, Type: EntryDir}, {Path: ManifestFile, Type: EntryFile}}; !slices.Equal(m.Entries, want) {
+	if want := []Entry{{Path: CLIDir, Type: EntryDir}, {Path: ManifestFile, Type: EntryFile}, {Path: LockFile, Type: EntryFile}}; !slices.Equal(m.Entries, want) {
 		t.Errorf("manifest = %v, want %v", m.Entries, want)
 	}
 }
@@ -188,11 +190,12 @@ func TestLockFailsWhenTheStackIsDestroyedWhileWaiting(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := make(chan error, 1)
+	waiting := make(chan struct{})
 	go func() {
-		_, err := s.Lock(context.Background(), LockOptions{Wait: true})
+		_, err := s.Lock(context.Background(), LockOptions{Wait: true, OnWait: func(string) { close(waiting) }})
 		got <- err
 	}()
-	time.Sleep(3 * lockPoll) // let the waiter open the lock file
+	<-waiting // it has the old lock file open
 	if _, err := s.RemoveCreated(); err != nil {
 		t.Fatal(err)
 	}
@@ -204,5 +207,33 @@ func TestLockFailsWhenTheStackIsDestroyedWhileWaiting(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("the waiter never returned")
+	}
+}
+
+func TestRemoveCreatedKeepsTheStackOpenableAfterAFailure(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	s := newStack(t)
+	populate(t, s)
+	// data/readme.txt can't be unlinked.
+	if err := os.Chmod(s.Path("data"), 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(s.Path("data"), 0o755) })
+
+	if _, err := s.RemoveCreated(); err == nil || !strings.Contains(err.Error(), "data/readme.txt") {
+		t.Fatalf("err = %v, want a failure naming data/readme.txt", err)
+	}
+	for _, p := range []string{ConfigFile, ManifestFile, LockFile} {
+		if _, err := os.Lstat(s.Path(p)); err != nil {
+			t.Errorf("%s: %v, want it kept", p, err)
+		}
+	}
+	if _, err := Open(s.Dir); err != nil {
+		t.Errorf("the stack no longer opens: %v", err)
+	}
+	if m, _ := s.Manifest(); !m.Has("data/readme.txt") || !m.Has(ConfigFile) {
+		t.Errorf("manifest lost what is left: %v", m.Entries)
 	}
 }

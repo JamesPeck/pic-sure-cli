@@ -205,3 +205,54 @@ func TestDestroyWithoutARenderedStack(t *testing.T) {
 		t.Errorf("stack dir: %v, want it removed", err)
 	}
 }
+
+// failingVolumeRm makes docker volume rm fail, as for a volume in use.
+func failingVolumeRm(t *testing.T, fd *fakeDaemon) *fakerunner.Runner {
+	f := fakerunner.New(t)
+	f.On(fakerunner.Glob("docker volume rm *")).Stderr("Error response from daemon: remove alpha_hpds-data: volume is in use\n").Exit(1)
+	inner := teardownRunner(t, fd)
+	f.On(fakerunner.Glob("docker *")).Do(func(ctx context.Context, c fakerunner.Call) (docker.Result, error) {
+		return inner.Run(ctx, docker.Cmd{Argv: c.Argv})
+	})
+	return f
+}
+
+func TestDestroyKeepsTheFilesWhenAVolumeStays(t *testing.T) {
+	fx := newCacheFixture(t)
+	fx.daemon.volumes = teardownVolumes(fx.alpha)
+	st := openFixtureStack(t, fx.alpha)
+	f := failingVolumeRm(t, fx.daemon)
+	d := &ops.Deps{Runner: f, Docker: docker.NewEngine(f), Compose: &downComposer{}, Clock: ops.FixedClock(cacheNow), Sink: events.Discard}
+
+	if _, err := ops.Destroy(context.Background(), d, st, ops.TeardownOptions{Name: "alpha"}); err == nil {
+		t.Fatal("destroy succeeded with a volume it couldn't remove")
+	}
+	if _, err := stack.Open(fx.alpha); err != nil {
+		t.Errorf("the stack no longer opens, so destroy can't be re-run: %v", err)
+	}
+	f.AssertNotCalled(fakerunner.Glob("docker image rm *"))
+}
+
+func TestResetRecordsAFailureAndForgetsTheCopies(t *testing.T) {
+	fx := newCacheFixture(t)
+	fx.daemon.volumes = teardownVolumes(fx.alpha)
+	st := openFixtureStack(t, fx.alpha)
+	state, _ := st.LoadState()
+	state.HPDSKey = &stack.VolumeCopy{}
+	if err := st.SaveState(state); err != nil {
+		t.Fatal(err)
+	}
+	f := failingVolumeRm(t, fx.daemon)
+	d := &ops.Deps{Runner: f, Docker: docker.NewEngine(f), Compose: &downComposer{}, Clock: ops.FixedClock(cacheNow), Sink: events.Discard}
+
+	if _, err := ops.Reset(context.Background(), d, st, ops.TeardownOptions{Name: "alpha"}); err == nil {
+		t.Fatal("reset succeeded with volumes it couldn't remove")
+	}
+	after, err := st.LoadState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.HPDSKey != nil || after.LastOperation == nil || after.LastOperation.Status != stack.OperationFailed {
+		t.Errorf("state after a failed reset: hpds_key %v, last operation %+v", after.HPDSKey, after.LastOperation)
+	}
+}

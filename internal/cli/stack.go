@@ -17,6 +17,17 @@ import (
 // version gate for cmd's class (gate.go), so a command the gate refuses
 // gets exit 5, and starts the run's log file in the stack (openRunLog).
 func (a *App) openStack(cmd *cobra.Command) (*stack.Stack, error) {
+	st, err := a.openStackUnlogged(cmd)
+	if err != nil {
+		return nil, err
+	}
+	a.openRunLog(st)
+	return st, nil
+}
+
+// openStackUnlogged is openStack without the run log, for a command that
+// must change nothing in the stack until the user confirms (056).
+func (a *App) openStackUnlogged(cmd *cobra.Command) (*stack.Stack, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return nil, err
@@ -33,7 +44,6 @@ func (a *App) openStack(cmd *cobra.Command) (*stack.Stack, error) {
 		_ = st.Close()
 		return nil, err
 	}
-	a.openRunLog(st)
 	return st, nil
 }
 

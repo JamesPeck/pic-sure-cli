@@ -17,11 +17,10 @@ import (
 
 // Teardown step IDs (§9.8).
 const (
-	StepTeardownDown   = "down"
-	StepVolumes        = "volumes"
-	StepDevImages      = "dev-images"
-	StepFiles          = "files"
-	composeVolumeLabel = "com.docker.compose.volume"
+	StepTeardownDown = "down"
+	StepVolumes      = "volumes"
+	StepDevImages    = "dev-images"
+	StepFiles        = "files"
 )
 
 // TeardownOptions configures Reset and Destroy.
@@ -169,13 +168,14 @@ func volumesStep(d *Deps, st *stack.Stack, name string, report *TeardownReport, 
 		ID:    StepVolumes,
 		Title: "Remove the stack's volumes",
 		Apply: func(ctx context.Context, sink events.Sink) error {
-			vols, err := StackVolumes(ctx, d, st, name)
+			vols, err := stackVolumes(ctx, d, st, name)
 			if err != nil {
 				return err
 			}
+			warnMoved(ctx, d, sink, st, name)
 			var failed []string
 			for _, v := range vols {
-				cv, known := catalog.LookupVolume(v.Labels[composeVolumeLabel])
+				cv, known := catalog.LookupVolume(v.Labels[stack.LabelComposeVolume])
 				if known && cv.Scope != catalog.StackScoped {
 					continue
 				}
@@ -199,14 +199,29 @@ func volumesStep(d *Deps, st *stack.Stack, name string, report *TeardownReport, 
 	}
 }
 
-// StackVolumes returns the volumes labelled for stack name whose stack-dir
+// stackVolumes returns the volumes labelled for stack name whose stack-dir
 // label is st's directory.
-func StackVolumes(ctx context.Context, d *Deps, st *stack.Stack, name string) ([]docker.Volume, error) {
+func stackVolumes(ctx context.Context, d *Deps, st *stack.Stack, name string) ([]docker.Volume, error) {
 	vols, err := d.Docker.VolumeList(ctx, stack.LabelStack+"="+name, stack.LabelStackDir+"="+st.Dir)
 	if err != nil {
 		return nil, fmt.Errorf("listing the stack's volumes: %w", err)
 	}
 	return vols, nil
+}
+
+// warnMoved warns about volumes labelled for stack name in another
+// directory, which teardown leaves alone: another stack's, or this one's
+// from before its directory moved.
+func warnMoved(ctx context.Context, d *Deps, sink events.Sink, st *stack.Stack, name string) {
+	vols, err := d.Docker.VolumeList(ctx, stack.LabelStack+"="+name)
+	if err != nil {
+		return
+	}
+	for _, v := range vols {
+		if dir := v.Labels[stack.LabelStackDir]; dir != st.Dir {
+			sink.Emit(events.Warning{ID: StepVolumes, Text: fmt.Sprintf("left volume %s alone: it is labelled for stack %s in %q, not this directory", v.Name, name, dir)})
+		}
+	}
 }
 
 // removeDevImages removes the dev-<name>-* images of the built catalog

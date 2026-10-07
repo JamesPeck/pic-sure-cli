@@ -309,14 +309,17 @@ it.
   load-phenotype` operation in state.json. `--json`'s data is
   `{"dataset": "phenotype:<sha256>"}`.
 - `teardown.go` (056): `reset [--keep-db]` and `destroy [--prune-images]`.
-  Both read the config (exit 2 if invalid), then `confirmName`: `--yes`
+  Both open the stack with `openStackUnlogged` (openStack without the run
+  log, so a refusal writes nothing) and read the config (exit 2 if
+  invalid), then `confirmName`: `--yes`
   consents; otherwise, when `canPrompt`, the user types the stack name on
   stdin (anything else is exit 4), and without a terminal it is exit 4
   before anything changes. `--json` and `--non-interactive` are no
-  consent. Under the stack lock they build the Composer with
+  consent. Then the run log, and under the stack lock the Composer from
   `teardownCompose`, which, unlike `stackCompose`, gives a never-rendered
-  stack none and a stack without secrets.yaml empty secrets, so a half-made
-  stack can still be torn down. Then `ops.Reset` or `ops.Destroy`;
+  stack none (a nil `docker.Composer`) and a stack whose secrets.yaml is
+  missing or unreadable empty secrets, so a half-made stack can still be
+  torn down. Then `ops.Reset` or `ops.Destroy`;
   `--prune-images` opens the default cache with `pruneLockTimeout`.
 
 | File | Commands | Ticket |
@@ -442,14 +445,16 @@ A directory is a stack when it holds `pic-sure.yaml` and `.pic-sure/`.
 - **Removal for destroy (056).** `RemoveCreated()` removes the manifest's
   paths deepest first with `Remove`, `pic-sure.yaml` after the rest (and
   not after a failure, so a failed run leaves a stack destroy can open
-  again), then the manifest and `.pic-sure/` together, only when nothing
-  else is in `.pic-sure/`, then the stack dir when `"."` is recorded and
+  again), then the lock, the manifest and `.pic-sure/` together, only when
+  nothing else is in `.pic-sure/` (the lock goes last so no other command
+  can create and take a new one meanwhile), then the stack dir when `"."` is recorded and
   it is empty (rmdir). A recorded directory that still holds anything, a
   path under a symlink and one whose kind changed are kept and reported.
   WriteFile temp files whose target is a recorded path are removed first.
   `RemoveReport` lists what went, what was kept, and the stack dir's
   remaining top-level entries. Because destroy deletes `.pic-sure/lock`
-  while holding it, `Lock` checks, once it has the flock, that its open
+  while holding it, a command already waiting on that file would get the
+  flock on the deleted inode, so `Lock` checks, once it has the flock, that its open
   file is still `.pic-sure/lock`; a command that waited on a destroyed
   stack fails with exit 3 wrapping `ErrNotFound`.
 - **Labels.** `st.Labels(name)` returns `org.hms-dbmi.picsure.stack=<name>`
@@ -1145,8 +1150,10 @@ tag goes. It then forgets the gone stacks' registry entries, and with
 
 **Reset and destroy (056, `teardown.go`).** §9.8. Both run a `down` step
 (compose down; nothing when `d.Compose` is nil, a never-rendered stack)
-and a `volumes` step over `StackVolumes`: `docker volume ls` filtered by
-both `stack=<name>` and `stack-dir=<Dir>` labels, never by name. A volume
+and a `volumes` step: `docker volume ls` filtered by both `stack=<name>`
+and `stack-dir=<Dir>` labels, never by name. Volumes labelled with the name
+but another directory (another stack, or this one before it moved) are
+left alone with a warning. A volume
 whose `com.docker.compose.volume` is a catalog `SharedData` or
 `HostScoped` volume is never removed, whatever its labels.
 - `Reset(d, st, TeardownOptions{Name, KeepDB})` removes `KindData` and

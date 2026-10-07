@@ -66,7 +66,7 @@ On a terminal you confirm by typing the stack name; otherwise pass --yes.`,
 // lock.
 func (a *App) teardown(cmd *cobra.Command, opts ops.TeardownOptions) error {
 	destroy := cmd.Name() == "destroy"
-	st, err := a.openStack(cmd)
+	st, err := a.openStackUnlogged(cmd)
 	if err != nil {
 		return err
 	}
@@ -87,6 +87,7 @@ func (a *App) teardown(cmd *cobra.Command, opts ops.TeardownOptions) error {
 	if err := a.confirmName(cmd, cfg.Name, what); err != nil {
 		return err
 	}
+	a.openRunLog(st)
 
 	d := a.newDeps()
 	lock, err := a.lockStack(cmd.Context(), cmd, st, d.Sink)
@@ -144,22 +145,23 @@ func (a *App) confirmName(cmd *cobra.Command, name, what string) error {
 
 // teardownCompose is the compose adapter for reset and destroy. Unlike
 // stackCompose, a stack that was never rendered gets none, and one without
-// secrets.yaml gets empty secrets: compose down needs the variables set,
-// not their values, and a half-made stack must still be removable.
-func (a *App) teardownCompose(r docker.Runner, st *stack.Stack, cfg *stack.Config) (*docker.Compose, error) {
+// secrets.yaml it can read gets empty secrets: compose down needs the
+// variables set, not their values, and a half-made stack must still be
+// removable.
+func (a *App) teardownCompose(r docker.Runner, st *stack.Stack, cfg *stack.Config) (docker.Composer, error) {
 	c, err := docker.NewCompose(r, st.Dir, nil)
 	if errors.Is(err, docker.ErrNotRendered) {
-		return nil, nil
+		return nil, nil // not a nil *Compose: downStep checks for a nil Composer
 	}
 	if err != nil {
 		return nil, err
 	}
 	sec, err := st.LoadSecrets()
-	if errors.Is(err, fs.ErrNotExist) {
-		sec, err = &stack.Secrets{}, nil
-	}
 	if err != nil {
-		return nil, err
+		if !errors.Is(err, fs.ErrNotExist) {
+			a.warnStderr("compose down runs without the stack's secrets: %v", err)
+		}
+		sec = &stack.Secrets{}
 	}
 	env, err := render.ComposeEnv(cfg, sec)
 	if err != nil {
