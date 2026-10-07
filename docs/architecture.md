@@ -1460,15 +1460,20 @@ the loader can mount (§9.6), using only Go's archive libraries.
   the absolute path to mount; `Format`; `Entry`; `Warnings`) and a cleanup
   func. A plain CSV is used in place, with no temp dir. Otherwise Resolve
   makes a per-run `phenotype-*` directory with `MkdirTemp` and writes the
-  gzip's content to `allConcepts.csv` there, or the archive entry to its
-  own path there through an `os.Root`. The cleanup func removes that
-  directory; on error Resolve removes it itself. `MkdirTemp` is required,
-  so extraction can't fall back to `$TMPDIR`: pass the cache's `TempDir`
-  method, which also prunes run directories a killed run left behind. One CSV entry is selected automatically. Several need `--entry`,
-  and a missing or unknown `--entry` is an `*EntryError` listing the
-  entries. `--entry` for a non-archive becomes a warning in
-  `Input.Warnings` for the caller to emit. Reads stop when `ctx` ends, with
-  its cause as the error.
+  gzip's content or the archive entry to `allConcepts.csv` there (0644 in
+  the 0700 directory, so a loader container running as another user can
+  read the bind mount). The entry's own name never reaches the path. The
+  cleanup func removes that directory; on error Resolve removes it itself.
+  `MkdirTemp` is required, so extraction can't fall back to `$TMPDIR`: pass
+  the cache's `TempDir` method, which also prunes run directories a killed
+  run left behind.
+- One CSV entry is selected automatically. Several need `--entry`, and a
+  missing or unknown `--entry` is an `*EntryError` listing the entries.
+  `--entry` for a non-archive becomes a warning in `Input.Warnings` for the
+  caller to emit. Reads stop when `ctx` ends, with its cause as the error.
+- Gzip input may hold several members and trailing zero padding, as GNU
+  tar accepts. A gzipped tar is read to the end of the stream when listed,
+  so a bad checksum after the tar's end marker is still caught.
 - `ListCSVEntries(ctx, file)` is the read-only lister for the TUI load
   wizard: the sorted entries of an archive, nil for a plain CSV or gzip,
   and an error for any input Resolve would reject before extracting.

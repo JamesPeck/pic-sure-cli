@@ -141,6 +141,18 @@ func TestResolve(t *testing.T) {
 		entry string
 		want  want
 	}{
+		{name: "tgz with zero padding after the stream", file: "padded.tgz",
+			data: append(tgzBytes(t, reg("allConcepts.csv", csvBody)), make([]byte, 1024)...),
+			want: want{format: phenoinput.TarGz, entry: "allConcepts.csv", body: csvBody}},
+		{name: "gzip with zero padding after the stream", file: "padded.csv.gz",
+			data: append(gzipBytes(t, []byte(csvBody)), make([]byte, 512)...),
+			want: want{format: phenoinput.Gzip, body: csvBody}},
+		{name: "gzip of two members", file: "two.csv.gz",
+			data: append(gzipBytes(t, []byte("a,b\n")), gzipBytes(t, []byte("1,2\n"))...),
+			want: want{format: phenoinput.Gzip, body: "a,b\n1,2\n"}},
+		{name: "tgz entry with a colon in its name", file: "stamped.tgz",
+			data: tgzBytes(t, reg("export_2024-01-01T10:00.csv", csvBody)),
+			want: want{format: phenoinput.TarGz, entry: "export_2024-01-01T10:00.csv", body: csvBody}},
 		// Plain CSV, used in place whatever its name.
 		{name: "raw csv", file: "allConcepts.csv", data: []byte(csvBody),
 			want: want{format: phenoinput.CSV, body: csvBody, inPlace: true}},
@@ -230,9 +242,15 @@ func TestResolve(t *testing.T) {
 		{name: "gzip of an empty file", file: "empty.csv.gz", data: gzipBytes(t, nil),
 			want: want{err: "decompresses to an empty file"}},
 		{name: "corrupt gzip", file: "bad.gz", data: []byte("\x1f\x8bnot really gzip"),
-			want: want{err: "reading"}},
+			want: want{err: "bad.gz as gzip: gzip: invalid header"}},
 		{name: "truncated tgz", file: "cut.tgz", data: bigTgz[:len(bigTgz)*2/3],
 			want: want{err: "unexpected EOF"}},
+		{name: "tgz with a bad checksum after the tar's end", file: "badsum.tgz", data: badChecksum(tgzBytes(t, reg("big.csv", big))),
+			want: want{err: "invalid checksum"}},
+		{name: "gzip with data after the stream", file: "junk.csv.gz", data: append(gzipBytes(t, []byte(csvBody)), "junk"...),
+			want: want{err: "data after the end of the compressed stream"}},
+		{name: "gzip with data after zero padding", file: "padjunk.csv.gz", data: append(gzipBytes(t, []byte(csvBody)), "\x00\x00j"...),
+			want: want{err: "data after the end of the compressed stream"}},
 		{name: "empty tgz", file: "empty.tgz", data: tgzBytes(t), want: want{err: "empty.tgz has no .csv entries"}},
 		{name: "tgz without csv entries", file: "docs.tgz", data: tgzBytes(t, reg("readme.txt", "note\n")),
 			want: want{err: "has no .csv entries"}},
@@ -253,7 +271,7 @@ func TestResolve(t *testing.T) {
 			data: tgzBytes(t, reg("a.csv", "one\n"), reg("./a.csv", "two\n")),
 			want: want{err: `dup.tgz has more than one entry named "a.csv"`}},
 		{name: "empty csv entry", file: "hollow.tgz", data: tgzBytes(t, reg("a.csv", "")),
-			want: want{err: "entry a.csv in"}},
+			want: want{err: "hollow.tgz is empty"}},
 		{name: "binary csv entry", file: "binary.zip", data: zipBytes(t, reg("a.csv", "\x00\x01\x02")),
 			want: want{err: "is binary data, not a CSV"}},
 
@@ -327,8 +345,11 @@ func TestResolve(t *testing.T) {
 				return
 			}
 			rel, err := filepath.Rel(tempDir, in.CSV)
-			if err != nil || !filepath.IsLocal(rel) || filepath.Dir(rel) == "." {
-				t.Fatalf("CSV %q is not inside a run directory under %q", in.CSV, tempDir)
+			if err != nil || !filepath.IsLocal(rel) || filepath.Dir(rel) == "." || filepath.Base(rel) != "allConcepts.csv" {
+				t.Fatalf("CSV %q is not allConcepts.csv in a run directory under %q", in.CSV, tempDir)
+			}
+			if fi, err := os.Stat(in.CSV); err != nil || fi.Mode().Perm() != 0o644 {
+				t.Errorf("CSV mode = %v (%v); want 0644 so the loader container can read it", fi.Mode().Perm(), err)
 			}
 			if err := cleanup(); err != nil {
 				t.Fatalf("cleanup: %v", err)
@@ -395,8 +416,8 @@ func assertNotExist(t *testing.T, paths ...string) {
 }
 
 // An entry whose parent directory is a symlink in the archive is extracted
-// into a real directory: Resolve never creates links, so it can't be led
-// outside the run directory.
+// into the run directory: Resolve never creates links, so it can't be led
+// outside it.
 func TestResolveDoesNotFollowArchiveSymlinks(t *testing.T) {
 	base := t.TempDir()
 	outside := filepath.Join(base, "outside")
@@ -544,4 +565,46 @@ func mkdirTempIn(t *testing.T, dir string) func(string) (string, error) {
 		t.Fatal(err)
 	}
 	return func(pattern string) (string, error) { return os.MkdirTemp(dir, pattern) }
+}
+
+// badChecksum corrupts the CRC-32 in a gzip stream's trailer.
+func badChecksum(gz []byte) []byte {
+	gz[len(gz)-8] ^= 0xff
+	return gz
+}
+
+// Canceling once the run directory exists stops the extraction itself, and
+// Resolve removes the directory.
+func TestResolveStopsWhenCanceledDuringExtraction(t *testing.T) {
+	big := strings.Repeat("x,y\n", 1<<14)
+	inputs := map[string][]byte{
+		"pheno.tgz":    tgzBytes(t, reg("big.csv", big)),
+		"pheno.zip":    zipBytes(t, reg("big.csv", big)),
+		"pheno.csv.gz": gzipBytes(t, []byte(big)),
+	}
+	for name, data := range inputs {
+		t.Run(name, func(t *testing.T) {
+			base := t.TempDir()
+			file := filepath.Join(base, name)
+			if err := os.WriteFile(file, data, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			tempDir := filepath.Join(base, "tmp")
+			mkdir := mkdirTempIn(t, tempDir)
+			interrupted := errors.New("interrupted")
+			ctx, cancel := context.WithCancelCause(context.Background())
+			defer cancel(nil)
+			opts := phenoinput.Options{MkdirTemp: func(pattern string) (string, error) {
+				dir, err := mkdir(pattern)
+				cancel(interrupted)
+				return dir, err
+			}}
+
+			_, _, err := phenoinput.Resolve(ctx, file, opts)
+			if !errors.Is(err, interrupted) {
+				t.Fatalf("Resolve error = %v; want the context's cause", err)
+			}
+			assertNoRunDirs(t, tempDir)
+		})
+	}
 }

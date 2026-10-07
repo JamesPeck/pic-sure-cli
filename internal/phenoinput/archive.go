@@ -3,13 +3,11 @@ package phenoinput
 import (
 	"archive/tar"
 	"archive/zip"
-	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
-	"path"
 	"path/filepath"
 )
 
@@ -34,7 +32,7 @@ func walk(ctx context.Context, file string, format Format, fn func(name string, 
 
 	var r io.Reader = ctxReader{ctx, f}
 	if format == TarGz {
-		gz, err := gzip.NewReader(r)
+		gz, err := newGzipReader(r)
 		if err != nil {
 			return fmt.Errorf("reading %s as gzip: %w", file, err)
 		}
@@ -45,6 +43,11 @@ func walk(ctx context.Context, file string, format Format, fn func(name string, 
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
+			// Read on to the end of the gzip stream, which verifies its
+			// checksum; the tar's end marker comes before it.
+			if _, err := io.Copy(io.Discard, r); err != nil {
+				return fmt.Errorf("reading %s: %w", file, err)
+			}
 			return nil
 		}
 		if err != nil && !errors.Is(err, tar.ErrInsecurePath) {
@@ -93,23 +96,15 @@ func walkZip(ctx context.Context, file string, f *os.File, fn func(string, func(
 }
 
 // extract copies the archive entry named entry, a clean name that
-// listEntries returned, to the same path under dir, and returns that path.
-// The copy goes through an os.Root on dir, so even a name that got past
-// listEntries can't write outside it.
+// listEntries returned, to csvName in dir, and returns that path.
 func extract(ctx context.Context, file string, format Format, entry, dir string) (string, error) {
-	root, err := os.OpenRoot(dir)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = root.Close() }()
-
 	found := false
-	err = walk(ctx, file, format, func(raw string, open func() (io.ReadCloser, error)) error {
+	err := walk(ctx, file, format, func(raw string, open func() (io.ReadCloser, error)) error {
 		if name, ok := csvEntryName(raw); !ok || name != entry {
 			return nil
 		}
 		found = true
-		if err := copyEntry(root, entry, open); err != nil {
+		if err := copyEntry(dir, open); err != nil {
 			return fmt.Errorf("extracting %s from %s: %w", entry, file, err)
 		}
 		return errStop
@@ -121,7 +116,7 @@ func extract(ctx context.Context, file string, format Format, entry, dir string)
 		return "", fmt.Errorf("%s changed while it was read: entry %s is gone", file, entry)
 	}
 
-	out := filepath.Join(dir, filepath.FromSlash(entry))
+	out := filepath.Join(dir, csvName)
 	head, err := readHead(out)
 	switch {
 	case err != nil:
@@ -134,48 +129,49 @@ func extract(ctx context.Context, file string, format Format, entry, dir string)
 	return out, nil
 }
 
-func copyEntry(root *os.Root, name string, open func() (io.ReadCloser, error)) error {
-	if d := path.Dir(name); d != "." {
-		if err := root.MkdirAll(d, 0o700); err != nil {
-			return err
-		}
-	}
+func copyEntry(dir string, open func() (io.ReadCloser, error)) error {
 	in, err := open()
 	if err != nil {
 		return err
 	}
 	defer func() { _ = in.Close() }()
-	out, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	return writeCSV(dir, in)
+}
+
+// csvName is what an extracted or decompressed CSV is called in the run
+// directory. A fixed name keeps the entry's own name, which may hold a
+// ':' that a bind mount source can't, out of the path.
+const csvName = "allConcepts.csv"
+
+// writeCSV copies r to csvName in dir. The file is world-readable so a
+// loader container running as another user can read it through a bind
+// mount; the run directory, at 0700, keeps it private on the host.
+func writeCSV(dir string, r io.Reader) error {
+	w, err := os.OpenFile(filepath.Join(dir, csvName), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		return err
 	}
-	_, err = io.Copy(out, in)
-	return errors.Join(err, out.Close())
+	_, err = io.Copy(w, r)
+	return errors.Join(err, w.Close())
 }
 
 // gunzip decompresses file, a gzip of a single CSV, into dir and returns
-// the CSV's path. The name allConcepts.csv matches the mount target.
+// the CSV's path.
 func gunzip(ctx context.Context, file, dir string) (string, error) {
 	f, err := os.Open(file)
 	if err != nil {
 		return "", err
 	}
 	defer func() { _ = f.Close() }()
-	gz, err := gzip.NewReader(ctxReader{ctx, f})
+	gz, err := newGzipReader(ctxReader{ctx, f})
 	if err != nil {
 		return "", fmt.Errorf("reading %s as gzip: %w", file, err)
 	}
 	defer func() { _ = gz.Close() }()
-	out := filepath.Join(dir, "allConcepts.csv")
-	w, err := os.OpenFile(out, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return "", err
-	}
-	_, err = io.Copy(w, gz)
-	if err = errors.Join(err, w.Close()); err != nil {
+	if err := writeCSV(dir, gz); err != nil {
 		return "", fmt.Errorf("decompressing %s: %w", file, err)
 	}
-	return out, nil
+	return filepath.Join(dir, csvName), nil
 }
 
 // readHead returns the first sniffLen bytes of the file at name.

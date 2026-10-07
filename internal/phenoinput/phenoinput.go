@@ -81,8 +81,9 @@ func (e *EntryError) Error() string {
 
 // Resolve detects the format of file and returns the CSV to load. A plain
 // CSV is used in place. Anything else is decompressed or extracted into a
-// new directory made by opts.MkdirTemp, which the returned cleanup func removes;
-// on error Resolve removes it itself. The cleanup func is never nil.
+// new directory made by opts.MkdirTemp, which the returned cleanup func
+// removes; on error Resolve removes it itself. The cleanup func is never
+// nil.
 //
 // Resolve rejects an empty file, binary data that isn't a supported
 // archive, an archive with no .csv entries, an archive entry whose path

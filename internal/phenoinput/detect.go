@@ -2,7 +2,6 @@ package phenoinput
 
 import (
 	"bytes"
-	"compress/gzip"
 	"context"
 	"fmt"
 	"io"
@@ -81,7 +80,7 @@ func detectGzip(ctx context.Context, file string, f *os.File) (Format, error) {
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		return "", err
 	}
-	gz, err := gzip.NewReader(ctxReader{ctx, f})
+	gz, err := newGzipReader(ctxReader{ctx, f})
 	if err != nil {
 		return "", fmt.Errorf("reading %s as gzip: %w", file, err)
 	}
