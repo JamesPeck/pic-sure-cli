@@ -96,12 +96,13 @@ type app struct {
 	dash    tea.Model
 	// dashCancel stops the dashboard's polls and log follower.
 	dashCancel context.CancelFunc
-	// runFromDash is set while the run screen runs a dashboard action.
-	runFromDash bool
-	activity    *activity
-	wizard      *wizardScreen
-	load        *loadScreen
-	run         *runScreen
+	// runCommand is set while the run screen runs a command line (a
+	// dashboard action or a load) rather than init.
+	runCommand bool
+	activity   *activity
+	wizard     *wizardScreen
+	load       *loadScreen
+	run        *runScreen
 	// lastSetup is the wizard's last confirmed setup, kept while an init
 	// of it failed before writing the stack, so Set up reopens it.
 	lastSetup *wizardDoneMsg
@@ -185,10 +186,10 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case dashboard.RunMsg:
 		return a.startAction(msg.Action)
 
+	case dashboard.LoadMsg:
+		return a.openLoad("")
+
 	case runActionMsg:
-		// The load screen emits runActionMsg to launch its phenotype load;
-		// drop it so a closed screen isn't left dangling behind the activity.
-		a.load = nil
 		a.landing.stopAnimations()
 		a.activity = newActivity(a.opts.Root, msg.act)
 		a.activity.setSize(a.width, a.height)
@@ -237,7 +238,7 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a.startInit(InitRequest{Dir: a.opts.Root})
 
 	case runClosedMsg:
-		if a.runFromDash {
+		if a.runCommand {
 			return a.actionClosed()
 		}
 		failed := false
@@ -254,19 +255,23 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, a.openLandingCmd()
 
 	case openLoadDataMsg:
-		s := newLoadScreen(a.opts.Root)
-		a.landing.stopAnimations()
-		s.setSize(a.width, a.height)
-		a.load = s
-		a.screen = ScreenLoadData
-		return a, s.init()
+		return a.openLoad(msg.kind)
 
 	case loadDataClosedMsg:
 		a.load = nil
+		if a.dash != nil {
+			// Opened from the dashboard, which kept running behind it.
+			a.screen = ScreenDashboard
+			return a, nil
+		}
 		if msg.aborted {
 			a.landing.result = "data load cancelled"
 		}
 		return a, a.openLandingCmd()
+
+	case loadRunMsg:
+		a.load = nil
+		return a.startAction(msg.act)
 	}
 
 	// The dashboard's polls and log lines reach it whichever screen shows.
@@ -336,10 +341,28 @@ func (a *app) closeDashboard() {
 	a.dash, a.dashCancel = nil, nil
 }
 
-// startAction opens the run screen on a dashboard action.
+// openLoad opens the load screen, on kind's first step if kind is set.
+// From the dashboard, the dashboard keeps running behind it.
+func (a *app) openLoad(kind string) (tea.Model, tea.Cmd) {
+	s := newLoadScreen(a.ctx, a.opts.Root, kind)
+	a.landing.stopAnimations()
+	s.setSize(a.width, a.height)
+	a.load = s
+	a.screen = ScreenLoadData
+	return a, s.init()
+}
+
+// startAction opens the run screen on a command line: a dashboard action
+// or a load. Closing it returns to the dashboard if one is open, else to
+// the landing.
 func (a *app) startAction(act dashboard.Action) (tea.Model, tea.Cmd) {
 	if a.opts.Command == nil {
-		return a, nil
+		if a.dash != nil {
+			a.screen = ScreenDashboard
+			return a, nil
+		}
+		a.landing.result = act.Title + ": not available here"
+		return a, a.openLandingCmd()
 	}
 	command := a.opts.Command
 	run := func(ctx context.Context, req InitRequest) (InitResult, error) {
@@ -348,15 +371,15 @@ func (a *app) startAction(act dashboard.Action) (tea.Model, tea.Cmd) {
 	a.run = newRunScreen(a.ctx, act.Title, run, InitRequest{Dir: a.opts.Root}, a.opts.Animations)
 	a.run.doneText = act.Done
 	a.run.setSize(a.width, a.height)
-	a.runFromDash = true
+	a.runCommand = true
 	a.screen = ScreenRun
 	return a, a.run.init()
 }
 
-// actionClosed leaves a dashboard action's run screen: back to the
-// dashboard, or to the landing when the action removed the stack.
+// actionClosed leaves a command's run screen: back to the dashboard, or to
+// the landing when there is none or the command removed the stack.
 func (a *app) actionClosed() (tea.Model, tea.Cmd) {
-	a.runFromDash = false
+	a.runCommand = false
 	if a.run != nil {
 		a.run.close()
 		a.run = nil

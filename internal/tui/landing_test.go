@@ -461,27 +461,14 @@ func TestLandingLoadDataOpensGuidedScreen(t *testing.T) {
 	}
 }
 
-func TestLandingDemoOpensDatasetPicker(t *testing.T) {
-	// "Load demo data…" now lives in the Developer options submenu.
+// The developer menu's demo entry opens the load screen on its datasets.
+func TestLandingDemoOpensTheLoadScreen(t *testing.T) {
 	l := newLanding("/tmp/x", readyStack, false)
 	l.dev = true
 	l.rebuildMenu()
-	_, _ = l.choose("demo")
-	if l.form == nil || l.pickerMake == nil {
-		t.Fatal("demo entry did not open a dataset picker")
-	}
-	if l.picked != "nhanes" {
-		t.Errorf("preselect = %q, want nhanes", l.picked)
-	}
-	l.picked = "synthea"
-	l.form.State = huh.StateCompleted
-	_, cmd := l.update(struct{}{})
-	run, ok := cmd().(runActionMsg)
-	if !ok {
-		t.Fatalf("got %#v, want runActionMsg", cmd())
-	}
-	if want := []string{"synthea"}; !eq(run.act.Args, want) {
-		t.Errorf("args = %v, want %v", run.act.Args, want)
+	_, cmd := l.choose("demo")
+	if msg, ok := cmd().(openLoadDataMsg); !ok || msg.kind != kindDemo {
+		t.Fatalf("demo = %#v, want openLoadDataMsg{kind: demo}", cmd())
 	}
 }
 
@@ -998,7 +985,6 @@ func TestLandingBranchPrefillFailure(t *testing.T) {
 func TestLandingFrameStaysInBoxWithDialogs(t *testing.T) {
 	sizes := [][2]int{{60, 16}, {80, 24}, {120, 30}}
 	open := []func(l *landing){
-		func(l *landing) { l.dev = true; l.rebuildMenu(); _, _ = l.choose("demo") },
 		func(l *landing) { _, _ = l.choose("etl") },
 		func(l *landing) { _, _ = l.choose("reset") },
 	}
@@ -1063,7 +1049,7 @@ func TestLandingEscCancelsEveryDialogKind(t *testing.T) {
 			l.resetRepos = true // ensure esc clears the toggle too
 		}},
 		{"light confirm (update)", func(l *landing) { _, _ = l.choose("update") }},
-		{"picker (demo)", func(l *landing) { _, _ = l.choose("demo") }},
+		{"picker (etl)", func(l *landing) { _, _ = l.choose("etl") }},
 		{"input (release-control branch)", func(l *landing) {
 			orig := fetchReleaseBranch
 			fetchReleaseBranch = func(string) string { return "main" }

@@ -267,23 +267,12 @@ func (l *landing) choose(id string) (*landing, tea.Cmd) {
 	case "update":
 		return l.startConfirm(actions.Update())
 	case "demo":
-		return l.startSelectPicker("Load demo data",
-			"REPLACES the phenotype data in the hpds-data volume with the\nselected dataset, then re-hydrates the dictionary database.",
-			"nhanes",
-			[]huh.Option[string]{
-				huh.NewOption("NHANES (default demo dataset)", "nhanes"),
-				huh.NewOption("Synthea 10k", "synthea"),
-				huh.NewOption("1000 Genomes", "1000genomes"),
-				huh.NewOption("All three combined", "all"),
-				huh.NewOption("Cancel", ""),
-			},
-			actions.DemoData)
+		return l, func() tea.Msg { return openLoadDataMsg{kind: kindDemo} }
 	case "migrate":
 		return l.startConfirm(actions.Migrate())
 	case "seed":
 		return l.startConfirm(actions.SeedDB())
 	case "loaddata":
-		// The guided "Load your data" screen (phenotype today; genomic in LD-5).
 		return l, func() tea.Msg { return openLoadDataMsg{} }
 	case "etl":
 		return l.startSelectPicker("Maintenance / advanced ETL",

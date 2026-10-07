@@ -12,10 +12,6 @@ import (
 	"github.com/JamesPeck/pic-sure-cli/internal/ops"
 )
 
-// loadNotBuilt is what the load-data key says until the load wizard runs
-// in-process.
-const loadNotBuilt = "loading data from the dashboard isn't built yet (ticket 047)"
-
 const (
 	leftWidthMin = 36 // floor: fits the services row format below
 	leftWidthMax = 50 // ceiling: don't starve the logs/status panes on huge terminals
@@ -311,8 +307,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "m":
 		return m.startConfirm(migrateAction())
 	case "l":
-		m.lastResult = loadNotBuilt
-		return m, nil
+		return m, func() tea.Msg { return LoadMsg{} }
 	case "R":
 		return m.startTeardown(false)
 	case "X":

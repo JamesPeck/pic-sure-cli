@@ -2464,7 +2464,7 @@ signal handler, so SIGINT and SIGTERM end the TUI through the context and
 the CLI exits 128+N. Ticket 001 removed its script layer: every action fails
 to start with "not implemented in v2 yet (ticket NNN)", the release-branch
 and dev-overlay lookups return nothing, and the archive lister fails.
-Ticket 040 rewired the dashboard (see its section); 047 rewires the load
+Ticket 040 rewired the dashboard (see its section), and 047 the load
 wizard.
 
 - **Landing (039).** It reads its directory (`detectStack`): no
@@ -2480,6 +2480,19 @@ wizard.
   operation's context. If the program ends (a signal) while init runs,
   `Run` cancels it and waits for it to return. A later in-process
   operation (040, 047) can reuse `runScreen`.
+- **Load wizard (047).** `loadScreen` asks for one load: a phenotype CSV
+  or archive (`phenoinput.ListCSVEntries` checks the pick and lists its
+  CSVs; two or more open an entry picker for `--entry`), a directory
+  (`ops.CheckPhenotypeDir`, for `--input-dir`), a demo dataset, or a
+  genomic partition; then the heap in MB (at least 256, which catches
+  gigabytes typed as megabytes), the auto or custom dictionary, and a
+  confirm. Both checks run in a `tea.Cmd`, stamped so a late result for an
+  earlier pick is dropped. Its consent sends `loadRunMsg` with the
+  `pic-sure data …` command line (absolute paths), which runs through
+  `Options.Command` on the run screen, as a dashboard action does. The
+  landing's "Load your data…" opens it on the kind step, the developer
+  menu's demo entry on the datasets, and the dashboard's `l` over the
+  dashboard, which it returns to.
 
 It runs on the Charm v2 modules (`charm.land/bubbletea/v2`, `bubbles/v2`,
 `huh/v2`, `lipgloss/v2`; ticket 002). The root model's `View` returns a
@@ -2511,8 +2524,8 @@ Ticket 040. The dashboard screen, embedded in the TUI (alt-screen).
 - **Actions** are pic-sure command lines (`Action.Args`): `r` restart the
   selected service, `u` update, `m` migrate (each after a yes/no dialog),
   `R` reset (with a keep-the-database choice) and `X` destroy, both after
-  the user types the stack's name, and then run with `--yes`. `l` (load
-  data) only says the load wizard isn't built (047). The dashboard sends
+  the user types the stack's name, and then run with `--yes`. `l` sends
+  `LoadMsg`, and the embedder opens its load wizard (047). The dashboard sends
   `RunMsg`; the embedder runs it and sends `ActionDoneMsg` back, which drops
   the deep check, polls again and restarts an ended log follower at once.
 - `Owns(msg)` names the dashboard's own messages (ticks, poll results, log
@@ -2526,7 +2539,7 @@ which takes a success line) and returns to the dashboard when it closes, or
 to the landing when the stack is gone (destroy). In `internal/cli`
 (`tuidashboard.go`), `dashBackend` opens the stack as `ps`, `status` and
 `logs` would (their gate, no run log, warnings dropped) and redacts errors.
-`commandFromTUI` runs `pic-sure --stack DIR ARGS...` in-process on a child
+`commandFromTUI` (also the load wizard's runner) runs `pic-sure --stack DIR ARGS...` in-process on a child
 `App` with no terminal: `App.tuiSink` replaces the output mode's sink with
 the TUI's (the `Result` event becomes the returned error), log records go
 to it as `Log` events, and the summary the command prints is the result's
@@ -2553,7 +2566,7 @@ yes runs `Check` first. It writes nothing.
 
 ## internal/filebrowser
 
-The file picker used by the load wizard, on Bubble Tea v2.
+The file and directory picker used by the load wizard, on Bubble Tea v2.
 
 ## internal/styles
 

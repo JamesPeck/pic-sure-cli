@@ -1,44 +1,49 @@
 package tui
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
 
-	"github.com/JamesPeck/pic-sure-cli/internal/actions"
+	"github.com/JamesPeck/pic-sure-cli/internal/dashboard"
 	"github.com/JamesPeck/pic-sure-cli/internal/dialog"
 	"github.com/JamesPeck/pic-sure-cli/internal/filebrowser"
+	"github.com/JamesPeck/pic-sure-cli/internal/ops"
+	"github.com/JamesPeck/pic-sure-cli/internal/phenoinput"
 	"github.com/JamesPeck/pic-sure-cli/internal/styles"
 )
 
-// The "Load your data" guided screen (Phases LD-4/LD-5). A self-contained,
-// app-shell routed tea.Model (ScreenLoadData) that walks the user through
-// loading either a phenotype CSV or a genomic VCF partition and dispatches one
-// actions.LoadPhenotype / actions.LoadGenomic run into the activity screen.
+// The "Load your data" screen (ScreenLoadData). It asks for what one
+// `pic-sure data load-phenotype`, `data demo` or `data load-genomic` needs,
+// and on consent sends loadRunMsg, which the app runs in-process on the
+// run screen.
 //
 // Step state machine (loadStep):
 //
-//	loadKind ──phenotype──▶ loadPhenoFile ─▶ loadPhenoHeap ─▶ loadPhenoDict
-//	   │ genomic                  │ (≥2 CSVs in archive)            │
-//	   │                          ▼                                 │
-//	   │                 loadPhenoArchiveEntry ─▶ loadPhenoHeap     │
-//	   │                                               auto ──────┤
-//	   │                                     custom ─▶ loadPhenoDatasets
-//	   │                                              ─▶ loadPhenoConcepts
-//	   │                                              ─▶ loadPhenoFacetsAsk
-//	   │                                     no ───────────────┐ │ yes
-//	   │                                                       │ ▼
-//	   │                                     loadPhenoFacetCategories
-//	   │                                             ─▶ loadPhenoFacets
-//	   │                                             ─▶ loadPhenoFacetConcepts
-//	   │                                                       │
-//	   │                                                       ▼
-//	   │                                                  loadConfirm ─▶ dispatch
+//	loadKind ─file─▶ loadPhenoFile ─(≥2 CSVs)─▶ loadPhenoArchiveEntry ─┐
+//	   │                  └──────────────────────────────────────────┤
+//	   ├─dir──▶ loadPhenoDir ─────────────────────────────────────────┤
+//	   │                                                              ▼
+//	   │                                      loadPhenoHeap ─▶ loadPhenoDict
+//	   │                                             auto ──────────┤
+//	   │                         custom ─▶ loadPhenoDatasets         │
+//	   │                                  ─▶ loadPhenoConcepts       │
+//	   │                                  ─▶ loadPhenoFacetsAsk      │
+//	   │                         no ──────────────────────┐ │ yes    │
+//	   │                                                  │ ▼        │
+//	   │                         loadPhenoFacetCategories            │
+//	   │                                 ─▶ loadPhenoFacets          │
+//	   │                                 ─▶ loadPhenoFacetConcepts   │
+//	   │                                                  ▼          ▼
+//	   ├─demo─▶ loadDemoDataset ─▶ loadPhenoHeap ───────▶ loadConfirm ─▶ run
 //	   │
 //	   ▼ genomic
 //	loadGenomicIndex ─▶ loadGenomicDirAsk ──no──▶ loadGenomicPartition
@@ -50,16 +55,15 @@ import (
 //	                            loadGenomicPromote ─▶ loadGenomicProfile
 //	                                                       │
 //	                                                       ▼
-//	                                            loadGenomicConfirm ─▶ dispatch
-//	   │ cancel
-//	   ▼
-//	close
+//	                                            loadGenomicConfirm ─▶ run
 type loadStep int
 
 const (
 	loadKind loadStep = iota
 	loadPhenoFile
 	loadPhenoArchiveEntry
+	loadPhenoDir
+	loadDemoDataset
 	loadPhenoHeap
 	loadPhenoDict
 	loadPhenoDatasets
@@ -70,7 +74,6 @@ const (
 	loadPhenoFacetConcepts
 	loadConfirm
 
-	// Genomic branch (LD-5).
 	loadGenomicIndex
 	loadGenomicDirAsk
 	loadGenomicDir
@@ -81,40 +84,55 @@ const (
 	loadGenomicConfirm
 )
 
-// defaultHeap is the JVM heap (MB) the phenotype heap input opens prefilled
-// with — the recommended floor for the common <1M-row phenotype CSV.
-const defaultHeap = "4096"
+// The kinds of load the first step offers.
+const (
+	kindFile    = "file"
+	kindDir     = "dir"
+	kindDemo    = "demo"
+	kindGenomic = "genomic"
+)
 
-// defaultGenomicHeap is the JVM heap (MB) the genomic heap input opens
-// prefilled with — genomic loads need substantially more headroom than the
-// phenotype floor.
-const defaultGenomicHeap = "16000"
-
-// fetchArchiveCSVs lists the *.csv entries of a compressed/archived phenotype
-// file, exact entry paths sorted, and nothing for a raw .csv or a plain .gz.
-// A package var so tests inject entries. It must run inside a tea.Cmd, never
-// in Update. Ticket 041 adds the in-process lister (ListCSVEntries), and
-// ticket 047 wires it in here.
-var fetchArchiveCSVs = func(_, _ string) ([]string, error) {
-	return nil, errors.New("listing archive entries: not implemented in v2 yet (ticket 041)")
+// The heap (MB) each kind's input opens with: the commands' own defaults.
+var defaultHeaps = map[string]string{
+	kindFile:    "4096",
+	kindDir:     "8000",
+	kindDemo:    "4096",
+	kindGenomic: "16000",
 }
 
-// archiveCSVsFillMsg carries the result of the async archive listing off the
-// update hot-path. seq stamps the loadPhenoFile selection it was fetched
-// for, so a result that arrives after the file step was re-entered or the screen
-// closed cannot land in the wrong place (mirrors devOverlaysFillMsg).
-type archiveCSVsFillMsg struct {
+// minHeapMB is the smallest heap the wizard takes. Anything below it is
+// almost certainly gigabytes typed as megabytes ("16" for 16 GB).
+const minHeapMB = 256
+
+// fetchArchiveCSVs lists the CSV entries of the file picked for a phenotype
+// load, and rejects a file the load would refuse. A package var so tests
+// inject entries. It reads the file, so it runs in a tea.Cmd, never in
+// Update.
+var fetchArchiveCSVs = phenoinput.ListCSVEntries
+
+// checkPhenotypeDir checks a directory picked for an --input-dir load, as
+// the load will. A package var for tests; it runs in a tea.Cmd too.
+var checkPhenotypeDir = ops.CheckPhenotypeDir
+
+// inspectFillMsg carries the result of the async check of a picked file or
+// directory. seq stamps the pick it was made for, so a result that arrives
+// after the step was re-entered or the screen closed is dropped.
+type inspectFillMsg struct {
 	seq     int
 	entries []string
 	err     error
 }
 
-// openLoadDataMsg asks the app to open the guided load screen.
-type openLoadDataMsg struct{}
+// openLoadDataMsg asks the app to open the load screen. kind, if set, skips
+// the kind step (the developer menu's demo entry opens on the datasets).
+type openLoadDataMsg struct{ kind string }
 
 // loadDataClosedMsg tells the app to leave the load screen (aborted=true when
 // the user cancelled, mirroring wizardClosedMsg's neutral-result behavior).
 type loadDataClosedMsg struct{ aborted bool }
+
+// loadRunMsg asks the app to run the load's command line on the run screen.
+type loadRunMsg struct{ act dashboard.Action }
 
 var (
 	loadTitleStyle  = lipgloss.NewStyle().Bold(true).Foreground(styles.Brand).Padding(0, 1)
@@ -122,6 +140,7 @@ var (
 )
 
 type loadScreen struct {
+	ctx  context.Context
 	root string
 	step loadStep
 
@@ -134,9 +153,11 @@ type loadScreen struct {
 	fb   filebrowser.Model
 
 	// Collected values.
-	kind            string // "phenotype" | "genomic" | "" (cancel)
+	kind            string // kindFile, kindDir, kindDemo, kindGenomic, or "" (cancel)
 	file            string
 	archiveEntry    string // chosen CSV inside a multi-CSV archive (--entry); "" otherwise
+	inputDir        string
+	demo            string
 	heap            string
 	dictMode        string // "auto" | "custom"
 	includeFacets   bool
@@ -160,33 +181,51 @@ type loadScreen struct {
 	// thrown away by a reflexive esc. A pristine screen closes immediately.
 	discarding bool
 
-	// Archive-inspection state for the phenotype file step. When a non-plain-.csv
-	// file is chosen, the screen lists the archive's entries asynchronously to
-	// learn whether the archive holds multiple CSVs (≥2 → entry picker). While the
-	// call is in flight inspecting is true (the view shows a placeholder and the
-	// filebrowser is parked); archiveSeq stamps each inspection so a stale result
-	// for a since-re-entered/closed file step is dropped; archiveErr surfaces a
-	// failed lookup inline so the user can re-pick.
+	// A picked phenotype file or directory is checked asynchronously: a file
+	// for the CSVs it holds (≥2 → entry picker), a directory as --input-dir
+	// would check it. While the check runs inspecting is true (the view shows
+	// a placeholder and the filebrowser is parked); inspectSeq stamps each
+	// check so a stale result is dropped; inspectErr shows a rejection above
+	// the re-opened browser.
 	inspecting     bool
-	archiveSeq     int
+	inspectSeq     int
 	archiveEntries []string
-	archiveErr     string
+	inspectErr     string
 
 	width, height int
 }
 
-func newLoadScreen(root string) *loadScreen {
-	// kind is pre-set to "phenotype" (the first real option) so the huh select
-	// cursor starts there on first paint. Without this, s.kind="" collides with
-	// Cancel's value "" and huh preselects Cancel — the same gotcha fixed in the
-	// dev-picker (landing.go startSelectPicker).
-	s := &loadScreen{root: root, step: loadKind, heap: defaultHeap, dictMode: "auto", kind: "phenotype"}
-	s.form = s.buildKindForm()
+// newLoadScreen opens on the kind step, or straight on kind's first step.
+func newLoadScreen(ctx context.Context, root, kind string) *loadScreen {
+	// kind is pre-set to the first real option so the huh select cursor
+	// starts there on first paint. Without this, s.kind="" collides with
+	// Cancel's value "" and huh preselects Cancel.
+	s := &loadScreen{ctx: ctx, root: root, step: loadKind, dictMode: "auto", kind: kindFile, demo: ops.DemoDatasets()[0]}
+	if kind != "" {
+		s.kind = kind
+		s.heap = defaultHeaps[kind]
+		s.step = firstStep(kind)
+	}
 	return s
 }
 
-// init starts the kind-select form (the app sizes the screen first).
-func (s *loadScreen) init() tea.Cmd { return s.form.Init() }
+// init builds and starts the opening step (the app sizes the screen first).
+func (s *loadScreen) init() tea.Cmd {
+	_, cmd := s.enterStep(s.step)
+	return cmd
+}
+
+func firstStep(kind string) loadStep {
+	switch kind {
+	case kindDir:
+		return loadPhenoDir
+	case kindDemo:
+		return loadDemoDataset
+	case kindGenomic:
+		return loadGenomicIndex
+	}
+	return loadPhenoFile
+}
 
 func (s *loadScreen) setSize(width, height int) {
 	s.width, s.height = width, height
@@ -225,7 +264,7 @@ func (s *loadScreen) fbHeight() int {
 // isFileStep reports whether step is one of the filebrowser-driven steps.
 func isFileStep(step loadStep) bool {
 	switch step {
-	case loadPhenoFile, loadPhenoDatasets, loadPhenoConcepts,
+	case loadPhenoFile, loadPhenoDir, loadPhenoDatasets, loadPhenoConcepts,
 		loadPhenoFacetCategories, loadPhenoFacets, loadPhenoFacetConcepts,
 		loadGenomicIndex, loadGenomicDir:
 		return true
@@ -234,11 +273,11 @@ func isFileStep(step loadStep) bool {
 }
 
 func (s *loadScreen) update(msg tea.Msg) (*loadScreen, tea.Cmd) {
-	// The async archive-csvs result is handled before any gate so it reaches the
-	// inspecting file step regardless of which overlay (discard prompt) is up; its
-	// own seq guard drops a result for a since-re-entered/closed step.
-	if fill, ok := msg.(archiveCSVsFillMsg); ok {
-		return s.applyArchiveCSVsFill(fill)
+	// The async check's result is handled before any gate so it reaches the
+	// inspecting file step regardless of which overlay (discard prompt) is up;
+	// its own seq guard drops a result for a since-re-entered/closed step.
+	if fill, ok := msg.(inspectFillMsg); ok {
+		return s.applyInspectFill(fill)
 	}
 
 	// A discard confirm owns the keyboard until answered. Swallow every
@@ -268,17 +307,14 @@ func (s *loadScreen) update(msg tea.Msg) (*loadScreen, tea.Cmd) {
 		return s, closeLoad(true)
 	}
 
-	// While the archive is being inspected the filebrowser is parked behind a
+	// While a pick is being checked the filebrowser is parked behind a
 	// placeholder; only the fill (handled above) and esc/discard (above) act.
 	// Swallow everything else so a stray filepicker tick can't re-select.
 	if s.inspecting {
 		return s, nil
 	}
 
-	switch s.step {
-	case loadPhenoFile, loadPhenoDatasets, loadPhenoConcepts,
-		loadPhenoFacetCategories, loadPhenoFacets, loadPhenoFacetConcepts,
-		loadGenomicIndex, loadGenomicDir:
+	if isFileStep(s.step) {
 		var cmd tea.Cmd
 		s.fb, cmd = s.fb.Update(msg)
 		// Poll for a selection on this msg and consume it exactly once: the next
@@ -288,10 +324,8 @@ func (s *loadScreen) update(msg tea.Msg) (*loadScreen, tea.Cmd) {
 			return s.consumeFile(path)
 		}
 		return s, cmd
-
-	default: // huh form steps: kind, heap, dict, facets-ask, confirm, archive entry
-		return s.updateForm(msg)
 	}
+	return s.updateForm(msg)
 }
 
 // updateForm pumps the active huh form and acts on its terminal state.
@@ -313,23 +347,17 @@ func (s *loadScreen) updateForm(msg tea.Msg) (*loadScreen, tea.Cmd) {
 func (s *loadScreen) formCompleted() (*loadScreen, tea.Cmd) {
 	switch s.step {
 	case loadKind:
-		switch s.kind {
-		case "phenotype":
-			return s.enterStep(loadPhenoFile)
-		case "genomic":
-			// The genomic heap floor is higher than the phenotype default the
-			// screen was constructed with; prefill the genomic default before the
-			// heap input is reached (heap is not "collected"/dirty data).
-			s.heap = defaultGenomicHeap
-			return s.enterStep(loadGenomicIndex)
-		default: // "" — Cancel
+		if s.kind == "" { // Cancel
 			return s, closeLoad(true)
 		}
-	case loadPhenoArchiveEntry:
-		// archiveEntry is bound to the select and preselected to the first entry,
-		// so it is always a real archive path here — store it and advance to heap.
+		s.heap = defaultHeaps[s.kind]
+		return s.enterStep(firstStep(s.kind))
+	case loadPhenoArchiveEntry, loadDemoDataset:
 		return s.enterStep(loadPhenoHeap)
 	case loadPhenoHeap:
+		if s.kind == kindDemo {
+			return s.enterStep(loadConfirm)
+		}
 		return s.enterStep(loadPhenoDict)
 	case loadPhenoDict:
 		if s.dictMode == "custom" {
@@ -364,27 +392,27 @@ func (s *loadScreen) formCompleted() (*loadScreen, tea.Cmd) {
 		if !s.confirmed {
 			return s, closeLoad(true)
 		}
-		return s, s.dispatchGenomic()
+		return s, s.dispatch()
 	}
 	return s, nil
 }
 
 // consumeFile stores a just-selected path into the field for the current file
-// step and advances. Exported as the test seam the spec calls for: tests drive
-// the state machine by calling this directly rather than the real filepicker.
+// step and advances. Tests drive the state machine by calling it directly
+// rather than through the real filepicker.
 func (s *loadScreen) consumeFile(path string) (*loadScreen, tea.Cmd) {
 	switch s.step {
 	case loadPhenoFile:
 		s.file = path
-		s.archiveErr = "" // a fresh pick retires any prior inspection error
-		// A plain .csv loads verbatim — no archive to inspect, no entry to pick.
-		// Anything else (.gz/.csv.gz/.tgz/.tar.gz) may be a tar holding multiple
-		// CSVs, so inspect it asynchronously before choosing the next step.
-		if isPlainCSV(path) {
-			s.archiveEntry = "" // ensure a re-pick to plain CSV drops any stale entry
-			return s.enterStep(loadPhenoHeap)
-		}
-		return s.startArchiveInspection(path)
+		s.archiveEntry = "" // a new pick invalidates any prior entry choice
+		return s.startInspection(func(ctx context.Context) ([]string, error) {
+			return fetchArchiveCSVs(ctx, path)
+		})
+	case loadPhenoDir:
+		s.inputDir = path
+		return s.startInspection(func(context.Context) ([]string, error) {
+			return nil, checkPhenotypeDir(path)
+		})
 	case loadPhenoDatasets:
 		s.datasets = path
 		return s.enterStep(loadPhenoConcepts)
@@ -410,60 +438,49 @@ func (s *loadScreen) consumeFile(path string) (*loadScreen, tea.Cmd) {
 	return s, nil
 }
 
-// isPlainCSV reports whether path is a raw, uncompressed CSV (the fast path that
-// needs no archive inspection). A bare ".csv" suffix that is NOT also ".csv.gz"
-// — the latter is a gzip the bash side decompresses — qualifies.
-func isPlainCSV(path string) bool {
-	return strings.HasSuffix(path, ".csv") && !strings.HasSuffix(path, ".csv.gz")
-}
-
-// startArchiveInspection parks the file step behind an "(inspecting archive…)"
-// placeholder and schedules the read-only archive lister in a tea.Cmd (it
-// reads the file, so it must never run in Update). archiveSeq stamps the
-// dispatch so a result for a since-re-entered/closed file step is dropped. The
-// step stays loadPhenoFile while inspecting (the view keys off s.inspecting); the
-// fill handler advances it. Mirrors landing.startDevPicker's async pattern.
-func (s *loadScreen) startArchiveInspection(file string) (*loadScreen, tea.Cmd) {
+// startInspection parks the file step behind a placeholder and runs check
+// in a tea.Cmd. The step stays put while inspecting (the view keys off
+// s.inspecting); the fill handler advances it.
+func (s *loadScreen) startInspection(check func(context.Context) ([]string, error)) (*loadScreen, tea.Cmd) {
 	s.inspecting = true
-	s.archiveErr = ""
+	s.inspectErr = ""
 	s.archiveEntries = nil
-	s.archiveEntry = "" // a new inspection invalidates any prior entry choice
-	s.archiveSeq++
-	seq, root := s.archiveSeq, s.root
+	s.inspectSeq++
+	seq, ctx := s.inspectSeq, s.ctx
 	return s, func() tea.Msg {
-		entries, err := fetchArchiveCSVs(root, file)
-		return archiveCSVsFillMsg{seq: seq, entries: entries, err: err}
+		entries, err := check(ctx)
+		return inspectFillMsg{seq: seq, entries: entries, err: err}
 	}
 }
 
-// applyArchiveCSVsFill lands the async archive-csvs result. Staleness is guarded
-// by seq (a result for a since-re-entered/closed file step is dropped) and by
-// requiring the inspection to still be in flight. Decision rule (LD-7a):
-//   - error → surface it inline and let the user re-pick (stay on the file step).
-//   - 0 or 1 entries → no picker; the bash side auto-picks a single-CSV tar and
-//     handles a plain .gz, so advance to heap with ArchiveEntry empty.
-//   - ≥2 entries → open the entry picker (loadPhenoArchiveEntry).
-func (s *loadScreen) applyArchiveCSVsFill(msg archiveCSVsFillMsg) (*loadScreen, tea.Cmd) {
-	if !s.inspecting || msg.seq != s.archiveSeq {
+// applyInspectFill lands the async check's result, if it is still the one
+// awaited:
+//   - an error reopens the browser with the reason, to pick again;
+//   - ≥2 CSV entries open the entry picker;
+//   - otherwise (a plain CSV, a gzip, a one-CSV archive, a directory) the
+//     load needs no --entry, and the heap is next.
+func (s *loadScreen) applyInspectFill(msg inspectFillMsg) (*loadScreen, tea.Cmd) {
+	if !s.inspecting || msg.seq != s.inspectSeq {
 		return s, nil
 	}
 	s.inspecting = false
 	if msg.err != nil {
-		// Re-open the file browser so the user can pick a different file; the
-		// inline error tells them why the chosen one was rejected.
-		s.archiveErr = "could not inspect archive: " + msg.err.Error()
-		return s.enterStep(loadPhenoFile)
+		what := "file"
+		if s.step == loadPhenoDir {
+			what = "directory"
+			s.inputDir = ""
+		} else {
+			s.file = ""
+		}
+		s.inspectErr = fmt.Sprintf("can't load that %s: %v", what, msg.err)
+		return s.enterStep(s.step)
 	}
 	if len(msg.entries) >= 2 {
 		s.archiveEntries = msg.entries
-		// Preselect the first entry so the select cursor starts on a real option
-		// (never on an empty/zero value — the afa885b cursor-on-Cancel lesson).
+		// Preselect the first entry so the select cursor starts on a real option.
 		s.archiveEntry = msg.entries[0]
 		return s.enterStep(loadPhenoArchiveEntry)
 	}
-	// 0 or 1 CSV: nothing to choose — leave ArchiveEntry empty and let bash
-	// auto-pick (single-CSV tar) or decompress (plain gzip / empty .gz output).
-	s.archiveEntries = nil
 	return s.enterStep(loadPhenoHeap)
 }
 
@@ -471,28 +488,30 @@ func (s *loadScreen) applyArchiveCSVsFill(msg archiveCSVsFillMsg) (*loadScreen, 
 // returning the model's Init command.
 func (s *loadScreen) enterStep(step loadStep) (*loadScreen, tea.Cmd) {
 	s.step = step
+	var form *huh.Form
 	switch step {
+	case loadKind:
+		form = s.buildKindForm()
 	case loadPhenoFile:
-		// Accept raw CSVs and the compressed/archived forms LD-7a handles. The
-		// filebrowser does suffix matching, so ".gz" also admits ".csv.gz" and
-		// ".tar.gz", and ".tgz" admits ".tgz".
-		return s.openBrowser([]string{".csv", ".gz", ".tgz"}, "Select the phenotype CSV (.csv/.gz/.tgz)")
+		// The filebrowser matches suffixes, so ".gz" also admits ".csv.gz" and
+		// ".tar.gz". The load detects the format by content.
+		return s.openBrowser([]string{".csv", ".gz", ".tgz", ".tar", ".zip"}, "Select the phenotype CSV, or an archive holding one")
 	case loadPhenoArchiveEntry:
-		s.form = s.sizeForm(s.buildArchiveEntryForm())
-		return s, s.form.Init()
-	case loadPhenoHeap:
-		s.form = s.sizeForm(s.buildHeapForm())
-		return s, s.form.Init()
+		form = s.buildArchiveEntryForm()
+	case loadPhenoDir:
+		return s.openDirBrowser("Select the directory of phenotype CSVs")
+	case loadDemoDataset:
+		form = s.buildDemoForm()
+	case loadPhenoHeap, loadGenomicHeap:
+		form = s.buildHeapForm()
 	case loadPhenoDict:
-		s.form = s.sizeForm(s.buildDictForm())
-		return s, s.form.Init()
+		form = s.buildDictForm()
 	case loadPhenoDatasets:
 		return s.openBrowser([]string{".csv"}, "Select datasets.csv")
 	case loadPhenoConcepts:
 		return s.openBrowser([]string{".zip"}, "Select concepts.zip")
 	case loadPhenoFacetsAsk:
-		s.form = s.sizeForm(s.buildFacetsForm())
-		return s, s.form.Init()
+		form = s.buildFacetsForm()
 	case loadPhenoFacetCategories:
 		return s.openBrowser([]string{".csv"}, "Select facet_categories.csv")
 	case loadPhenoFacets:
@@ -500,33 +519,27 @@ func (s *loadScreen) enterStep(step loadStep) (*loadScreen, tea.Cmd) {
 	case loadPhenoFacetConcepts:
 		return s.openBrowser([]string{".csv"}, "Select facet_concepts.csv")
 	case loadConfirm:
-		s.form = s.sizeForm(s.buildConfirmForm())
-		return s, s.form.Init()
+		form = s.buildConfirmForm()
 
 	case loadGenomicIndex:
 		return s.openBrowser([]string{".tsv"}, "Select the VCF index TSV")
 	case loadGenomicDirAsk:
-		s.form = s.sizeForm(s.buildGenomicDirAskForm())
-		return s, s.form.Init()
+		form = s.buildGenomicDirAskForm()
 	case loadGenomicDir:
 		return s.openDirBrowser("Select the directory of VCF files")
 	case loadGenomicPartition:
-		s.form = s.sizeForm(s.buildPartitionForm())
-		return s, s.form.Init()
-	case loadGenomicHeap:
-		s.form = s.sizeForm(s.buildGenomicHeapForm())
-		return s, s.form.Init()
+		form = s.buildPartitionForm()
 	case loadGenomicPromote:
-		s.form = s.sizeForm(s.buildPromoteForm())
-		return s, s.form.Init()
+		form = s.buildPromoteForm()
 	case loadGenomicProfile:
-		s.form = s.sizeForm(s.buildProfileForm())
-		return s, s.form.Init()
+		form = s.buildProfileForm()
 	case loadGenomicConfirm:
-		s.form = s.sizeForm(s.buildGenomicConfirmForm())
-		return s, s.form.Init()
+		form = s.buildGenomicConfirmForm()
+	default:
+		return s, nil
 	}
-	return s, nil
+	s.form = s.sizeForm(form)
+	return s, s.form.Init()
 }
 
 func (s *loadScreen) openBrowser(exts []string, title string) (*loadScreen, tea.Cmd) {
@@ -535,69 +548,87 @@ func (s *loadScreen) openBrowser(exts []string, title string) (*loadScreen, tea.
 	return s, s.fb.Init()
 }
 
-// openDirBrowser opens a DirMode filebrowser for selecting a directory (the
-// optional --vcf-dir override).
+// openDirBrowser opens a DirMode filebrowser for selecting a directory.
 func (s *loadScreen) openDirBrowser(title string) (*loadScreen, tea.Cmd) {
 	s.fb = filebrowser.New(filebrowser.Options{DirMode: true, Title: title, StartDir: s.root})
 	s.fb.SetSize(s.fbWidth(), s.fbHeight())
 	return s, s.fb.Init()
 }
 
-// dirty reports whether any data has been collected (any file path set). The
-// dictionary mode, kind selection, and heap default are not "collected input" —
-// only a chosen file path is — so the kind-select closes pristinely. On the
-// genomic branch the screen turns dirty once the VCF index is selected.
+// dirty reports whether any data has been collected (any path set). The
+// kind, dataset, dictionary mode and heap are not "collected input", so a
+// screen with only those closes at once.
 func (s *loadScreen) dirty() bool {
-	return s.file != "" || s.datasets != "" || s.concepts != "" ||
+	return s.file != "" || s.inputDir != "" || s.datasets != "" || s.concepts != "" ||
 		s.facetCategories != "" || s.facets != "" || s.facetConcepts != "" ||
 		s.vcfIndex != "" || s.vcfDir != ""
 }
 
-// opts assembles the PhenotypeOpts from the collected values; facet fields are
-// forwarded only in custom mode with facets included.
-func (s *loadScreen) opts() actions.PhenotypeOpts {
-	o := actions.PhenotypeOpts{
-		File:             s.file,
-		ArchiveEntry:     s.archiveEntry,
-		Heap:             s.heap,
-		CustomDictionary: s.dictMode == "custom",
+// args is the pic-sure command line the collected values make. Paths are
+// absolute, so the command doesn't depend on the working directory.
+func (s *loadScreen) args() []string {
+	heap := strings.TrimSpace(s.heap)
+	switch s.kind {
+	case kindDemo:
+		return []string{"data", "demo", s.demo, "--heap", heap}
+	case kindGenomic:
+		args := []string{"data", "load-genomic", "--partition", strings.TrimSpace(s.partition),
+			"--vcf-index", absPath(s.vcfIndex)}
+		if s.includeVCFDir && s.vcfDir != "" {
+			args = append(args, "--vcf-dir", absPath(s.vcfDir))
+		}
+		args = append(args, "--heap", heap)
+		if s.promote {
+			args = append(args, "--promote")
+		}
+		if s.enableProfile {
+			args = append(args, "--enable-profile")
+		}
+		return args
 	}
-	if o.CustomDictionary {
-		o.Datasets = s.datasets
-		o.Concepts = s.concepts
-		if s.includeFacets {
-			o.FacetCategories = s.facetCategories
-			o.Facets = s.facets
-			o.FacetConcepts = s.facetConcepts
+	args := []string{"data", "load-phenotype"}
+	if s.kind == kindDir {
+		args = append(args, "--input-dir", absPath(s.inputDir))
+	} else {
+		args = append(args, "--file", absPath(s.file))
+		if s.archiveEntry != "" {
+			args = append(args, "--entry", s.archiveEntry)
 		}
 	}
-	return o
+	args = append(args, "--heap", heap)
+	if s.dictMode == "custom" {
+		args = append(args, "--dictionary", "custom",
+			"--datasets", absPath(s.datasets), "--concepts", absPath(s.concepts))
+		if s.includeFacets {
+			args = append(args, "--facets-categories", absPath(s.facetCategories),
+				"--facets", absPath(s.facets), "--facet-concepts", absPath(s.facetConcepts))
+		}
+	}
+	return args
+}
+
+func absPath(p string) string {
+	if abs, err := filepath.Abs(p); err == nil {
+		return abs
+	}
+	return p
+}
+
+// action is the run screen's title, success line and command line.
+func (s *loadScreen) action() dashboard.Action {
+	act := dashboard.Action{Title: "Loading phenotype data", Done: "Phenotype data loaded", Args: s.args()}
+	switch s.kind {
+	case kindDemo:
+		act.Title, act.Done = "Loading the "+s.demo+" demo data", "Demo data loaded"
+	case kindGenomic:
+		act.Title, act.Done = "Loading genomic partition "+strings.TrimSpace(s.partition), "Genomic data loaded"
+	}
+	return act
 }
 
 func (s *loadScreen) dispatch() tea.Cmd {
-	act := actions.LoadPhenotype(s.opts())
-	return func() tea.Msg { return runActionMsg{act: act} }
-}
-
-// genomicOpts assembles the GenomicOpts from the collected genomic values.
-// VCFDir is forwarded only when the user opted to point at a directory.
-func (s *loadScreen) genomicOpts() actions.GenomicOpts {
-	o := actions.GenomicOpts{
-		Partition:     s.partition,
-		VCFIndex:      s.vcfIndex,
-		Heap:          s.heap,
-		Promote:       s.promote,
-		EnableProfile: s.enableProfile,
-	}
-	if s.includeVCFDir {
-		o.VCFDir = s.vcfDir
-	}
-	return o
-}
-
-func (s *loadScreen) dispatchGenomic() tea.Cmd {
-	act := actions.LoadGenomic(s.genomicOpts())
-	return func() tea.Msg { return runActionMsg{act: act} }
+	act := s.action()
+	return func() tea.Msg { return loadRunMsg{act: act} }
 }
 
 func closeLoad(aborted bool) tea.Cmd {
@@ -614,20 +645,19 @@ func (s *loadScreen) buildKindForm() *huh.Form {
 			Description("Choose the kind of data to load into PIC-SURE.").
 			Value(&s.kind).
 			Options(
-				huh.NewOption("Phenotype data (CSV)", "phenotype"),
-				huh.NewOption("Genomic data (VCF)", "genomic"),
+				huh.NewOption("Phenotype CSV, or an archive holding one", kindFile),
+				huh.NewOption("Directory of phenotype CSVs", kindDir),
+				huh.NewOption("Demo dataset", kindDemo),
+				huh.NewOption("Genomic data (VCF)", kindGenomic),
 				huh.NewOption("Cancel", ""),
 			),
 	))
 }
 
 // buildArchiveEntryForm lists the CSV entries found inside a multi-CSV archive
-// so the user picks which one to load (forwarded as --entry). No Cancel option:
-// esc backs out of the whole step (the screen's esc handler owns cancel), so the
-// select carries only real entries and the cursor preselects archiveEntry (set
-// to the first entry by applyArchiveCSVsFill) — never an empty value that would
-// reintroduce the cursor-on-Cancel collision. Value is bound BEFORE Options, per
-// the huh gotcha.
+// so the user picks which one to load (--entry). No Cancel option: esc backs
+// out (the screen's esc handler owns cancel), and the cursor preselects the
+// first entry.
 func (s *loadScreen) buildArchiveEntryForm() *huh.Form {
 	opts := make([]huh.Option[string], 0, len(s.archiveEntries))
 	for _, e := range s.archiveEntries {
@@ -636,17 +666,48 @@ func (s *loadScreen) buildArchiveEntryForm() *huh.Form {
 	return huh.NewForm(huh.NewGroup(
 		huh.NewSelect[string]().
 			Title("Choose the CSV to load").
-			Description("This archive holds multiple CSVs — pick the phenotype CSV to load.").
+			Description("This archive holds several CSVs; pick the one to load.").
 			Value(&s.archiveEntry).
 			Options(opts...),
 	))
 }
 
+func (s *loadScreen) buildDemoForm() *huh.Form {
+	labels := map[string]string{
+		"nhanes":      "NHANES",
+		"synthea":     "Synthea 10k",
+		"1000genomes": "1000 Genomes (phenotypes)",
+		ops.DemoAll:   "All three combined",
+	}
+	var opts []huh.Option[string]
+	for _, name := range ops.DemoDatasets() {
+		label := labels[name]
+		if label == "" {
+			label = name
+		}
+		opts = append(opts, huh.NewOption(label, name))
+	}
+	return huh.NewForm(huh.NewGroup(
+		huh.NewSelect[string]().
+			Title("Demo dataset").
+			Description("Downloaded once from hms-dbmi/pic-sure-public-datasets and cached.").
+			Value(&s.demo).
+			Options(opts...),
+	))
+}
+
 func (s *loadScreen) buildHeapForm() *huh.Form {
+	desc := "The loader's JVM heap in MB. 4096 suits up to about 1M rows."
+	switch s.kind {
+	case kindDir:
+		desc = "The sequential loader's JVM heap in MB."
+	case kindGenomic:
+		desc = "Each VCF loader's JVM heap in MB. Raise it for large partitions."
+	}
 	return huh.NewForm(huh.NewGroup(
 		huh.NewInput().
-			Title("JVM heap size").
-			Description("MB; 4096 for <1M rows, 8000+ for larger.").
+			Title("JVM heap size (MB)").
+			Description(desc).
 			Value(&s.heap).
 			Validate(validateHeap),
 	))
@@ -677,9 +738,13 @@ func (s *loadScreen) buildFacetsForm() *huh.Form {
 }
 
 func (s *loadScreen) buildConfirmForm() *huh.Form {
+	title := "⚠ Load phenotype data — this REPLACES the stack's phenotype data"
+	if s.kind == kindDemo {
+		title = "⚠ Load demo data — this REPLACES the stack's phenotype data"
+	}
 	return huh.NewForm(huh.NewGroup(
 		huh.NewConfirm().
-			Title("⚠ Load phenotype data — this REPLACES existing HPDS phenotype data").
+			Title(title).
 			Description(s.confirmSummary()).
 			Affirmative("Load").
 			Negative("Cancel").
@@ -693,7 +758,7 @@ func (s *loadScreen) buildGenomicDirAskForm() *huh.Form {
 	return huh.NewForm(huh.NewGroup(
 		huh.NewConfirm().
 			Title("VCF directory").
-			Description("Point at a directory of VCF files?\n(the index may already use absolute paths)").
+			Description("Do the VCFs live outside the index's directory?\nEvery VCF the index names must be under the directory.").
 			Affirmative("Yes").
 			Negative("No").
 			Value(&s.includeVCFDir),
@@ -710,21 +775,11 @@ func (s *loadScreen) buildPartitionForm() *huh.Form {
 	))
 }
 
-func (s *loadScreen) buildGenomicHeapForm() *huh.Form {
-	return huh.NewForm(huh.NewGroup(
-		huh.NewInput().
-			Title("JVM heap size").
-			Description("MB; 16000 for typical loads, raise for large partitions.").
-			Value(&s.heap).
-			Validate(validateHeap),
-	))
-}
-
 func (s *loadScreen) buildPromoteForm() *huh.Form {
 	return huh.NewForm(huh.NewGroup(
 		huh.NewConfirm().
-			Title("Promote this load to live genomic data now?").
-			Description("A backup of the current genomic data is kept (promote is backup-safe).").
+			Title("Promote this partition into HPDS's live genomic data?").
+			Description("HPDS stops while the partition is copied in, and starts again.").
 			Affirmative("Yes").
 			Negative("No").
 			Value(&s.promote),
@@ -735,7 +790,7 @@ func (s *loadScreen) buildProfileForm() *huh.Form {
 	return huh.NewForm(huh.NewGroup(
 		huh.NewConfirm().
 			Title("Enable the genomic HPDS profile now?").
-			Description("Only if data will be present — otherwise HPDS can crash-loop.").
+			Description("HPDS reads genomic data only with this profile (bch-dev).").
 			Affirmative("Yes").
 			Negative("No").
 			Value(&s.enableProfile),
@@ -753,22 +808,23 @@ func (s *loadScreen) buildGenomicConfirmForm() *huh.Form {
 	))
 }
 
-// validateHeap accepts a non-empty numeric (MB) heap value.
+// validateHeap accepts a whole number of MB, at least minHeapMB.
 func validateHeap(v string) error {
 	v = strings.TrimSpace(v)
 	if v == "" {
-		return errors.New("heap is required (e.g. 4096)")
+		return errors.New("heap is required, in MB (e.g. 4096)")
 	}
-	for _, r := range v {
-		if r < '0' || r > '9' {
-			return errors.New("heap must be numeric (MB), e.g. 4096")
-		}
+	mb, err := strconv.Atoi(v)
+	if err != nil || mb <= 0 {
+		return errors.New("heap must be a whole number of MB, e.g. 4096")
+	}
+	if mb < minHeapMB {
+		return fmt.Errorf("heap is in MB: %d MB is too small (4096 is 4 GB)", mb)
 	}
 	return nil
 }
 
-// partitionPattern mirrors etl.sh load-genomic's own partition guard
-// (^[A-Za-z0-9_-]+$): a non-empty run of letters, digits, underscores, hyphens.
+// partitionPattern is load-genomic's own partition rule.
 var partitionPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 // validatePartition accepts a non-empty partition name of letters/digits/_/-.
@@ -783,21 +839,36 @@ func validatePartition(v string) error {
 	return nil
 }
 
-// confirmSummary leads with the action's honest Describe warning (phenotype
-// REPLACES existing HPDS data) and follows with an aligned title/value digest
-// of everything collected — the U8 confirm-summary idiom: titles padded with
-// spaces to the widest visible title, a two-space gap, then the value.
+// confirmSummary says what the load replaces, then lists the collected
+// values: titles padded to the widest, a two-space gap, then the value.
 func (s *loadScreen) confirmSummary() string {
-	rows := [][2]string{
-		{"File", s.file},
+	var lead string
+	var rows [][2]string
+	switch s.kind {
+	case kindDemo:
+		lead = "Downloads the dataset (or reuses the cached copy), replaces HPDS's\n" +
+			"phenotype data with it, and rebuilds the dictionary."
+		rows = append(rows, [2]string{"Dataset", s.demo})
+	case kindDir:
+		lead = "The sequential loader reads the directory while HPDS keeps running;\n" +
+			"its output then replaces HPDS's phenotype data, and the dictionary is\n" +
+			"rebuilt. A failed load leaves HPDS as it was."
+		rows = append(rows, [2]string{"Directory", s.inputDir})
+	default:
+		lead = "HPDS stops, its phenotype data is replaced with this CSV, and the\n" +
+			"dictionary is rebuilt. If the loader fails, HPDS stays stopped with no\n" +
+			"phenotype data until a load succeeds."
+		rows = append(rows, [2]string{"File", s.file})
+		// For a multi-CSV archive the file line is the archive path; name the
+		// chosen entry on its own line so the user sees exactly which CSV loads.
+		if s.archiveEntry != "" {
+			rows = append(rows, [2]string{"Archive entry", s.archiveEntry})
+		}
 	}
-	// For a multi-CSV archive the file line is the archive path; name the chosen
-	// entry on its own line so the user sees exactly which CSV will load.
-	if s.archiveEntry != "" {
-		rows = append(rows, [2]string{"Archive entry", s.archiveEntry})
-	}
-	rows = append(rows, [2]string{"Heap", s.heap + " MB"})
-	if s.dictMode == "custom" {
+	rows = append(rows, [2]string{"Heap", strings.TrimSpace(s.heap) + " MB"})
+	switch {
+	case s.kind == kindDemo:
+	case s.dictMode == "custom":
 		rows = append(rows,
 			[2]string{"Dictionary", "custom"},
 			[2]string{"Datasets", s.datasets},
@@ -810,74 +881,48 @@ func (s *loadScreen) confirmSummary() string {
 				[2]string{"Facet concepts", s.facetConcepts},
 			)
 		}
-	} else {
+	default:
 		rows = append(rows, [2]string{"Dictionary", "auto (rebuild from loaded data)"})
 	}
-
-	titleWidth := 0
-	for _, r := range rows {
-		if w := lipgloss.Width(r[0]); w > titleWidth {
-			titleWidth = w
-		}
-	}
-
-	var b strings.Builder
-	b.WriteString(actions.LoadPhenotype(s.opts()).Describe)
-	b.WriteString("\n\n")
-	for _, r := range rows {
-		pad := strings.Repeat(" ", titleWidth-lipgloss.Width(r[0]))
-		fmt.Fprintf(&b, "%s%s  %s\n", r[0], pad, r[1])
-	}
-	return strings.TrimRight(b.String(), "\n")
+	return lead + "\n\n" + alignRows(rows)
 }
 
-// genomicConfirmSummary leads with the action's Describe, follows with the two
-// genomic caveats — promote is backup-safe, and enabling the profile before
-// genomic data is present crash-loops HPDS — and closes with an aligned digest
-// of the collected values (the same U8 confirm-summary idiom as confirmSummary).
-//
-// The screen cannot know whether prior genomic data is already live, so the
-// risky combination (enable-profile=true with promote=false) is surfaced as a
-// prominent CONDITIONAL warning rather than a flat assertion.
+// genomicConfirmSummary says what the load does, warns when the profile is
+// enabled without promoting this load, and lists the collected values.
 func (s *loadScreen) genomicConfirmSummary() string {
 	vcfDir := s.vcfDir
 	if !s.includeVCFDir || vcfDir == "" {
-		vcfDir = "(index paths)"
+		vcfDir = "(the index's directory)"
 	}
 	rows := [][2]string{
-		{"Partition", s.partition},
+		{"Partition", strings.TrimSpace(s.partition)},
 		{"VCF index", s.vcfIndex},
 		{"VCF dir", vcfDir},
-		{"Heap", s.heap + " MB"},
+		{"Heap", strings.TrimSpace(s.heap) + " MB"},
 		{"Promote", yesNo(s.promote)},
 		{"Enable profile", yesNo(s.enableProfile)},
 	}
 
-	titleWidth := 0
-	for _, r := range rows {
-		if w := lipgloss.Width(r[0]); w > titleWidth {
-			titleWidth = w
-		}
-	}
-
 	var b strings.Builder
-	b.WriteString(actions.LoadGenomic(s.genomicOpts()).Describe)
-	b.WriteString("\n\n")
-	b.WriteString("Caveats:\n")
-	b.WriteString("• Promote is backup-safe: the previous genomic data volume is kept until\n" +
-		"  explicitly removed.\n")
+	b.WriteString("Loads the VCFs into the partition's staging area, replacing any earlier\n" +
+		"load of it. HPDS keeps running on its live data while the loaders run.\n")
 	if s.enableProfile && !s.promote {
-		// Risky combo: enabling the profile without promoting this load. We can't
-		// know whether prior genomic data is already live, so warn conditionally.
-		b.WriteString("⚠ You enabled the profile WITHOUT promoting this load. If no prior\n" +
-			"  genomic data is already live, enabling the HPDS genomic profile will\n" +
-			"  crash-loop HPDS. Only proceed if promoted genomic data is already present\n" +
-			"  (or also promote this load).\n")
-	} else {
-		b.WriteString("• Enabling the genomic profile before genomic data is present crash-loops\n" +
-			"  HPDS — only enable it once promoted data exists.\n")
+		// The screen can't know whether genomic data is already live.
+		b.WriteString("⚠ You enabled the profile WITHOUT promoting this load. If HPDS has\n" +
+			"  no promoted genomic data yet, the genomic profile has nothing to read.\n")
 	}
 	b.WriteString("\n")
+	b.WriteString(alignRows(rows))
+	return b.String()
+}
+
+// alignRows lays out title/value rows with the values in one column.
+func alignRows(rows [][2]string) string {
+	titleWidth := 0
+	for _, r := range rows {
+		titleWidth = max(titleWidth, lipgloss.Width(r[0]))
+	}
+	var b strings.Builder
 	for _, r := range rows {
 		pad := strings.Repeat(" ", titleWidth-lipgloss.Width(r[0]))
 		fmt.Fprintf(&b, "%s%s  %s\n", r[0], pad, r[1])
@@ -897,16 +942,15 @@ func (s *loadScreen) view() string {
 	var body, footer string
 	switch {
 	case s.inspecting:
-		// The archive-csvs lister is running; park the file browser behind a brief
-		// placeholder so the screen doesn't look frozen during the bash fork.
-		body = loadTitleStyle.Render("(inspecting archive…)")
+		// The check reads the picked file or directory; park the browser
+		// behind a placeholder so the screen doesn't look frozen.
+		body = loadTitleStyle.Render("(checking…)")
 		footer = loadFooterStyle.Render("esc cancel")
 	case isFileStep(s.step):
 		fbView := s.fb.View()
-		// Surface a failed archive inspection inline above the re-opened browser so
-		// the user knows why their previous pick was rejected and can re-pick.
-		if s.archiveErr != "" {
-			fbView = lipgloss.JoinVertical(lipgloss.Left, styles.Bad.Render(s.archiveErr), fbView)
+		// Show why the previous pick was rejected above the re-opened browser.
+		if s.inspectErr != "" {
+			fbView = lipgloss.JoinVertical(lipgloss.Left, styles.Bad.Render(s.inspectErr), fbView)
 		}
 		body = fbView
 		footer = loadFooterStyle.Render("enter select · esc cancel")

@@ -571,16 +571,15 @@ func TestTeardownWaitsForTheStatus(t *testing.T) {
 	}
 }
 
-func TestLoadIsAStub(t *testing.T) {
+// l asks the embedder to open its load wizard.
+func TestLoadOpensTheWizard(t *testing.T) {
 	m, _ := testModel(t)
-	m, run := press(t, m, "l")
-	if run != nil || !strings.Contains(view(m), "isn't built yet (ticket 047)") {
-		t.Errorf("view:\n%s", view(m))
+	_, cmd := update(t, m, keyMsg("l"))
+	if cmd == nil {
+		t.Fatal("l sent nothing")
 	}
-	// The next key clears it.
-	m, _ = press(t, m, "down")
-	if m.lastResult != "" {
-		t.Error("the stub message stayed")
+	if _, ok := cmd().(LoadMsg); !ok {
+		t.Errorf("l sent %#v, want LoadMsg", cmd())
 	}
 }
 

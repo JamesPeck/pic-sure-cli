@@ -1,7 +1,10 @@
 package tui
 
 import (
-	"fmt"
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -9,8 +12,18 @@ import (
 	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
 
-	"github.com/JamesPeck/pic-sure-cli/internal/actions"
+	"github.com/JamesPeck/pic-sure-cli/internal/dashboard"
 )
+
+// newTestLoad opens a sized load screen on root, on kind's first step if
+// kind is set.
+func newTestLoad(t *testing.T, root, kind string) *loadScreen {
+	t.Helper()
+	s := newLoadScreen(context.Background(), root, kind)
+	s.setSize(100, 35)
+	_ = s.init()
+	return s
+}
 
 // completeForm forces the active huh form to its completed state and pumps a
 // neutral message so the screen acts on it — the same bypass the landing and
@@ -20,11 +33,295 @@ func completeForm(s *loadScreen) (*loadScreen, tea.Cmd) {
 	return s.update(struct{}{})
 }
 
-// genomicInputs is the set of values driveGenomicToConfirm walks through the
-// genomic step chain. An empty heap keeps the prefilled genomic default.
+// stubInspect replaces the archive lister and the directory check for one
+// test; nil err with entries lists them, a non-nil err rejects the pick.
+func stubInspect(t *testing.T, entries []string, err error) {
+	t.Helper()
+	origList, origDir := fetchArchiveCSVs, checkPhenotypeDir
+	fetchArchiveCSVs = func(context.Context, string) ([]string, error) { return entries, err }
+	checkPhenotypeDir = func(string) error { return err }
+	t.Cleanup(func() { fetchArchiveCSVs, checkPhenotypeDir = origList, origDir })
+}
+
+// pick consumes path on the current file step and, if that starts a check,
+// runs it and lands its result.
+func pick(t *testing.T, s *loadScreen, path string) *loadScreen {
+	t.Helper()
+	s, cmd := s.consumeFile(path)
+	if s.inspecting {
+		fill, ok := cmd().(inspectFillMsg)
+		if !ok {
+			t.Fatal("the check's command didn't return its result")
+		}
+		s, _ = s.update(fill)
+	}
+	return s
+}
+
+// chooseKind completes the kind step with kind.
+func chooseKind(t *testing.T, s *loadScreen, kind string) *loadScreen {
+	t.Helper()
+	s.kind = kind
+	s, _ = completeForm(s)
+	if s.step != firstStep(kind) {
+		t.Fatalf("kind %q: step = %v, want %v", kind, s.step, firstStep(kind))
+	}
+	return s
+}
+
+// run confirms the load and returns the action it asks the app to run.
+func run(t *testing.T, s *loadScreen) dashboard.Action {
+	t.Helper()
+	if s.step != loadConfirm && s.step != loadGenomicConfirm {
+		t.Fatalf("step = %v, want a confirm step", s.step)
+	}
+	s.confirmed = true
+	_, cmd := completeForm(s)
+	if cmd == nil {
+		t.Fatal("confirm produced no command")
+	}
+	msg, ok := cmd().(loadRunMsg)
+	if !ok {
+		t.Fatalf("confirm sent %#v, want loadRunMsg", cmd())
+	}
+	return msg.act
+}
+
+func loadView(s *loadScreen) string { return wizardANSI.ReplaceAllString(s.view(), "") }
+
+// The whole auto-dictionary path for a file: kind, file, heap, dictionary,
+// confirm, then data load-phenotype with the file and the heap.
+func TestLoadWizardFileAutoFlow(t *testing.T) {
+	stubInspect(t, nil, nil)
+	s := chooseKind(t, newTestLoad(t, "/tmp/x", ""), kindFile)
+	s = pick(t, s, "/data/pheno.csv")
+	if s.step != loadPhenoHeap || s.heap != "4096" {
+		t.Fatalf("after the file: step %v heap %q", s.step, s.heap)
+	}
+	s, _ = completeForm(s)
+	if s.step != loadPhenoDict {
+		t.Fatalf("after the heap: step %v", s.step)
+	}
+	s, _ = completeForm(s) // auto
+	act := run(t, s)
+	want := []string{"data", "load-phenotype", "--file", "/data/pheno.csv", "--heap", "4096"}
+	if !eq(act.Args, want) {
+		t.Errorf("args = %q, want %q", act.Args, want)
+	}
+	if act.Title != "Loading phenotype data" || act.Done != "Phenotype data loaded" {
+		t.Errorf("title %q done %q", act.Title, act.Done)
+	}
+}
+
+func TestLoadWizardCustomDictionary(t *testing.T) {
+	for _, facets := range []bool{false, true} {
+		stubInspect(t, nil, nil)
+		s := chooseKind(t, newTestLoad(t, "/tmp/x", ""), kindFile)
+		s = pick(t, s, "/data/pheno.csv")
+		s.heap = " 8000 "
+		s, _ = completeForm(s)
+		s.dictMode = "custom"
+		s, _ = completeForm(s)
+		s = pick(t, s, "/data/datasets.csv")
+		s = pick(t, s, "/data/concepts.zip")
+		if s.step != loadPhenoFacetsAsk {
+			t.Fatalf("step = %v, want the facets question", s.step)
+		}
+		s.includeFacets = facets
+		s, _ = completeForm(s)
+		if facets {
+			s = pick(t, s, "/data/fc.csv")
+			s = pick(t, s, "/data/f.csv")
+			s = pick(t, s, "/data/fcon.csv")
+		}
+		view := loadView(s)
+		act := run(t, s)
+		want := []string{"data", "load-phenotype", "--file", "/data/pheno.csv", "--heap", "8000",
+			"--dictionary", "custom", "--datasets", "/data/datasets.csv", "--concepts", "/data/concepts.zip"}
+		if facets {
+			want = append(want, "--facets-categories", "/data/fc.csv", "--facets", "/data/f.csv", "--facet-concepts", "/data/fcon.csv")
+		}
+		if !eq(act.Args, want) {
+			t.Errorf("facets %v: args = %q, want %q", facets, act.Args, want)
+		}
+		if strings.Contains(view, "Facet concepts") != facets {
+			t.Errorf("facets %v: summary:\n%s", facets, view)
+		}
+	}
+}
+
+// An archive with several CSVs opens the entry picker, and the entry
+// reaches --entry and the summary.
+func TestLoadWizardArchiveEntryPicker(t *testing.T) {
+	stubInspect(t, []string{"a/one.csv", "b/two.csv"}, nil)
+	s := chooseKind(t, newTestLoad(t, "/tmp/x", ""), kindFile)
+	s = pick(t, s, "/data/set.tar.gz")
+	if s.step != loadPhenoArchiveEntry || s.archiveEntry != "a/one.csv" {
+		t.Fatalf("step %v entry %q, want the picker on the first entry", s.step, s.archiveEntry)
+	}
+	if v := loadView(s); !strings.Contains(v, "b/two.csv") {
+		t.Errorf("picker doesn't list the entries:\n%s", v)
+	}
+	s.archiveEntry = "b/two.csv"
+	s, _ = completeForm(s)
+	if s.step != loadPhenoHeap {
+		t.Fatalf("after the entry: step %v", s.step)
+	}
+	s, _ = completeForm(s)
+	s, _ = completeForm(s)
+	if v := loadView(s); !strings.Contains(v, "Archive entry") || !strings.Contains(v, "b/two.csv") {
+		t.Errorf("summary doesn't name the entry:\n%s", v)
+	}
+	if args := run(t, s).Args; !containsPair(args, "--entry", "b/two.csv") {
+		t.Errorf("args = %q, want --entry b/two.csv", args)
+	}
+}
+
+// A one-CSV archive or a gzip needs no --entry.
+func TestLoadWizardSingleEntryArchiveSkipsPicker(t *testing.T) {
+	stubInspect(t, []string{"only.csv"}, nil)
+	s := chooseKind(t, newTestLoad(t, "/tmp/x", ""), kindFile)
+	s = pick(t, s, "/data/one.zip")
+	if s.step != loadPhenoHeap || s.archiveEntry != "" {
+		t.Fatalf("step %v entry %q", s.step, s.archiveEntry)
+	}
+}
+
+// The real lister is wired in: a plain CSV goes on to the heap, and a
+// file the load would refuse is rejected on the file step.
+func TestLoadWizardRealInspection(t *testing.T) {
+	dir := t.TempDir()
+	csv := filepath.Join(dir, "pheno.csv")
+	empty := filepath.Join(dir, "empty.csv")
+	if err := os.WriteFile(csv, []byte("PATIENT_NUM,CONCEPT_PATH,NVAL_NUM,TVAL_CHAR\n1,\\a\\,,x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(empty, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := chooseKind(t, newTestLoad(t, dir, ""), kindFile)
+	if s = pick(t, s, csv); s.step != loadPhenoHeap {
+		t.Errorf("plain CSV: step %v, want the heap", s.step)
+	}
+	s = chooseKind(t, newTestLoad(t, dir, ""), kindFile)
+	if s = pick(t, s, empty); s.step != loadPhenoFile || s.inspectErr == "" {
+		t.Errorf("empty file: step %v err %q, want the file step with an error", s.step, s.inspectErr)
+	}
+}
+
+// A rejected pick reopens the browser with the reason, and forgets the pick.
+func TestLoadWizardRejectedPick(t *testing.T) {
+	stubInspect(t, nil, errors.New("no CSV entries"))
+	for _, kind := range []string{kindFile, kindDir} {
+		s := chooseKind(t, newTestLoad(t, "/tmp/x", ""), kind)
+		s = pick(t, s, "/data/thing")
+		if s.step != firstStep(kind) || s.dirty() {
+			t.Errorf("%s: step %v dirty %v, want the same step, nothing kept", kind, s.step, s.dirty())
+		}
+		if v := loadView(s); !strings.Contains(v, "can't load that") || !strings.Contains(v, "no CSV entries") {
+			t.Errorf("%s: view doesn't show the reason:\n%s", kind, v)
+		}
+	}
+}
+
+// A check's result is used only by the pick it was made for.
+func TestLoadWizardStaleInspection(t *testing.T) {
+	stubInspect(t, []string{"a.csv", "b.csv"}, nil)
+	s := chooseKind(t, newTestLoad(t, "/tmp/x", ""), kindFile)
+	s, first := s.consumeFile("/data/first.tgz")
+	stale := first().(inspectFillMsg)
+	s.inspectSeq++ // a newer pick is in flight
+	if s, _ = s.update(stale); !s.inspecting || s.step != loadPhenoFile {
+		t.Errorf("a stale result was applied: step %v inspecting %v", s.step, s.inspecting)
+	}
+	s.inspecting = false // the screen moved on
+	stale.seq = s.inspectSeq
+	if s, _ = s.update(stale); s.step != loadPhenoFile {
+		t.Errorf("a result after the check ended was applied: step %v", s.step)
+	}
+}
+
+// While a pick is checked, keys don't reach the browser, and esc still
+// asks before discarding.
+func TestLoadWizardInspectingEsc(t *testing.T) {
+	stubInspect(t, nil, nil)
+	s := chooseKind(t, newTestLoad(t, "/tmp/x", ""), kindDir)
+	s, _ = s.consumeFile("/data/dir")
+	if !s.inspecting || !strings.Contains(loadView(s), "checking") {
+		t.Fatalf("not inspecting:\n%s", loadView(s))
+	}
+	s, _ = s.update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if !s.discarding {
+		t.Error("esc while checking a pick didn't ask to discard")
+	}
+}
+
+func TestLoadWizardInputDirFlow(t *testing.T) {
+	stubInspect(t, nil, nil)
+	s := chooseKind(t, newTestLoad(t, "/tmp/x", ""), kindDir)
+	s = pick(t, s, "/data/csvs")
+	if s.step != loadPhenoHeap || s.heap != "8000" {
+		t.Fatalf("step %v heap %q, want the heap at 8000", s.step, s.heap)
+	}
+	s, _ = completeForm(s)
+	s, _ = completeForm(s) // auto
+	if v := loadView(s); !strings.Contains(v, "Directory") || !strings.Contains(v, "HPDS keeps running") {
+		t.Errorf("summary:\n%s", v)
+	}
+	want := []string{"data", "load-phenotype", "--input-dir", "/data/csvs", "--heap", "8000"}
+	if args := run(t, s).Args; !eq(args, want) {
+		t.Errorf("args = %q, want %q", args, want)
+	}
+}
+
+func TestLoadWizardDemoFlow(t *testing.T) {
+	s := chooseKind(t, newTestLoad(t, "/tmp/x", ""), kindDemo)
+	if s.demo != "nhanes" {
+		t.Errorf("dataset preselected %q, want nhanes", s.demo)
+	}
+	for _, opt := range []string{"NHANES", "Synthea 10k", "1000 Genomes", "All three combined"} {
+		if !strings.Contains(loadView(s), opt) {
+			t.Errorf("dataset picker misses %q", opt)
+		}
+	}
+	s.demo = "synthea"
+	s, _ = completeForm(s)
+	if s.step != loadPhenoHeap || s.heap != "4096" {
+		t.Fatalf("step %v heap %q", s.step, s.heap)
+	}
+	s, _ = completeForm(s)
+	if s.step != loadConfirm {
+		t.Fatalf("demo heap → step %v, want the confirm (no dictionary questions)", s.step)
+	}
+	if v := loadView(s); strings.Contains(v, "Dictionary") || !strings.Contains(v, "synthea") {
+		t.Errorf("summary:\n%s", v)
+	}
+	act := run(t, s)
+	if want := []string{"data", "demo", "synthea", "--heap", "4096"}; !eq(act.Args, want) {
+		t.Errorf("args = %q, want %q", act.Args, want)
+	}
+	if act.Title != "Loading the synthea demo data" {
+		t.Errorf("title %q", act.Title)
+	}
+}
+
+// The developer menu's demo entry opens the screen on the datasets, and a
+// pristine esc there closes it.
+func TestLoadWizardOpensOnKind(t *testing.T) {
+	s := newTestLoad(t, "/tmp/x", kindDemo)
+	if s.step != loadDemoDataset || s.form == nil {
+		t.Fatalf("step %v, want the dataset picker", s.step)
+	}
+	_, cmd := s.update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if msg, ok := cmd().(loadDataClosedMsg); !ok || !msg.aborted {
+		t.Errorf("esc = %#v", cmd())
+	}
+}
+
+// genomicInputs is what driveGenomicToConfirm enters. An empty heap keeps
+// the default.
 type genomicInputs struct {
 	vcfIndex      string
-	includeVCFDir bool
 	vcfDir        string
 	partition     string
 	heap          string
@@ -32,1025 +329,240 @@ type genomicInputs struct {
 	enableProfile bool
 }
 
-// driveGenomicToConfirm walks the genomic branch from the kind select to the
-// confirm summary (form built, not yet confirmed), asserting each transition,
-// and returns the screen parked at loadGenomicConfirm.
+// driveGenomicToConfirm walks the genomic steps to the confirm summary.
 func driveGenomicToConfirm(t *testing.T, s *loadScreen, in genomicInputs) *loadScreen {
 	t.Helper()
-
-	s.kind = "genomic"
+	s = chooseKind(t, s, kindGenomic)
+	s = pick(t, s, in.vcfIndex)
+	if s.step != loadGenomicDirAsk {
+		t.Fatalf("after the index: step %v", s.step)
+	}
+	s.includeVCFDir = in.vcfDir != ""
 	s, _ = completeForm(s)
-	if s.step != loadGenomicIndex {
-		t.Fatalf("kind=genomic step = %v, want loadGenomicIndex", s.step)
+	if in.vcfDir != "" {
+		s = pick(t, s, in.vcfDir)
 	}
-
-	s, _ = s.consumeFile(in.vcfIndex)
-	if s.step != loadGenomicDirAsk || s.vcfIndex != in.vcfIndex {
-		t.Fatalf("after vcf-index step=%v vcfIndex=%q", s.step, s.vcfIndex)
-	}
-
-	s.includeVCFDir = in.includeVCFDir
-	s, _ = completeForm(s)
-	if in.includeVCFDir {
-		if s.step != loadGenomicDir {
-			t.Fatalf("dir-ask=yes step = %v, want loadGenomicDir", s.step)
-		}
-		s, _ = s.consumeFile(in.vcfDir)
-	}
-	if s.step != loadGenomicPartition {
-		t.Fatalf("before partition step = %v, want loadGenomicPartition", s.step)
-	}
-
 	s.partition = in.partition
 	s, _ = completeForm(s)
-	if s.step != loadGenomicHeap {
-		t.Fatalf("after partition step = %v, want loadGenomicHeap", s.step)
+	if s.step != loadGenomicHeap || s.heap != "16000" {
+		t.Fatalf("step %v heap %q, want the heap at 16000", s.step, s.heap)
 	}
-
 	if in.heap != "" {
 		s.heap = in.heap
 	}
 	s, _ = completeForm(s)
-	if s.step != loadGenomicPromote {
-		t.Fatalf("after heap step = %v, want loadGenomicPromote", s.step)
-	}
-
 	s.promote = in.promote
 	s, _ = completeForm(s)
-	if s.step != loadGenomicProfile {
-		t.Fatalf("after promote step = %v, want loadGenomicProfile", s.step)
-	}
-
 	s.enableProfile = in.enableProfile
 	s, _ = completeForm(s)
 	if s.step != loadGenomicConfirm {
-		t.Fatalf("after profile step = %v, want loadGenomicConfirm", s.step)
+		t.Fatalf("step %v, want the genomic confirm", s.step)
 	}
 	return s
 }
 
-// TestLoadWizardPhenotypeAutoFlow drives the whole auto-dictionary happy path:
-// kind → file → heap → dictionary(auto) → confirm → dispatch, and asserts the
-// dispatched runActionMsg carries LoadPhenotype with the collected File/Heap
-// and CustomDictionary=false.
-func TestLoadWizardPhenotypeAutoFlow(t *testing.T) {
-	s := newLoadScreen("/tmp/x")
-	s.setSize(100, 35)
-
-	// kind: phenotype.
-	s.kind = "phenotype"
-	s, _ = completeForm(s)
-	if s.step != loadPhenoFile {
-		t.Fatalf("after kind=phenotype, step = %v, want loadPhenoFile", s.step)
+func TestLoadWizardGenomicFlow(t *testing.T) {
+	cases := []struct {
+		in   genomicInputs
+		want []string
+	}{
+		{genomicInputs{vcfIndex: "/v/idx.tsv", partition: "p1"},
+			[]string{"data", "load-genomic", "--partition", "p1", "--vcf-index", "/v/idx.tsv", "--heap", "16000"}},
+		{genomicInputs{vcfIndex: "/v/idx.tsv", vcfDir: "/vcfs", partition: "p2", heap: "20000", promote: true, enableProfile: true},
+			[]string{"data", "load-genomic", "--partition", "p2", "--vcf-index", "/v/idx.tsv", "--vcf-dir", "/vcfs",
+				"--heap", "20000", "--promote", "--enable-profile"}},
 	}
-
-	// file: consume a selection (the test seam — we don't drive the filepicker).
-	s, _ = s.consumeFile("/data/pheno.csv")
-	if s.step != loadPhenoHeap || s.file != "/data/pheno.csv" {
-		t.Fatalf("after file select, step=%v file=%q", s.step, s.file)
-	}
-
-	// heap: keep the prefilled default.
-	if s.heap != defaultHeap {
-		t.Fatalf("heap default = %q, want %q", s.heap, defaultHeap)
-	}
-	s, _ = completeForm(s)
-	if s.step != loadPhenoDict {
-		t.Fatalf("after heap, step = %v, want loadPhenoDict", s.step)
-	}
-
-	// dictionary: auto → straight to confirm.
-	s.dictMode = "auto"
-	s, _ = completeForm(s)
-	if s.step != loadConfirm {
-		t.Fatalf("after dict=auto, step = %v, want loadConfirm", s.step)
-	}
-
-	// confirm: Load.
-	s.confirmed = true
-	_, cmd := completeForm(s)
-	if cmd == nil {
-		t.Fatal("confirm produced no command")
-	}
-	run, ok := cmd().(runActionMsg)
-	if !ok {
-		t.Fatalf("dispatch = %#v, want runActionMsg", cmd())
-	}
-	if want := actions.LoadPhenotype(actions.PhenotypeOpts{}).Name; run.act.Name != want {
-		t.Errorf("action = %q, want %q", run.act.Name, want)
-	}
-	want := []string{"load-phenotype", "--file", "/data/pheno.csv", "--heap", defaultHeap}
-	if !eq(run.act.Args, want) {
-		t.Errorf("args = %v, want %v (auto dictionary, no --dictionary custom)", run.act.Args, want)
-	}
-}
-
-// TestLoadWizardCustomNoFacets: dictionary(custom) → datasets → concepts →
-// facets(no) → confirm → dispatch with CustomDictionary=true, Datasets/Concepts
-// set and the facet fields empty.
-func TestLoadWizardCustomNoFacets(t *testing.T) {
-	s := newLoadScreen("/tmp/x")
-	s.setSize(100, 35)
-
-	s.kind = "phenotype"
-	s, _ = completeForm(s)
-	s, _ = s.consumeFile("/data/pheno.csv")
-	s, _ = completeForm(s) // heap default → dict
-
-	// dictionary: custom → datasets file step.
-	s.dictMode = "custom"
-	s, _ = completeForm(s)
-	if s.step != loadPhenoDatasets {
-		t.Fatalf("after dict=custom, step = %v, want loadPhenoDatasets", s.step)
-	}
-	s, _ = s.consumeFile("/data/datasets.csv")
-	if s.step != loadPhenoConcepts {
-		t.Fatalf("after datasets, step = %v, want loadPhenoConcepts", s.step)
-	}
-	s, _ = s.consumeFile("/data/concepts.zip")
-	if s.step != loadPhenoFacetsAsk {
-		t.Fatalf("after concepts, step = %v, want loadPhenoFacetsAsk", s.step)
-	}
-
-	// facets: no → straight to confirm.
-	s.includeFacets = false
-	s, _ = completeForm(s)
-	if s.step != loadConfirm {
-		t.Fatalf("after facets=no, step = %v, want loadConfirm", s.step)
-	}
-
-	s.confirmed = true
-	_, cmd := completeForm(s)
-	run, ok := cmd().(runActionMsg)
-	if !ok {
-		t.Fatalf("dispatch = %#v, want runActionMsg", cmd())
-	}
-	want := []string{
-		"load-phenotype", "--file", "/data/pheno.csv", "--heap", defaultHeap,
-		"--dictionary", "custom",
-		"--datasets", "/data/datasets.csv",
-		"--concepts", "/data/concepts.zip",
-	}
-	if !eq(run.act.Args, want) {
-		t.Errorf("args = %v, want %v (custom, no facets)", run.act.Args, want)
-	}
-}
-
-// TestLoadWizardCustomWithFacets: facets(yes) collects the three facet files
-// and forwards them.
-func TestLoadWizardCustomWithFacets(t *testing.T) {
-	s := newLoadScreen("/tmp/x")
-	s.setSize(100, 35)
-
-	s.kind = "phenotype"
-	s, _ = completeForm(s)
-	s, _ = s.consumeFile("/data/pheno.csv")
-	s, _ = completeForm(s) // heap → dict
-	s.dictMode = "custom"
-	s, _ = completeForm(s)
-	s, _ = s.consumeFile("/data/datasets.csv")
-	s, _ = s.consumeFile("/data/concepts.zip")
-
-	// facets: yes → three file steps.
-	s.includeFacets = true
-	s, _ = completeForm(s)
-	if s.step != loadPhenoFacetCategories {
-		t.Fatalf("after facets=yes, step = %v, want loadPhenoFacetCategories", s.step)
-	}
-	s, _ = s.consumeFile("/data/facet_categories.csv")
-	if s.step != loadPhenoFacets {
-		t.Fatalf("after facet categories, step = %v, want loadPhenoFacets", s.step)
-	}
-	s, _ = s.consumeFile("/data/facets.csv")
-	if s.step != loadPhenoFacetConcepts {
-		t.Fatalf("after facets, step = %v, want loadPhenoFacetConcepts", s.step)
-	}
-	s, _ = s.consumeFile("/data/facet_concepts.csv")
-	if s.step != loadConfirm {
-		t.Fatalf("after facet concepts, step = %v, want loadConfirm", s.step)
-	}
-
-	s.confirmed = true
-	_, cmd := completeForm(s)
-	run, ok := cmd().(runActionMsg)
-	if !ok {
-		t.Fatalf("dispatch = %#v, want runActionMsg", cmd())
-	}
-	want := []string{
-		"load-phenotype", "--file", "/data/pheno.csv", "--heap", defaultHeap,
-		"--dictionary", "custom",
-		"--datasets", "/data/datasets.csv",
-		"--concepts", "/data/concepts.zip",
-		"--facets-categories", "/data/facet_categories.csv",
-		"--facets", "/data/facets.csv",
-		"--facet-concepts", "/data/facet_concepts.csv",
-	}
-	if !eq(run.act.Args, want) {
-		t.Errorf("args = %v, want %v (custom with facets)", run.act.Args, want)
-	}
-}
-
-// TestLoadWizardConfirmCancelCloses: declining at the confirm summary closes
-// the screen without dispatching a load.
-func TestLoadWizardConfirmCancelCloses(t *testing.T) {
-	s := newLoadScreen("/tmp/x")
-	s.setSize(100, 35)
-	s.kind = "phenotype"
-	s, _ = completeForm(s)
-	s, _ = s.consumeFile("/data/pheno.csv")
-	s, _ = completeForm(s) // heap
-	s.dictMode = "auto"
-	s, _ = completeForm(s) // → confirm
-
-	s.confirmed = false
-	_, cmd := completeForm(s)
-	if cmd == nil {
-		t.Fatal("declined confirm produced no command")
-	}
-	msg, ok := cmd().(loadDataClosedMsg)
-	if !ok || !msg.aborted {
-		t.Fatalf("declined confirm = %#v, want loadDataClosedMsg{aborted:true}", cmd())
-	}
-}
-
-// TestLoadWizardKindCancelCloses: the Cancel option on the kind select closes.
-func TestLoadWizardKindCancelCloses(t *testing.T) {
-	s := newLoadScreen("/tmp/x")
-	s.kind = "" // Cancel
-	_, cmd := completeForm(s)
-	if cmd == nil {
-		t.Fatal("kind cancel produced no command")
-	}
-	if msg, ok := cmd().(loadDataClosedMsg); !ok || !msg.aborted {
-		t.Fatalf("kind cancel = %#v, want loadDataClosedMsg{aborted:true}", cmd())
-	}
-}
-
-// TestLoadWizardGenomicRoutesToFile: picking genomic routes into the genomic
-// branch's first (VCF index) file step — not a phenotype load, not the old
-// coming-soon stub — and prefills the higher genomic heap default.
-func TestLoadWizardGenomicRoutesToFile(t *testing.T) {
-	s := newLoadScreen("/tmp/x")
-	s.setSize(100, 35)
-	s.kind = "genomic"
-	s, cmd := completeForm(s)
-	if s.step != loadGenomicIndex {
-		t.Fatalf("genomic kind step = %v, want loadGenomicIndex", s.step)
-	}
-	if !isFileStep(s.step) {
-		t.Fatalf("loadGenomicIndex should be a file step")
-	}
-	if s.heap != defaultGenomicHeap {
-		t.Errorf("genomic heap default = %q, want %q", s.heap, defaultGenomicHeap)
-	}
-	// Routing to a file step must not dispatch anything yet.
-	if cmd != nil {
-		if _, ok := cmd().(runActionMsg); ok {
-			t.Fatal("entering the genomic file step dispatched a run action")
+	for _, c := range cases {
+		s := driveGenomicToConfirm(t, newTestLoad(t, "/tmp/x", ""), c.in)
+		act := run(t, s)
+		if !eq(act.Args, c.want) {
+			t.Errorf("args = %q, want %q", act.Args, c.want)
+		}
+		if act.Title != "Loading genomic partition "+c.in.partition {
+			t.Errorf("title %q", act.Title)
 		}
 	}
 }
 
-// TestLoadWizardEscPristineCloses: esc at the kind-select (no input collected)
-// closes immediately with no discard prompt.
-func TestLoadWizardEscPristineCloses(t *testing.T) {
-	s := newLoadScreen("/tmp/x")
-	s.setSize(100, 35)
-	s2, cmd := s.update(tea.KeyPressMsg{Code: tea.KeyEscape})
-	if s2.discarding {
-		t.Fatal("pristine esc raised the discard prompt")
-	}
-	if cmd == nil {
-		t.Fatal("pristine esc produced no command")
-	}
-	if msg, ok := cmd().(loadDataClosedMsg); !ok || !msg.aborted {
-		t.Fatalf("pristine esc = %#v, want loadDataClosedMsg{aborted:true}", cmd())
+// Enabling the profile without promoting warns; with promote it doesn't.
+func TestLoadWizardGenomicProfileWarning(t *testing.T) {
+	for _, promote := range []bool{false, true} {
+		s := driveGenomicToConfirm(t, newTestLoad(t, "/tmp/x", ""),
+			genomicInputs{vcfIndex: "/v/idx.tsv", partition: "p", promote: promote, enableProfile: true})
+		if warned := strings.Contains(loadView(s), "WITHOUT promoting"); warned == promote {
+			t.Errorf("promote %v: warning shown %v", promote, warned)
+		}
 	}
 }
 
-// TestLoadWizardEscDirtyGuard: once a file is collected, esc raises the
-// "Discard data load?" prompt; y discards (closes), n keeps the screen.
-func TestLoadWizardEscDirtyGuard(t *testing.T) {
-	dirty := func(t *testing.T) *loadScreen {
+// Relative picks become absolute paths, so the command doesn't depend on
+// the working directory.
+func TestLoadWizardArgsAreAbsolute(t *testing.T) {
+	stubInspect(t, nil, nil)
+	s := chooseKind(t, newTestLoad(t, "/tmp/x", ""), kindFile)
+	s = pick(t, s, "rel/pheno.csv")
+	s, _ = completeForm(s)
+	s, _ = completeForm(s)
+	wd, _ := os.Getwd()
+	if args := run(t, s).Args; !containsPair(args, "--file", filepath.Join(wd, "rel/pheno.csv")) {
+		t.Errorf("args = %q", args)
+	}
+}
+
+func TestValidateHeap(t *testing.T) {
+	for _, v := range []string{"256", "4096", " 8000 "} {
+		if err := validateHeap(v); err != nil {
+			t.Errorf("validateHeap(%q) = %v", v, err)
+		}
+	}
+	for v, want := range map[string]string{
+		"":     "required",
+		"16g":  "whole number of MB",
+		"4.5":  "whole number of MB",
+		"0":    "whole number of MB",
+		"-1":   "whole number of MB",
+		"16":   "too small",
+		"255":  "too small",
+		"1e10": "whole number of MB",
+	} {
+		if err := validateHeap(v); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("validateHeap(%q) = %v, want %q", v, err, want)
+		}
+	}
+}
+
+func TestValidatePartition(t *testing.T) {
+	for _, v := range []string{"chr22", "a_b-c", "-dash"} {
+		if err := validatePartition(v); err != nil {
+			t.Errorf("validatePartition(%q) = %v", v, err)
+		}
+	}
+	for _, v := range []string{"", "   ", "a b", "a/b", "a.b"} {
+		if validatePartition(v) == nil {
+			t.Errorf("validatePartition(%q) accepted", v)
+		}
+	}
+}
+
+func TestLoadWizardCancels(t *testing.T) {
+	closed := func(t *testing.T, cmd tea.Cmd) {
 		t.Helper()
-		s := newLoadScreen("/tmp/x")
-		s.setSize(100, 35)
-		s.kind = "phenotype"
-		s, _ = completeForm(s)
-		s, _ = s.consumeFile("/data/pheno.csv") // now dirty
-		if !s.dirty() {
-			t.Fatal("setup: screen should be dirty after a file selection")
+		if cmd == nil {
+			t.Fatal("no command")
 		}
-		return s
+		if msg, ok := cmd().(loadDataClosedMsg); !ok || !msg.aborted {
+			t.Fatalf("sent %#v, want loadDataClosedMsg{aborted: true}", cmd())
+		}
 	}
+	// The kind step's Cancel.
+	s := newTestLoad(t, "/tmp/x", "")
+	s.kind = ""
+	_, cmd := completeForm(s)
+	closed(t, cmd)
 
-	// esc on a dirty screen raises the prompt (no close yet).
-	s := dirty(t)
-	s, cmd := s.update(tea.KeyPressMsg{Code: tea.KeyEscape})
-	if !s.discarding {
-		t.Fatal("esc on a dirty screen did not raise the discard prompt")
-	}
-	if cmd != nil {
-		t.Fatal("esc on a dirty screen must not close yet")
-	}
-	if !strings.Contains(wizardANSI.ReplaceAllString(s.view(), ""), "Discard data load?") {
-		t.Errorf("footer missing the discard prompt:\n%s", wizardANSI.ReplaceAllString(s.view(), ""))
-	}
-
-	// y discards (closes aborted).
-	s = dirty(t)
-	s, _ = s.update(tea.KeyPressMsg{Code: tea.KeyEscape})
-	_, cmd = s.update(tea.KeyPressMsg{Code: 'y', Text: "y"})
-	if msg, ok := cmd().(loadDataClosedMsg); !ok || !msg.aborted {
-		t.Fatalf("y at discard prompt = %#v, want loadDataClosedMsg{aborted:true}", cmd())
-	}
-
-	// n keeps the screen (prompt dismissed, collected file intact).
-	s = dirty(t)
-	s, _ = s.update(tea.KeyPressMsg{Code: tea.KeyEscape})
-	s, cmd = s.update(tea.KeyPressMsg{Code: 'n', Text: "n"})
-	if cmd != nil {
-		t.Fatal("n at discard prompt should not close the screen")
-	}
-	if s.discarding {
-		t.Fatal("n did not dismiss the discard prompt")
-	}
-	if s.file != "/data/pheno.csv" {
-		t.Errorf("collected file lost after declining discard: %q", s.file)
-	}
-}
-
-// TestLoadWizardConfirmSummaryLeadsWithWarning: the confirm summary leads with
-// the action's honest "REPLACES existing HPDS phenotype data" warning and lists
-// the collected values.
-func TestLoadWizardConfirmSummaryLeadsWithWarning(t *testing.T) {
-	s := newLoadScreen("/tmp/x")
-	s.setSize(100, 35)
-	s.kind = "phenotype"
+	// Cancel at the confirm.
+	s = newTestLoad(t, "/tmp/x", kindDemo)
 	s, _ = completeForm(s)
-	s, _ = s.consumeFile("/data/pheno.csv")
-	s, _ = completeForm(s) // heap
-	s.dictMode = "auto"
-	s, _ = completeForm(s) // → confirm
+	s, _ = completeForm(s)
+	s.confirmed = false
+	_, cmd = completeForm(s)
+	closed(t, cmd)
 
-	view := wizardANSI.ReplaceAllString(s.view(), "")
-	for _, want := range []string{"REPLACES existing HPDS phenotype data", "/data/pheno.csv", defaultHeap} {
-		if !strings.Contains(view, want) {
-			t.Errorf("confirm summary missing %q:\n%s", want, view)
-		}
+	// esc on a pristine screen.
+	_, cmd = newTestLoad(t, "/tmp/x", "").update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	closed(t, cmd)
+}
+
+// Once a path is collected, esc asks first: y discards, n keeps it.
+func TestLoadWizardEscDirtyGuard(t *testing.T) {
+	stubInspect(t, nil, nil)
+	dirty := func() *loadScreen {
+		s := chooseKind(t, newTestLoad(t, "/tmp/x", ""), kindFile)
+		return pick(t, s, "/data/pheno.csv")
+	}
+	s, cmd := dirty().update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if !s.discarding || cmd != nil || !strings.Contains(loadView(s), "Discard data load?") {
+		t.Fatalf("esc on a dirty screen: discarding %v cmd %v", s.discarding, cmd != nil)
+	}
+	if _, cmd = s.update(tea.KeyPressMsg{Code: 'y', Text: "y"}); cmd == nil {
+		t.Fatal("y didn't close")
+	}
+	s, _ = dirty().update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	s, cmd = s.update(tea.KeyPressMsg{Code: 'n', Text: "n"})
+	if cmd != nil || s.discarding || s.file != "/data/pheno.csv" {
+		t.Errorf("n: cmd %v discarding %v file %q", cmd != nil, s.discarding, s.file)
 	}
 }
 
-// TestLoadWizardFrameStaysInBox: across the size matrix the screen renders
-// without panicking and never overflows the terminal box.
+// Across sizes, every kind of step stays inside the terminal.
 func TestLoadWizardFrameStaysInBox(t *testing.T) {
-	for _, w := range []int{80, 120, 200} {
-		h := 30
-		// Exercise a representative step from each kind: the kind select
-		// (form), a phenotype file step (filebrowser), the phenotype confirm
-		// summary, and the genomic confirm summary (the longest/wrappiest one).
-		for _, step := range []loadStep{loadKind, loadPhenoFile, loadConfirm, loadGenomicConfirm} {
-			s := newLoadScreen("/tmp/x")
-			s.setSize(w, h)
-			switch step {
-			case loadPhenoFile:
-				s.kind = "phenotype"
-				s, _ = completeForm(s)
-			case loadConfirm:
-				s.kind = "phenotype"
-				s, _ = completeForm(s)
-				s, _ = s.consumeFile("/data/pheno.csv")
-				s, _ = completeForm(s)
-				s.dictMode = "auto"
-				s, _ = completeForm(s)
-			case loadGenomicConfirm:
-				s = driveGenomicToConfirm(t, s, genomicInputs{
-					vcfIndex:      "/data/idx.tsv",
-					partition:     "chr22",
-					promote:       false,
-					enableProfile: true, // exercise the long conditional warning
-				})
-			}
-			s.setSize(w, h) // re-size after entering the step
+	stubInspect(t, []string{"a.csv", "b.csv"}, nil)
+	steps := map[string]func(*loadScreen) *loadScreen{
+		"kind": func(s *loadScreen) *loadScreen { return s },
+		"file": func(s *loadScreen) *loadScreen { return chooseKind(t, s, kindFile) },
+		"entry": func(s *loadScreen) *loadScreen {
+			return pick(t, chooseKind(t, s, kindFile), "/data/a-very-long-directory-name/set.tar.gz")
+		},
+		"confirm": func(s *loadScreen) *loadScreen {
+			s = pick(t, chooseKind(t, s, kindFile), "/data/set.tar.gz")
+			s, _ = completeForm(s)
+			s, _ = completeForm(s)
+			s, _ = completeForm(s)
+			return s
+		},
+		"genomic confirm": func(s *loadScreen) *loadScreen {
+			return driveGenomicToConfirm(t, s, genomicInputs{vcfIndex: "/v/idx.tsv", partition: "p", enableProfile: true})
+		},
+	}
+	for _, sz := range [][2]int{{60, 16}, {80, 24}, {120, 30}} {
+		for name, to := range steps {
+			s := to(newTestLoad(t, "/tmp/x", ""))
+			s.setSize(sz[0], sz[1])
 			view := s.view()
-			if lipgloss.Height(view) > h {
-				t.Errorf("%dx%d step=%v frame height %d exceeds %d", w, h, step, lipgloss.Height(view), h)
+			if h := lipgloss.Height(view); h > sz[1] {
+				t.Errorf("%v %s: height %d", sz, name, h)
 			}
-			for n, line := range strings.Split(view, "\n") {
-				if lw := lipgloss.Width(line); lw > w {
-					t.Errorf("%dx%d step=%v line %d width %d exceeds %d", w, h, step, n, lw, w)
+			for _, line := range strings.Split(view, "\n") {
+				if w := lipgloss.Width(line); w > sz[0] {
+					t.Errorf("%v %s: line width %d", sz, name, w)
+					break
 				}
 			}
 		}
 	}
 }
 
-// TestLoadWizardGenomicFullFlow drives the whole genomic happy path including a
-// VCF dir override and both toggles on, and asserts the dispatched runActionMsg
-// carries LoadGenomic with the collected values and the exact argv.
-func TestLoadWizardGenomicFullFlow(t *testing.T) {
-	s := newLoadScreen("/tmp/x")
-	s.setSize(100, 35)
-
-	s = driveGenomicToConfirm(t, s, genomicInputs{
-		vcfIndex:      "/data/idx.tsv",
-		includeVCFDir: true,
-		vcfDir:        "/data/vcf",
-		partition:     "chr22",
-		promote:       true,
-		enableProfile: true,
-	})
-	if s.vcfDir != "/data/vcf" || s.heap != defaultGenomicHeap {
-		t.Fatalf("collected vcfDir=%q heap=%q", s.vcfDir, s.heap)
-	}
-
-	s.confirmed = true
-	_, cmd := completeForm(s)
-	if cmd == nil {
-		t.Fatal("confirm produced no command")
-	}
-	run, ok := cmd().(runActionMsg)
-	if !ok {
-		t.Fatalf("dispatch = %#v, want runActionMsg", cmd())
-	}
-	if run.act.Name != "load genomic data" {
-		t.Errorf("action name = %q, want %q", run.act.Name, "load genomic data")
-	}
-	want := []string{
-		"load-genomic", "--partition", "chr22", "--vcf-index", "/data/idx.tsv",
-		"--vcf-dir", "/data/vcf", "--heap", defaultGenomicHeap,
-		"--promote", "--enable-profile",
-	}
-	if !eq(run.act.Args, want) {
-		t.Errorf("args = %v, want %v", run.act.Args, want)
-	}
-}
-
-// TestLoadWizardGenomicVCFDirBranch: declining the dir prompt leaves VCFDir
-// empty (no --vcf-dir in argv); accepting it collects the directory and emits
-// --vcf-dir.
-func TestLoadWizardGenomicVCFDirBranch(t *testing.T) {
-	// no → skip straight to partition, no --vcf-dir.
-	s := newLoadScreen("/tmp/x")
-	s.setSize(100, 35)
-	s = driveGenomicToConfirm(t, s, genomicInputs{
-		vcfIndex: "/data/idx.tsv", partition: "chr22",
-	})
-	if s.vcfDir != "" {
-		t.Errorf("dir-ask=no left vcfDir=%q, want empty", s.vcfDir)
-	}
-	s.confirmed = true
-	_, cmd := completeForm(s)
-	run := cmd().(runActionMsg)
-	for _, a := range run.act.Args {
-		if a == "--vcf-dir" {
-			t.Errorf("dir-ask=no but argv has --vcf-dir: %v", run.act.Args)
+// The kind select opens on its first real option, with every option shown,
+// even on a short terminal: huh preselects the option equal to the bound
+// value, and "" is Cancel's.
+func TestLoadWizardKindSelectOpensOnFirstOption(t *testing.T) {
+	for _, sz := range [][2]int{{100, 35}, {60, 16}} {
+		s := newLoadScreen(context.Background(), "/tmp/x", "")
+		s.setSize(sz[0], sz[1])
+		_ = s.init()
+		v := loadView(s)
+		if !strings.Contains(v, "> Phenotype CSV") || strings.Contains(v, "> Cancel") {
+			t.Errorf("%v: cursor not on the first option:\n%s", sz, v)
 		}
-	}
-	wantNo := []string{
-		"load-genomic", "--partition", "chr22", "--vcf-index", "/data/idx.tsv",
-		"--heap", defaultGenomicHeap,
-	}
-	if !eq(run.act.Args, wantNo) {
-		t.Errorf("dir-ask=no args = %v, want %v", run.act.Args, wantNo)
-	}
-
-	// yes → DirMode browser, vcfDir set, --vcf-dir present.
-	s = newLoadScreen("/tmp/x")
-	s.setSize(100, 35)
-	s = driveGenomicToConfirm(t, s, genomicInputs{
-		vcfIndex: "/data/idx.tsv", includeVCFDir: true, vcfDir: "/data/vcf", partition: "chr22",
-	})
-	if s.vcfDir != "/data/vcf" {
-		t.Errorf("dir-ask=yes vcfDir=%q, want /data/vcf", s.vcfDir)
-	}
-	s.confirmed = true
-	_, cmd = completeForm(s)
-	run = cmd().(runActionMsg)
-	if !containsPair(run.act.Args, "--vcf-dir", "/data/vcf") {
-		t.Errorf("dir-ask=yes argv missing --vcf-dir /data/vcf: %v", run.act.Args)
-	}
-}
-
-// TestLoadWizardGenomicToggles: each promote/enable-profile combination yields
-// the correct presence of --promote / --enable-profile in the argv.
-func TestLoadWizardGenomicToggles(t *testing.T) {
-	for _, c := range []struct {
-		promote, profile bool
-	}{
-		{false, false}, {true, false}, {false, true}, {true, true},
-	} {
-		s := newLoadScreen("/tmp/x")
-		s.setSize(100, 35)
-		s = driveGenomicToConfirm(t, s, genomicInputs{
-			vcfIndex: "/data/idx.tsv", partition: "chr22",
-			promote: c.promote, enableProfile: c.profile,
-		})
-		s.confirmed = true
-		_, cmd := completeForm(s)
-		args := cmd().(runActionMsg).act.Args
-		if got := contains(args, "--promote"); got != c.promote {
-			t.Errorf("promote=%v profile=%v: --promote present=%v, want %v (%v)", c.promote, c.profile, got, c.promote, args)
-		}
-		if got := contains(args, "--enable-profile"); got != c.profile {
-			t.Errorf("promote=%v profile=%v: --enable-profile present=%v, want %v (%v)", c.promote, c.profile, got, c.profile, args)
+		for _, opt := range []string{"Directory of phenotype CSVs", "Demo dataset", "Genomic data (VCF)", "Cancel"} {
+			if !strings.Contains(v, opt) {
+				t.Errorf("%v: option %q not shown:\n%s", sz, opt, v)
+			}
 		}
 	}
 }
 
-// TestValidatePartition: empty and bad-char partitions are rejected; valid
-// letters/digits/_/- accepted. This is the validator the partition input binds.
-func TestValidatePartition(t *testing.T) {
-	bad := []string{"", "  ", "chr 22", "chr/22", "chr.22", "chr*", "a b"}
-	for _, v := range bad {
-		if validatePartition(v) == nil {
-			t.Errorf("validatePartition(%q) = nil, want error", v)
-		}
-	}
-	good := []string{"chr22", "1000genomes", "my_partition", "data-set-1", "ABC_123-x"}
-	for _, v := range good {
-		if err := validatePartition(v); err != nil {
-			t.Errorf("validatePartition(%q) = %v, want nil", v, err)
+// The browsers open at the stack's directory, not the process's cwd.
+func TestLoadWizardBrowsersStartAtRoot(t *testing.T) {
+	root := t.TempDir()
+	for _, kind := range []string{kindFile, kindDir, kindGenomic} {
+		s := chooseKind(t, newTestLoad(t, root, ""), kind)
+		if got := s.fb.Dir(); got != root {
+			t.Errorf("%s: browser opened in %q, want %q", kind, got, root)
 		}
 	}
 }
 
-// TestLoadWizardGenomicConfirmCaveats: the genomic confirm summary leads with
-// the action's Describe and carries both caveats; with enable-profile on and
-// promote off it surfaces the prominent conditional crash-loop warning.
-func TestLoadWizardGenomicConfirmCaveats(t *testing.T) {
-	// Risky combo: profile on, promote off → the conditional warning.
-	s := newLoadScreen("/tmp/x")
-	s.setSize(100, 35)
-	s = driveGenomicToConfirm(t, s, genomicInputs{
-		vcfIndex: "/data/idx.tsv", partition: "chr22",
-		promote: false, enableProfile: true,
-	})
-	view := wizardANSI.ReplaceAllString(s.view(), "")
-	for _, want := range []string{
-		"genomic partition", // from the action's Describe
-		"backup-safe",       // promote caveat
-		"WITHOUT promoting", // the prominent conditional warning
-		"crash-loop",
-		"chr22", "/data/idx.tsv", "(index paths)", // digest rows, no dir → index paths
-	} {
-		if !strings.Contains(view, want) {
-			t.Errorf("genomic confirm summary missing %q:\n%s", want, view)
-		}
-	}
-
-	// Safe combo: the flat (non-conditional) profile caveat is shown instead.
-	s = newLoadScreen("/tmp/x")
-	s.setSize(100, 35)
-	s = driveGenomicToConfirm(t, s, genomicInputs{
-		vcfIndex: "/data/idx.tsv", partition: "chr22",
-		promote: true, enableProfile: false,
-	})
-	view = wizardANSI.ReplaceAllString(s.view(), "")
-	if strings.Contains(view, "WITHOUT promoting") {
-		t.Errorf("non-risky combo should not show the conditional warning:\n%s", view)
-	}
-	if !strings.Contains(view, "before genomic data is present crash-loops") {
-		t.Errorf("non-risky combo missing the flat profile caveat:\n%s", view)
-	}
-}
-
-// TestLoadWizardGenomicEscDirtyGuard: once the VCF index is collected, esc on
-// the genomic branch raises the discard prompt rather than closing.
-func TestLoadWizardGenomicEscDirtyGuard(t *testing.T) {
-	s := newLoadScreen("/tmp/x")
-	s.setSize(100, 35)
-	s.kind = "genomic"
-	s, _ = completeForm(s)
-
-	// Pristine genomic file step (no index yet) closes immediately on esc.
-	s2, cmd := s.update(tea.KeyPressMsg{Code: tea.KeyEscape})
-	if s2.discarding {
-		t.Fatal("esc before any genomic input raised the discard prompt")
-	}
-	if msg, ok := cmd().(loadDataClosedMsg); !ok || !msg.aborted {
-		t.Fatalf("pristine genomic esc = %#v, want loadDataClosedMsg{aborted:true}", cmd())
-	}
-
-	// After the VCF index, the screen is dirty: esc raises the discard prompt.
-	s = newLoadScreen("/tmp/x")
-	s.setSize(100, 35)
-	s.kind = "genomic"
-	s, _ = completeForm(s)
-	s, _ = s.consumeFile("/data/idx.tsv")
-	if !s.dirty() {
-		t.Fatal("screen should be dirty after the VCF index selection")
-	}
-	s, cmd = s.update(tea.KeyPressMsg{Code: tea.KeyEscape})
-	if !s.discarding {
-		t.Fatal("esc after vcf-index did not raise the discard prompt")
-	}
-	if cmd != nil {
-		t.Fatal("esc on a dirty genomic screen must not close yet")
-	}
-	if !strings.Contains(wizardANSI.ReplaceAllString(s.view(), ""), "Discard data load?") {
-		t.Errorf("footer missing the discard prompt:\n%s", wizardANSI.ReplaceAllString(s.view(), ""))
-	}
-}
-
-// TestLoadWizardGenomicConfirmCancelCloses: declining the genomic confirm
-// closes the screen without dispatching a load.
-func TestLoadWizardGenomicConfirmCancelCloses(t *testing.T) {
-	s := newLoadScreen("/tmp/x")
-	s.setSize(100, 35)
-	s = driveGenomicToConfirm(t, s, genomicInputs{vcfIndex: "/data/idx.tsv", partition: "chr22"})
-	s.confirmed = false
-	_, cmd := completeForm(s)
-	if cmd == nil {
-		t.Fatal("declined genomic confirm produced no command")
-	}
-	if msg, ok := cmd().(loadDataClosedMsg); !ok || !msg.aborted {
-		t.Fatalf("declined genomic confirm = %#v, want loadDataClosedMsg{aborted:true}", cmd())
-	}
-}
-
-// TestLoadWizardKindStepSingleTitle: the kind step must render the "Load your
-// data" header exactly once — the form no longer carries a redundant .Title.
-func TestLoadWizardKindStepSingleTitle(t *testing.T) {
-	s := newLoadScreen("/tmp/x")
-	s.setSize(100, 35)
-	view := wizardANSI.ReplaceAllString(s.view(), "")
-	if n := strings.Count(view, "Load your data"); n != 1 {
-		t.Errorf("kind step renders %q %d times, want 1:\n%s", "Load your data", n, view)
-	}
-}
-
-// drivePhenoFile selects the phenotype kind and consumes a file path, returning
-// the screen and the command consumeFile produced (the async archive-csvs fetch
-// for a non-plain-.csv path, or nil/an Init cmd for a plain .csv).
-func drivePhenoFile(t *testing.T, s *loadScreen, path string) (*loadScreen, tea.Cmd) {
-	t.Helper()
-	s.kind = "phenotype"
-	s, _ = completeForm(s)
-	if s.step != loadPhenoFile {
-		t.Fatalf("after kind=phenotype, step = %v, want loadPhenoFile", s.step)
-	}
-	return s.consumeFile(path)
-}
-
-// runArchiveCmd executes the archive-inspection command (which calls the stubbed
-// fetchArchiveCSVs synchronously) and routes the resulting message back through
-// update, returning the post-fill screen. Fails if cmd does not deliver an
-// archiveCSVsFillMsg.
-func runArchiveCmd(t *testing.T, s *loadScreen, cmd tea.Cmd) *loadScreen {
-	t.Helper()
-	if cmd == nil {
-		t.Fatal("archive inspection produced no command")
-	}
-	msg, ok := cmd().(archiveCSVsFillMsg)
-	if !ok {
-		t.Fatalf("inspection cmd = %#v, want archiveCSVsFillMsg", cmd())
-	}
-	s, _ = s.update(msg)
-	return s
-}
-
-// stubArchiveCSVs installs a fetchArchiveCSVs returning entries/err and restores
-// the original on cleanup. called (if non-nil) is set true when the stub runs.
-func stubArchiveCSVs(t *testing.T, entries []string, err error, called *bool) {
-	t.Helper()
-	orig := fetchArchiveCSVs
-	fetchArchiveCSVs = func(string, string) ([]string, error) {
-		if called != nil {
-			*called = true
-		}
-		return entries, err
-	}
-	t.Cleanup(func() { fetchArchiveCSVs = orig })
-}
-
-// TestLoadWizardPlainCSVNoInspection: a plain .csv advances straight to heap
-// without calling archive-csvs and without an --entry in the dispatched argv.
-func TestLoadWizardPlainCSVNoInspection(t *testing.T) {
-	called := false
-	stubArchiveCSVs(t, nil, nil, &called)
-
-	s := newLoadScreen("/tmp/x")
-	s.setSize(100, 35)
-	s, cmd := drivePhenoFile(t, s, "/data/pheno.csv")
-	if called {
-		t.Fatal("archive-csvs was called for a plain .csv")
-	}
-	if s.step != loadPhenoHeap {
-		t.Fatalf("plain .csv step = %v, want loadPhenoHeap", s.step)
-	}
-	if s.inspecting {
-		t.Fatal("plain .csv must not enter the inspecting state")
-	}
-	// The cmd here is the heap form's Init (or nil) — never an archive fetch.
-	if cmd != nil {
-		if _, ok := cmd().(archiveCSVsFillMsg); ok {
-			t.Fatal("plain .csv scheduled an archive-csvs fetch")
-		}
-	}
-
-	// Drive to dispatch and assert no --entry.
-	s, _ = completeForm(s) // heap → dict
-	s.dictMode = "auto"
-	s, _ = completeForm(s) // → confirm
-	s.confirmed = true
-	_, cmd = completeForm(s)
-	run := cmd().(runActionMsg)
-	if contains(run.act.Args, "--entry") {
-		t.Errorf("plain .csv argv unexpectedly has --entry: %v", run.act.Args)
-	}
-	want := []string{"load-phenotype", "--file", "/data/pheno.csv", "--heap", defaultHeap}
-	if !eq(run.act.Args, want) {
-		t.Errorf("args = %v, want %v", run.act.Args, want)
-	}
-}
-
-// TestLoadWizardSingleCSVArchiveNoPicker: an archive whose lister returns exactly
-// one CSV needs no picker — the screen advances to heap with ArchiveEntry empty
-// (bash auto-picks the single CSV).
-func TestLoadWizardSingleCSVArchiveNoPicker(t *testing.T) {
-	stubArchiveCSVs(t, []string{"only.csv"}, nil, nil)
-
-	s := newLoadScreen("/tmp/x")
-	s.setSize(100, 35)
-	s, cmd := drivePhenoFile(t, s, "/data/pheno.tgz")
-	if !s.inspecting {
-		t.Fatal("a non-plain file must enter the inspecting state")
-	}
-	s = runArchiveCmd(t, s, cmd)
-
-	if s.inspecting {
-		t.Fatal("inspecting flag not cleared after the fill")
-	}
-	if s.step != loadPhenoHeap {
-		t.Fatalf("single-CSV archive step = %v, want loadPhenoHeap", s.step)
-	}
-	if s.archiveEntry != "" {
-		t.Errorf("single-CSV archive set ArchiveEntry = %q, want empty", s.archiveEntry)
-	}
-
-	s, _ = completeForm(s) // heap → dict
-	s.dictMode = "auto"
-	s, _ = completeForm(s)
-	s.confirmed = true
-	_, cmd = completeForm(s)
-	run := cmd().(runActionMsg)
-	if contains(run.act.Args, "--entry") {
-		t.Errorf("single-CSV archive argv unexpectedly has --entry: %v", run.act.Args)
-	}
-}
-
-// TestLoadWizardMultiCSVArchivePicker: an archive with ≥2 CSVs opens the entry
-// picker with the cursor on the FIRST entry (never a Cancel row); choosing the
-// second entry forwards it as --entry in the dispatched argv.
-func TestLoadWizardMultiCSVArchivePicker(t *testing.T) {
-	entries := []string{"a/first.csv", "b/second.csv"}
-	stubArchiveCSVs(t, entries, nil, nil)
-
-	s := newLoadScreen("/tmp/x")
-	s.setSize(100, 35)
-	s, cmd := drivePhenoFile(t, s, "/data/pheno.tgz")
-	s = runArchiveCmd(t, s, cmd)
-
-	if s.step != loadPhenoArchiveEntry {
-		t.Fatalf("multi-CSV archive step = %v, want loadPhenoArchiveEntry", s.step)
-	}
-	// Cursor preselects the first entry; never a Cancel row (afa885b lesson).
-	if s.archiveEntry != entries[0] {
-		t.Errorf("picker preselect = %q, want first entry %q", s.archiveEntry, entries[0])
-	}
-	view := wizardANSI.ReplaceAllString(s.view(), "")
-	if !strings.Contains(view, "> "+entries[0]) {
-		t.Errorf("picker cursor not on the first entry %q:\n%s", entries[0], view)
-	}
-	if strings.Contains(view, "> Cancel") {
-		t.Errorf("picker cursor is on a Cancel row (cursor-on-Cancel bug):\n%s", view)
-	}
-	for _, e := range entries {
-		if !strings.Contains(view, e) {
-			t.Errorf("picker render missing entry %q:\n%s", e, view)
-		}
-	}
-
-	// Choose the second entry and dispatch.
-	s.archiveEntry = entries[1]
-	s, _ = completeForm(s)
-	if s.step != loadPhenoHeap {
-		t.Fatalf("after entry pick, step = %v, want loadPhenoHeap", s.step)
-	}
-	s, _ = completeForm(s) // heap → dict
-	s.dictMode = "auto"
-	s, _ = completeForm(s)
-	s.confirmed = true
-	_, cmd = completeForm(s)
-	run := cmd().(runActionMsg)
-	if !containsPair(run.act.Args, "--entry", entries[1]) {
-		t.Errorf("argv missing --entry %q: %v", entries[1], run.act.Args)
-	}
-	want := []string{
-		"load-phenotype", "--file", "/data/pheno.tgz", "--heap", defaultHeap,
-		"--entry", entries[1],
-	}
-	if !eq(run.act.Args, want) {
-		t.Errorf("args = %v, want %v", run.act.Args, want)
-	}
-}
-
-// TestLoadWizardArchiveEntryInConfirmSummary: with a chosen entry the confirm
-// summary names both the archive path (File) and the chosen Archive entry.
-func TestLoadWizardArchiveEntryInConfirmSummary(t *testing.T) {
-	entries := []string{"a/first.csv", "b/second.csv"}
-	stubArchiveCSVs(t, entries, nil, nil)
-
-	s := newLoadScreen("/tmp/x")
-	s.setSize(100, 35)
-	s, cmd := drivePhenoFile(t, s, "/data/pheno.tgz")
-	s = runArchiveCmd(t, s, cmd)
-	s.archiveEntry = entries[1]
-	s, _ = completeForm(s) // entry → heap
-	s, _ = completeForm(s) // heap → dict
-	s.dictMode = "auto"
-	s, _ = completeForm(s) // → confirm
-
-	view := wizardANSI.ReplaceAllString(s.view(), "")
-	for _, want := range []string{"/data/pheno.tgz", "Archive entry", entries[1]} {
-		if !strings.Contains(view, want) {
-			t.Errorf("confirm summary missing %q:\n%s", want, view)
-		}
-	}
-}
-
-// TestLoadWizardArchiveCSVsErrorRePick: a failed archive-csvs lookup surfaces an
-// inline error and re-opens the file browser so the user can re-pick.
-func TestLoadWizardArchiveCSVsErrorRePick(t *testing.T) {
-	stubArchiveCSVs(t, nil, errInspect, nil)
-
-	s := newLoadScreen("/tmp/x")
-	s.setSize(100, 35)
-	s, cmd := drivePhenoFile(t, s, "/data/pheno.tgz")
-	s = runArchiveCmd(t, s, cmd)
-
-	if s.inspecting {
-		t.Fatal("inspecting flag not cleared after an error fill")
-	}
-	if s.step != loadPhenoFile {
-		t.Fatalf("after archive error, step = %v, want loadPhenoFile (re-pick)", s.step)
-	}
-	if s.archiveErr == "" {
-		t.Fatal("archive error not recorded for inline display")
-	}
-	view := wizardANSI.ReplaceAllString(s.view(), "")
-	if !strings.Contains(view, "could not inspect archive") {
-		t.Errorf("file step does not surface the inspection error inline:\n%s", view)
-	}
-
-	// Re-picking a plain CSV clears the error and advances.
-	called := false
-	stubArchiveCSVs(t, nil, nil, &called)
-	s, _ = s.consumeFile("/data/pheno.csv")
-	if s.archiveErr != "" {
-		t.Errorf("re-pick did not clear the archive error: %q", s.archiveErr)
-	}
-	if called {
-		t.Error("re-pick to a plain .csv should not call archive-csvs")
-	}
-	if s.step != loadPhenoHeap {
-		t.Fatalf("re-pick step = %v, want loadPhenoHeap", s.step)
-	}
-}
-
-// TestLoadWizardArchiveFillStaleness: a fill stamped with a stale seq (the file
-// step was re-entered, bumping archiveSeq) must be dropped, leaving the fresh
-// inspection untouched.
-func TestLoadWizardArchiveFillStaleness(t *testing.T) {
-	stubArchiveCSVs(t, []string{"a.csv", "b.csv"}, nil, nil)
-
-	s := newLoadScreen("/tmp/x")
-	s.setSize(100, 35)
-	s, _ = drivePhenoFile(t, s, "/data/one.tgz")
-	staleSeq := s.archiveSeq
-
-	// Re-pick (a fresh selection bumps archiveSeq and restarts inspection).
-	s, _ = s.consumeFile("/data/two.tgz")
-	if s.archiveSeq == staleSeq {
-		t.Fatal("re-picking did not bump archiveSeq")
-	}
-	if !s.inspecting {
-		t.Fatal("re-pick should leave the screen inspecting")
-	}
-
-	// A stale fill must be dropped: still inspecting, still on the file step.
-	s, _ = s.update(archiveCSVsFillMsg{seq: staleSeq, entries: []string{"a.csv", "b.csv"}})
-	if !s.inspecting {
-		t.Error("stale fill cleared the inspecting state of the fresh inspection")
-	}
-	if s.step != loadPhenoFile {
-		t.Errorf("stale fill advanced the step to %v", s.step)
-	}
-}
-
-// TestLoadWizardArchiveAfterCloseDropped: a fill arriving after the screen left
-// the inspecting state (e.g. closed/advanced) is dropped, not applied.
-func TestLoadWizardArchiveAfterCloseDropped(t *testing.T) {
-	stubArchiveCSVs(t, []string{"a.csv", "b.csv"}, nil, nil)
-
-	s := newLoadScreen("/tmp/x")
-	s.setSize(100, 35)
-	s, cmd := drivePhenoFile(t, s, "/data/pheno.tgz")
-	s = runArchiveCmd(t, s, cmd) // applies → loadPhenoArchiveEntry, inspecting=false
-	if s.inspecting {
-		t.Fatal("setup: inspection should have completed")
-	}
-	stepBefore := s.step
-	// A second (stale, duplicate) fill at the same seq must be ignored because
-	// inspecting is already false.
-	s, _ = s.update(archiveCSVsFillMsg{seq: s.archiveSeq, entries: []string{"x.csv", "y.csv", "z.csv"}})
-	if s.step != stepBefore {
-		t.Errorf("late fill re-applied: step = %v, want %v", s.step, stepBefore)
-	}
-}
-
-// TestLoadWizardArchiveEntryPickerShortHeight is the afa885b regression guard for
-// the new select: on a short terminal the entry picker's first render must show
-// all entries with the cursor on the first one (not scrolled out / not on a
-// would-be Cancel row).
-func TestLoadWizardArchiveEntryPickerShortHeight(t *testing.T) {
-	entries := []string{"a/first.csv", "b/second.csv", "c/third.csv"}
-	stubArchiveCSVs(t, entries, nil, nil)
-
-	s := newLoadScreen("/tmp/x")
-	s.setSize(60, 12) // short terminal — forces group viewport clipping
-	s, cmd := drivePhenoFile(t, s, "/data/pheno.tgz")
-	s = runArchiveCmd(t, s, cmd)
-	s.setSize(60, 12) // re-size after entering the picker step
-
-	view := wizardANSI.ReplaceAllString(s.view(), "")
-	for _, e := range entries {
-		if !strings.Contains(view, e) {
-			t.Errorf("short-height picker hides entry %q on first render:\n%s", e, view)
-		}
-	}
-	if !strings.Contains(view, "> "+entries[0]) {
-		t.Errorf("short-height picker cursor not on the first entry:\n%s", view)
-	}
-}
-
-// TestLoadWizardArchiveEntryEscDiscards: esc on the entry picker (a dirty screen,
-// file already collected) raises the discard prompt; y discards.
-func TestLoadWizardArchiveEntryEscDiscards(t *testing.T) {
-	stubArchiveCSVs(t, []string{"a.csv", "b.csv"}, nil, nil)
-
-	s := newLoadScreen("/tmp/x")
-	s.setSize(100, 35)
-	s, cmd := drivePhenoFile(t, s, "/data/pheno.tgz")
-	s = runArchiveCmd(t, s, cmd)
-	if s.step != loadPhenoArchiveEntry {
-		t.Fatalf("setup: step = %v, want loadPhenoArchiveEntry", s.step)
-	}
-	if !s.dirty() {
-		t.Fatal("screen should be dirty (file collected) at the entry picker")
-	}
-
-	// esc raises the discard prompt (file is collected → dirty).
-	s, cmd = s.update(tea.KeyPressMsg{Code: tea.KeyEscape})
-	if !s.discarding {
-		t.Fatal("esc on the entry picker did not raise the discard prompt")
-	}
-	if cmd != nil {
-		t.Fatal("esc on a dirty entry picker must not close yet")
-	}
-	// y discards (closes aborted).
-	_, cmd = s.update(tea.KeyPressMsg{Code: 'y', Text: "y"})
-	if msg, ok := cmd().(loadDataClosedMsg); !ok || !msg.aborted {
-		t.Fatalf("y at discard prompt = %#v, want loadDataClosedMsg{aborted:true}", cmd())
-	}
-}
-
-// TestLoadWizardInspectingEscCancels: esc while the archive is being inspected
-// (no further input collected beyond the file) still raises the discard prompt
-// (the file is already collected, making the screen dirty).
-func TestLoadWizardInspectingEscDiscards(t *testing.T) {
-	stubArchiveCSVs(t, []string{"a.csv", "b.csv"}, nil, nil)
-
-	s := newLoadScreen("/tmp/x")
-	s.setSize(100, 35)
-	s, _ = drivePhenoFile(t, s, "/data/pheno.tgz")
-	if !s.inspecting {
-		t.Fatal("setup: screen should be inspecting")
-	}
-	s, cmd := s.update(tea.KeyPressMsg{Code: tea.KeyEscape})
-	if !s.discarding {
-		t.Fatal("esc while inspecting did not raise the discard prompt")
-	}
-	if cmd != nil {
-		t.Fatal("esc while inspecting must not close yet")
-	}
-}
-
-// errInspect is the canned archive-csvs failure used by the error-path test.
-var errInspect = fmt.Errorf("missing or unreadable file")
-
-// containsPair reports whether flag is immediately followed by val in argv.
 func containsPair(args []string, flag, val string) bool {
 	for i := 0; i+1 < len(args); i++ {
 		if args[i] == flag && args[i+1] == val {
@@ -1058,92 +570,4 @@ func containsPair(args []string, flag, val string) bool {
 		}
 	}
 	return false
-}
-
-// TestLoadWizardKindSelectShowsAllOptionsInitially mirrors
-// TestLandingDevPickerShowsAllOptionsInitially: on first render (no keypress),
-// the kind-select must show all three options with the cursor on the first real
-// option ("Phenotype data (CSV)"), not on "Cancel".
-//
-// Root-cause guard: huh preselects the option whose value equals the bound
-// value; if s.kind=="" (the zero value) and Cancel's value is also "", huh
-// places the cursor on Cancel and the group viewport scrolls it into view,
-// hiding the two real options on a short terminal.
-func TestLoadWizardKindSelectShowsAllOptionsInitially(t *testing.T) {
-	s := newLoadScreen("/tmp/x")
-	s.setSize(100, 35)
-	_ = s.init()
-
-	view := wizardANSI.ReplaceAllString(s.view(), "")
-
-	// All three options must appear.
-	for _, opt := range []string{"Phenotype data (CSV)", "Genomic data (VCF)", "Cancel"} {
-		if !strings.Contains(view, opt) {
-			t.Errorf("kind-select render missing option %q", opt)
-		}
-	}
-	// Cursor must NOT be on Cancel.
-	if strings.Contains(view, "> Cancel") {
-		t.Error("kind-select cursor is on Cancel on first render (bug: empty s.kind collides with Cancel's \"\" value)")
-	}
-	// Cursor must be on the first real option.
-	if !strings.Contains(view, "> Phenotype data (CSV)") {
-		t.Error("kind-select cursor is not on \"Phenotype data (CSV)\" on first render")
-	}
-}
-
-// TestLoadWizardKindSelectShortHeightShowsOptions is the short-terminal variant
-// capturing the user-reported symptom: on a small terminal the group viewport
-// scrolls to whichever option has the cursor; if the cursor is on Cancel the
-// real options are scrolled out of view above.
-func TestLoadWizardKindSelectShortHeightShowsOptions(t *testing.T) {
-	s := newLoadScreen("/tmp/x")
-	s.setSize(60, 12) // short terminal — forces group viewport clipping
-	_ = s.init()
-
-	view := wizardANSI.ReplaceAllString(s.view(), "")
-
-	// "Phenotype data (CSV)" must be visible (not scrolled out).
-	if !strings.Contains(view, "Phenotype data (CSV)") {
-		t.Errorf("kind-select on short terminal hides \"Phenotype data (CSV)\" on first render:\n%s", view)
-	}
-	// Cursor must not be on Cancel.
-	if strings.Contains(view, "> Cancel") {
-		t.Errorf("kind-select cursor is on Cancel on short terminal first render:\n%s", view)
-	}
-}
-
-// TestOpenBrowserStartsAtRoot asserts that openBrowser (used for phenotype
-// file, datasets, concepts, facet-categories, facets, facet-concepts and genomic
-// index steps) opens the filebrowser at s.root — the PIC-SURE checkout root —
-// rather than os.Getwd() (the process cwd, typically the repository root where
-// the binary was launched). This is the regression test for the UX bug where
-// the file picker opened in the Go CLI source directory instead of the checkout
-// root where demo-data/ and the user's data files live.
-func TestOpenBrowserStartsAtRoot(t *testing.T) {
-	root := t.TempDir() // a real, absolute directory distinct from cwd
-
-	s := newLoadScreen(root)
-	s.setSize(100, 35)
-
-	s, _ = s.openBrowser([]string{".csv", ".tsv"}, "Pick a file")
-
-	if got := s.fb.Dir(); got != root {
-		t.Errorf("openBrowser: filebrowser Dir = %q, want root %q (cwd leaked into start dir)", got, root)
-	}
-}
-
-// TestOpenDirBrowserStartsAtRoot asserts that openDirBrowser (used for the
-// genomic vcf-dir step) also opens at s.root, not os.Getwd().
-func TestOpenDirBrowserStartsAtRoot(t *testing.T) {
-	root := t.TempDir()
-
-	s := newLoadScreen(root)
-	s.setSize(100, 35)
-
-	s, _ = s.openDirBrowser("Pick a directory")
-
-	if got := s.fb.Dir(); got != root {
-		t.Errorf("openDirBrowser: filebrowser Dir = %q, want root %q (cwd leaked into start dir)", got, root)
-	}
 }

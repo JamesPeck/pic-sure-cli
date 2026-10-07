@@ -112,29 +112,80 @@ func TestAppLoadDataNavigation(t *testing.T) {
 	}
 }
 
-func TestAppLoadDataDispatchOpensActivity(t *testing.T) {
-	orig := startRunner
-	startRunner = func(string, actions.Action, int, int) (runnerHandle, error) {
-		return &fakeRunner{}, nil
+// A load runs its command on the run screen; closing it returns to the
+// landing it was opened from.
+func TestAppLoadRunsOnTheRunScreen(t *testing.T) {
+	root := t.TempDir()
+	var got CommandRequest
+	a := newApp(context.Background(), Options{
+		Root: root,
+		Command: func(_ context.Context, req CommandRequest) (InitResult, error) {
+			got = req
+			return InitResult{Summary: "Loaded."}, nil
+		},
+	})
+	a.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	a.Update(openLoadDataMsg{})
+	act := dashboard.Action{Title: "Loading phenotype data", Done: "Phenotype data loaded", Args: []string{"data", "demo", "nhanes"}}
+	a.Update(loadRunMsg{act: act})
+	if a.screen != ScreenRun || a.run == nil || a.load != nil {
+		t.Fatalf("loadRunMsg: screen %v run %v load %v", a.screen, a.run != nil, a.load != nil)
 	}
-	t.Cleanup(func() { startRunner = orig })
+	<-a.run.done
+	for !a.run.finished {
+		a.Update(a.run.listen())
+	}
+	if got.Dir != root || strings.Join(got.Args, " ") != "data demo nhanes" {
+		t.Errorf("command = %+v", got)
+	}
+	if v := a.content(); !strings.Contains(v, "Phenotype data loaded") || !strings.Contains(v, "Loading phenotype data") {
+		t.Errorf("run screen:\n%s", v)
+	}
+	a.Update(runClosedMsg{})
+	if a.screen != ScreenLanding || a.run != nil {
+		t.Errorf("closing: screen %v", a.screen)
+	}
+}
 
+// Without a Command, a load says so on the landing instead of hanging.
+func TestAppLoadWithoutCommand(t *testing.T) {
 	a := testApp(ScreenLanding)
 	a.Update(openLoadDataMsg{})
-	if a.load == nil {
-		t.Fatal("load screen not open")
+	a.Update(loadRunMsg{act: dashboard.Action{Title: "Loading phenotype data"}})
+	if a.screen != ScreenLanding || !strings.Contains(a.landing.result, "not available") {
+		t.Errorf("screen %v result %q", a.screen, a.landing.result)
 	}
-	// The load screen emits a runActionMsg to launch the load; the app routes it
-	// to the activity screen and drops the (now-closed) load screen.
-	a.Update(runActionMsg{act: actions.LoadPhenotype(actions.PhenotypeOpts{File: "pheno.csv"})})
-	if a.screen != ScreenActivity || a.activity == nil {
-		t.Fatal("runActionMsg from the load screen did not open the activity screen")
+}
+
+// l on the dashboard opens the load screen over it; cancelling returns to
+// the dashboard, and a load's run screen does too.
+func TestDashboardLoadRoundTrip(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, stack.ConfigFile), []byte("schema: 1\n"), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	if a.load != nil {
-		t.Error("load screen not dropped after dispatch")
+	a := newApp(context.Background(), Options{
+		Root: root, Start: ScreenDashboard,
+		Command: func(context.Context, CommandRequest) (InitResult, error) { return InitResult{}, nil },
+	})
+	a.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	a.Update(dashboard.LoadMsg{})
+	if a.screen != ScreenLoadData || a.load == nil || a.dash == nil {
+		t.Fatalf("LoadMsg: screen %v", a.screen)
 	}
-	if want := actions.LoadPhenotype(actions.PhenotypeOpts{}).Name; a.activity.act.Name != want {
-		t.Errorf("activity action = %q, want %q", a.activity.act.Name, want)
+	a.Update(loadDataClosedMsg{aborted: true})
+	if a.screen != ScreenDashboard || a.load != nil {
+		t.Fatalf("cancel: screen %v", a.screen)
+	}
+	a.Update(dashboard.LoadMsg{})
+	a.Update(loadRunMsg{act: dashboard.Action{Title: "Loading", Args: []string{"data", "demo"}}})
+	<-a.run.done
+	for !a.run.finished {
+		a.Update(a.run.listen())
+	}
+	a.Update(runClosedMsg{})
+	if a.screen != ScreenDashboard || a.dash == nil {
+		t.Errorf("after the load: screen %v", a.screen)
 	}
 }
 

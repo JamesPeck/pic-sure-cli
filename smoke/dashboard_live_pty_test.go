@@ -131,7 +131,9 @@ func TestDashboardActionsUnderPTY(t *testing.T) {
 	w.wait(10*time.Second, "Logs — psama", "psama is ready")
 
 	s.send("l")
-	w.wait(5*time.Second, "isn't built yet (ticket 047)")
+	w.wait(5*time.Second, "Load your data", "Demo dataset")
+	s.send(keyEsc)
+	w.wait(5*time.Second, "Logs — psama")
 
 	s.send("r")
 	w.wait(5*time.Second, "Restart psama?")
