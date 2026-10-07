@@ -1178,8 +1178,8 @@ stack mutation:
   TTY) or needs `SelfUpdate` (`--self-update`), then calls
   `Updater.SelfUpdate(ctx, version)`, and is otherwise exit 5 naming the
   command to run. SelfUpdate re-executes on success; if it returns nil
-  anyway, the gate is exit 5 so the old binary doesn't go on. A nil `Updater` (until 060) is always exit 5 with
-  instructions. `IgnoreCLIVersion` turns any mismatch into a warning. A CLI
+  anyway, the gate is exit 5 so the old binary doesn't go on. A nil `Updater` is always exit 5 with
+  instructions; `a.newSelfUpdater` (see internal/selfupdate) builds the real one. `IgnoreCLIVersion` turns any mismatch into a warning. A CLI
   version `CompareVersions` can't order (`dev`, a bare sha) is treated as
   equal with a warning, and so is a `PSCLI` that isn't a version.
 - `rel.ResolveComponents(ctx, cache, sink, step, cfg.Components)` resolves
@@ -1356,7 +1356,41 @@ The package imports only the catalog.
 
 ## internal/selfupdate
 
-_Ticket 060 fills this in._
+Ticket 060. `selfupdate.Updater` replaces the running binary with a GitHub
+release (§8, D12). The cli builds it with `a.newSelfUpdater(proxyURL, sink,
+step)` (`internal/cli/selfupdate.go`): `init` and `update` pass their
+config's `netproxy` `ProxyURL` and set it as `release.GateOptions.Updater`.
+The `self-update` command uses the proxy of the stack it runs in, or the
+environment's when there is none. `PIC_SURE_RELEASE_API` replaces the
+GitHub API root (mirrors, tests).
+
+- `Install(ctx, version)` (the command): refuse a binary it mustn't replace
+  before any download (exit 3 with what to do instead): one whose real path
+  (symlinks resolved) is in a Homebrew `Cellar`/`Caskroom` or a system
+  prefix (`/usr/bin`, `/nix/store`, ...), or whose directory the user can't
+  write. Then look the release up (`releases/latest`, or
+  `releases/tags/vX`; `--to 2.1.0` means `v2.1.0`; an unknown tag is exit
+  3), download `checksums.txt`, its cosign bundle if the release has one,
+  and `pic-sure_<os>_<arch>.tar.gz`, check the archive's SHA-256, extract
+  `pic-sure` from the archive's root into a temp file beside the binary
+  (keeping its mode) and rename it over the binary. The running version,
+  or a latest release older than it, is a no-op; an explicit older `--to`
+  downgrades.
+- Signatures: with a `checksums.txt.sigstore.json` asset and cosign on PATH,
+  `CosignVerifier` runs `cosign verify-blob`, accepting only a keyless
+  signature from the repo's `release.yml` on a tag; failure is exit 1.
+  Without cosign or without a bundle the update warns and relies on the
+  checksum. `RequireSignature` makes both errors; set it once releases are
+  signed.
+- `SelfUpdate(ctx, version)` (`release.SelfUpdater`, the gate's action):
+  `Install`, then `syscall.Exec` the new binary with the process's argv and
+  environment plus `PIC_SURE_SELF_UPDATED=<version>`, so it doesn't
+  return on success. Exec keeps the pid and drops close-on-exec files (the
+  stack lock) but skips deferred cleanups, so call the gate before taking
+  anything else that needs one. A refusal is exit 5 here. A second
+  `SelfUpdate` in a re-executed process is exit 5 rather than a loop.
+- HTTP errors name the asset or release, never a URL, so proxy credentials
+  can't reach a message.
 
 ## internal/events
 

@@ -1,7 +1,18 @@
-# Not implemented yet: exit 1, naming ticket 060.
+# The release lookups and downloads are covered by internal/selfupdate's
+# tests against a fake GitHub; these check the command's wiring without a
+# network. Port 1 refuses connections, so nothing is downloaded or replaced.
+env PIC_SURE_RELEASE_API=http://127.0.0.1:1
+
 exitcode 1 pic-sure self-update
-stderr '^pic-sure: not implemented \(ticket 060\)$'
+stderr '^pic-sure: looking up the latest pic-sure release: .*connection refused'
 ! stdout .
-exitcode 1 pic-sure self-update --to v2.0.1
-stderr '^pic-sure: not implemented \(ticket 060\)$'
-! stdout .
+
+exitcode 1 pic-sure self-update --to 2.0.1
+stderr '^pic-sure: looking up pic-sure release v2.0.1: .*connection refused'
+! stderr http:
+
+exitcode 1 pic-sure --json self-update --to v2.0.1
+stdout '"exit_code":1'
+
+exitcode 2 pic-sure self-update extra
+stderr 'unknown command|accepts 0 arg'
