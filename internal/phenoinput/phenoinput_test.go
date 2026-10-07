@@ -283,7 +283,7 @@ func TestResolve(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			in, cleanup, err := phenoinput.Resolve(context.Background(), file, phenoinput.Options{Entry: tc.entry, TempDir: tempDir})
+			in, cleanup, err := phenoinput.Resolve(context.Background(), file, phenoinput.Options{Entry: tc.entry, MkdirTemp: mkdirTempIn(t, tempDir)})
 			if cleanup == nil {
 				t.Fatal("Resolve returned a nil cleanup func")
 			}
@@ -410,7 +410,7 @@ func TestResolveDoesNotFollowArchiveSymlinks(t *testing.T) {
 	}
 	tempDir := filepath.Join(base, "cache", "tmp")
 
-	in, cleanup, err := phenoinput.Resolve(context.Background(), file, phenoinput.Options{TempDir: tempDir})
+	in, cleanup, err := phenoinput.Resolve(context.Background(), file, phenoinput.Options{MkdirTemp: mkdirTempIn(t, tempDir)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -429,7 +429,7 @@ func TestResolveUsesANewDirectoryPerRun(t *testing.T) {
 	if err := os.WriteFile(file, tgzBytes(t, reg("allConcepts.csv", csvBody)), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	opts := phenoinput.Options{TempDir: filepath.Join(base, "tmp")}
+	opts := phenoinput.Options{MkdirTemp: mkdirTempIn(t, filepath.Join(base, "tmp"))}
 
 	first, cleanFirst, err := phenoinput.Resolve(context.Background(), file, opts)
 	if err != nil {
@@ -451,13 +451,13 @@ func TestResolveUsesANewDirectoryPerRun(t *testing.T) {
 	}
 }
 
-func TestResolveRequiresTempDir(t *testing.T) {
+func TestResolveRequiresMkdirTemp(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "allConcepts.csv")
 	if err := os.WriteFile(file, []byte(csvBody), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := phenoinput.Resolve(context.Background(), file, phenoinput.Options{}); err == nil {
-		t.Fatal("Resolve without a TempDir succeeded")
+		t.Fatal("Resolve without MkdirTemp succeeded")
 	}
 }
 
@@ -472,7 +472,7 @@ func TestResolveStopsWhenCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancelCause(context.Background())
 	cancel(interrupted)
 
-	_, _, err := phenoinput.Resolve(ctx, file, phenoinput.Options{TempDir: tempDir})
+	_, _, err := phenoinput.Resolve(ctx, file, phenoinput.Options{MkdirTemp: mkdirTempIn(t, tempDir)})
 	if !errors.Is(err, interrupted) {
 		t.Fatalf("Resolve error = %v; want the context's cause", err)
 	}
@@ -481,7 +481,7 @@ func TestResolveStopsWhenCanceled(t *testing.T) {
 
 func TestResolveRejectsNonFiles(t *testing.T) {
 	base := t.TempDir()
-	opts := phenoinput.Options{TempDir: filepath.Join(base, "tmp")}
+	opts := phenoinput.Options{MkdirTemp: mkdirTempIn(t, filepath.Join(base, "tmp"))}
 	if _, _, err := phenoinput.Resolve(context.Background(), filepath.Join(base, "missing.tgz"), opts); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("missing file: error %v; want fs.ErrNotExist", err)
 	}
@@ -534,4 +534,14 @@ func TestListCSVEntries(t *testing.T) {
 	if _, err := phenoinput.ListCSVEntries(context.Background(), filepath.Join(t.TempDir(), "missing.tgz")); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("missing file: error %v; want fs.ErrNotExist", err)
 	}
+}
+
+// mkdirTempIn stands in for the cache's TempDir, making run directories
+// under dir.
+func mkdirTempIn(t *testing.T, dir string) func(string) (string, error) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return func(pattern string) (string, error) { return os.MkdirTemp(dir, pattern) }
 }

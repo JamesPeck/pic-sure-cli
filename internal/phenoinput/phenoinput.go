@@ -37,11 +37,11 @@ type Options struct {
 	// the archive holds more than one CSV, and ignored with a warning for
 	// input that isn't an archive.
 	Entry string
-	// TempDir is the directory under the host cache where Resolve creates
-	// its per-run extraction directory. It is required: extraction never
-	// falls back to $TMPDIR, which Colima and Lima don't share with the
-	// Docker VM (spec §7.1).
-	TempDir string
+	// MkdirTemp creates the per-run extraction directory, named pattern as
+	// in os.MkdirTemp; pass the host cache's (*cache.Cache).TempDir. It is
+	// required: extraction never falls back to $TMPDIR, which Colima and
+	// Lima don't share with the Docker VM (spec §7.1).
+	MkdirTemp func(pattern string) (string, error)
 }
 
 // Input is a phenotype CSV ready to mount into the loader.
@@ -81,7 +81,7 @@ func (e *EntryError) Error() string {
 
 // Resolve detects the format of file and returns the CSV to load. A plain
 // CSV is used in place. Anything else is decompressed or extracted into a
-// new directory under opts.TempDir, which the returned cleanup func removes;
+// new directory made by opts.MkdirTemp, which the returned cleanup func removes;
 // on error Resolve removes it itself. The cleanup func is never nil.
 //
 // Resolve rejects an empty file, binary data that isn't a supported
@@ -90,8 +90,8 @@ func (e *EntryError) Error() string {
 // --entry (as an *EntryError).
 func Resolve(ctx context.Context, file string, opts Options) (Input, func() error, error) {
 	noop := func() error { return nil }
-	if opts.TempDir == "" {
-		return Input{}, noop, errors.New("phenoinput: Options.TempDir is required")
+	if opts.MkdirTemp == nil {
+		return Input{}, noop, errors.New("phenoinput: Options.MkdirTemp is required")
 	}
 	format, err := detect(ctx, file)
 	if err != nil {
@@ -120,9 +120,13 @@ func Resolve(ctx context.Context, file string, opts Options) (Input, func() erro
 		}
 	}
 
-	dir, err := newRunDir(opts.TempDir)
+	made, err := opts.MkdirTemp("phenotype-")
 	if err != nil {
 		return Input{}, noop, err
+	}
+	dir, err := filepath.Abs(made)
+	if err != nil {
+		return Input{}, noop, errors.Join(err, os.RemoveAll(made))
 	}
 	cleanup := func() error { return os.RemoveAll(dir) }
 	if format == Gzip {
@@ -205,19 +209,6 @@ func selectEntry(file string, entries []string, want string) (string, error) {
 		return name, nil
 	}
 	return "", &EntryError{File: file, Entry: want, Entries: entries}
-}
-
-// newRunDir creates the per-run directory under parent, private to the
-// user since phenotype data is sensitive.
-func newRunDir(parent string) (string, error) {
-	if err := os.MkdirAll(parent, 0o700); err != nil {
-		return "", err
-	}
-	dir, err := os.MkdirTemp(parent, "phenotype-")
-	if err != nil {
-		return "", err
-	}
-	return filepath.Abs(dir)
 }
 
 // ctxReader stops reading once ctx is done, so a long extraction ends

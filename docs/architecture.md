@@ -1456,15 +1456,15 @@ the loader can mount (§9.6), using only Go's archive libraries.
   `a.csv`. macOS metadata (`._*`, `__MACOSX/`) doesn't count. An archive
   with a CSV entry outside its own directory (`../x.csv`, `/x.csv`) or two
   CSV entries of the same name is rejected outright.
-- `Resolve(ctx, file, Options{Entry, TempDir})` returns an `Input` (`CSV`,
+- `Resolve(ctx, file, Options{Entry, MkdirTemp})` returns an `Input` (`CSV`,
   the absolute path to mount; `Format`; `Entry`; `Warnings`) and a cleanup
   func. A plain CSV is used in place, with no temp dir. Otherwise Resolve
-  makes a per-run `phenotype-*` directory under `TempDir` and writes the
+  makes a per-run `phenotype-*` directory with `MkdirTemp` and writes the
   gzip's content to `allConcepts.csv` there, or the archive entry to its
   own path there through an `os.Root`. The cleanup func removes that
-  directory; on error Resolve removes it itself. `TempDir` is required, so
-  extraction can't fall back to `$TMPDIR`: pass a directory under the host
-  cache. One CSV entry is selected automatically. Several need `--entry`,
+  directory; on error Resolve removes it itself. `MkdirTemp` is required,
+  so extraction can't fall back to `$TMPDIR`: pass the cache's `TempDir`
+  method, which also prunes run directories a killed run left behind. One CSV entry is selected automatically. Several need `--entry`,
   and a missing or unknown `--entry` is an `*EntryError` listing the
   entries. `--entry` for a non-archive becomes a warning in
   `Input.Warnings` for the caller to emit. Reads stop when `ctx` ends, with
