@@ -638,6 +638,19 @@ monorepo's contexts before running Maven.
   tail, per-line callback) and `ensureImage` (pull with progress) are
   there for the other image builds (030) to reuse.
 
+**Status (027, `status.go`).** `Status(ctx, d, st, StatusOptions)` builds
+the read-only `StatusReport` (`status --json`, documented field by field in
+`docs/json-schemas.md`; a test keeps the two in step). It reads
+pic-sure.yaml (migrated in memory), the version gate, state.json's release,
+components, image tags and last operation, and the token expiry from
+secrets.yaml; it asks docker only `image inspect` per built image with a
+recorded tag (stopping at the first docker failure) and `compose ps`. It
+takes no lock, writes nothing and never fetches release-control. A section
+it can't read carries an error string instead of failing, so the command
+exits 0. The command leaves `Deps.Compose` nil for an unrendered stack and
+builds it with no env, since `ps` needs no secret. Migrations are
+`unknown` until 032 adds its check; `--deep` is 037.
+
 ## internal/steps
 
 Ticket 011, on the `Step` type and `Run` signature from 001.
