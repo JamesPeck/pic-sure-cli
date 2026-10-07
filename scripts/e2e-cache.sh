@@ -17,10 +17,10 @@ set -euo pipefail
 volume=pic-sure-m2
 helper=alpine:3.23 # the catalog's alpine (internal/catalog/images.go)
 cmd="${1:-}" dir="${2:-}"
-[ -n "$cmd" ] && [ -n "$dir" ] || {
+if [ -z "$cmd" ] || [ -z "$dir" ]; then
 	echo "usage: $0 load-images|save-images|load-maven|save-maven DIR [LIST]" >&2
 	exit 2
-}
+fi
 mkdir -p "$dir"
 dir="$(cd "$dir" && pwd -P)"
 

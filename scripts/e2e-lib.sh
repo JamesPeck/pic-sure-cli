@@ -107,7 +107,9 @@ collect() {
 	# support-bundle is optional: older builds don't implement it.
 	pic --stack "$dir" support-bundle --output "$out/support-bundle.tar.gz" > "$out/support-bundle.txt" 2>&1 ||
 		echo "support-bundle failed or isn't available; see support-bundle.txt" >&2
-	[ -d "$dir/.pic-sure/logs" ] && cp -R "$dir/.pic-sure/logs" "$out/run-logs" || true
+	if [ -d "$dir/.pic-sure/logs" ]; then
+		cp -R "$dir/.pic-sure/logs" "$out/run-logs" || true
+	fi
 }
 
 e2e_cleanup() {
