@@ -52,8 +52,8 @@ section. Edit only your own.
 
 ## Adding a command
 
-Commands are already registered, each returning
-`exitcode.Failed("not implemented (ticket NNN)")`. To implement one, edit its
+Every command is registered in root.go (001), and every ticket stub is
+now implemented. To change one, edit its
 constructor in its group's file, for example `newUpCmd` in
 `internal/cli/up.go`: add its flags, and make `RunE` build the dependencies
 with `a.newDeps()`, call the operation, and hand the result to the output
@@ -164,7 +164,7 @@ it.
   error raised before a `RunE` starts is reported as a usage error. A
   `PreRunE` that fails for any other reason must return an
   `*exitcode.Error`.
-- `helpers.go`: `notImplemented(ticket)`, `newGroup`, and the `help`
+- `helpers.go`: `newGroup` and the `help`
   command. A group run without a subcommand, or with an unknown one, is a
   usage error, and so is `help` with an unknown topic.
 - `output.go` (004): output mode selection, the run's sink, and how a

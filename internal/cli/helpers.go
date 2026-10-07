@@ -8,13 +8,6 @@ import (
 	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
 )
 
-// notImplemented is the RunE of a command whose ticket hasn't landed.
-func notImplemented(ticket string) func(*cobra.Command, []string) error {
-	return func(*cobra.Command, []string) error {
-		return exitcode.Failed("not implemented (ticket %s)", ticket)
-	}
-}
-
 // newGroup returns a parent command for subs. Without a subcommand, or with
 // an unknown one, it fails with a usage error.
 func newGroup(use, short string, subs ...*cobra.Command) *cobra.Command {
