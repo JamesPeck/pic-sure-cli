@@ -16,26 +16,28 @@ dir_a="$E2E_WORK/$a" dir_b="$E2E_WORK/$b"
 set_name="${E2E_SHARED_SET:-ci-genomic-$(date +%Y%m%d%H%M%S)-$$}"
 fixture="$E2E_WORK/fixture"
 expected="$repo_root/testdata/genomic/expected.json"
+helper=alpine:3.23 # the catalog's alpine (internal/catalog/images.go)
 
 # hpds NAME PATH BODY posts BODY to the stack's HPDS from a container on its
 # query network (HPDS publishes no port) and prints the answer.
 hpds() {
-	docker run --rm --network "$1_query" alpine:3.23 \
+	docker run --rm --network "$1_query" "$helper" \
 		wget -q -O - --header 'Content-Type: application/json' \
 		--post-data "$3" "http://hpds:8080/PIC-SURE/v3/$2" < /dev/null
 }
 
-# hpds_dataframe NAME BODY runs a DATAFRAME query, which HPDS only answers
-# asynchronously: submit, poll the status, fetch the CSV. One container does
-# all three.
+# hpds_dataframe NAME BODY runs a DATAFRAME query through the asynchronous
+# API (submit, poll the status, fetch the CSV): this release's /query/sync
+# answers DATAFRAME with HTTP 400.
 hpds_dataframe() {
 	# shellcheck disable=SC2016 # expanded by the container's shell
-	docker run --rm --network "$1_query" alpine:3.23 sh -euc '
+	docker run --rm --network "$1_query" "$helper" sh -euc '
 		post() { wget -q -O - --header "Content-Type: application/json" --post-data "$2" "http://hpds:8080/PIC-SURE/v3/$1"; }
 		id="$(post query "$1" | sed -n "s/.*\"resourceResultId\":\"\([^\"]*\)\".*/\1/p")"
 		[ -n "$id" ] || { echo "no query id" >&2; exit 1; }
 		tries=60
-		until post "query/$id/status" "{}" | grep -q "\"status\":\"AVAILABLE\""; do
+		until status="$(post "query/$id/status" "{}")" && [ "${status#*\"status\":\"AVAILABLE\"}" != "$status" ]; do
+			case "$status" in *\"status\":\"ERROR\"*) echo "query $id failed: $status" >&2; exit 1 ;; esac
 			tries=$((tries - 1))
 			[ "$tries" -gt 0 ] || { echo "query $id never became available" >&2; exit 1; }
 			sleep 1
@@ -70,6 +72,9 @@ check_queries() {
 	[ "$bad" -eq 0 ] || fail "$name: $bad of $n genomic queries differ from expected.json"
 }
 
+[ -z "$(docker volume ls -q --filter "name=^${set_name}_")" ] ||
+	fail "a data set named $set_name exists; set E2E_SHARED_SET to a new name"
+
 say "genomic fixture"
 (cd "$repo_root" && go run ./internal/testfixtures/genomic/cmd/genomic-fixture -abs "$fixture")
 
@@ -82,6 +87,7 @@ pic --stack "$dir_a" data load-genomic --partition synth --vcf-index "$fixture/v
 check_queries "$a"
 
 say "publish $set_name, then destroy $a"
+# Nothing named $set_name existed at the start, so cleanup may remove it.
 e2e_sets+=("$set_name")
 pic --stack "$dir_a" shared-data publish "$set_name"
 pic --stack "$dir_a" destroy --yes
@@ -91,9 +97,10 @@ init_stack "$b" "$dir_b" --hpds-data "shared:$set_name"
 say "$b: hydrate the dictionary from the shared set"
 pic --stack "$dir_b" dictionary hydrate
 check_queries "$b"
-if pic --stack "$dir_b" data load-phenotype --file "$fixture/phenotype.csv" > /dev/null 2>&1; then
+if out="$(pic --stack "$dir_b" data load-phenotype --file "$fixture/phenotype.csv" 2>&1)"; then
 	fail "$b: load-phenotype into a shared set succeeded"
 fi
+grep -q 'which is read-only' <<< "$out" || fail "$b: load-phenotype wasn't refused as read-only: $out"
 
 say "destroy $b, then remove $set_name"
 pic --stack "$dir_b" destroy --yes

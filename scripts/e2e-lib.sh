@@ -8,11 +8,11 @@
 #                       temp dir, removed after a pass)
 #   E2E_RELEASE_BRANCH  release-control branch or tag (default james_mono)
 #   E2E_JAVA_OPTS       HPDS JVM options (default -Xmx1g)
-#   E2E_LOAD_HEAP_MB    loader JVM heap for data demo (default 1024)
+#   E2E_LOAD_HEAP_MB    loader JVM heap for the data loads (default 1024)
 #   E2E_ARTIFACTS       on failure, compose logs, run logs and the support
 #                       bundle of every stack go here (default: none kept)
-#   E2E_KEEP=1          on failure, leave the stacks running instead of
-#                       destroying them
+#   E2E_KEEP=1          on failure, leave the stacks running (and shared
+#                       data sets in place) instead of removing them
 #   E2E_IMAGES_FILE     each init appends the images its stack runs here
 #                       (the workflow caches them)
 
@@ -122,7 +122,7 @@ e2e_cleanup() {
 		for i in "${!e2e_stacks[@]}"; do collect "${e2e_stacks[$i]}" "${e2e_dirs[$i]}"; done
 	fi
 	if [ "$rc" -ne 0 ] && [ -n "$E2E_KEEP" ]; then
-		echo "e2e: E2E_KEEP set; left the stacks in $E2E_WORK" >&2
+		echo "e2e: E2E_KEEP set; left the stacks in $E2E_WORK${e2e_sets[*]:+ and the data sets ${e2e_sets[*]}}" >&2
 		exit "$rc"
 	fi
 	for i in "${!e2e_stacks[@]}"; do
