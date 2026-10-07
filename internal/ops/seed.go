@@ -28,13 +28,13 @@ const psama = "psama"
 // the migrate step. It creates the admin user (auth.admin_email) with the
 // Top Admin and User roles if no user has that email, and makes
 // auth.application's PICSURE token equal secrets.yaml's introspection token.
-// A stored token that is valid for TokenRenewBefore or longer is written to
+// A stored token that is valid for more than TokenRenewBefore is written to
 // the database as it is; otherwise a new one is issued (jwt.Introspection)
 // and written to the database first, then to secrets.yaml, updating sec. A
 // running psama is restarted after a change.
 //
-// Check is done when the admin user exists, the token is valid for
-// TokenRenewBefore and the database holds it, so a database that lost the
+// Check is done when the admin user exists, the token is valid for more
+// than TokenRenewBefore and the database holds it, so a database that lost the
 // token (after `reset`) is re-seeded. The migrations must have run: a
 // database without them fails with exit 3.
 //
@@ -113,6 +113,10 @@ func (s *seedStep) apply(ctx context.Context, sink events.Sink) error {
 
 	token, expiry := string(s.sec.IntrospectionToken), s.sec.IntrospectionTokenExpiry
 	if !s.tokenValid() {
+		if s.sec.Auth0ClientSecret == "" {
+			return exitcode.Precondition("secrets.yaml has no Auth0 client secret to sign the introspection token with. "+
+				"PSAMA needs one of at least %d bytes in every auth mode; in open mode, where Auth0 isn't contacted, any value will do", jwt.MinSecretLen)
+		}
 		token, expiry, err = jwt.Introspection(string(s.sec.Auth0ClientSecret), s.sec.ApplicationUUID, s.d.Clock.Now(), jwt.DefaultTTL)
 		if err != nil {
 			return exitcode.Precondition("issuing the introspection token: %w", err)
@@ -148,7 +152,7 @@ func (s *seedStep) apply(ctx context.Context, sink events.Sink) error {
 	return nil
 }
 
-// tokenValid reports whether secrets.yaml's token is valid for at least
+// tokenValid reports whether secrets.yaml's token is valid for more than
 // TokenRenewBefore.
 func (s *seedStep) tokenValid() bool {
 	return s.sec.IntrospectionToken != "" && s.sec.IntrospectionTokenExpiry.After(s.d.Clock.Now().Add(TokenRenewBefore))

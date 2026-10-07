@@ -53,15 +53,15 @@ func (db *fakeDB) do(_ context.Context, c fakerunner.Call) (docker.Result, error
 	in := string(c.Stdin)
 	switch {
 	case strings.Contains(in, "information_schema.tables"):
-		return docker.Result{Stdout: []byte(itoa(db.historyTbl) + "\n")}, nil
+		return docker.Result{Stdout: []byte(strconv.Itoa(db.historyTbl) + "\n")}, nil
 	case strings.Contains(in, "SELECT LEAST("):
-		return docker.Result{Stdout: []byte(itoa(db.applied) + "\n")}, nil
+		return docker.Result{Stdout: []byte(strconv.Itoa(db.applied) + "\n")}, nil
 	case strings.Contains(in, "SELECT COUNT(*) FROM auth.user"):
 		n := 0
 		if db.users[emailRE.FindStringSubmatch(in)[1]] {
 			n = 1
 		}
-		return docker.Result{Stdout: []byte(itoa(n) + "\n")}, nil
+		return docker.Result{Stdout: []byte(strconv.Itoa(n) + "\n")}, nil
 	case strings.Contains(in, "INSERT INTO auth.user "):
 		email := emailRE.FindStringSubmatch(in)[1]
 		if db.insertErr != "" {
@@ -81,8 +81,6 @@ func (db *fakeDB) do(_ context.Context, c fakerunner.Call) (docker.Result, error
 	db.t.Errorf("unexpected SQL %q", in)
 	return docker.Result{ExitCode: 1}, nil
 }
-
-func itoa(n int) string { return strconv.Itoa(n) }
 
 type seedFixture struct {
 	f   *fakerunner.Runner
@@ -312,7 +310,19 @@ func TestSeedRestartsARunningPsama(t *testing.T) {
 	if err := x.run(); err != nil {
 		t.Fatal(err)
 	}
-	x.f.AssertOrder(fakerunner.Glob("docker exec *"), restart)
+	// After every write.
+	if calls := x.f.Calls(); !restart.Match(calls[len(calls)-1].Argv) {
+		t.Errorf("last call %s, want the restart", calls[len(calls)-1])
+	}
+}
+
+func TestSeedNeedsAClientSecretForTheToken(t *testing.T) {
+	x := newSeedFixture(t)
+	x.sec.Auth0ClientSecret = ""
+	err := x.run()
+	if exitcode.FromError(err) != exitcode.CodePrecondition || !strings.Contains(err.Error(), "open mode") {
+		t.Fatalf("err %v, want exit 3 explaining open mode", err)
+	}
 }
 
 func TestSeedKeepsTheEmailAndTokenOutOfLogs(t *testing.T) {

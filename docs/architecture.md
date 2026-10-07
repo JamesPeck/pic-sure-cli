@@ -835,12 +835,13 @@ hint unless both custom Flyway histories exist (looked up in
 `information_schema` first) and have a non-baseline row. It creates the
 admin user with 014's `SeedAdminUser` when no user has
 `auth.admin_email`. Then it makes `auth.application`'s PICSURE token equal
-secrets.yaml's: a stored token valid for `TokenRenewBefore` (30 days) or
-longer is written back as it is (after `reset`); otherwise `jwt.Introspection`
-issues one, which goes to the database first, then to secrets.yaml and `sec`.
+secrets.yaml's: a stored token valid for more than `TokenRenewBefore` (30
+days) is written back as it is (after `reset`); otherwise `jwt.Introspection`
+issues one (exit 3 without a client secret, which PSAMA needs even in
+open mode), which goes to the database first, then to secrets.yaml and `sec`.
 If saving fails, the next run issues another, so it converges. A running
 psama is restarted after a change (a failure is a warning). Check is done
-when the user exists, the token is valid for 30 days and the database holds
+when the user exists, the token is valid for more than 30 days and the database holds
 it. The step registers the admin email, and any token it issues, with the
 log redactor. A new token changes `render.ComposeEnv(cfg, sec)`
 (gateway's `PICSURE_INTROSPECTION_TOKEN`), so a Composer whose env was
