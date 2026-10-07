@@ -14,12 +14,31 @@ type screen struct {
 	cells      [][]rune
 	r, c       int
 	last       rune
+	// top and bottom are the scrolling region's rows.
+	top, bottom int
 }
 
 func newScreen(rows, cols int) *screen {
-	s := &screen{rows: rows, cols: cols}
+	s := &screen{rows: rows, cols: cols, bottom: rows - 1}
 	s.clear()
 	return s
+}
+
+func (s *screen) blank() []rune { return []rune(strings.Repeat(" ", s.cols)) }
+
+// scroll moves rows from..bottom up n lines (down when n < 0), blanking
+// what is uncovered.
+func (s *screen) scroll(from, n int) {
+	region := s.cells[from : s.bottom+1]
+	for range max(n, -n) {
+		if n > 0 {
+			copy(region, region[1:])
+			region[len(region)-1] = s.blank()
+		} else {
+			copy(region[1:], region)
+			region[0] = s.blank()
+		}
+	}
 }
 
 func (s *screen) clear() {
@@ -40,11 +59,12 @@ func (s *screen) put(ch rune) {
 }
 
 func (s *screen) lineFeed() {
-	if s.r < s.rows-1 {
+	switch {
+	case s.r == s.bottom:
+		s.scroll(s.top, 1)
+	case s.r < s.rows-1:
 		s.r++
-		return
 	}
-	s.cells = append(s.cells[1:], []rune(strings.Repeat(" ", s.cols)))
 }
 
 func clamp(v, lo, hi int) int { return max(lo, min(v, hi)) }
@@ -136,6 +156,30 @@ func (s *screen) csi(params string, final byte) {
 	case 'b':
 		for range arg(0, 1) {
 			s.put(s.last)
+		}
+	case 'r':
+		s.top, s.bottom = clamp(arg(0, 1)-1, 0, s.rows-1), clamp(arg(1, s.rows)-1, 0, s.rows-1)
+		s.r, s.c = 0, 0
+	case 'S':
+		s.scroll(s.top, arg(0, 1))
+	case 'T':
+		s.scroll(s.top, -arg(0, 1))
+	case 'L':
+		if s.r >= s.top && s.r <= s.bottom {
+			s.scroll(s.r, -arg(0, 1))
+		}
+	case 'M':
+		if s.r >= s.top && s.r <= s.bottom {
+			s.scroll(s.r, arg(0, 1))
+		}
+	case 'P', '@':
+		row, n := s.cells[s.r], min(arg(0, 1), s.cols-s.c)
+		if final == 'P' {
+			copy(row[s.c:], row[s.c+n:])
+			copy(row[s.cols-n:], s.blank())
+		} else {
+			copy(row[s.c+n:], row[s.c:])
+			copy(row[s.c:s.c+n], s.blank())
 		}
 	case 'K':
 		from, to := s.c, s.cols

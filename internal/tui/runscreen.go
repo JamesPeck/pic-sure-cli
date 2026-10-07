@@ -167,9 +167,13 @@ func (s *runScreen) close() {
 	<-s.done
 }
 
+// blockWidth is the width of the screen's content. It is fixed, so the
+// centered block doesn't shift as lines come and go.
+func (s *runScreen) blockWidth() int { return min(max(s.width-4, 40), 100) }
+
 func (s *runScreen) setSize(width, height int) {
 	s.width, s.height = width, height
-	m, _ := s.prog.Update(tea.WindowSizeMsg{Width: max(width-2, 20), Height: height})
+	m, _ := s.prog.Update(tea.WindowSizeMsg{Width: s.blockWidth() - 2, Height: height})
 	s.prog = m.(progress.Model)
 	if s.askDlg != nil {
 		s.askDlg = dialog.Fit(s.askDlg, max(min(width-4, 76), 40), max(height/2, 8))
@@ -268,8 +272,8 @@ func (s *runScreen) view() string {
 	if s.height > 0 && len(steps) > max(room, 3) {
 		steps = steps[len(steps)-max(room, 3):]
 	}
-	content := lipgloss.JoinVertical(lipgloss.Left,
-		runTitleStyle.Render(s.title), strings.Join(steps, "\n"), "", tail, runFooterStyle.Render(footer))
+	content := lipgloss.NewStyle().Width(s.blockWidth()).Render(lipgloss.JoinVertical(lipgloss.Left,
+		runTitleStyle.Render(s.title), strings.Join(steps, "\n"), "", tail, runFooterStyle.Render(footer)))
 	if s.width == 0 || s.height == 0 {
 		return content
 	}

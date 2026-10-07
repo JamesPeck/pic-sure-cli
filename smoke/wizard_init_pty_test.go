@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/creack/pty"
 )
 
 // TestWizardCreatesAStackUnderPTY drives the setup wizard to a real stack:
@@ -53,6 +55,15 @@ func TestWizardCreatesAStackUnderPTY(t *testing.T) {
 			time.Sleep(300 * time.Millisecond)
 		}
 	}
+	// repaint makes the TUI redraw the whole screen, which the emulator
+	// renders more faithfully than a run of incremental updates.
+	rows := uint16(40)
+	repaint := func() {
+		rows = 79 - rows // 40 and 39 alternately
+		if err := pty.Setsize(s.master, &pty.Winsize{Rows: rows, Cols: 120}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	capture := func(title string, timeout time.Duration, want ...string) {
 		t.Helper()
 		time.Sleep(300 * time.Millisecond) // let the frame settle
@@ -91,8 +102,12 @@ func TestWizardCreatesAStackUnderPTY(t *testing.T) {
 	step(left, enter)
 	capture("run: first steps", 2*time.Minute, "Setting up PIC-SURE", "Check the host")
 	capture("run: building", 30*time.Minute, "Write the config and secrets")
-	capture("run: finished", 45*time.Minute, "Setup finished")
+	waitScreen(45*time.Minute, "Setup finished")
+	repaint()
+	capture("run: finished", 30*time.Second, "Setup finished")
 	step(enter)
+	waitScreen(30*time.Second, "Dashboard")
+	repaint()
 	capture("landing on the new stack", 30*time.Second, "Dashboard")
 	step("q")
 	s.waitExit0()
