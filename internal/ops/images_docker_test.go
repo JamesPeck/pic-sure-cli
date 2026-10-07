@@ -32,7 +32,7 @@ func TestImageBuildsWithDocker(t *testing.T) {
 		t.Skipf("docker is not available: %v", err)
 	}
 	ctx := context.Background()
-	e := docker.NewEngine(execRunner{})
+	e := docker.NewEngine(&docker.ExecRunner{})
 	b := make([]byte, 4)
 	if _, err := rand.Read(b); err != nil {
 		t.Fatal(err)
@@ -49,7 +49,7 @@ func TestImageBuildsWithDocker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d := &ops.Deps{Runner: execRunner{}, Docker: e, Sink: &events.Recorder{}}
+	d := &ops.Deps{Runner: &docker.ExecRunner{}, Docker: e, Sink: &events.Recorder{}}
 	opts := ops.ImageBuildOptions{Cache: c, SHA: feSHA, Source: src, Tag: tag, Step: "images"}
 	cfg := stack.DefaultConfig()
 	cfg.Frontend.Analytics.GoogleAnalyticsID = `it's $HOME`
@@ -103,11 +103,11 @@ func TestRealImageBuilds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, err := cache.Open(root, cache.Options{Git: git.New(execRunner{}), Holder: "ops test 030"})
+	c, err := cache.Open(root, cache.Options{Git: git.New(&docker.ExecRunner{}), Holder: "ops test 030"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	d := &ops.Deps{Runner: execRunner{}, Docker: docker.NewEngine(execRunner{}), Sink: &events.Recorder{}}
+	d := &ops.Deps{Runner: &docker.ExecRunner{}, Docker: docker.NewEngine(&docker.ExecRunner{}), Sink: &events.Recorder{}}
 	cfg := stack.DefaultConfig()
 	cfg.Auth.Mode = stack.AuthOpen
 	logs := t.TempDir()
