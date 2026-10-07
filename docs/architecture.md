@@ -182,7 +182,7 @@ it.
 
   A usage error gets the "Run 'CMD --help' for usage." hint when cobra
   rejected the command line, or when the command wrapped it in
-  `withUsageHint` (a missing subcommand, an unknown key argument). Other
+  `withUsageHint` (a missing subcommand or help topic, an unknown key). Other
   usage errors, such as an invalid config file, carry only their message.
   Output the renderer couldn't write (a full disk) fails the run with
   exit 1. `help`, `completion` and `--version` print text even with

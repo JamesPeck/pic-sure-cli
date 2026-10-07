@@ -145,12 +145,15 @@ func (a *App) succeed() error {
 	if o == nil {
 		return nil
 	}
+	if err := o.sink.writeErr(); err != nil {
+		return exitcode.Failed("writing output: %w", err)
+	}
 	if !o.final {
 		o.final = true
 		o.sink.Emit(events.Result{OK: true, Data: o.report})
-	}
-	if err := o.sink.writeErr(); err != nil {
-		return exitcode.Failed("writing output: %w", err)
+		if err := o.sink.writeErr(); err != nil {
+			return exitcode.Failed("writing output: %w", err)
+		}
 	}
 	return nil
 }
@@ -189,8 +192,10 @@ type usageHint struct{ error }
 func (h usageHint) Unwrap() error { return h.error }
 
 // jsonRequested reports whether args ask for --json, for a command line
-// cobra rejected before it parsed that flag. It stops at "--", and the last
-// --json or --json=BOOL wins, as in pflag.
+// cobra rejected, perhaps before it reached that flag. It stops at "--", and
+// the last --json or --json=BOOL wins. It is a best guess: it can't tell a
+// --json that another flag took as its value, or that a command took as a
+// positional argument, from the flag itself.
 func jsonRequested(args []string) bool {
 	on := false
 	for _, arg := range args {

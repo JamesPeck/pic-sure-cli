@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"syscall"
@@ -94,6 +95,7 @@ func TestJSONFailureIsAResultLine(t *testing.T) {
 		{[]string{"--json", "--plain", "up"}, 2, "if any flags in the group [json plain] are set none of the others can be; [json plain] were all set"},
 		{[]string{"up", "--bogus", "--json"}, 2, "unknown flag: --bogus"},
 		{[]string{"up", "--bogus", "--json=false", "--json=1"}, 2, "unknown flag: --bogus"},
+		{[]string{"help", "frobnicate", "--json"}, 2, `unknown help topic "frobnicate"`},
 	}
 	for _, tt := range tests {
 		t.Run(strings.Join(tt.args, " "), func(t *testing.T) {
@@ -128,6 +130,15 @@ func TestPlainFailureLeavesStdoutAlone(t *testing.T) {
 	}
 	if stdout.Len() != 0 || stderr.String() != "pic-sure: not implemented (ticket 035)\n" {
 		t.Errorf("stdout %q, stderr %q", stdout, stderr)
+	}
+
+	// The last --json wins even when cobra parsed an earlier one.
+	a, stdout, _ = testApp(t)
+	if code := a.Run(context.Background(), []string{"up", "--json", "--bogus", "--json=false"}); code != exitcode.CodeUsage {
+		t.Errorf("exit = %d", code)
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout = %q, want plain output", stdout)
 	}
 }
 
@@ -372,22 +383,36 @@ func TestRunEndings(t *testing.T) {
 			t.Errorf("stdout %q, stderr %q", stdout, stderr)
 		}
 	})
-	t.Run("output that can't be written fails the run", func(t *testing.T) {
-		a, _, stderr := testApp(t)
-		a.Stdout = failingWriter{}
-		root := withRunE(t, a, []string{"up"}, streamingUp(a, false, nil, nil))
-		if code := a.execute(context.Background(), root, []string{"up", "--json"}); code != exitcode.CodeFailed {
-			t.Errorf("exit = %d", code)
-		}
-		if got := stderr.String(); got != "pic-sure: writing output: disk full\n" {
-			t.Errorf("stderr = %q", got)
-		}
-	})
+	for _, fail := range []int{1, 100} {
+		t.Run(fmt.Sprintf("output that can't be written fails the run (%d failed writes)", fail), func(t *testing.T) {
+			a, _, stderr := testApp(t)
+			var stdout strings.Builder
+			w := &failingWriter{fail: fail}
+			a.Stdout = io.MultiWriter(w, &stdout)
+			root := withRunE(t, a, []string{"up"}, streamingUp(a, false, nil, nil))
+			if code := a.execute(context.Background(), root, []string{"up", "--json"}); code != exitcode.CodeFailed {
+				t.Errorf("exit = %d", code)
+			}
+			if got := stderr.String(); got != "pic-sure: writing output: disk full\n" {
+				t.Errorf("stderr = %q", got)
+			}
+			if strings.Contains(stdout.String(), `"ok":true`) {
+				t.Errorf("a successful result reached stdout:\n%s", stdout.String())
+			}
+		})
+	}
 }
 
-type failingWriter struct{}
+// failingWriter fails its first fail writes.
+type failingWriter struct{ fail int }
 
-func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("disk full") }
+func (w *failingWriter) Write(p []byte) (int, error) {
+	if w.fail > 0 {
+		w.fail--
+		return 0, errors.New("disk full")
+	}
+	return len(p), nil
+}
 
 func TestUsageHint(t *testing.T) {
 	tests := []struct {

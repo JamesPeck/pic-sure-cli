@@ -43,7 +43,7 @@ func rejectUnknownHelpTopics(root *cobra.Command) {
 	help.Run = nil
 	help.RunE = func(cmd *cobra.Command, args []string) error {
 		if _, rest, err := root.Find(args); err != nil || len(rest) > 0 {
-			return exitcode.Usage("unknown help topic %q", strings.Join(args, " "))
+			return withUsageHint(exitcode.Usage("unknown help topic %q", strings.Join(args, " ")))
 		}
 		show(cmd, args)
 		return nil

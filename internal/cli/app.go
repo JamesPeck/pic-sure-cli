@@ -87,7 +87,7 @@ func (a *App) execute(ctx context.Context, root *cobra.Command, args []string) i
 		err = a.succeed()
 	case !a.running && !errors.As(err, &coded):
 		// cobra may have stopped before it reached --json.
-		a.Global.JSON = a.Global.JSON || jsonRequested(args)
+		a.Global.JSON = jsonRequested(args)
 		err = exitcode.Usage("%w", err)
 	}
 	if err == nil {

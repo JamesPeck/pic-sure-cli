@@ -73,7 +73,10 @@ cmp stack/pic-sure.yaml want.yaml
 cp bad.yaml stack/pic-sure.yaml
 exitcode 2 pic-sure --stack stack config show
 stderr 'network.http_port \(line 4\): must be a port from 1 to 65535, got 0'
-exec pic-sure --stack stack config set network.http_port 80
+! stderr 'for usage'
+exec pic-sure --stack stack --json config set network.http_port 80
+stdout -count=1 '^\{'
+stdout '^\{"type":"result","ok":true,"data":\{"key":"network.http_port","value":80\}\}$'
 exec pic-sure --stack stack config get network.http_port
 stdout '^80$'
 
