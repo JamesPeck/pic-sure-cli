@@ -3,6 +3,7 @@ package ops
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"errors"
 	"io"
 	"os"
@@ -63,7 +64,7 @@ func TestReactorBuildForReal(t *testing.T) {
 		t.Fatal(err)
 	}
 	logDir := t.TempDir()
-	d := &Deps{Runner: r, Docker: docker.NewEngine(r), Sink: events.NewPlain(os.Stderr, events.PlainOptions{Now: time.Now})}
+	d := &Deps{Runner: r, Docker: docker.NewEngine(r), Rand: rand.Reader, Sink: events.NewPlain(os.Stderr, events.PlainOptions{Now: time.Now})}
 	opts := ReactorOptions{Cache: c, SHA: sha, LogDir: logDir, Step: "build-pic-sure"}
 
 	first := opts

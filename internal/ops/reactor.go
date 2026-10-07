@@ -71,10 +71,23 @@ type ReactorResult struct {
 // reactor container has finished.
 var reactorPoll = 2 * time.Second
 
-// reactorKeepalive bounds, in seconds, how long a reactor container whose
-// build died without removing it (the CLI was killed) holds the name and
-// keeps other builds waiting. It must outlast any Maven run.
-const reactorKeepalive = "21600"
+// reactorRunLabel marks the reactor container with the run that started it.
+const reactorRunLabel = "org.hms-dbmi.picsure.reactor-run"
+
+// The reactor container's own process exits when heartbeatFile, which the
+// build touches every heartbeatEvery, hasn't been touched for heartbeatCheck
+// seconds, so a killed build's container stops within two checks.
+const (
+	heartbeatFile  = "/tmp/pic-sure-heartbeat"
+	heartbeatCheck = "60"
+)
+
+var heartbeatEvery = 15 * time.Second
+
+// reactorCreatedGrace is how long a reactor container may stay in the
+// created state, between docker run's create and start, before a waiting
+// build takes it for a dead build's.
+var reactorCreatedGrace = 2 * time.Minute
 
 // tailLines is how many lines of a failed part's output are shown.
 const tailLines = 30
@@ -163,7 +176,7 @@ func BuildReactor(ctx context.Context, d *Deps, opts ReactorOptions) (ReactorRes
 	for _, img := range toBuild {
 		_, err := os.Stat(filepath.Join(src, filepath.FromSlash(img.Context)))
 		if errors.Is(err, fs.ErrNotExist) {
-			return res, fmt.Errorf("pic-sure %s has no %s: it predates the monorepo layout this build needs", opts.SHA[:12], img.Context)
+			return res, fmt.Errorf("the pic-sure source %s has no %s: it predates the monorepo layout this build needs", src, img.Context)
 		}
 		if err != nil {
 			return res, err
@@ -232,17 +245,23 @@ func runReactor(ctx context.Context, d *Deps, c *cache.Cache, opts ReactorOption
 		return fmt.Errorf("creating the Maven volume: %w", err)
 	}
 
+	runID, err := docker.UniqueName("run", d.Rand)
+	if err != nil {
+		return err
+	}
 	mvn := "mvn -B install -T1C -DskipTests"
 	run := docker.RunOpts{
 		Image:  mavenImg.Ref,
 		Name:   ReactorContainer,
 		Detach: true,
-		// The container idles while Maven runs in it through docker exec,
-		// so it is running from birth until it is removed, contexts copied.
-		// A waiting build therefore never mistakes it for a dead build's.
-		Args:    []string{"sleep", reactorKeepalive},
+		// Maven runs through docker exec while the container's own process
+		// waits on heartbeats, so the container keeps running until it has
+		// been copied from, and stops soon after this process dies. Only a
+		// dead build's container is ever stopped.
+		Args: []string{"sh", "-c", "touch " + heartbeatFile + "; " +
+			"while sleep " + heartbeatCheck + "; do rm " + heartbeatFile + " 2>/dev/null || exit 0; done"},
 		Workdir: "/build",
-		Labels:  map[string]string{ReactorSrcLabel: opts.SHA},
+		Labels:  map[string]string{ReactorSrcLabel: opts.SHA, reactorRunLabel: runID},
 		Mounts: []docker.Mount{
 			{Source: src, Target: "/src", ReadOnly: true},
 			{Source: cache.MavenVolume, Target: "/root/.m2"},
@@ -272,8 +291,10 @@ func runReactor(ctx context.Context, d *Deps, c *cache.Cache, opts ReactorOption
 	if err != nil {
 		return err
 	}
+	stopHeartbeat := heartbeat(ctx, d, id)
 	removed := false
 	defer func() {
+		stopHeartbeat()
 		if removed {
 			return
 		}
@@ -289,7 +310,6 @@ func runReactor(ctx context.Context, d *Deps, c *cache.Cache, opts ReactorOption
 	progress("Running the Maven reactor build for pic-sure %s", opts.SHA[:12])
 	code, err := d.Docker.Exec(ctx, docker.ExecOpts{
 		Container: id,
-		Workdir:   "/build",
 		Args:      []string{"sh", "-c", "cp -r /src/. /build && exec " + mvn},
 		Stdout:    out,
 		Stderr:    out,
@@ -312,6 +332,7 @@ func runReactor(ctx context.Context, d *Deps, c *cache.Cache, opts ReactorOption
 			return fmt.Errorf("copying %s out of the reactor container: %w", ctxDir, err)
 		}
 	}
+	stopHeartbeat()
 	if err := d.Docker.Rm(ctx, id, true); err != nil {
 		return fmt.Errorf("removing the reactor container: %w", err)
 	}
@@ -324,7 +345,7 @@ func progressf(sink events.Sink, step, format string, args ...any) {
 }
 
 // ensureImage pulls ref if it isn't present, so the pull's progress is
-// visible instead of hidden inside docker create.
+// visible instead of hidden inside docker run.
 func ensureImage(ctx context.Context, d *Deps, step, ref string, out *partOutput) error {
 	ok, err := d.Docker.ImageExists(ctx, ref)
 	if err != nil || ok {
@@ -339,12 +360,14 @@ func ensureImage(ctx context.Context, d *Deps, step, ref string, out *partOutput
 
 // startReactorContainer starts the reactor container under its fixed name
 // and returns its ID. A running container with the name is another build's,
-// so it waits for that to finish; a stopped one is left over from a build
-// that died, so it removes it.
+// so it waits for that to finish. A stopped one is a dead build's, so it
+// removes it, as it does one left in the created state for longer than
+// docker takes to start a container.
 func startReactorContainer(ctx context.Context, d *Deps, step string, run docker.RunOpts) (string, error) {
 	timeout := time.NewTimer(cache.ReactorLockTimeout)
 	defer timeout.Stop()
 	waiting := false
+	createdID, createdPolls := "", 0
 	for {
 		info, err := d.Docker.ContainerInspect(ctx, ReactorContainer)
 		switch {
@@ -355,15 +378,20 @@ func startReactorContainer(ctx context.Context, d *Deps, step string, run docker
 			if err == nil {
 				return strings.TrimSpace(stdout.String()), nil
 			}
-			if !nameInUse(err) {
-				return "", fmt.Errorf("starting the reactor container: %w", err)
+			if nameInUse(err) {
+				continue // another build took the name first
 			}
-			// Another build took the name first.
-			continue
+			removeOwnReactor(ctx, d, run.Labels[reactorRunLabel])
+			return "", fmt.Errorf("starting the reactor container: %w", err)
 		case err != nil:
 			return "", fmt.Errorf("checking for another reactor build: %w", err)
-		case !info.Running:
-			if err := d.Docker.Rm(ctx, info.ID, false); err != nil {
+		case info.Running:
+		case info.Status == "created" && info.ID != createdID:
+			createdID, createdPolls = info.ID, 1
+		case info.Status == "created" && createdPolls < int(reactorCreatedGrace/reactorPoll):
+			createdPolls++
+		default:
+			if err := d.Docker.Rm(ctx, info.ID, true); err != nil {
 				return "", fmt.Errorf("removing the stopped container %s: %w", ReactorContainer, err)
 			}
 			continue
@@ -376,10 +404,51 @@ func startReactorContainer(ctx context.Context, d *Deps, step string, run docker
 		case <-ctx.Done():
 			return "", fmt.Errorf("waiting for the reactor container %s: %w", ReactorContainer, context.Cause(ctx))
 		case <-timeout.C:
-			return "", fmt.Errorf("waited %s for container %s to go; if no build is using it, remove it with `docker rm -f %[2]s`",
+			return "", fmt.Errorf("waited %s for another build's container %s to go; if no build is using it, remove it with `docker rm -f %[2]s`",
 				cache.ReactorLockTimeout, ReactorContainer)
 		case <-time.After(reactorPoll):
 		}
+	}
+}
+
+// removeOwnReactor removes the reactor container a failed docker run may
+// have left behind, if it is this run's: docker run creates the container
+// before starting it.
+func removeOwnReactor(ctx context.Context, d *Deps, runID string) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+	defer cancel()
+	info, err := d.Docker.ContainerInspect(ctx, ReactorContainer)
+	if err == nil && info.Labels[reactorRunLabel] == runID {
+		_ = d.Docker.Rm(ctx, info.ID, true)
+	}
+}
+
+// heartbeat keeps the reactor container's heartbeat file fresh until the
+// returned function is called.
+func heartbeat(ctx context.Context, d *Deps, id string) (stop func()) {
+	ctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		tick := time.NewTicker(heartbeatEvery)
+		defer tick.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+				// A missed beat is harmless: the container stops only
+				// after several in a row.
+				_, _ = d.Docker.Exec(ctx, docker.ExecOpts{Container: id, Args: []string{"touch", heartbeatFile}})
+			}
+		}
+	}()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			cancel()
+			<-done
+		})
 	}
 }
 

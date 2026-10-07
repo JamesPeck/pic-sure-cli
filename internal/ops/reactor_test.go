@@ -46,7 +46,7 @@ func newReactorFixture(t *testing.T) *reactorFixture {
 	return &reactorFixture{
 		f:    f,
 		rec:  rec,
-		d:    &Deps{Runner: f, Docker: docker.NewEngine(f), Sink: rec},
+		d:    &Deps{Runner: f, Docker: docker.NewEngine(f), Sink: rec, Rand: strings.NewReader(strings.Repeat("r", 64))},
 		opts: ReactorOptions{Cache: c, SHA: testSHA, Source: src, Step: "build"},
 		root: root,
 	}
@@ -80,7 +80,7 @@ func (x *reactorFixture) reactorOK() {
 	x.f.On(fakerunner.Exact("docker", "container", "inspect", ReactorContainer)).
 		Exit(1).Stderr("Error: No such container: " + ReactorContainer)
 	x.f.On(fakerunner.Glob("docker run -d *")).Stdout("ctr123\n")
-	x.f.On(fakerunner.Glob("docker exec -w /build ctr123 *"))
+	x.f.On(fakerunner.Glob("docker exec ctr123 sh -c *"))
 	x.f.On(fakerunner.Glob("docker cp ctr123:*"))
 	x.f.On(fakerunner.Exact("docker", "rm", "-v", "-f", "ctr123"))
 	x.f.On(fakerunner.Glob("docker build *"))
@@ -132,20 +132,21 @@ func TestReactorBuildRunsMavenThenBuildsEveryImage(t *testing.T) {
 		"--name " + ReactorContainer,
 		"-v " + x.opts.Source + ":/src:ro",
 		"-v pic-sure-m2:/root/.m2",
-		"maven:3-amazoncorretto-25 sleep " + reactorKeepalive,
+		"maven:3-amazoncorretto-25 sh -c",
+		reactorRunLabel + "=run-",
 	} {
 		if !strings.Contains(run, want) {
 			t.Errorf("run %s\nlacks %q", run, want)
 		}
 	}
-	x.f.AssertCalled(fakerunner.Exact("docker", "exec", "-w", "/build", "ctr123",
+	x.f.AssertCalled(fakerunner.Exact("docker", "exec", "ctr123",
 		"sh", "-c", "cp -r /src/. /build && exec mvn -B install -T1C -DskipTests"))
 
 	buildDir := filepath.Join(x.root, "build", "0123456789ab")
 	order := []fakerunner.Matcher{
 		fakerunner.Exact("docker", "volume", "create", cache.MavenVolume),
 		fakerunner.Glob("docker run -d *"),
-		fakerunner.Glob("docker exec * ctr123 *"),
+		fakerunner.Glob("docker exec ctr123 sh -c *"),
 	}
 	// Overlapping contexts are copied once.
 	for _, c := range []string{
@@ -226,7 +227,7 @@ func TestReactorBuildForceRebuildsFreshImages(t *testing.T) {
 func TestReactorBuildFailureShowsTheTailAndRemovesTheContainer(t *testing.T) {
 	x := newReactorFixture(t)
 	x.missing()
-	x.f.On(fakerunner.Glob("docker exec -w /build ctr123 *")).
+	x.f.On(fakerunner.Glob("docker exec ctr123 sh -c *")).
 		Stdout("[INFO] Building pic-sure-gateway 1.0-SNAPSHOT    [3/40]\n[ERROR] compilation failed\n").Exit(1)
 	x.reactorOK()
 	x.opts.LogDir = t.TempDir()
@@ -263,13 +264,13 @@ func TestReactorBuildRemovesAStoppedReactorContainer(t *testing.T) {
 	x.missing()
 	x.f.On(fakerunner.Exact("docker", "container", "inspect", ReactorContainer)).Times(1).
 		Stdout(`[{"Id":"old","State":{"Status":"exited","Running":false}}]`)
-	x.f.On(fakerunner.Exact("docker", "rm", "-v", "old"))
+	x.f.On(fakerunner.Exact("docker", "rm", "-v", "-f", "old"))
 	x.reactorOK()
 
 	if _, err := BuildReactor(context.Background(), x.d, x.opts); err != nil {
 		t.Fatal(err)
 	}
-	x.f.AssertOrder(fakerunner.Exact("docker", "rm", "-v", "old"), fakerunner.Glob("docker run -d *"))
+	x.f.AssertOrder(fakerunner.Exact("docker", "rm", "-v", "-f", "old"), fakerunner.Glob("docker run -d *"))
 }
 
 func TestReactorBuildWaitsForARunningReactorContainer(t *testing.T) {
@@ -428,5 +429,75 @@ func TestReactorBuildFailureOfAnImageShowsTheTailAndLog(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(x.root, "build", "0123456789ab")); err != nil {
 		t.Errorf("a failed build's contexts should stay: %v", err)
+	}
+}
+
+func TestReactorBuildGivesACreatedContainerTimeToStart(t *testing.T) {
+	defer func(p, g time.Duration) { reactorPoll, reactorCreatedGrace = p, g }(reactorPoll, reactorCreatedGrace)
+	reactorPoll, reactorCreatedGrace = time.Millisecond, 3*time.Millisecond
+	x := newReactorFixture(t)
+	x.missing()
+	x.f.On(fakerunner.Exact("docker", "container", "inspect", ReactorContainer)).Times(4).
+		Stdout(`[{"Id":"stuck","State":{"Status":"created","Running":false}}]`)
+	x.f.On(fakerunner.Exact("docker", "rm", "-v", "-f", "stuck"))
+	x.reactorOK()
+
+	if _, err := BuildReactor(context.Background(), x.d, x.opts); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(x.f.CallsMatching(fakerunner.Exact("docker", "container", "inspect", ReactorContainer))); n != 5 {
+		t.Errorf("inspected %d times, want 4 while waiting and 1 after removing it", n)
+	}
+	x.f.AssertOrder(fakerunner.Exact("docker", "rm", "-v", "-f", "stuck"), fakerunner.Glob("docker run -d *"))
+}
+
+func TestReactorBuildRemovesItsContainerWhenItFailsToStart(t *testing.T) {
+	x := newReactorFixture(t)
+	x.missing()
+	x.f.On(fakerunner.Exact("docker", "container", "inspect", ReactorContainer)).Times(1).
+		Exit(1).Stderr("Error: No such container: " + ReactorContainer)
+	x.f.On(fakerunner.Glob("docker run -d *")).Exit(125).Stderr("docker: Error response from daemon: invalid mount config")
+	x.f.On(fakerunner.Exact("docker", "container", "inspect", ReactorContainer)).
+		Stdout(`[{"Id":"mine","Config":{"Labels":{"` + reactorRunLabel + `":"run-72727272"}},"State":{"Status":"created"}}]`)
+	x.f.On(fakerunner.Exact("docker", "rm", "-v", "-f", "mine"))
+	x.reactorOK()
+
+	_, err := BuildReactor(context.Background(), x.d, x.opts)
+	if err == nil || !strings.Contains(err.Error(), "invalid mount config") {
+		t.Fatalf("err = %v, want the docker error", err)
+	}
+	x.f.AssertCalled(fakerunner.Exact("docker", "rm", "-v", "-f", "mine"))
+}
+
+func TestReactorBuildSendsHeartbeatsWhileMavenRuns(t *testing.T) {
+	defer func(e time.Duration) { heartbeatEvery = e }(heartbeatEvery)
+	heartbeatEvery = time.Millisecond
+	x := newReactorFixture(t)
+	x.missing()
+	x.f.On(fakerunner.Glob("docker exec ctr123 sh -c *")).Do(func(context.Context, fakerunner.Call) (docker.Result, error) {
+		time.Sleep(20 * time.Millisecond)
+		return docker.Result{}, nil
+	})
+	x.f.On(fakerunner.Exact("docker", "exec", "ctr123", "touch", heartbeatFile))
+	x.reactorOK()
+
+	if _, err := BuildReactor(context.Background(), x.d, x.opts); err != nil {
+		t.Fatal(err)
+	}
+	calls := x.f.Calls()
+	beats, removed := 0, false
+	for _, c := range calls {
+		switch c.String() {
+		case "docker exec ctr123 touch " + heartbeatFile:
+			beats++
+			if removed {
+				t.Error("a heartbeat after the container was removed")
+			}
+		case "docker rm -v -f ctr123":
+			removed = true
+		}
+	}
+	if beats == 0 {
+		t.Error("no heartbeats")
 	}
 }

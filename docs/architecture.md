@@ -614,13 +614,18 @@ last image and `LockImage` per image, and refuses a commit without the
 monorepo's contexts before running Maven.
 
 - **Container.** Maven runs through `docker exec` in a container named
-  `ReactorContainer` (`pic-sure-reactor`), started with `docker run -d`
-  on a `sleep`, so the container is running from creation until it has
-  been copied from and removed. Another build that finds it running
-  waits (a Progress event; ctx ends the wait); a stopped one is a dead
-  build's and is removed. The proxy's `settings.xml` is bind-mounted at
-  `/pic-sure/settings.xml` (not in `/root/.m2`, which is the shared
-  `pic-sure-m2` volume) and passed with `-s`.
+  `ReactorContainer` (`pic-sure-reactor`), started with `docker run -d`.
+  Its own process waits on a heartbeat file the build touches every 15 s
+  and exits a minute or two after the beats stop, so the container runs
+  until it has been copied from and removed, and a killed build's
+  container stops soon after. Another build that finds it running waits
+  (a Progress event; ctx, or `ReactorLockTimeout`, ends the wait). A
+  stopped one, or one left in the created state for two minutes, is a
+  dead build's and is removed. A `docker run` that fails after creating
+  the container removes it, found by its run label. The proxy's
+  `settings.xml` is bind-mounted at `/pic-sure/settings.xml` (not in
+  `/root/.m2`, which is the shared `pic-sure-m2` volume) and passed with
+  `-s`.
 - **Contexts** are copied with `docker cp` into `cache.BuildDir(sha)`,
   each once (a context inside another comes with it), and the directory
   is removed after a success. A failed build leaves it for inspection;
