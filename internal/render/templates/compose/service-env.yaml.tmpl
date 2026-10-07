@@ -4,12 +4,10 @@
 {{ if .ServiceEnv -}}
 services:
 {{- range $service, $env := .ServiceEnv }}
-{{- if $env }}
   {{ q $service }}:
-    environment:
+    environment:{{ if not $env }} {}{{ end }}
 {{- range $name, $value := $env }}
       {{ q $name }}: {{ q $value }}
-{{- end }}
 {{- end }}
 {{- end }}
 {{ end -}}

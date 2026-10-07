@@ -33,7 +33,6 @@ func templateFS() fs.FS {
 	return sub
 }
 
-// Compose fragments, by path in the template tree.
 const (
 	fragmentBase       = "compose/base.yaml.tmpl"
 	fragmentLocalDB    = "compose/local-db.yaml.tmpl"
@@ -278,10 +277,13 @@ func executeTemplate(name string, d templateData) ([]byte, error) {
 // sequence, replaces the earlier one whole, so a fragment that changes a list
 // (a service's volumes, say) restates all of it. A fragment can't remove a
 // key, which is why whatever only some stacks have lives in its own fragment
-// and never in base (§6.4: nothing depends on compose's !reset). A comment
-// above a key in a later fragment replaces the earlier one. A later
-// fragment's header comment, separated from its first key by a blank line,
-// is dropped.
+// and never in base (§6.4: nothing depends on compose's !reset), and a
+// mapping can't be replaced by anything else, which would delete it.
+//
+// A replaced value takes the later fragment's comment, if any; a merged
+// mapping keeps its comment unless the later fragment has one. A later
+// fragment's header comment, separated from its first key by a blank line, is
+// dropped.
 func renderCompose(d templateData, fragments []string) ([]byte, error) {
 	var out *yaml.Node
 	for _, name := range fragments {
@@ -304,7 +306,9 @@ func renderCompose(d templateData, fragments []string) ([]byte, error) {
 			out = &doc
 			continue
 		}
-		mergeMapping(out.Content[0], root)
+		if err := mergeMapping(out.Content[0], root, ""); err != nil {
+			return nil, fmt.Errorf("%s: %w", name, err)
+		}
 	}
 	if out == nil {
 		return nil, fmt.Errorf("no compose fragments")
@@ -322,24 +326,30 @@ func renderCompose(d templateData, fragments []string) ([]byte, error) {
 }
 
 // mergeMapping merges the mapping src into the mapping dst, as described on
-// renderCompose.
-func mergeMapping(dst, src *yaml.Node) {
+// renderCompose. path is dst's key path, for errors.
+func mergeMapping(dst, src *yaml.Node, path string) error {
 	for i := 0; i+1 < len(src.Content); i += 2 {
 		key, val := src.Content[i], src.Content[i+1]
 		j := keyIndex(dst, key.Value)
 		switch {
 		case j < 0:
 			dst.Content = append(dst.Content, key, val)
-		case dst.Content[j+1].Kind == yaml.MappingNode && val.Kind == yaml.MappingNode:
+		case dst.Content[j+1].Kind == yaml.MappingNode:
+			if val.Kind != yaml.MappingNode {
+				return fmt.Errorf("%s%s: a mapping can only be merged with a mapping", path, key.Value)
+			}
 			if key.HeadComment != "" {
 				dst.Content[j].HeadComment = key.HeadComment
 			}
-			mergeMapping(dst.Content[j+1], val)
+			if err := mergeMapping(dst.Content[j+1], val, path+key.Value+"."); err != nil {
+				return err
+			}
 		default:
 			// The key node carries the comments, which describe the new value.
 			dst.Content[j], dst.Content[j+1] = key, val
 		}
 	}
+	return nil
 }
 
 // keyIndex returns the index in the mapping m of the key named key, or -1.

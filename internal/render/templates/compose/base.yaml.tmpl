@@ -17,11 +17,12 @@ services:
       - "{{ .HTTPPort }}:80"
       - "{{ .HTTPSPort }}:443"
     volumes:
-      # server.crt, server.key and server.chain, owned 2:2 (spec §9.1 step 6).
+      # server.crt, server.key and server.chain, copied in by pic-sure.
       - certs:/usr/local/apache2/cert:ro
       - type: bind
         source: {{ q (path .FilesDir "httpd/httpd-vhosts.conf") }}
         target: /usr/local/apache2/conf/extra/httpd-vhosts.conf
+        bind: {create_host_path: false}
         read_only: true
       - httpd-logs:/app/logs
     environment:
@@ -170,8 +171,8 @@ services:
       DATASOURCE_USERNAME: auth
       DATASOURCE_PASSWORD: ${DB_AUTH_PASSWORD}
       APPLICATION_CLIENT_SECRET: ${AUTH0_CLIENT_SECRET}
-      # Must stay false: the introspection token is keyed on the raw secret
-      # (spec §9.4).
+      # Must stay false: pic-sure signs the introspection token with the
+      # secret as is.
       APPLICATION_CLIENT_SECRET_IS_BASE_64: "false"
       AUTH0_IDP_PROVIDER_IS_ENABLED: "true"
       AUTH0_HOST: {{ q (printf "https://%s.auth0.com/" .Auth.Auth0Tenant) }}
@@ -344,6 +345,7 @@ services:
       - type: bind
         source: {{ q (path .PicSureSrc "services/picsure-dictionary/db/schema.sql") }}
         target: /docker-entrypoint-initdb.d/schema.sql
+        bind: {create_host_path: false}
         read_only: true
     networks:
       - data
@@ -369,22 +371,27 @@ services:
       - type: bind
         source: {{ q (path .FilesDir "flyway/run-migrations.sh") }}
         target: /scripts/run-migrations.sh
+        bind: {create_host_path: false}
         read_only: true
       - type: bind
         source: {{ q (path .PicSureSrc "services/pic-sure-auth-microapp/pic-sure-auth-db/db/sql") }}
         target: /migrations/auth
+        bind: {create_host_path: false}
         read_only: true
       - type: bind
         source: {{ q (path .PicSureSrc "services/pic-sure-operations-service/db/sql") }}
         target: /migrations/picsure
+        bind: {create_host_path: false}
         read_only: true
       - type: bind
         source: {{ q (path .MigrationsSrc .MigrationsProject "auth") }}
         target: /migrations/custom/auth
+        bind: {create_host_path: false}
         read_only: true
       - type: bind
         source: {{ q (path .MigrationsSrc .MigrationsProject "picsure") }}
         target: /migrations/custom/picsure
+        bind: {create_host_path: false}
         read_only: true
     environment:
       DB_HOST: {{ q .DB.Host }}
@@ -414,10 +421,12 @@ services:
       - type: bind
         source: {{ q (path .FilesDir "flyway/run-dictionary-migrations.sh") }}
         target: /scripts/run-dictionary-migrations.sh
+        bind: {create_host_path: false}
         read_only: true
       - type: bind
         source: {{ q (path .PicSureSrc "services/picsure-dictionary/db/flyway") }}
         target: /migrations/dictionary
+        bind: {create_host_path: false}
         read_only: true
     environment:
       POSTGRES_HOST: dictionary-db

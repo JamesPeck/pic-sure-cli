@@ -295,8 +295,9 @@ the drift job (066), and lists every deliberate difference from AIO.
   and `service-env` (the `services.<name>.env` overrides) last.
   `renderCompose(data, fragments)` executes and merges them into the one
   `compose.yaml`: mappings merge key by key, scalars and sequences replace
-  whole. No fragment can remove a key, so whatever only some stacks have
-  lives in its own fragment.
+  whole, and replacing a mapping with anything else is an error. No fragment
+  can remove a key, so whatever only some stacks have lives in its own
+  fragment.
 - `files/` holds what render writes to `render/files/`: the httpd vhost (a
   template), the Vite dev config, the Flyway scripts, the MySQL init script
   and the demo facet config.
@@ -314,7 +315,11 @@ the drift job (066), and lists every deliberate difference from AIO.
   `compose run --rm flyway-init` starts what they depend on.
 - Compose creates a declared volume only when a service mounts it, so a
   helper that creates a stack volume first (certs, truststore, the HPDS key,
-  genomic staging) must give it the stack labels.
+  genomic staging) must give it the stack labels, plus
+  `com.docker.compose.project` and `com.docker.compose.volume` so compose
+  adopts it without a warning.
+- Every bind mount sets `create_host_path: false`: a missing source fails
+  the start instead of becoming an empty directory.
 
 `templates_test.go` renders every mode and dev variant and checks the result
 against the catalog (services, images, networks, volumes, labels, profiles),

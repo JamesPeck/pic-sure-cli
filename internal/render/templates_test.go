@@ -336,7 +336,12 @@ func checkMounts(t *testing.T, service string, vols []yaml.Node, d templateData)
 			named = append(named, src)
 			continue
 		}
-		var long struct{ Type, Source, Target string }
+		var long struct {
+			Type, Source, Target string
+			Bind                 struct {
+				CreateHostPath *bool `yaml:"create_host_path"`
+			}
+		}
 		if err := n.Decode(&long); err != nil {
 			t.Fatal(err)
 		}
@@ -350,6 +355,11 @@ func checkMounts(t *testing.T, service string, vols []yaml.Node, d templateData)
 		}
 		if !ok {
 			t.Errorf("%s: bind source %q isn't under the render, source or frontend dirs", service, long.Source)
+		}
+		// Otherwise compose uses the bind API, and Docker creates a
+		// missing source as an empty directory.
+		if c := long.Bind.CreateHostPath; c == nil || *c {
+			t.Errorf("%s: bind %s doesn't set create_host_path: false", service, long.Target)
 		}
 	}
 	return named
@@ -375,8 +385,8 @@ func TestComposeReferencesOnlySecrets(t *testing.T) {
 					t.Fatal(err)
 				}
 				for _, ref := range varRef.FindAllStringSubmatch(strings.Join(scalars(&doc), "\n"), -1) {
-					if len(ref[0])-len(ref[1]) > 3 {
-						continue // $${...} is an escaped literal
+					if dollars := len(ref[0]) - len(ref[1]) - 2; dollars%2 == 0 {
+						continue // $$ is an escaped $, so an even run is literal
 					}
 					if !slices.Contains(allowed, ref[1]) {
 						t.Errorf("proxy=%v mode %+v dev %v: ${%s} isn't a secret", proxy, m, dev, ref[1])
@@ -502,7 +512,9 @@ func TestMergeMapping(t *testing.T) {
 	if err := yaml.Unmarshal([]byte(over), &on); err != nil {
 		t.Fatal(err)
 	}
-	mergeMapping(bn.Content[0], on.Content[0])
+	if err := mergeMapping(bn.Content[0], on.Content[0], ""); err != nil {
+		t.Fatal(err)
+	}
 	var got map[string]any
 	if err := bn.Decode(&got); err != nil {
 		t.Fatal(err)
@@ -514,6 +526,40 @@ func TestMergeMapping(t *testing.T) {
 	}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Errorf("merged %v, want %v", got, want)
+	}
+}
+
+func TestMergeMappingRefusesToReplaceAMapping(t *testing.T) {
+	for _, over := range []string{"a:\n", "a: [1]\n", "a: x\n", "b: {c: ~}\n"} {
+		var bn, on yaml.Node
+		if err := yaml.Unmarshal([]byte("a: {x: 1}\nb: {c: {d: 1}}\n"), &bn); err != nil {
+			t.Fatal(err)
+		}
+		if err := yaml.Unmarshal([]byte(over), &on); err != nil {
+			t.Fatal(err)
+		}
+		if err := mergeMapping(bn.Content[0], on.Content[0], ""); err == nil {
+			t.Errorf("merging %q replaced a mapping", over)
+		}
+	}
+}
+
+func TestEmptyServiceEnvChangesNothing(t *testing.T) {
+	m := catalog.Mode{}
+	d := sampleData(m, nil, false)
+	want, err := renderCompose(d, composeFragments(m, nil)[:len(composeFragments(m, nil))-1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, env := range []map[string]map[string]string{nil, {}, {"psama": {}}, {"psama": nil, "hpds": {}}} {
+		d.ServiceEnv = env
+		got, err := renderCompose(d, composeFragments(m, nil))
+		if err != nil {
+			t.Fatalf("ServiceEnv %v: %v", env, err)
+		}
+		if string(got) != string(want) {
+			t.Errorf("ServiceEnv %v changed the compose file:\n%s", env, got)
+		}
 	}
 }
 

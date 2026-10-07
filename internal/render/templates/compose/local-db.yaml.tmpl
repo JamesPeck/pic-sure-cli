@@ -18,6 +18,7 @@ services:
       - type: bind
         source: {{ q (path .FilesDir "db-init") }}
         target: /docker-entrypoint-initdb.d
+        bind: {create_host_path: false}
         read_only: true
     networks:
       - app
@@ -31,7 +32,6 @@ services:
       start_period: 15s
       interval: 10s
 
-  # Nothing that connects to MySQL starts before it is healthy.
   flyway-init:
     depends_on:
       picsure-db:

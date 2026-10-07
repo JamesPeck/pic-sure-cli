@@ -42,7 +42,10 @@ adapter sets them on every call, so `compose.yaml` never holds a secret.
 
 **Volumes.** Compose creates a declared volume only when a service mounts it.
 A helper that creates a stack volume first (certs, truststore, the HPDS key,
-genomic staging) must give it the stack labels itself.
+genomic staging) must give it the stack labels itself, plus
+`com.docker.compose.project=<name>` and `com.docker.compose.volume=<key>`;
+without the project label compose warns on every `up` that the volume
+wasn't created by compose.
 
 ## Templates and their AIO sources
 
@@ -98,7 +101,9 @@ Compose:
   as `${DB_DICTIONARY_PASSWORD}`, instead of the `dictionary.env` env file.
 - Bind mounts use the long syntax with absolute sources: rendered files and
   source trees from the host cache or a configured local source, not
-  `./repos`, `PICSURE_SRC` or `MIGRATIONS_SRC`.
+  `./repos`, `PICSURE_SRC` or `MIGRATIONS_SRC`. Every one sets
+  `create_host_path: false`, so a missing source fails the start instead of
+  becoming an empty directory; AIO did this for two of them.
 - The Flyway services are in the `migrate` profile and run with
   `compose run --rm`. psama, the operations service and the dictionary
   services no longer depend on them; pic-sure migrates before starting
@@ -114,7 +119,10 @@ Compose:
   properties, psama's truststore properties and a dev variant's JDWP agent.
 - Shared HPDS: the volume names follow the catalog (`shared-hpds-data`,
   `shared-hpds-genomic`, `hpds-genomic-copy`), and the seed's alpine is
-  pinned.
+  pinned. The seed records a finished copy as `.picsure-seeded` and compares
+  the published marker with that. AIO compared it with the copied
+  `.picsure-published`, which `cp -a` can write before the rest of the set,
+  so an interrupted copy passed as complete.
 - `LOGGING_API_KEY` has no `disabled` fallback: pic-sure always generates it.
 
 Dev variants:

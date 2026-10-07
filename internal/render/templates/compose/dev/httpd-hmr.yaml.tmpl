@@ -13,10 +13,12 @@ services:
       - type: bind
         source: {{ q .FrontendSrc }}
         target: /app
+        bind: {create_host_path: false}
       - frontend-node-modules:/app/node_modules
       - type: bind
         source: {{ q (path .FilesDir "httpd/vite.config.dev.ts") }}
         target: /app/vite.config.aio.ts
+        bind: {create_host_path: false}
         read_only: true
     ports:
       - "127.0.0.1:{{ .DevPort "httpd-hmr" }}:3000"

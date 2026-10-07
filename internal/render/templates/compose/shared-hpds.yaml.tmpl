@@ -10,6 +10,9 @@
 #   hpds-genomic-seed copies the shared genomic data into this stack's own
 #   hpds-genomic-copy whenever the published set changes, and HPDS mounts the
 #   copy, where it also writes its indexes.
+#
+# hpds's volume list restates local-hpds's with these two swapped in: a
+# fragment's list replaces the earlier one whole.
 
 services:
   hpds-genomic-seed:
@@ -20,14 +23,16 @@ services:
     volumes:
       - shared-hpds-genomic:/src:ro
       - hpds-genomic-copy:/dst
-    # The publisher's .picsure-published marker identifies the set. Copy only
-    # when it differs from the copy's, so restarts are instant.
+    # The publisher's .picsure-published marker identifies the set. A copy
+    # of it is written as .picsure-seeded once the whole set is copied, so
+    # restarts skip a finished copy and redo an interrupted one.
     command:
       - sh
       - -c
       - >-
-        if cmp -s /src/.picsure-published /dst/.picsure-published; then exit 0; fi;
-        find /dst -mindepth 1 -delete && cp -a /src/. /dst/
+        if cmp -s /src/.picsure-published /dst/.picsure-seeded; then exit 0; fi;
+        find /dst -mindepth 1 -delete && cp -a /src/. /dst/ &&
+        cp /src/.picsure-published /dst/.picsure-seeded
 
   hpds:
     depends_on:
