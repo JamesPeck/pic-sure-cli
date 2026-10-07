@@ -51,7 +51,7 @@ var specCommands = map[string]string{
 	"data load-genomic":   "",
 	"dictionary hydrate":  "", "dictionary load-csv": "", "dictionary load-facets": "", "dictionary weights": "",
 	"shared-data publish": "", "shared-data list": "", "shared-data remove": "",
-	"dev list": "052", "dev on": "052", "dev off": "052",
+	"dev list": "", "dev on": "", "dev off": "",
 	"db bootstrap": "",
 	"reset":        "", "destroy": "",
 	"cache list": "", "cache prune": "",

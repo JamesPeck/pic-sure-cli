@@ -1,10 +1,54 @@
-# Not implemented yet: exit 1, naming ticket 052.
-exitcode 1 pic-sure dev list
-stderr '^pic-sure: not implemented \(ticket 052\)$'
-! stdout .
-exitcode 1 pic-sure dev on psama
-stderr '^pic-sure: not implemented \(ticket 052\)$'
-! stdout .
-exitcode 1 pic-sure dev off psama
-stderr '^pic-sure: not implemented \(ticket 052\)$'
-! stdout .
+# dev list and dev on/off's refusals, before they change anything. The
+# on/off cycle is covered by the ops tests and the real runs.
+env XDG_CACHE_HOME=$WORK/cache
+
+# No stack here or above: exit 3.
+exitcode 3 pic-sure dev list
+stderr 'no pic-sure stack found'
+
+# list shows every variant, its port in this stack's dev_ports block, and
+# the source it needs.
+exec pic-sure --stack stack dev list
+cmp stdout list.txt
+exec pic-sure --stack stack --json dev list
+stdout '"name":"hpds","component":"pic-sure","services":\["hpds"\],"port":15012,"on":true,"source":"../pic-sure"'
+stdout '"name":"httpd-hmr","component":"frontend","services":\["httpd"\],"port":15016,"on":false,"source":""'
+
+# An unknown variant is exit 2, listing them.
+exitcode 2 pic-sure --stack stack dev on nope
+stderr 'no dev variant "nope"; want one of psama, hpds, gateway, operations, query, visualization, dictionary, httpd, httpd-hmr'
+exitcode 2 pic-sure --stack stack dev on psama --skip-step images
+stderr 'none can be skipped'
+
+# dev on needs the component's local source.
+exitcode 3 pic-sure --stack stack dev on httpd
+stderr 'dev httpd builds frontend from a local checkout; set it first: pic-sure config set components.frontend.source PATH'
+! exists docker.log
+
+# dev off on a variant that isn't on changes nothing.
+exec pic-sure --stack stack dev off psama
+stdout 'dev psama is already off'
+! exists docker.log
+
+-- stack/pic-sure.yaml --
+schema: 1
+name: demo
+auth: {mode: open, admin_email: admin@example.com}
+network: {dev_ports: {base: 15010}}
+components: {pic-sure: {source: ../pic-sure}}
+dev: {services: [hpds]}
+-- stack/.pic-sure/state.json --
+{"cli_version": "dev", "schema_version": 1, "initialized_at": "2026-10-07T12:00:00Z"}
+-- pic-sure/README --
+checkout
+-- list.txt --
+SERVICE        STATE  PORT             COMPONENT  SOURCE
+psama          off    127.0.0.1:15010  pic-sure   ../pic-sure
+hpds           on     127.0.0.1:15012  pic-sure   ../pic-sure
+gateway        off    127.0.0.1:15013  pic-sure   ../pic-sure
+operations     off    127.0.0.1:15014  pic-sure   ../pic-sure
+query          off    127.0.0.1:15015  pic-sure   ../pic-sure
+visualization  off    -                pic-sure   ../pic-sure
+dictionary     off    -                pic-sure   ../pic-sure
+httpd          off    -                frontend   (not set)
+httpd-hmr      off    127.0.0.1:15016  frontend   (not set)

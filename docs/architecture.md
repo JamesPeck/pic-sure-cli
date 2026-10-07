@@ -412,6 +412,19 @@ it.
   `list` and `remove NAME` open no stack and take no lock; `list --json` is
   `{"data_sets": [...]}`, `remove --json` is `{"name", "removed": [...]}`.
 
+- `dev.go` (052): `dev list` (`ops.DevList`: every variant with its port
+  on 127.0.0.1, whether it is on, and its component's source; `--json` is
+  `{"variants": [...]}`), and `dev on|off SERVICE`. Usage problems first:
+  an unknown variant (`ops.LookupDev`, exit 2, listing them) and any
+  `--skip-step`. Under the stack lock: `dev off` of a variant that isn't on
+  changes nothing; `dev on` needs the component's source and refuses httpd
+  beside httpd-hmr (`ops.CheckDevOn`, exit 3); then up's checks (an
+  initialised stack, `upSecrets`) and, for `on`, its port free or the
+  stack's own. It records the `dev on`/`dev off` operation and runs
+  `ops.DevSteps` with up's lazy-env Composer. `--json`'s data is
+  `{"service", "on", "services", "port", "source"}`. `dev off`'s text says
+  the service keeps the source build while the source is set (§7.3).
+
 | File | Commands | Ticket |
 |---|---|---|
 | `init.go` | `init` | 034 |
@@ -1220,6 +1233,21 @@ comes from the migrate and seed steps, or its recreation, so an update
 that changes nothing restarts nothing. A failure leaves the old images
 (their tags differ) and data in place, and the step error names the step
 a re-run resumes from.
+
+**Dev variants (052, `dev.go`).** §7.3. `DevSteps(d, st, doc, cfg, state,
+DevOptions{ConvergeOptions, Variant, On})` switches one variant: for `on`,
+the image step limited to the variant's component (with the variant
+already in `cfg.Dev.Services`, so it records `dev_images`); `dev-config`
+(writes `dev.services` to pic-sure.yaml through `doc`, after a successful
+build, and for `off` drops the variant's `dev_images`); up's render step
+with its rendered-file watch, up's `restart` step; and `dev-start`,
+`compose up -d --no-deps --wait` (new `ComposeUpOpts.NoDeps`) for the
+variant's services plus any other start service whose image the build
+retagged, since a source applies to the whole component. `dev off` doesn't
+build: the services keep the component's source build while the source is
+set. `DevList(cfg)`, `DevPort`, `LookupDev`, `CheckDevOn` and
+`ComponentSource` serve the command. httpd-hmr's `node` image tag
+(`images["node"]` from `.nvmrc`) is 053's.
 
 **Phenotype loader (042, `loader.go`).** §9.6's one loader, for `data
 demo` (046) and `data load-phenotype`. `LoadPhenotype(ctx, d, st, cfg,

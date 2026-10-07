@@ -83,6 +83,8 @@ const (
 type ComposeUpOpts struct {
 	// Services to start, along with their dependencies. Empty means all.
 	Services []string
+	// NoDeps adds --no-deps: start only Services, not what they depend on.
+	NoDeps bool
 	// Wait adds --wait: return only once the services are running and
 	// healthy, and fail if one exits or turns unhealthy instead.
 	Wait bool
@@ -241,6 +243,9 @@ func overrideFiles(dir string) ([]string, error) {
 // Up implements Composer.
 func (c *Compose) Up(ctx context.Context, opts ComposeUpOpts) error {
 	args := []string{"up", "-d"}
+	if opts.NoDeps {
+		args = append(args, "--no-deps")
+	}
 	if opts.Wait {
 		args = append(args, "--wait")
 		if opts.WaitTimeout > 0 {

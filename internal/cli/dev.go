@@ -1,6 +1,25 @@
 package cli
 
-import "github.com/spf13/cobra"
+import (
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"slices"
+	"strings"
+	"text/tabwriter"
+
+	"github.com/spf13/cobra"
+
+	"github.com/JamesPeck/pic-sure-cli/internal/cache"
+	"github.com/JamesPeck/pic-sure-cli/internal/catalog"
+	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
+	"github.com/JamesPeck/pic-sure-cli/internal/log"
+	"github.com/JamesPeck/pic-sure-cli/internal/netproxy"
+	"github.com/JamesPeck/pic-sure-cli/internal/ops"
+	"github.com/JamesPeck/pic-sure-cli/internal/stack"
+	"github.com/JamesPeck/pic-sure-cli/internal/steps"
+)
 
 func newDevCmd(a *App) *cobra.Command {
 	return newGroup("dev", "Run services from local source with debug ports",
@@ -8,19 +27,239 @@ func newDevCmd(a *App) *cobra.Command {
 			Use:   "list",
 			Short: "List the services that have a dev mode",
 			Args:  cobra.NoArgs,
-			RunE:  notImplemented("052"),
+			RunE:  a.devList,
 		},
 		&cobra.Command{
 			Use:   "on SERVICE",
 			Short: "Run SERVICE from local source",
-			Args:  cobra.ExactArgs(1),
-			RunE:  notImplemented("052"),
+			Long: `Build SERVICE's component from its local checkout
+(components.<component>.source), add SERVICE to dev.services, re-render and
+recreate SERVICE. A Java service also gets a JDWP debug port on 127.0.0.1,
+from the stack's network.dev_ports block; dev list shows it.
+
+Run it again after changing the source to rebuild and recreate.`,
+			Args: cobra.ExactArgs(1),
+			RunE: func(cmd *cobra.Command, args []string) error { return a.dev(cmd, args[0], true) },
 		},
 		&cobra.Command{
 			Use:   "off SERVICE",
-			Short: "Return SERVICE to its release image",
-			Args:  cobra.ExactArgs(1),
-			RunE:  notImplemented("052"),
+			Short: "Remove SERVICE's dev variant and debug port",
+			Long: `Remove SERVICE from dev.services, re-render and recreate SERVICE without
+its debug port. While components.<component>.source is set, SERVICE keeps
+running the build of that checkout, since a source applies to the whole
+component. To return to the release images, unset the source and run
+pic-sure up.`,
+			Args: cobra.ExactArgs(1),
+			RunE: func(cmd *cobra.Command, args []string) error { return a.dev(cmd, args[0], false) },
 		},
 	)
+}
+
+// devListReport is `dev list --json`'s data.
+type devListReport struct {
+	Variants []ops.DevVariantInfo `json:"variants"`
+}
+
+func (a *App) devList(cmd *cobra.Command, _ []string) error {
+	st, err := a.openStack(cmd)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = st.Close() }()
+	cfg, err := st.LoadConfig()
+	if err != nil {
+		return configError(err)
+	}
+	report := devListReport{Variants: ops.DevList(cfg)}
+	return a.printReport(report, func(w io.Writer) error { return writeDevList(w, report.Variants) })
+}
+
+func writeDevList(w io.Writer, vs []ops.DevVariantInfo) error {
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	_, _ = fmt.Fprintln(tw, "SERVICE\tSTATE\tPORT\tCOMPONENT\tSOURCE")
+	for _, v := range vs {
+		state, port, src := "off", "-", "(not set)"
+		if v.On {
+			state = "on"
+		}
+		if v.Port != 0 {
+			port = fmt.Sprintf("127.0.0.1:%d", v.Port)
+		}
+		if v.Source != "" {
+			src = v.Source
+		}
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", v.Name, state, port, v.Component, src)
+	}
+	return tw.Flush()
+}
+
+// devReport is `dev on|off --json`'s data.
+type devReport struct {
+	Service  string   `json:"service"`
+	On       bool     `json:"on"`
+	Services []string `json:"services"`
+	// Port is the debug (or HMR) port on 127.0.0.1 while on, else 0.
+	Port   int    `json:"port"`
+	Source string `json:"source"`
+}
+
+// dev is `dev on NAME` and `dev off NAME`.
+func (a *App) dev(cmd *cobra.Command, name string, on bool) (err error) {
+	v, err := ops.LookupDev(name)
+	if err != nil {
+		return err
+	}
+	if len(a.Global.SkipSteps) > 0 {
+		return exitcode.Usage("--skip-step: dev's steps depend on each other, so none can be skipped")
+	}
+	ctx := cmd.Context()
+	st, err := a.openStack(cmd)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = st.Close() }()
+	d := a.newDeps()
+	lock, err := a.lockStack(ctx, cmd, st, d.Sink)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = lock.Unlock() }()
+
+	doc, err := st.ReadConfigDoc()
+	if err != nil {
+		return configError(err)
+	}
+	cfg, err := checkConfigDoc(doc, st.Dir)
+	if err != nil {
+		return configError(err)
+	}
+	log.RegisterSecrets(cfg.Auth.AdminEmail)
+	report := &devReport{Service: v.Name, On: on, Services: v.Services, Source: ops.ComponentSource(cfg, v.Component)}
+	if !on && !slices.Contains(cfg.Dev.Services, v.Name) {
+		return a.finish(report, func(w io.Writer) error {
+			_, err := fmt.Fprintf(w, "dev %s is already off.\n", v.Name)
+			return err
+		})
+	}
+	if on {
+		if err := ops.CheckDevOn(cfg, v); err != nil {
+			return err
+		}
+	}
+	state, err := st.LoadState()
+	if errors.Is(err, fs.ErrNotExist) || err == nil && state.InitializedAt.IsZero() {
+		return exitcode.Precondition("the stack in %s isn't initialised; run `pic-sure init %s` to finish it", st.Dir, st.Dir)
+	}
+	if err != nil {
+		return err
+	}
+	sec, err := upSecrets(d, st, cfg)
+	if err != nil {
+		return err
+	}
+	if on {
+		if err := checkDevPort(cmd, d, st, cfg, v); err != nil {
+			return err
+		}
+	}
+	proxy, err := netproxy.New(netproxy.Config(cfg.Proxy), netproxy.CatalogServices())
+	if err != nil {
+		return exitcode.Usage("%w", err)
+	}
+	d.Git = d.Git.WithEnv(proxy.Env()...)
+	root, err := cache.DefaultRoot()
+	if err != nil {
+		return err
+	}
+	c, err := cache.Open(root, cache.Options{Git: d.Git, Holder: cmd.CommandPath()})
+	if err != nil {
+		return err
+	}
+	if err := registerStack(ctx, c, d.Sink, st, cfg.Name); err != nil {
+		return err
+	}
+
+	op := "dev off"
+	if on {
+		op = "dev on"
+	}
+	state.StartOperation(op, d.Clock.Now())
+	if err := st.SaveState(state); err != nil {
+		return err
+	}
+	plan, err := ops.DevSteps(d, st, doc, cfg, state, ops.DevOptions{
+		ConvergeOptions: ops.ConvergeOptions{
+			Cache:      c,
+			CLIVersion: a.Info.Version,
+			Compose:    a.upCompose(d, st, cfg, sec),
+		},
+		Variant: v.Name,
+		On:      on,
+	})
+	if err == nil {
+		err = steps.Run(ctx, d.Sink, plan, steps.Options{})
+	}
+	if ferr := finishUp(d, st, err); err == nil {
+		err = ferr
+	}
+	if err != nil {
+		return err
+	}
+	if on {
+		report.Port = ops.DevPort(cfg, v)
+	}
+	return a.finish(report, func(w io.Writer) error { return writeDev(w, report, v) })
+}
+
+func writeDev(w io.Writer, r *devReport, v catalog.DevVariant) error {
+	if r.On {
+		_, err := fmt.Fprintf(w, "dev %s is on: %s %s from %s", r.Service, strings.Join(r.Services, ", "), verb(r.Services, "runs", "run"), r.Source)
+		if err == nil && r.Port != 0 {
+			what := "debugger (JDWP)"
+			if v.Image != "" {
+				what = "dev server"
+			}
+			_, err = fmt.Fprintf(w, "; attach a %s to 127.0.0.1:%d", what, r.Port)
+		}
+		if err == nil {
+			_, err = fmt.Fprintln(w, ".")
+		}
+		return err
+	}
+	_, err := fmt.Fprintf(w, "dev %s is off: %s %s no debug port.\n", r.Service, strings.Join(r.Services, ", "), verb(r.Services, "has", "have"))
+	if err == nil && r.Source != "" {
+		_, err = fmt.Fprintf(w, "%s still %s the build of components.%s.source (%s), which applies to the whole component.\n"+
+			"To return to the release images: pic-sure config set components.%s.source '' && pic-sure up\n",
+			strings.Join(r.Services, ", "), verb(r.Services, "runs", "run"), v.Component, r.Source, v.Component)
+	}
+	return err
+}
+
+// verb is one or many by the number of services.
+func verb(services []string, one, many string) string {
+	if len(services) == 1 {
+		return one
+	}
+	return many
+}
+
+// checkDevPort makes sure the port dev on v publishes is free, or already
+// published by the stack's own containers, so another stack's or program's
+// port is exit 3 before anything is built.
+func checkDevPort(cmd *cobra.Command, d *ops.Deps, st *stack.Stack, cfg *stack.Config, v catalog.DevVariant) error {
+	port := ops.DevPort(cfg, v)
+	if port == 0 {
+		return nil
+	}
+	user, published, err := ops.StackNameInUse(cmd.Context(), d, cfg.Name, st.Dir)
+	if err != nil {
+		return err
+	}
+	if user != "" {
+		return exitcode.Precondition("the stack name %s is in use by another stack or compose project (%s)", cfg.Name, user)
+	}
+	if !published[port] && !(systemHost{}).PortFree(port) {
+		return exitcode.Precondition("port %d, dev %s's port from network.dev_ports.base (%d), is in use", port, v.Name, cfg.Network.DevPorts.Base)
+	}
+	return nil
 }
