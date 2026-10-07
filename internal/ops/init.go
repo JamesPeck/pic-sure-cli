@@ -138,9 +138,10 @@ func ResolveStep(d *Deps, st *stack.Stack, cfg *stack.Config, state *stack.State
 // records when the step runs, so it can follow the image step in one plan.
 func StackTruststoreStep(d *Deps, st *stack.Stack, cfg *stack.Config, state *stack.State) steps.Step {
 	inner := func() steps.Step { return TruststoreStep(d, st, cfg, psamaImage(state)) }
+	s := inner()
 	return steps.Step{
-		ID:    TruststoreStepID,
-		Title: "Build psama's truststore",
+		ID:    s.ID,
+		Title: s.Title,
 		Check: func(ctx context.Context) (bool, error) { return inner().Check(ctx) },
 		Apply: func(ctx context.Context, sink events.Sink) error { return inner().Apply(ctx, sink) },
 	}
@@ -294,8 +295,18 @@ func ChoosePorts(h Host, httpPort, httpsPort int, auto bool) (int, int, error) {
 		if hp, sp, ok := pair(DefaultHTTPPort, DefaultHTTPSPort); ok {
 			return hp, sp, nil
 		}
-		return 0, 0, exitcode.Precondition("the default ports %d and %d aren't both free; pass --http-port and --https-port, or --auto-ports to pick free ones",
-			DefaultHTTPPort, DefaultHTTPSPort)
+		var busy []string
+		if httpPort == 0 && !h.PortFree(DefaultHTTPPort) {
+			busy = append(busy, strconv.Itoa(DefaultHTTPPort))
+		}
+		if httpsPort == 0 && !h.PortFree(DefaultHTTPSPort) {
+			busy = append(busy, strconv.Itoa(DefaultHTTPSPort))
+		}
+		if len(busy) == 0 {
+			return 0, 0, exitcode.Usage("port %d is the other port's default; pass both --http-port and --https-port, or --auto-ports", httpPort+httpsPort)
+		}
+		return 0, 0, exitcode.Precondition("port %s is in use; pass --http-port and --https-port, or --auto-ports to pick free ones",
+			strings.Join(busy, " and "))
 	}
 	for i := range autoPortTries {
 		if hp, sp, ok := pair(AutoHTTPPort+i, AutoHTTPSPort+i); ok {

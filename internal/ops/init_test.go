@@ -43,7 +43,8 @@ func TestChoosePorts(t *testing.T) {
 		{name: "one given", https: 9443, wantHTTP: 80, wantS: 9443},
 		{name: "one given, auto", https: 9443, auto: true, wantHTTP: 8080, wantS: 9443},
 		{name: "one default busy", http: 8083, busy: []int{443}, wantCode: exitcode.CodePrecondition},
-		{name: "one given equal to the other's default", http: 443, wantCode: exitcode.CodePrecondition},
+		{name: "one given equal to the other's default", http: 443, wantCode: exitcode.CodeUsage},
+		{name: "one given equal to the other's default, auto", http: 443, auto: true, wantHTTP: 443, wantS: 8443},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h, s, err := ops.ChoosePorts(busyHost(tc.busy...), tc.http, tc.https, tc.auto)

@@ -117,8 +117,10 @@ type DoctorOptions struct {
 	ComposeErr error
 	// Network adds the reachability checks.
 	Network bool
-	// Config is the config of a stack that doesn't exist yet (init's), for
-	// the memory check, when Stack is nil.
+	// Config is the config of a stack init is creating or resuming, used
+	// as a Stack's would be when Stack is nil: its HPDS heap counts in the
+	// memory check (once: a running hpds of a stack of that name is taken
+	// for it), and its images.mode and proxy apply.
 	Config *stack.Config
 	// Building makes an old or missing buildx a failure, not a warning.
 	// A stack with images.mode build sets it too.
@@ -492,7 +494,8 @@ func (c *doctor) memoryCheck(ctx context.Context) {
 		heap := maxHeap(envValue(h.Config.Env, "JAVA_OPTS"))
 		runningTotal += heap
 		owner := h.Config.Labels[stack.LabelStack]
-		if c.opts.Stack != nil && h.Config.Labels[stack.LabelStackDir] == c.opts.Stack.Dir {
+		if c.opts.Stack != nil && h.Config.Labels[stack.LabelStackDir] == c.opts.Stack.Dir ||
+			c.opts.Stack == nil && c.opts.Config != nil && owner == c.opts.Config.Name {
 			thisRunning = true
 			owner += " (this stack)"
 		}

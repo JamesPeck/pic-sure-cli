@@ -49,9 +49,10 @@ TLS certificate, render the compose file, set up and migrate the database,
 seed it, install the HPDS key and start the services.
 
 Every config flag sets the pic-sure.yaml key its help names. Secrets are
-read from stdin only (--auth0-client-secret-stdin). Ports default to 80
-and 443 when they are free; --auto-ports picks a free pair from 8080/8443
-otherwise.
+read from stdin only (--auth0-client-secret-stdin, --db-root-password-stdin;
+with both, one per line in that order). Ports not given are 80 and 443,
+which must be free; --auto-ports takes the first free pair from 8080/8443
+instead.
 
 A DIR that already has a pic-sure.yaml is resumed: its config is used as it
 is, and the steps already done are skipped. On a stack init has finished it
@@ -255,9 +256,9 @@ func (r *initRun) readConfig() error {
 			return exitcode.Usage("--source %s: %v", s, err)
 		}
 	}
-	// Validation refuses ports inside the dev block, which preconditions
-	// chooses only later; until then use the first block clear of the
-	// ports given.
+	// Validation refuses clashing ports, but preconditions chooses the
+	// ports not given only later, on the host. Until then use what it
+	// would choose were every port free.
 	httpPort, err := portFlag(flags, "http-port")
 	if err != nil {
 		return err
@@ -266,8 +267,8 @@ func (r *initRun) readConfig() error {
 	if err != nil {
 		return err
 	}
-	base, _ := ops.ChooseDevPortsBase(anyPortFree{}, httpPort, httpsPort)
-	if err := r.doc.SetValue("network.dev_ports.base", base); err != nil {
+	auto, _ := flags.GetBool("auto-ports")
+	if err := r.setPorts(anyPortFree{}, httpPort, httpsPort, auto); err != nil {
 		return err
 	}
 	if r.cfg, err = r.doc.Config(); err != nil {
@@ -464,10 +465,23 @@ func (r *initRun) preconditions(ctx context.Context, sink events.Sink) error {
 		return err
 	}
 	auto, _ := flags.GetBool("auto-ports")
-	if httpPort, httpsPort, err = ops.ChoosePorts(systemHost{}, httpPort, httpsPort, auto); err != nil {
+	if err := r.setPorts(systemHost{}, httpPort, httpsPort, auto); err != nil {
 		return err
 	}
-	base, err := ops.ChooseDevPortsBase(systemHost{}, httpPort, httpsPort)
+	if r.cfg, err = r.doc.Config(); err != nil {
+		return flagProblems(err)
+	}
+	return nil
+}
+
+// setPorts chooses the ports (§6.5) on host h and sets them in the config
+// document.
+func (r *initRun) setPorts(h ops.Host, httpPort, httpsPort int, auto bool) error {
+	httpPort, httpsPort, err := ops.ChoosePorts(h, httpPort, httpsPort, auto)
+	if err != nil {
+		return err
+	}
+	base, err := ops.ChooseDevPortsBase(h, httpPort, httpsPort)
 	if err != nil {
 		return err
 	}
@@ -475,9 +489,6 @@ func (r *initRun) preconditions(ctx context.Context, sink events.Sink) error {
 		if err := r.doc.SetValue(key, v); err != nil {
 			return err
 		}
-	}
-	if r.cfg, err = r.doc.Config(); err != nil {
-		return flagProblems(err)
 	}
 	return nil
 }

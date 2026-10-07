@@ -966,8 +966,9 @@ init, and the parts `up` and `update` reuse.
   dir)` finds a container or volume of compose project `name`, or a volume
   labelled for stack `name`, whose stack-dir label isn't `dir`, and returns
   the host ports `dir`'s own containers publish.
-- Doctor's new `DoctorOptions.Config` is init's config before the stack
-  exists, so `memory` counts its HPDS heap.
+- Doctor's new `DoctorOptions.Config` is init's config, used without a
+  `Stack`: `memory` counts its HPDS heap once (a running hpds of a stack of
+  that name is taken for it).
 - `Summary` is init's report (URL, Auth0 URLs, token expiry, next steps);
   `PeekState(dir)` reads state.json without opening the stack.
 

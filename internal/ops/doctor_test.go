@@ -388,6 +388,16 @@ func TestDoctorMemory(t *testing.T) {
 		e.opts.Config = &cfg
 		wantCheck(t, e.run(), "memory", ops.CheckWarn, "this stack 20.0 GiB when up), more than Docker has")
 	})
+	t.Run("a stack init resumes, already running", func(t *testing.T) {
+		e := newDoctorEnv(t)
+		cfg := stack.DefaultConfig()
+		cfg.Name, cfg.HPDS.JavaOpts = "demo", "-Xmx16g"
+		e.opts.Config = &cfg
+		e.f.On(fakerunner.Glob("docker ps *")).Stdout("id0\n")
+		e.f.On(fakerunner.Exact("docker", "container", "inspect", "id0")).Stdout(
+			`[{"Config":{"Env":["JAVA_OPTS=-Xmx16g"],"Labels":{"` + stack.LabelStack + `":"demo"}}}]`)
+		wantCheck(t, e.run(), "memory", ops.CheckWarn, "HPDS heaps total 16.0 GiB (demo (this stack) 16.0 GiB)")
+	})
 	t.Run("this stack over when down only warns", func(t *testing.T) {
 		e := newDoctorEnv(t)
 		e.stack(t, func(c *stack.Config) { c.HPDS.JavaOpts = "-Xmx20g" })

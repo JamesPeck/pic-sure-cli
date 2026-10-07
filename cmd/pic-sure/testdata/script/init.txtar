@@ -37,6 +37,11 @@ exitcode 2 pic-sure init new --name demo --admin-email admin@example.com --auth-
 stderr '--skip-step bogus: init has no such step'
 exitcode 2 pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --skip-step db-bootstrap
 stderr '--skip-step db-bootstrap: init has no such step'
+
+# The admin email is personal data: the debug log of the flags redacts it.
+exitcode 2 pic-sure --log-level debug init new --name demo --admin-email admin@example.com --auth-mode open --skip-step bogus
+stderr 'flags="\[--admin-email=\[REDACTED\] '
+! stderr 'admin@example.com'
 ! exists new
 ! exists docker.log
 
@@ -90,11 +95,18 @@ stderr 'step release failed'
 ! exists new
 
 # Explicit ports inside the default dev block pass validation: the block
-# moves. (The run fails later, here at the release, or at the ports if the
-# host uses them.)
+# moves. The run fails later, at the release, or at the ports if the host
+# uses them.
 ! exec pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --http-port 15000 --https-port 15001
-! stderr 'dev'
+stderr 'step release failed|is in use'
 ! exists new
+
+# A port given that is the other's default is fine with --auto-ports, and a
+# usage error without it.
+exitcode 2 pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --http-port 443
+stderr 'port 443 is the other port''s default'
+! exec pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --http-port 443 --auto-ports
+stderr 'step release failed|is in use'
 
 # On a stack init finished, it does nothing and exits 0.
 exec pic-sure init done
