@@ -2265,7 +2265,7 @@ Ticket 038. The TUI renderer for an operation's events (§10.3).
   progress text and warnings, the running step's last `LiveTail` (8) log
   lines, and a failed step's last `FailTail` (20). Event text loses escape
   sequences, control characters (C1 too) and, in log lines, everything
-  before a `\r`. A progress or
+  before a `\r` (`CleanLine` does it for other screens' text). A progress or
   log event for an ID that isn't a running step goes under the last running
   step, or at the bottom when none runs; a warning no running step owns gets
   its own row. Ctrl-C asks first ("Press Ctrl-C again", withdrawn after 5 s
@@ -2367,7 +2367,8 @@ signal handler, so SIGINT and SIGTERM end the TUI through the context and
 the CLI exits 128+N. Ticket 001 removed its script layer: every action fails
 to start with "not implemented in v2 yet (ticket NNN)", the release-branch
 and dev-overlay lookups return nothing, and the archive lister fails.
-Tickets 040 and 047 rewire the dashboard and the load wizard.
+Ticket 040 rewired the dashboard (see its section); 047 rewires the load
+wizard.
 
 - **Landing (039).** It reads its directory (`detectStack`): no
   pic-sure.yaml offers set up; a pic-sure.yaml whose state.json lacks
@@ -2395,10 +2396,39 @@ still ships esc disabled, so the screens handle esc themselves.
 
 ## internal/dashboard
 
-The v1 dashboard. Its polls, log follower and actions report "not
-implemented in v2 yet" until ticket 040 rewires them. `pollCmd` and
-`TestPollCmdNotWedgedByOrphanGrandchild` stay only as the model for ticket
-003's grandchild handling; 040 deletes them.
+Ticket 040. The dashboard screen, embedded in the TUI (alt-screen).
+
+- **Reads.** `dashboard.Backend` is `Services` (`compose ps`), `Status`
+  (the `status` report, `--deep` with `deep`) and `FollowLogs` (`logs -f`
+  with the last 200 lines). The services pane polls every 2 s with a 10 s
+  timeout, the status pane every 15 s; each poll has at most one in flight.
+  `h` runs the deep check, which is cached (with its time) until an action
+  runs: `deepGen` drops a check that started before one. The log pane
+  follows the selected service; a follower that ends is restarted with a
+  backoff (2 s doubling to 30 s), and its new tail replaces the scrollback.
+  Leaving the dashboard cancels its context, which stops all of them.
+- **Actions** are pic-sure command lines (`Action.Args`): `r` restart the
+  selected service, `u` update, `m` migrate (each after a yes/no dialog),
+  `R` reset (with a keep-the-database choice) and `X` destroy, both after
+  the user types the stack's name, and then run with `--yes`. `l` (load
+  data) only says the load wizard isn't built (047). The dashboard sends
+  `RunMsg`; the embedder runs it and sends `ActionDoneMsg` back, which drops
+  the deep check and polls again.
+- `Owns(msg)` names the dashboard's own messages (ticks, poll results, log
+  lines), which the embedder routes to it while another screen shows.
+
+**Wiring.** `tui.Options.Dashboard` is the backend and `Options.Command`
+runs an action; the app shows it on the run screen (039's `runScreen`,
+which takes a success line) and returns to the dashboard when it closes, or
+to the landing when the stack is gone (destroy). In `internal/cli`
+(`tuidashboard.go`), `dashBackend` opens the stack as `ps`, `status` and
+`logs` would (their gate, no run log, warnings dropped) and redacts errors.
+`commandFromTUI` runs `pic-sure --stack DIR ARGS...` in-process on a child
+`App` with no terminal: `App.tuiSink` replaces the output mode's sink with
+the TUI's (the `Result` event becomes the returned error), log records go
+to it as `Log` events, and the summary the command prints is the result's
+`Summary`. A prompt the command would need (the gate's self-update) is
+refused as on a non-interactive run.
 
 ## internal/wizard
 

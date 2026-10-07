@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/JamesPeck/pic-sure-cli/internal/events"
 	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
 	"github.com/JamesPeck/pic-sure-cli/internal/log"
 	"github.com/JamesPeck/pic-sure-cli/internal/progress"
@@ -63,6 +64,10 @@ type App struct {
 	// tuiLog takes the log records for stderr while the full-screen TUI
 	// runs init (initFromTUI).
 	tuiLog atomic.Pointer[logEvents]
+	// tuiSink, when set, is the run's event sink in place of the one its
+	// output mode would choose: the full-screen TUI's, for a command the
+	// dashboard runs in-process (commandFromTUI).
+	tuiSink events.Sink
 	// interrupt cancels the running command's context as SIGINT would. The
 	// TUI renderer calls it when the user confirms Ctrl-C, which the
 	// terminal delivers as a key rather than a signal while it runs.
@@ -173,5 +178,7 @@ func (a *App) startTUI(ctx context.Context) error {
 		Animations: tui.AnimationsEnabled(a.Global.NoAnimations, os.Getenv),
 		Init:       a.initFromTUI,
 		Defaults:   wizardDefaults,
+		Dashboard:  dashBackend{a: a, dir: dir},
+		Command:    a.commandFromTUI,
 	})
 }

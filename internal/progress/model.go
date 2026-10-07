@@ -406,6 +406,9 @@ func lastN(lines []string, n int) []string {
 	return lines
 }
 
+// CleanLine is cleanLine, for screens that draw other command output.
+func CleanLine(s string) string { return cleanLine(s) }
+
 // cleanLine makes event text safe to draw: the text after its last carriage
 // return (a progress bar's final state), with escape sequences and other
 // control characters (C1 included) removed and tabs expanded.

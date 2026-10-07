@@ -12,6 +12,7 @@ import (
 	"github.com/JamesPeck/pic-sure-cli/internal/docker"
 	"github.com/JamesPeck/pic-sure-cli/internal/log"
 	"github.com/JamesPeck/pic-sure-cli/internal/ops"
+	"github.com/JamesPeck/pic-sure-cli/internal/stack"
 )
 
 func newStatusCmd(a *App) *cobra.Command {
@@ -44,6 +45,12 @@ func (a *App) status(cmd *cobra.Command, deep bool) error {
 		return err
 	}
 	defer func() { _ = st.Close() }()
+	report := a.statusReport(cmd, st, deep)
+	return a.printReport(report, func(w io.Writer) error { return writeStatus(w, report) })
+}
+
+// statusReport is status's report on st, its messages redacted.
+func (a *App) statusReport(cmd *cobra.Command, st *stack.Stack, deep bool) *ops.StatusReport {
 	d := a.newDeps()
 	opts := ops.StatusOptions{CLIVersion: a.Info.Version, Migrations: a.configMigrations(), Deep: deep}
 	if c, err := a.stackCompose(cmd, d.Runner, st); err == nil {
@@ -59,7 +66,7 @@ func (a *App) status(cmd *cobra.Command, deep bool) error {
 		dp.Data.Message = log.Redact(dp.Data.Message)
 		dp.HTTP.Message = log.Redact(dp.HTTP.Message)
 	}
-	return a.printReport(report, func(w io.Writer) error { return writeStatus(w, report) })
+	return report
 }
 
 // writeStatus is the human form of the report.

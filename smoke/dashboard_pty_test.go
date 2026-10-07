@@ -218,7 +218,7 @@ func TestTUIHonoursNoColor(t *testing.T) {
 	s := startPTYEnv(t, dir, []string{"TERM=xterm-256color", "COLORTERM=truecolor", "NO_COLOR=yes"}, "--no-animations")
 	s.waitFor("Dashboard")
 	s.send("\r")
-	s.waitFor("Services", "not implemented")
+	s.waitFor("Services", "Services unavailable")
 	s.send("q")
 	s.waitExit0()
 	s.mu.Lock()

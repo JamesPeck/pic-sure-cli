@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/JamesPeck/pic-sure-cli/internal/actions"
 	"github.com/JamesPeck/pic-sure-cli/internal/dashboard"
+	"github.com/JamesPeck/pic-sure-cli/internal/events"
 	"github.com/JamesPeck/pic-sure-cli/internal/stack"
 )
 
@@ -186,5 +188,59 @@ func TestFailedSetupKeepsItsAnswers(t *testing.T) {
 	a.Update(runClosedMsg{})
 	if a.lastSetup != nil {
 		t.Error("a finished setup was kept")
+	}
+}
+
+// A dashboard action runs on the run screen, and closing it returns to the
+// dashboard, which polls again; the dashboard's own messages reach it while
+// the run screen shows.
+func TestDashboardActionRoundTrip(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, stack.ConfigFile), []byte("schema: 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var got CommandRequest
+	a := newApp(context.Background(), Options{
+		Root: root, Start: ScreenDashboard,
+		Command: func(_ context.Context, req CommandRequest) (InitResult, error) {
+			got = req
+			req.Sink.Emit(events.StepStarted{ID: "restart", Title: "Restart hpds"})
+			req.Sink.Emit(events.StepDone{ID: "restart", Status: events.StepOK})
+			return InitResult{}, nil
+		},
+	})
+	a.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	a.Update(dashboard.RunMsg{Action: dashboard.Action{Title: "Restarting hpds", Done: "Restarted hpds", Args: []string{"restart", "hpds"}}})
+	if a.screen != ScreenRun || a.run == nil || a.dash == nil {
+		t.Fatal("RunMsg didn't open the run screen over the dashboard")
+	}
+	<-a.run.done
+	for !a.run.finished {
+		a.Update(a.run.listen())
+	}
+	if got.Dir != root || strings.Join(got.Args, " ") != "restart hpds" {
+		t.Errorf("command = %+v", got)
+	}
+	if v := a.content(); !strings.Contains(v, "Restarted hpds") || !strings.Contains(v, "Restart hpds") {
+		t.Errorf("run screen:\n%s", v)
+	}
+
+	_, cmd := a.Update(runClosedMsg{})
+	if a.screen != ScreenDashboard || a.run != nil || cmd == nil {
+		t.Fatalf("closing didn't return to the dashboard (screen %v)", a.screen)
+	}
+}
+
+// An action that removed the stack (destroy) returns to the landing.
+func TestDashboardActionThatRemovedTheStack(t *testing.T) {
+	a := newApp(context.Background(), Options{
+		Root: t.TempDir(), Start: ScreenDashboard,
+		Command: func(context.Context, CommandRequest) (InitResult, error) { return InitResult{}, nil },
+	})
+	a.Update(dashboard.RunMsg{Action: dashboard.Action{Title: "Destroying the stack", Args: []string{"--yes", "destroy"}}})
+	a.Update(runClosedMsg{})
+	if a.screen != ScreenLanding || a.dash != nil {
+		t.Errorf("screen %v, dashboard kept %v", a.screen, a.dash != nil)
 	}
 }

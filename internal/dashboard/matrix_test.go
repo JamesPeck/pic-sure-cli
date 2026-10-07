@@ -31,13 +31,13 @@ var dashMatrixSizes = [][2]int{
 // TestDashboardHelpLineMatrix renders the dashboard at each canonical size in
 // modeNormal (the help-line mode that U12 targets) and asserts:
 //   - At width <100: the reduced hint set ("↑/↓ select · r restart …") is used.
-//   - At width ≥100: the full legend (containing "p/m/s", "X uninstall") is used.
+//   - At width ≥100: the full legend (containing "m migrate", "X destroy") is used.
 //   - The view stays within the terminal box at every size.
 func TestDashboardHelpLineMatrix(t *testing.T) {
 	for _, sz := range dashMatrixSizes {
 		w, h := sz[0], sz[1]
 		t.Run(fmt.Sprintf("%dx%d", w, h), func(t *testing.T) {
-			m := testModel(t)
+			m, _ := testModel(t)
 			mm, _ := m.Update(tea.WindowSizeMsg{Width: w, Height: h})
 			m = mm.(*model)
 			// modeNormal is the default; the helpLine switch falls through to the
@@ -51,19 +51,19 @@ func TestDashboardHelpLineMatrix(t *testing.T) {
 					t.Errorf("%dx%d narrow: helpLine missing '↑/↓ select': %q", w, h, helpLine)
 				}
 				// The full legend's cryptic shorthands must NOT appear at narrow widths.
-				if strings.Contains(helpLine, "p/m/s") {
-					t.Errorf("%dx%d narrow: helpLine contains 'p/m/s' (full legend leaked): %q", w, h, helpLine)
+				if strings.Contains(helpLine, "m migrate") {
+					t.Errorf("%dx%d narrow: helpLine contains m migrate (full legend leaked): %q", w, h, helpLine)
 				}
-				if strings.Contains(helpLine, "X uninstall") {
-					t.Errorf("%dx%d narrow: helpLine contains 'X uninstall' (full legend leaked): %q", w, h, helpLine)
+				if strings.Contains(helpLine, "X destroy") {
+					t.Errorf("%dx%d narrow: helpLine contains X destroy (full legend leaked): %q", w, h, helpLine)
 				}
 			} else {
 				// Wide: full legend.
-				if !strings.Contains(helpLine, "p/m/s") {
-					t.Errorf("%dx%d wide: helpLine missing 'p/m/s': %q", w, h, helpLine)
+				if !strings.Contains(helpLine, "m migrate") {
+					t.Errorf("%dx%d wide: helpLine missing m migrate: %q", w, h, helpLine)
 				}
-				if !strings.Contains(helpLine, "X uninstall") {
-					t.Errorf("%dx%d wide: helpLine missing 'X uninstall': %q", w, h, helpLine)
+				if !strings.Contains(helpLine, "X destroy") {
+					t.Errorf("%dx%d wide: helpLine missing X destroy: %q", w, h, helpLine)
 				}
 			}
 
@@ -91,7 +91,7 @@ func TestDashboardHelpLineMatrix(t *testing.T) {
 func TestDashboardColorProfileSGR(t *testing.T) {
 	for _, sz := range [][2]int{{80, 24}, {200, 50}} {
 		w, h := sz[0], sz[1]
-		m := testModel(t)
+		m, _ := testModel(t)
 		mm, _ := m.Update(tea.WindowSizeMsg{Width: w, Height: h})
 		m = mm.(*model)
 		view := m.View().Content

@@ -6,41 +6,109 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/huh/v2"
 
-	"github.com/JamesPeck/pic-sure-cli/internal/actions"
 	"github.com/JamesPeck/pic-sure-cli/internal/dialog"
 )
 
-// startConfirm opens a huh dialog for an action. Destructive actions
-// require typing the action name; everything else is a yes/no confirm.
-func (m *model) startConfirm(act actions.Action) (tea.Model, tea.Cmd) {
+// The dashboard's actions. Each is the pic-sure command it runs.
+
+func restartAction(service string) (Action, string) {
+	return Action{
+		Title: "Restarting " + service,
+		Done:  "Restarted " + service,
+		Args:  []string{"restart", service},
+	}, fmt.Sprintf("Restarts the %s container.", service)
+}
+
+func updateAction() (Action, string) {
+	return Action{
+			Title: "Updating PIC-SURE",
+			Done:  "Update finished",
+			Args:  []string{"update"},
+		}, "Fetches the release, rebuilds what changed, runs the migrations,\n" +
+			"renews the introspection token and restarts what needs it.\n" +
+			"Data volumes are kept."
+}
+
+func migrateAction() (Action, string) {
+	return Action{
+		Title: "Migrating the databases",
+		Done:  "Migrations applied",
+		Args:  []string{"migrate"},
+	}, "Runs the pending Flyway migrations on the PIC-SURE and dictionary\ndatabases."
+}
+
+func resetAction(keepDB bool) Action {
+	a := Action{Title: "Resetting the stack", Done: "Stack reset; update starts it again", Args: []string{"--yes", "reset"}}
+	if keepDB {
+		a.Args = append(a.Args, "--keep-db")
+	}
+	return a
+}
+
+func destroyAction() Action {
+	return Action{Title: "Destroying the stack", Done: "Stack destroyed", Args: []string{"--yes", "destroy"}}
+}
+
+// startConfirm opens a yes/no dialog for act.
+func (m *model) startConfirm(act Action, describe string) (tea.Model, tea.Cmd) {
 	m.pending = &act
 	m.confirmOK = false
-	m.confirmText = ""
-
-	var field huh.Field
-	if act.Destructive {
-		word := act.ConfirmWord
-		field = huh.NewInput().
-			Title(fmt.Sprintf("⚠ %s — this destroys data", act.Name)).
-			Description(act.Describe + fmt.Sprintf("\n\nType %q to confirm (esc cancels):", word)).
-			Value(&m.confirmText).
-			Validate(func(s string) error {
-				if s != word {
-					return fmt.Errorf("type %q exactly to confirm", word)
-				}
-				return nil
-			})
-	} else {
-		field = huh.NewConfirm().
-			Title(fmt.Sprintf("Run %s?", m.pending.Name)).
-			Description(act.Describe).
-			Affirmative("Run").
-			Negative("Cancel").
-			Value(&m.confirmOK)
-	}
-
-	m.form = m.sizeForm(huh.NewForm(huh.NewGroup(field)).WithShowHelp(true))
+	m.form = m.sizeForm(huh.NewForm(huh.NewGroup(huh.NewConfirm().
+		Title(act.Title + "?").
+		Description(describe).
+		Affirmative("Run").
+		Negative("Cancel").
+		Value(&m.confirmOK))).WithShowHelp(true))
 	m.mode = modeConfirm
+	return m, m.form.Init()
+}
+
+// startTeardown opens the typed confirmation for reset or destroy: the user
+// types the stack's name, as `pic-sure reset` and `destroy` ask on a terminal.
+func (m *model) startTeardown(destroy bool) (tea.Model, tea.Cmd) {
+	name := m.stackName()
+	if name == "" {
+		m.lastResult = "the stack's name isn't known yet; wait for the status to load"
+		return m, nil
+	}
+	m.teardownDestroy = destroy
+	m.keepDB = false
+	m.confirmText = ""
+	typed := huh.NewInput().
+		Title(fmt.Sprintf("Type the stack's name, %s, to confirm", name)).
+		Value(&m.confirmText).
+		Validate(func(s string) error {
+			if s != name {
+				return fmt.Errorf("type %q exactly to confirm", name)
+			}
+			return nil
+		})
+	var fields []huh.Field
+	if destroy {
+		fields = []huh.Field{
+			huh.NewNote().
+				Title("⚠ Destroy — this deletes the stack").
+				Description("Stops and removes the containers and every volume of this stack,\n" +
+					"the database included, and then the files pic-sure created in\n" +
+					fmt.Sprintf("%s. Files you added there are kept.", m.root)),
+			typed,
+		}
+	} else {
+		fields = []huh.Field{
+			huh.NewSelect[bool]().
+				Title("⚠ Reset — this deletes data").
+				Description("Stops the stack and removes its data volumes and TLS certificate.\n"+
+					"The config, secrets and logs are kept; update starts it again.").
+				Value(&m.keepDB).
+				Options(
+					huh.NewOption("Remove the database too", false),
+					huh.NewOption("Keep the database", true),
+				),
+			typed,
+		}
+	}
+	m.form = m.sizeForm(huh.NewForm(huh.NewGroup(fields...)).WithShowHelp(true))
+	m.mode = modeTeardown
 	return m, m.form.Init()
 }
 
@@ -49,55 +117,12 @@ func (m *model) startConfirm(act actions.Action) (tea.Model, tea.Cmd) {
 // to the terminal, lays the form out wider than the pane so lipgloss re-wraps
 // every line inside it, mangling titles/descriptions below 120 cols.
 func (m *model) sizeForm(f *huh.Form) *huh.Form {
-	_, cols := m.actionPaneSize() // form-pane content width = m.width-leftWidth()-8
+	cols := m.formWidth()
 	// -5 = the frame's chrome rows around the form pane content: header (1) +
 	// pane border top/bottom (2) + footer help line (1), plus 1 row of slack
 	// so the composed frame can never exceed the terminal box.
 	height := max(m.height-5, 8)
 	return dialog.Fit(f, cols, height)
-}
-
-// startPicker opens the demo-data dataset picker (the only parameterless ETL
-// entry points; everything else needs file paths — use the CLI for those).
-// The picker IS the consent (spec consent model: pickers carry a Cancel row
-// and dispatch on selection — no second confirm), so the description carries
-// the REPLACES warning itself.
-func (m *model) startPicker() (tea.Model, tea.Cmd) {
-	// Preselect the default dataset, and bind Value BEFORE Options: huh
-	// computes the option viewport's scroll offset when Options() runs, from
-	// the accessor's CURRENT value — an empty accessor matches the Cancel
-	// option ("") and opens the picker scrolled to the bottom with the
-	// cursor out of sight.
-	m.pickedDataset = "nhanes"
-	m.form = m.sizeForm(huh.NewForm(huh.NewGroup(
-		huh.NewSelect[string]().
-			Title("Load demo data").
-			Description("REPLACES the phenotype data in the hpds-data volume with the\nselected dataset, then re-hydrates the dictionary database.").
-			Value(&m.pickedDataset).
-			Options(
-				huh.NewOption("NHANES (default demo dataset)", "nhanes"),
-				huh.NewOption("Synthea 10k", "synthea"),
-				huh.NewOption("1000 Genomes", "1000genomes"),
-				huh.NewOption("All three combined", "all"),
-				huh.NewOption("Cancel", ""),
-			),
-	)))
-	m.mode = modePick
-	return m, m.form.Init()
-}
-
-// startReset opens the combined reset dialog (scope keep/all + repos toggle +
-// typed-word confirm), the same form the landing screen uses — built by
-// dialog.ResetForm and sized here to the dashboard's form pane.
-func (m *model) startReset() (tea.Model, tea.Cmd) {
-	m.resetScope = "keep"
-	m.resetRepos = false
-	m.confirmText = ""
-	word := actions.Reset().ConfirmWord
-
-	m.form = m.sizeForm(dialog.ResetForm(&m.resetScope, &m.resetRepos, &m.confirmText, word))
-	m.mode = modeReset
-	return m, m.form.Init()
 }
 
 func (m *model) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -108,61 +133,38 @@ func (m *model) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch m.form.State {
 	case huh.StateCompleted:
-		switch m.mode {
-		case modePick:
-			// The picker is the consent: dispatch on selection, no second
-			// confirm (spec consent model — Cancel is the empty option).
-			choice := m.pickedDataset
-			m.form = nil
-			if choice == "" {
-				m.mode = modeNormal
-				return m, nil
-			}
-			return m.startAction(actions.DemoData(choice))
-		case modeReset:
-			act := actions.ResetWith(m.resetScope == "all", m.resetRepos)
-			m.form = nil
-			// Re-validate the typed word at the dispatch seam (defense in
-			// depth: the form's own Validate already gates real input).
-			if !actions.ConfirmAccepted(act, false, m.confirmText) {
-				m.mode = modeNormal
-				return m, nil
-			}
-			return m.startAction(act)
-		case modeConfirm:
-			act := m.pending
-			m.form = nil
-			if !actions.ConfirmAccepted(*act, m.confirmOK, m.confirmText) {
-				m.mode = modeNormal
-				return m, nil
-			}
-			return m.startAction(*act)
-		}
-	case huh.StateAborted:
 		m.form = nil
 		m.mode = modeNormal
+		switch {
+		case m.pending != nil:
+			act := *m.pending
+			m.pending = nil
+			if !m.confirmOK {
+				return m, nil
+			}
+			return m, run(act)
+		case m.confirmText != m.stackName():
+			// The form's own validation gates real input; this guards the
+			// dispatch against a name that changed while it was open.
+			return m, nil
+		case m.teardownDestroy:
+			return m, run(destroyAction())
+		default:
+			return m, run(resetAction(m.keepDB))
+		}
+	case huh.StateAborted:
+		m.closeForm()
 		return m, nil
 	}
 	return m, cmd
 }
 
-func (m *model) startAction(act actions.Action) (tea.Model, tea.Cmd) {
-	rows, cols := m.actionPaneSize()
-	runner, err := startRunner(m.root, act, rows, cols)
-	if err != nil {
-		m.lastResult = fmt.Sprintf("%s failed to start: %v", act.Name, err)
-		m.mode = modeNormal
-		return m, nil
-	}
-	m.runner = runner
-	m.actionName = act.Name
-	m.actionAbortNote = act.AbortNote
-	m.actionOut = actions.NewOutputBuffer()
-	m.actionView.SetContent("")
-	m.mode = modeActing
-	// Fresh run: bump the sequence so any grace timer armed by a previous
-	// run's abort is discarded as stale, and clear leftover abort state.
-	m.actionSeq++
-	m.confirmingAbort, m.aborted, m.killOffered, m.lastAborted = false, false, false, false
-	return m, runner.WaitData()
+func (m *model) closeForm() {
+	m.form = nil
+	m.pending = nil
+	m.mode = modeNormal
+}
+
+func run(act Action) tea.Cmd {
+	return func() tea.Msg { return RunMsg{Action: act} }
 }

@@ -2,6 +2,8 @@ package tui
 
 import (
 	"context"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -9,6 +11,7 @@ import (
 	"github.com/charmbracelet/colorprofile"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/dashboard"
+	"github.com/JamesPeck/pic-sure-cli/internal/events"
 	"github.com/JamesPeck/pic-sure-cli/internal/ops"
 	"github.com/JamesPeck/pic-sure-cli/internal/stack"
 	"github.com/JamesPeck/pic-sure-cli/internal/styles"
@@ -37,6 +40,21 @@ type Options struct {
 	// Defaults is the config the setup wizard opens with for a new stack
 	// in dir: free ports, a name. Nil means stack.DefaultConfig.
 	Defaults func(dir string) stack.Config
+	// Dashboard reads the stack in Root for the dashboard.
+	Dashboard dashboard.Backend
+	// Command runs a pic-sure command line in-process for the dashboard's
+	// actions, sending its events to req.Sink.
+	Command func(ctx context.Context, req CommandRequest) (InitResult, error)
+}
+
+// CommandRequest is a command the dashboard asks Options.Command to run.
+type CommandRequest struct {
+	// Dir is the stack directory, which the command gets as --stack.
+	Dir string
+	// Args is the rest of the command line, such as ["restart", "hpds"].
+	Args []string
+	// Sink receives the command's events.
+	Sink events.Sink
 }
 
 // openWizardMsg asks the app to open the setup wizard.
@@ -70,13 +88,17 @@ type app struct {
 	opts          Options
 	width, height int
 
-	screen   Screen
-	landing  *landing
-	dash     tea.Model
-	activity *activity
-	wizard   *wizardScreen
-	load     *loadScreen
-	run      *runScreen
+	screen  Screen
+	landing *landing
+	dash    tea.Model
+	// dashCancel stops the dashboard's polls and log follower.
+	dashCancel context.CancelFunc
+	// runFromDash is set while the run screen runs a dashboard action.
+	runFromDash bool
+	activity    *activity
+	wizard      *wizardScreen
+	load        *loadScreen
+	run         *runScreen
 	// lastSetup is the wizard's last confirmed setup, kept while an init
 	// of it failed before writing the stack, so Set up reopens it.
 	lastSetup *wizardDoneMsg
@@ -86,7 +108,7 @@ func newApp(ctx context.Context, o Options) *app {
 	a := &app{ctx: ctx, opts: o, screen: ScreenLanding}
 	a.landing = newLanding(o.Root, detectStack(o.Root), o.Animations)
 	if o.Start == ScreenDashboard {
-		a.dash = dashboard.New(o.Root)
+		a.newDashboard()
 		a.screen = ScreenDashboard
 	}
 	return a
@@ -154,8 +176,11 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a.openDashboard()
 
 	case dashboard.BackMsg:
-		a.dash = nil
+		a.closeDashboard()
 		return a.openLanding()
+
+	case dashboard.RunMsg:
+		return a.startAction(msg.Action)
 
 	case runActionMsg:
 		// The load screen emits runActionMsg to launch its phenotype load;
@@ -209,6 +234,9 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a.startInit(InitRequest{Dir: a.opts.Root})
 
 	case runClosedMsg:
+		if a.runFromDash {
+			return a.actionClosed()
+		}
 		failed := false
 		if a.run != nil {
 			a.run.close()
@@ -236,6 +264,13 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.landing.result = "data load cancelled"
 		}
 		return a, a.openLandingCmd()
+	}
+
+	// The dashboard's polls and log lines reach it whichever screen shows.
+	if a.dash != nil && dashboard.Owns(msg) {
+		var cmd tea.Cmd
+		a.dash, cmd = a.dash.Update(msg)
+		return a, cmd
 	}
 
 	// --- route everything else to the active screen ---
@@ -282,9 +317,63 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 }
 
+func (a *app) newDashboard() {
+	ctx, cancel := context.WithCancel(a.ctx)
+	b := a.opts.Dashboard
+	if b == nil {
+		b = noBackend{}
+	}
+	a.dash, a.dashCancel = dashboard.New(ctx, a.opts.Root, b), cancel
+}
+
+func (a *app) closeDashboard() {
+	if a.dashCancel != nil {
+		a.dashCancel()
+	}
+	a.dash, a.dashCancel = nil, nil
+}
+
+// startAction opens the run screen on a dashboard action.
+func (a *app) startAction(act dashboard.Action) (tea.Model, tea.Cmd) {
+	if a.opts.Command == nil {
+		return a, nil
+	}
+	command := a.opts.Command
+	run := func(ctx context.Context, req InitRequest) (InitResult, error) {
+		return command(ctx, CommandRequest{Dir: req.Dir, Args: act.Args, Sink: req.Sink})
+	}
+	a.run = newRunScreen(a.ctx, act.Title, run, InitRequest{Dir: a.opts.Root}, a.opts.Animations)
+	a.run.doneText = act.Done
+	a.run.setSize(a.width, a.height)
+	a.runFromDash = true
+	a.screen = ScreenRun
+	return a, a.run.init()
+}
+
+// actionClosed leaves a dashboard action's run screen: back to the
+// dashboard, or to the landing when the action removed the stack.
+func (a *app) actionClosed() (tea.Model, tea.Cmd) {
+	a.runFromDash = false
+	if a.run != nil {
+		a.run.close()
+		a.run = nil
+	}
+	if detectStack(a.opts.Root) == noStack {
+		a.closeDashboard()
+		return a, a.openLandingCmd()
+	}
+	if a.dash == nil {
+		return a, a.openLandingCmd()
+	}
+	a.screen = ScreenDashboard
+	var cmd tea.Cmd
+	a.dash, cmd = a.dash.Update(dashboard.ActionDoneMsg{})
+	return a, cmd
+}
+
 func (a *app) openDashboard() (tea.Model, tea.Cmd) {
 	a.landing.stopAnimations()
-	a.dash = dashboard.New(a.opts.Root)
+	a.newDashboard()
 	a.screen = ScreenDashboard
 	// Deliver the current size before Init so the first frame is laid out.
 	var cmd tea.Cmd
@@ -347,3 +436,14 @@ func (a *app) content() string {
 	}
 	return a.landing.view()
 }
+
+// noBackend is the dashboard's backend when the program has none.
+type noBackend struct{}
+
+var errNoBackend = errors.New("the dashboard can't read the stack here")
+
+func (noBackend) Services(context.Context) ([]ops.StatusService, error) { return nil, errNoBackend }
+
+func (noBackend) Status(context.Context, bool) (*ops.StatusReport, error) { return nil, errNoBackend }
+
+func (noBackend) FollowLogs(context.Context, string, io.Writer) error { return errNoBackend }

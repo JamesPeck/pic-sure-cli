@@ -82,6 +82,9 @@ type output struct {
 }
 
 func (a *App) output() *output {
+	if a.out == nil && a.tuiSink != nil {
+		a.out = &output{mode: modeTUI, sink: &runSink{Sink: a.tuiSink}}
+	}
 	if a.out == nil {
 		mode := selectMode(a.Global, a.IsTerminal(), os.Getenv)
 		o := &output{mode: mode}

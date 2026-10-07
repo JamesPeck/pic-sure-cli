@@ -63,12 +63,14 @@ var (
 	runFooterStyle = lipgloss.NewStyle().Faint(true).Padding(0, 1)
 )
 
-// runScreen runs init in-process and shows its steps with an embedded
-// progress.Model. Ctrl-C twice cancels it; the gate's
+// runScreen runs an operation in-process (init, or a dashboard action) and
+// shows its steps with an embedded progress.Model. Ctrl-C twice cancels it; the gate's
 // question opens a yes/no dialog.
 type runScreen struct {
 	title string
-	prog  progress.Model
+	// doneText is the line shown when the operation succeeds.
+	doneText string
+	prog     progress.Model
 
 	msgs   chan tea.Msg
 	stop   chan struct{} // closed when the screen goes, so the operation never blocks on it
@@ -86,15 +88,16 @@ type runScreen struct {
 	width, height int
 }
 
-// newRunScreen starts init on req in its own goroutine.
+// newRunScreen starts run on req in its own goroutine.
 func newRunScreen(ctx context.Context, title string, run func(context.Context, InitRequest) (InitResult, error), req InitRequest, animations bool) *runScreen {
 	ctx, cancel := context.WithCancelCause(ctx)
 	s := &runScreen{
-		title:  title,
-		msgs:   make(chan tea.Msg, 64),
-		stop:   make(chan struct{}),
-		cancel: cancel,
-		done:   make(chan struct{}),
+		title:    title,
+		doneText: "Setup finished",
+		msgs:     make(chan tea.Msg, 64),
+		stop:     make(chan struct{}),
+		cancel:   cancel,
+		done:     make(chan struct{}),
 	}
 	s.prog = progress.New(progress.Options{
 		Animations: animations,
@@ -257,11 +260,11 @@ func (s *runScreen) view() string {
 		parts = append(parts, s.askDlg.View())
 		footer = "enter answer · esc no"
 	case s.finished && s.err == nil:
-		parts = append(parts, styles.OK.Render("✓ Setup finished"), strings.TrimRight(s.res.Summary, "\n"))
-		footer = "enter back to the menu"
+		parts = append(parts, styles.OK.Render("✓ "+s.doneText), strings.TrimRight(s.res.Summary, "\n"))
+		footer = "enter to go back"
 	case s.finished:
 		parts = append(parts, styles.Bad.Render("✗ "+s.err.Error()))
-		footer = "enter back to the menu"
+		footer = "enter to go back"
 	default:
 		footer = "ctrl+c twice to cancel"
 	}

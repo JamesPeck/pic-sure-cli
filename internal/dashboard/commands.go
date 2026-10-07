@@ -2,39 +2,38 @@ package dashboard
 
 import (
 	"context"
-	"errors"
-	"os/exec"
-	"path/filepath"
-	"syscall"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/JamesPeck/pic-sure-cli/internal/contract"
+	"github.com/JamesPeck/pic-sure-cli/internal/ops"
 )
-
-// errNotImplemented is what every dashboard read reports until ticket 040
-// polls the compose adapter (017) and the v2 status report (027) in-process.
-var errNotImplemented = errors.New("not implemented in v2 yet (ticket 040)")
 
 const (
 	servicesInterval = 2 * time.Second
 	statusInterval   = 15 * time.Second
+
+	// servicesTimeout bounds one `compose ps`, so a hung daemon can't
+	// wedge the pane: only one poll runs at a time.
+	servicesTimeout = 10 * time.Second
+	// statusTimeout bounds one status report, which inspects images and
+	// checks the migrations.
+	statusTimeout = 60 * time.Second
+	// deepTimeout bounds `status --deep`, whose probes take up to 25 s each.
+	deepTimeout = 2 * time.Minute
 )
 
 // Log-follower restart backoff: a dead follower is restarted after a delay
 // that doubles on each consecutive failed restart, capped at logRetryMax, so a
-// service whose `compose logs -f` keeps failing is retried ever less often
-// instead of every servicesInterval. The delay resets once a session delivers
-// real lines.
+// service whose `compose logs -f` keeps failing is retried ever less often.
+// The delay resets once a session delivers real lines.
 const (
 	logRetryBase = 2 * time.Second
 	logRetryMax  = 30 * time.Second
 )
 
 // nextLogRetryDelay computes the next backoff from the previous one: it starts
-// at logRetryBase and doubles up to logRetryMax. Pure so tests can assert the
-// schedule grows without sleeping.
+// at logRetryBase and doubles up to logRetryMax.
 func nextLogRetryDelay(prev time.Duration) time.Duration {
 	if prev < logRetryBase {
 		return logRetryBase
@@ -50,12 +49,20 @@ type (
 	statusTickMsg   struct{}
 
 	servicesMsg struct {
-		services []contract.ComposeService
+		services []ops.StatusService
 		err      error
 	}
 	statusMsg struct {
-		status *contract.Status
+		report *ops.StatusReport
 		err    error
+	}
+	// deepMsg is a deep check's result. gen is the deepGen it started
+	// under: an action since then makes it stale.
+	deepMsg struct {
+		gen    int
+		report *ops.StatusReport
+		err    error
+		at     time.Time
 	}
 
 	logLinesMsg struct {
@@ -86,33 +93,29 @@ func statusTick() tea.Cmd {
 	return tea.Tick(statusInterval, func(time.Time) tea.Msg { return statusTickMsg{} })
 }
 
-// pollCmd builds a context-bound `bash <script> <args>` poll. No v2 code
-// calls it: it stays so TestPollCmdNotWedgedByOrphanGrandchild keeps
-// compiling as the model for the exec runner's grandchild handling (ticket
-// 003). Ticket 040 deletes both.
-//
-// The script's own context kill only reaches bash, but a script that runs
-// `docker compose` as a non-exec'd child hands the grandchild the stdout
-// pipe. On a context timeout CommandContext would kill bash alone; the
-// orphaned docker process keeps the write end open and Wait blocks on the
-// I/O-copy goroutine until EOF — forever if the daemon is hung, silently
-// wedging the poll. So run the poll in its own process group and bring the
-// whole group down on cancel; WaitDelay is a backstop in case a process
-// escapes the group.
-func pollCmd(ctx context.Context, root, script string, args ...string) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, "bash", append([]string{filepath.Join(root, script)}, args...)...)
-	cmd.Dir = root
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	// SIGKILL, not SIGTERM: a hung-daemon grandchild may ignore TERM, and polls have nothing to drain.
-	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
-	cmd.WaitDelay = 2 * time.Second
-	return cmd
+func pollServices(ctx context.Context, b Backend) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(ctx, servicesTimeout)
+		defer cancel()
+		services, err := b.Services(ctx)
+		return servicesMsg{services: services, err: err}
+	}
 }
 
-func pollServices(string) tea.Cmd {
-	return func() tea.Msg { return servicesMsg{err: errNotImplemented} }
+func pollStatus(ctx context.Context, b Backend) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(ctx, statusTimeout)
+		defer cancel()
+		report, err := b.Status(ctx, false)
+		return statusMsg{report: report, err: err}
+	}
 }
 
-func pollStatus(string) tea.Cmd {
-	return func() tea.Msg { return statusMsg{err: errNotImplemented} }
+func probeDeep(ctx context.Context, b Backend, gen int) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(ctx, deepTimeout)
+		defer cancel()
+		report, err := b.Status(ctx, true)
+		return deepMsg{gen: gen, report: report, err: err, at: time.Now()}
+	}
 }

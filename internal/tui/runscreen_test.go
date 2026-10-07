@@ -54,7 +54,7 @@ func TestRunScreenShowsStepsAndSummary(t *testing.T) {
 		t.Errorf("init ran on %q", got.Dir)
 	}
 	view := plainView(s)
-	for _, want := range []string{"Fetch the release", "Setup finished", "https://localhost:8443/", "enter back to the menu"} {
+	for _, want := range []string{"Fetch the release", "Setup finished", "https://localhost:8443/", "enter to go back"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view lacks %q:\n%s", want, view)
 		}
