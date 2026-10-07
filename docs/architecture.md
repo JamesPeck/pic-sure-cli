@@ -1457,14 +1457,14 @@ GitHub API root (mirrors, tests).
   (keeping its mode) and rename it over the binary. The running version,
   or a latest release older than it, is a no-op; an explicit older `--to`
   downgrades.
-- Signatures: with a `checksums.txt.sigstore.json` asset and cosign on PATH,
-  `CosignVerifier` runs `cosign verify-blob`, accepting only a keyless
-  signature from the repo's `release.yml` for the release's own tag, so an
-  older release's signed assets can't pass for a newer one; failure is
-  exit 1.
-  Without cosign or without a bundle the update warns and relies on the
-  checksum. `RequireSignature` makes both errors; set it once releases are
-  signed.
+- Signatures: every v2 release carries `checksums.txt.sigstore.json`
+  (`.goreleaser.yaml`), so a release without it is refused (exit 1). With
+  cosign on PATH, `CosignVerifier` runs `cosign verify-blob`, accepting only
+  a keyless signature from the repo's `release.yml` for the release's own
+  tag, so an older release's signed assets can't pass for a newer one;
+  failure is exit 1. Without cosign the update warns and relies on the
+  checksum, as `install.sh` does; `RequireSignature` makes that an error
+  too (exit 3).
 - `SelfUpdate(ctx, version)` (`release.SelfUpdater`, the gate's action):
   `Install`, then `syscall.Exec` the new binary with the process's argv and
   environment plus `PIC_SURE_SELF_UPDATED=<version>`, so it doesn't

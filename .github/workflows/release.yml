@@ -2,23 +2,30 @@ name: Release
 
 on:
   push:
-    tags: ["v*"]
+    tags: ["v2.*"]
 
-permissions:
-  contents: read
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   check:
-    name: Test + lint
+    name: Check
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     # Mirror ci.yml so the release gate is no weaker than the per-PR gate:
     # the PTY end-to-end test runs here too instead of self-skipping under CI.
     env:
       PICSURE_PTY_TEST: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
@@ -40,77 +47,83 @@ jobs:
         run: make check
 
       - name: Shellcheck
-        run: |
-          shellcheck install.sh
+        run: shellcheck install.sh smoke/install_test.sh
 
-  build:
-    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+      - name: GoReleaser config check
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          version: v2.18.2
+          args: check
+
+      - name: Snapshot build
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          version: v2.18.2
+          args: release --snapshot --clean
+
+      - name: install.sh tests
+        run: bash smoke/install_test.sh dist
+
+  release:
+    name: Build, sign, attest, publish
     needs: check
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        goos: [linux, darwin]
-        goarch: [amd64, arm64]
+    permissions:
+      contents: write # create the release and upload its assets
+      id-token: write # keyless cosign signature and the provenance attestation
+      attestations: write # store the provenance attestation
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # GoReleaser needs the tags to find the previous release
+          persist-credentials: false
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
-      # Asset naming is a contract with install.sh:
-      # pic-sure_<os>_<arch>.tar.gz
-      - name: Build
-        run: |
-          make build-release \
-            GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
-            VERSION=${{ github.ref_name }}
-          tar -C dist -czf "pic-sure_${{ matrix.goos }}_${{ matrix.goarch }}.tar.gz" pic-sure
-
-      # The runner is linux/amd64, so only that artifact is directly runnable.
-      # Assert the tag was wired into the binary via the Makefile ldflags
-      # (-X main.version): catches a broken ldflags/variable-name mismatch or
-      # an un-embedded "dev" default before the release is published.
-      - name: Verify embedded version matches the tag
-        if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
-        run: |
-          out="$(dist/pic-sure --version)"
-          echo "$out"
-          echo "$out" | grep -F -- "${{ github.ref_name }}" \
-            || { echo "::error::--version output '$out' does not contain the tag ${{ github.ref_name }}" >&2; exit 1; }
-
-      - uses: actions/upload-artifact@v4
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:
-          name: pic-sure_${{ matrix.goos }}_${{ matrix.goarch }}
-          path: pic-sure_${{ matrix.goos }}_${{ matrix.goarch }}.tar.gz
-          if-no-files-found: error
+          cosign-release: v3.1.3
 
-  publish:
-    name: Publish release
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/download-artifact@v4
+      - uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
-          path: dist
-          merge-multiple: true
+          syft-version: v1.54.1
 
-      - name: Checksums
+      # Builds, archives, checksums, SBOMs and the cosign bundle, then uploads
+      # them all to a draft release (.goreleaser.yaml).
+      - name: GoReleaser
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          version: v2.18.2
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-checksums: dist/checksums.txt
+
+      # Install this runner's archive the way users will: checksum, cosign
+      # bundle against this workflow's identity, archive layout. Then check
+      # that the tag reached the binary through the ldflags.
+      - name: Install with install.sh
+        env:
+          TAG: ${{ github.ref_name }}
         run: |
-          cd dist
-          sha256sum pic-sure_*.tar.gz > checksums.txt
-          cat checksums.txt
+          mirror="$RUNNER_TEMP/github"
+          mkdir -p "$mirror/$GITHUB_REPOSITORY/releases/download"
+          ln -s "$GITHUB_WORKSPACE/dist" "$mirror/$GITHUB_REPOSITORY/releases/download/$TAG"
+          PIC_SURE_INSTALL_GITHUB_URL="file://$mirror" \
+            ./install.sh --repo "$GITHUB_REPOSITORY" --version "$TAG" --bin-dir "$RUNNER_TEMP/bin"
+          out="$("$RUNNER_TEMP/bin/pic-sure" version)"
+          echo "$out" | grep -F -- "version $TAG," \
+            || { echo "::error::'pic-sure version' printed '$out', which does not name $TAG" >&2; exit 1; }
 
-      - name: Create release with assets
+      - name: Publish the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release create "${{ github.ref_name }}" \
-            --verify-tag \
-            --generate-notes \
-            dist/pic-sure_*.tar.gz dist/checksums.txt
+          TAG: ${{ github.ref_name }}
+        run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false

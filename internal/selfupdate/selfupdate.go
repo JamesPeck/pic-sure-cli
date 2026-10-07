@@ -45,7 +45,6 @@ func AssetName(goos, goarch string) string {
 const (
 	SignatureVerified   = "verified"   // cosign verified checksums.txt
 	SignatureUnverified = "unverified" // signed, but cosign isn't installed
-	SignatureUnsigned   = "unsigned"   // the release has no bundle
 )
 
 // Updater replaces the running pic-sure with a GitHub release. The zero
@@ -69,8 +68,8 @@ type Updater struct {
 	// VerifyBundle checks bundle, the cosign signature of release tag's
 	// checksums. Nil means cosign isn't available.
 	VerifyBundle func(ctx context.Context, tag, checksums, bundle string) error
-	// RequireSignature refuses a release that isn't signed, or whose
-	// signature can't be checked.
+	// RequireSignature also refuses a signed release when cosign isn't
+	// available to check it. A release without a bundle is always refused.
 	RequireSignature bool
 	// Sink and Step receive progress and warnings.
 	Sink events.Sink
@@ -215,16 +214,13 @@ func (u *Updater) SelfUpdate(ctx context.Context, version string) error {
 	return nil
 }
 
-// verifySignature downloads the release's cosign bundle, if it has one, and
-// checks checksums.txt against it. It returns a Signature state.
+// verifySignature downloads the release's cosign bundle and checks
+// checksums.txt against it. It returns a Signature state. Every v2 release
+// is signed, so a missing bundle means a tampered or broken release.
 func (u *Updater) verifySignature(ctx context.Context, rel *release, sums, dir string) (string, error) {
 	b, ok := rel.find(BundleName)
 	if !ok {
-		if u.RequireSignature {
-			return "", exitcode.Failed("pic-sure release %s isn't signed (no %s); not installing it", rel.Tag, BundleName)
-		}
-		u.warn("pic-sure release %s isn't signed; only its SHA-256 checksum was verified", rel.Tag)
-		return SignatureUnsigned, nil
+		return "", exitcode.Failed("pic-sure release %s isn't signed (no %s); not installing it", rel.Tag, BundleName)
 	}
 	if u.VerifyBundle == nil {
 		if u.RequireSignature {

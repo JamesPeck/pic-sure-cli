@@ -1,0 +1,72 @@
+# Release build for pic-sure v2. .github/workflows/release.yml runs it on
+# v2 tags; `make snapshot` is the local dry run.
+version: 2
+
+project_name: pic-sure
+
+builds:
+  - id: pic-sure
+    main: ./cmd/pic-sure
+    binary: pic-sure
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    # Same variables as the Makefile's dev build. The version keeps the tag's
+    # leading v, so a v2.0.0 build reports v2.0.0 (release-control's PSCLI
+    # names CLI versions the same way). Commit time instead of build time
+    # keeps rebuilds of a tag byte-identical.
+    ldflags:
+      - -s -w -X main.version=v{{ .Version }} -X main.commit={{ .ShortCommit }} -X main.date={{ .CommitDate }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+# Asset names are a contract with install.sh and self-update:
+# pic-sure_<os>_<arch>.tar.gz, with the binary at the archive root.
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+# One syft SBOM per archive: pic-sure_<os>_<arch>.tar.gz.sbom.json. The
+# release workflow installs syft; snapshots skip it.
+sboms:
+  - artifacts: archive
+    disable: "{{ .IsSnapshot }}"
+
+# Keyless signature over checksums.txt, as a Sigstore bundle
+# (checksums.txt.sigstore.json). The certificate names the release workflow
+# and tag, which is what install.sh checks.
+signs:
+  - cmd: sh
+    artifacts: checksum
+    signature: "${artifact}.sigstore.json"
+    # A snapshot (a local dry run) must never sign: keyless signing opens a
+    # browser login and publishes to the public Rekor log. GoReleaser can't
+    # skip one sign config by template, so the command itself does.
+    # GoReleaser expands ${artifact} and ${signature} (and any other $NAME)
+    # inside the script before sh sees it.
+    args:
+      - -c
+      - >-
+        {{ if .IsSnapshot }}echo "snapshot: not signing ${artifact}" >&2{{ else }}cosign
+        sign-blob --bundle='${signature}' --yes '${artifact}'{{ end }}
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot+{{ .ShortCommit }}"
+
+# The workflow publishes the draft only after it has attested the archives
+# and installed one with install.sh.
+release:
+  draft: true
+  replace_existing_draft: true
+  prerelease: auto
+
+changelog:
+  use: github-native

@@ -46,6 +46,7 @@ func newFakeRelease(t *testing.T, tag string) *fakeRelease {
 		AssetName("linux", "amd64"): archive,
 		ChecksumsName: []byte(fmt.Sprintf("%s  %s\n%s  %s\n",
 			strings.Repeat("0", 64), AssetName("darwin", "arm64"), hex.EncodeToString(sum[:]), AssetName("linux", "amd64"))),
+		BundleName: []byte(`{"bundle":true}`),
 	}}
 }
 
@@ -226,12 +227,12 @@ func TestInstallReplacesTheBinary(t *testing.T) {
 		t.Errorf("mode = %v, want the old binary's 0750", fi.Mode().Perm())
 	}
 	assertOnlyBinary(t, filepath.Dir(exe))
-	want := Result{From: "v2.0.0", To: "v2.1.0", Path: res.Path, Updated: true, Signature: SignatureUnsigned}
+	want := Result{From: "v2.0.0", To: "v2.1.0", Path: res.Path, Updated: true, Signature: SignatureUnverified}
 	if *res != want {
 		t.Errorf("result = %+v, want %+v", *res, want)
 	}
-	if !strings.Contains(fmt.Sprint(rec.Events()), "isn't signed") {
-		t.Errorf("events %v don't warn that the release is unsigned", rec.Events())
+	if !strings.Contains(fmt.Sprint(rec.Events()), "cosign isn't installed") {
+		t.Errorf("events %v don't warn that the signature went unchecked", rec.Events())
 	}
 }
 
@@ -404,26 +405,28 @@ func TestInstallGoesThroughTheProxy(t *testing.T) {
 func TestInstallSignature(t *testing.T) {
 	errBad := errors.New("bad signature")
 	tests := []struct {
-		name    string
-		signed  bool
-		verify  func(context.Context, string, string, string) error
-		require bool
-		want    string
-		code    int
-		substr  string
+		name     string
+		unsigned bool
+		verify   func(context.Context, string, string, string) error
+		require  bool
+		want     string
+		code     int
+		substr   string
 	}{
-		{name: "verified", signed: true, verify: func(context.Context, string, string, string) error { return nil }, want: SignatureVerified},
-		{name: "bad signature", signed: true, verify: func(context.Context, string, string, string) error { return errBad },
+		{name: "verified", verify: func(context.Context, string, string, string) error { return nil }, want: SignatureVerified},
+		{name: "bad signature", verify: func(context.Context, string, string, string) error { return errBad },
 			code: exitcode.CodeFailed, substr: "the signature of checksums.txt doesn't verify: bad signature"},
-		{name: "no cosign", signed: true, want: SignatureUnverified},
-		{name: "no cosign, required", signed: true, require: true, code: exitcode.CodePrecondition, substr: "cosign isn't installed"},
-		{name: "unsigned, required", require: true, code: exitcode.CodeFailed, substr: "isn't signed"},
+		{name: "no cosign", want: SignatureUnverified},
+		{name: "no cosign, required", require: true, code: exitcode.CodePrecondition, substr: "cosign isn't installed"},
+		{name: "unsigned", unsigned: true, verify: func(context.Context, string, string, string) error { return nil },
+			code: exitcode.CodeFailed, substr: "isn't signed (no checksums.txt.sigstore.json)"},
+		{name: "unsigned, no cosign", unsigned: true, code: exitcode.CodeFailed, substr: "isn't signed"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rel := newFakeRelease(t, "v2.1.0")
-			if tt.signed {
-				rel.files[BundleName] = []byte(`{"bundle":true}`)
+			if tt.unsigned {
+				delete(rel.files, BundleName)
 			}
 			exe := installed(t, "")
 			u := newUpdater(newFakeGitHub(t, "v2.1.0", rel), exe, nil)

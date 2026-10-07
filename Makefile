@@ -5,18 +5,19 @@ COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
 DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS := -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(DATE)
 
-.PHONY: build build-release test fmt-check vet lint print-lint-version check compose-check clean
+.PHONY: build snapshot install-test test fmt-check vet lint print-lint-version check compose-check clean
 
 build:
 	$(GO) build -ldflags "$(LDFLAGS)" -o $(BIN) ./cmd/pic-sure
 
-# Release build — the single place release ldflags live; local cross-builds
-# and the CI release matrix both call this.
-# Usage: make build-release GOOS=linux GOARCH=arm64 [OUT=dist/pic-sure]
-OUT ?= dist/pic-sure
-build-release:
-	CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=$(GOARCH) $(GO) build -trimpath \
-		-ldflags "-s -w $(LDFLAGS)" -o $(OUT) ./cmd/pic-sure
+# A local dry run of the release (.goreleaser.yaml) into dist/: no
+# signature, SBOM or upload.
+snapshot:
+	goreleaser release --snapshot --clean
+
+# install.sh against the snapshot, served like a GitHub release.
+install-test: snapshot
+	bash smoke/install_test.sh dist
 
 test:
 	$(GO) test ./...

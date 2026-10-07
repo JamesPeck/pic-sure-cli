@@ -112,4 +112,29 @@ jobs:
       - name: Shellcheck
         run: |
           shellcheck --version
-          shellcheck install.sh
+          shellcheck install.sh smoke/install_test.sh
+
+  release:
+    name: Release snapshot + install.sh
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      # Unsigned, with no SBOM or upload (.goreleaser.yaml skips them for
+      # snapshots).
+      - name: Snapshot build
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          version: v2.18.2
+          args: release --snapshot --clean
+
+      - name: install.sh tests
+        run: bash smoke/install_test.sh dist

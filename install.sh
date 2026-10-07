@@ -1,30 +1,53 @@
 #!/usr/bin/env bash
 # =============================================================================
-# pic-sure CLI — Installer
+# pic-sure CLI v2 — Installer
 # =============================================================================
-# Downloads the latest (or a pinned) pic-sure release binary for this
-# OS/architecture, verifies its checksum, and installs it.
+# Installs the newest v2 release of pic-sure (or a pinned one) for this
+# OS/architecture. It verifies the archive against checksums.txt and, when
+# cosign is installed, verifies checksums.txt against its Sigstore bundle.
 #
-#   curl -fsSL https://raw.githubusercontent.com/JamesPeck/pic-sure-cli/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/JamesPeck/pic-sure-cli/v2/install.sh | bash
+#   curl -fsSL .../install.sh | bash -s -- --version v2.0.0
 #
 # Usage:
-#   install.sh                      # latest release → ~/.local/bin
+#   install.sh                      # newest v2.x.y release → ~/.local/bin
 #   install.sh --bin-dir /usr/local/bin
-#   install.sh --version v3.3.0
+#   install.sh --version v2.0.0
 #   install.sh --repo OWNER/NAME    # override the GitHub repository
+#
+# Test hooks (environment), for a local mirror of GitHub:
+#   PIC_SURE_INSTALL_GITHUB_URL  replaces https://github.com in download URLs;
+#                                any URL curl reads, file:// included
+#   PIC_SURE_INSTALL_API_URL     replaces https://api.github.com
 # =============================================================================
 
 set -euo pipefail
 
 REPO="JamesPeck/pic-sure-cli"
 BIN_DIR="$HOME/.local/bin"
-VERSION="latest"
-# Test hook: point at a local directory holding the release assets instead
-# of GitHub (used by CI/smoke to verify this script against a local build).
-ASSET_DIR="${PIC_SURE_INSTALL_ASSET_DIR:-}"
+VERSION=""
+GITHUB_URL="${PIC_SURE_INSTALL_GITHUB_URL:-https://github.com}"
+API_URL="${PIC_SURE_INSTALL_API_URL:-https://api.github.com}"
+
+# Asset names are a contract with .goreleaser.yaml and self-update.
+CHECKSUMS="checksums.txt"
+BUNDLE="checksums.txt.sigstore.json"
+OIDC_ISSUER="https://token.actions.githubusercontent.com"
 
 say() { printf '%s\n' "$*"; }
 fail() { printf 'install.sh: %s\n' "$*" >&2; exit 1; }
+
+usage() {
+  cat <<'EOF'
+Install the pic-sure CLI (v2).
+
+Usage: install.sh [--version vX.Y.Z] [--bin-dir DIR] [--repo OWNER/NAME]
+
+  --version   release tag to install (default: the newest v2.x.y release)
+  --bin-dir   where to put the binary (default: ~/.local/bin)
+  --repo      GitHub repository to install from (default: JamesPeck/pic-sure-cli)
+EOF
+}
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -35,7 +58,7 @@ while [ "$#" -gt 0 ]; do
       ;;
     --bin-dir=*) BIN_DIR="${1#*=}"; shift ;;
     --version)
-      [ -n "${2:-}" ] || fail "--version requires a tag (e.g. v3.3.0)"
+      [ -n "${2:-}" ] || fail "--version requires a tag (e.g. v2.0.0)"
       VERSION="$2"
       shift 2
       ;;
@@ -47,7 +70,7 @@ while [ "$#" -gt 0 ]; do
       ;;
     --repo=*) REPO="${1#*=}"; shift ;;
     -h|--help)
-      sed -n '2,16p' "$0"
+      usage
       exit 0
       ;;
     *)
@@ -55,6 +78,11 @@ while [ "$#" -gt 0 ]; do
       ;;
   esac
 done
+
+# Tags carry a leading v; accept "2.0.0" as well.
+case "$VERSION" in
+  [0-9]*) VERSION="v$VERSION" ;;
+esac
 
 # --- platform detection ------------------------------------------------------
 case "$(uname -s)" in
@@ -69,10 +97,11 @@ case "$(uname -m)" in
   *) fail "unsupported architecture: $(uname -m) (amd64 and arm64 are supported)" ;;
 esac
 
-# Asset naming contract with .github/workflows/release.yml.
 ASSET="pic-sure_${OS}_${ARCH}.tar.gz"
 
-# --- checksum tool -----------------------------------------------------------
+# --- tools -------------------------------------------------------------------
+command -v curl >/dev/null 2>&1 || fail "curl is required"
+
 if command -v sha256sum >/dev/null 2>&1; then
   CHECKSUM_CMD="sha256sum"
 elif command -v shasum >/dev/null 2>&1; then
@@ -81,48 +110,97 @@ else
   fail "neither sha256sum nor shasum is available; install one to verify the download"
 fi
 
-# --- download ----------------------------------------------------------------
+fetch() { # URL DEST
+  curl -fsSL --retry 3 --proto-redir '=https' -o "$2" "$1"
+}
+
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/pic-sure-install.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
 
-if [ -n "$ASSET_DIR" ]; then
-  say "Using local assets from $ASSET_DIR"
-  cp "$ASSET_DIR/$ASSET" "$ASSET_DIR/checksums.txt" "$TMP/"
-else
-  command -v curl >/dev/null 2>&1 || fail "curl is required"
-  if [ "$VERSION" = "latest" ]; then
-    BASE_URL="https://github.com/$REPO/releases/latest/download"
-  else
-    BASE_URL="https://github.com/$REPO/releases/download/$VERSION"
-  fi
-  say "Downloading $ASSET ($VERSION) from $REPO..."
-  curl -fsSL -o "$TMP/$ASSET" "$BASE_URL/$ASSET" \
-    || fail "download failed: $BASE_URL/$ASSET (is there a release with this asset?)"
-  curl -fsSL -o "$TMP/checksums.txt" "$BASE_URL/checksums.txt" \
-    || fail "download failed: $BASE_URL/checksums.txt"
+# --- choose the release ------------------------------------------------------
+# Without --version, install the newest stable v2.x.y. GitHub's "latest"
+# release could belong to another major line, so pick from the list.
+if [ -z "$VERSION" ]; then
+  say "Finding the newest v2 release of $REPO..."
+  fetch "$API_URL/repos/$REPO/releases?per_page=100" "$TMP/releases.json" \
+    || fail "could not list releases of $REPO; pass --version vX.Y.Z to choose one"
+  VERSION="$(grep -o '"tag_name": *"[^"]*"' "$TMP/releases.json" \
+    | sed 's/.*"\([^"]*\)"$/\1/' \
+    | grep -E '^v2\.[0-9]+\.[0-9]+$' \
+    | sort -t. -k2,2n -k3,3n \
+    | tail -n 1 || true)"
+  [ -n "$VERSION" ] || fail "$REPO has no v2.x.y release; pass --version to choose one"
 fi
 
-# --- verify ------------------------------------------------------------------
+BASE_URL="$GITHUB_URL/$REPO/releases/download/$VERSION"
+# The release workflow signs with the tag's own identity, so a bundle from
+# any other tag or workflow fails verification.
+IDENTITY="https://github.com/$REPO/.github/workflows/release.yml@refs/tags/$VERSION"
+
+# --- download ----------------------------------------------------------------
+say "Downloading pic-sure $VERSION ($ASSET) from $BASE_URL..."
+fetch "$BASE_URL/$ASSET" "$TMP/$ASSET" \
+  || fail "download failed: $BASE_URL/$ASSET (is there a release with this asset?)"
+fetch "$BASE_URL/$CHECKSUMS" "$TMP/$CHECKSUMS" \
+  || fail "download failed: $BASE_URL/$CHECKSUMS"
+have_bundle=false
+if fetch "$BASE_URL/$BUNDLE" "$TMP/$BUNDLE" 2>/dev/null; then
+  have_bundle=true
+fi
+
+# --- verify the signature on checksums.txt -----------------------------------
+# Every v2 release is signed, so a v2 release without a bundle is refused
+# even when cosign isn't here to check it (self-update does the same).
+if [ "$have_bundle" = false ]; then
+  case "$VERSION" in
+    v2.*) fail "release $VERSION has no $BUNDLE, but every v2 release is signed — aborting" ;;
+    *) say "Release $VERSION has no $BUNDLE; verifying the checksum only." ;;
+  esac
+elif command -v cosign >/dev/null 2>&1; then
+  say "Verifying the signature on $CHECKSUMS (cosign)..."
+  if ! out="$(cosign verify-blob --bundle "$TMP/$BUNDLE" \
+      --certificate-identity "$IDENTITY" \
+      --certificate-oidc-issuer "$OIDC_ISSUER" \
+      "$TMP/$CHECKSUMS" 2>&1)"; then
+    printf '%s\n' "$out" >&2
+    fail "signature verification FAILED for $CHECKSUMS (expected signer $IDENTITY) — aborting"
+  fi
+else
+  say "WARNING: cosign not found, so the signature on $CHECKSUMS wasn't checked;" >&2
+  say "  relying on the checksum only (see below to verify by hand)." >&2
+fi
+
+# --- verify the archive ------------------------------------------------------
 # Compare hashes explicitly rather than via `-c`, whose handling of
 # malformed lines varies between implementations (some warn and exit 0).
 say "Verifying checksum ($CHECKSUM_CMD)..."
-expected_hash="$(awk -v asset="$ASSET" '$2 == asset || $2 == "*"asset {print $1}' "$TMP/checksums.txt")"
-[ -n "$expected_hash" ] || fail "checksums.txt has no entry for $ASSET"
+expected_hash="$(awk -v asset="$ASSET" '$2 == asset || $2 == "*"asset {print $1}' "$TMP/$CHECKSUMS")"
+[ -n "$expected_hash" ] || fail "$CHECKSUMS has no entry for $ASSET"
 actual_hash="$($CHECKSUM_CMD "$TMP/$ASSET" | awk '{print $1}')"
 if [ "$actual_hash" != "$expected_hash" ]; then
   fail "checksum verification FAILED for $ASSET (expected $expected_hash, got $actual_hash) — aborting"
 fi
 
 # --- install -----------------------------------------------------------------
-tar -C "$TMP" -xzf "$TMP/$ASSET"
-[ -f "$TMP/pic-sure" ] || fail "archive did not contain the pic-sure binary"
+mkdir "$TMP/x"
+tar -C "$TMP/x" -xzf "$TMP/$ASSET"
+[ -f "$TMP/x/pic-sure" ] || fail "archive did not contain the pic-sure binary"
 
 mkdir -p "$BIN_DIR"
-install -m 0755 "$TMP/pic-sure" "$BIN_DIR/pic-sure"
+install -m 0755 "$TMP/x/pic-sure" "$BIN_DIR/pic-sure"
 
 say ""
 say "Installed: $BIN_DIR/pic-sure"
 "$BIN_DIR/pic-sure" --version || true
+
+say ""
+say "To verify this release by hand, download $ASSET, $CHECKSUMS and"
+say "$BUNDLE from $GITHUB_URL/$REPO/releases/tag/$VERSION, then run:"
+say "  cosign verify-blob --bundle $BUNDLE \\"
+say "    --certificate-identity $IDENTITY \\"
+say "    --certificate-oidc-issuer $OIDC_ISSUER $CHECKSUMS"
+say "  $CHECKSUM_CMD --ignore-missing -c $CHECKSUMS"
+say "  gh attestation verify $ASSET --repo $REPO"
 
 case ":$PATH:" in
   *":$BIN_DIR:"*) ;;
@@ -136,6 +214,5 @@ esac
 
 say ""
 say "Get started:"
-say "  git clone --branch tui-mono https://github.com/hms-dbmi/pic-sure-all-in-one"
-say "  cd pic-sure-all-in-one"
-say "  pic-sure"
+say "  pic-sure init my-stack     # create and start a stack in ./my-stack"
+say "  pic-sure help"

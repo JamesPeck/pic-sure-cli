@@ -488,7 +488,8 @@ operation: [docs/architecture.md](docs/architecture.md).
 | `make test` | `go test ./...`, including the testscript scenarios and, outside CI, the PTY smoke tests (set `PICSURE_PTY_TEST=1` to run those in CI) |
 | `make lint` | `golangci-lint run` — version pinned in the Makefile; CI installs exactly that |
 | `make check` | gofmt check, `go vet`, lint and test: what CI runs |
-| `make build-release GOOS=… GOARCH=…` | the release build (same ldflags as CI) |
+| `make snapshot` | a local dry run of the release (GoReleaser, unsigned) into `dist/` |
+| `make install-test` | `make snapshot`, then `install.sh` against it from a local server (`smoke/install_test.sh`) |
 
 Conventions enforced by tests: every wizard key must exist in the checked-in
 AIO `.env.example` contract fixture; every action must carry an `AbortNote`;
