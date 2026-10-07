@@ -111,6 +111,19 @@ stderr '^pic-sure: interrupted \(interrupt\)$'
 ! stderr 'docker compose'
 exec sh -c '! kill -0 "$(cat follow.pid)" 2>/dev/null'
 
+# compose holds the stack lock while compose runs, and a SIGTERM to
+# pic-sure alone reaches compose, which the terminal's Ctrl-C would not.
+rm follow.pid
+! exec pic-sure --stack stack compose -- logs -f &pass&
+exec sh -c 'while [ ! -f follow.pid ]; do sleep 0.05; done'
+exitcode 1 pic-sure --stack stack down
+stderr 'pic-sure compose'
+stderr 'pass --wait-lock'
+exec sh -c 'kill -TERM "$(cat parent.pid)"'
+wait pass
+stderr '^pic-sure: interrupted \(terminated\)$'
+exec sh -c '! kill -0 "$(cat follow.pid)" 2>/dev/null'
+
 -- docker.scenario --
 docker compose * --progress plain down --remove-orphans => 0 stderr=down.txt
 docker compose * --progress json down --remove-orphans => 0 stderr=down.json
@@ -138,6 +151,7 @@ hpds-1  | started
 raw compose ps
 -- bin/docker --
 #!/bin/sh
+echo $PPID > "$HOME/parent.pid"
 echo $$ > "$HOME/follow.pid"
 exec sleep 30
 -- stack/pic-sure.yaml --

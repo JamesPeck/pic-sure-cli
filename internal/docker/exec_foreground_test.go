@@ -8,12 +8,14 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/creack/pty"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/docker"
+	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
 )
 
 // foregroundHelperEnv makes TestForegroundHelper run: it is the process a
@@ -90,26 +92,40 @@ func TestExecForegroundReadsTheTerminal(t *testing.T) {
 	}
 }
 
-// A foreground child gets no signal when ctx ends (Ctrl-C has reached it
-// from the terminal already): the call waits for it, then returns the
-// context's error.
-func TestExecForegroundCancelLeavesTheChildAlone(t *testing.T) {
+// When the CLI got SIGINT, the terminal sent it to the foreground child
+// too, so the runner doesn't signal the child again; on any other
+// cancellation, the child gets SIGTERM. Either way the call waits for the
+// child, then returns the context's error.
+func TestExecForegroundCancel(t *testing.T) {
 	t.Parallel()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	r := &docker.ExecRunner{Foreground: true}
-	stdout := writerFunc(func(p []byte) (int, error) {
-		if strings.Contains(string(p), "ready") {
-			cancel()
-		}
-		return len(p), nil
-	})
+	for _, tt := range []struct {
+		name  string
+		cause error
+		want  int
+	}{
+		{"SIGINT", exitcode.Signaled(os.Interrupt), 7},
+		{"SIGTERM", exitcode.Signaled(syscall.SIGTERM), 9},
+		{"no cause", nil, 9},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ctx, cancel := context.WithCancelCause(context.Background())
+			defer cancel(nil)
+			r := &docker.ExecRunner{Foreground: true, WaitDelay: time.Minute}
+			stdout := writerFunc(func(p []byte) (int, error) {
+				if strings.Contains(string(p), "ready") {
+					cancel(tt.cause)
+				}
+				return len(p), nil
+			})
 
-	code, err := r.Stream(ctx, sh(`trap 'exit 1' TERM; echo ready; sleep 0.3; exit 7`), stdout, nil)
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("err = %v, want context.Canceled", err)
-	}
-	if code != 7 {
-		t.Errorf("code %d, want 7: the child was signalled", code)
+			code, err := r.Stream(ctx, sh(`trap 'exit 9' TERM; echo ready; sleep 0.3; exit 7`), stdout, nil)
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("err = %v, want context.Canceled", err)
+			}
+			if code != tt.want {
+				t.Errorf("code %d, want %d", code, tt.want)
+			}
+		})
 	}
 }

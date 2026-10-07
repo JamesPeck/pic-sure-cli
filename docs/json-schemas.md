@@ -1,6 +1,6 @@
 # JSON output
 
-`status --json`, `doctor --json` and `version --json` print one JSON object
+`status --json`, `doctor --json`, `ps --json` and `version --json` print one JSON object
 on stdout with `schema_version` first. Commands that stream print NDJSON
 events instead, ending with a `result` event. Within `schema_version` 2,
 changes are additive only: fields are added, never renamed, removed or
@@ -80,3 +80,13 @@ an `omitted` field is left out when empty.
 | `last_operation.status` | string | `running` (or interrupted, if nothing holds the lock), `ok` or `failed`. |
 | `last_operation.started_at` | string | When it started. |
 | `last_operation.finished_at` | string, omitted | When it finished. |
+
+## `ps --json`
+
+The stack's containers, stopped ones included. Exit code 3 when there is
+no stack or it hasn't been rendered, and 1 when compose can't be asked.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `schema_version` | int | Always 2. |
+| `services` | array | The containers, in the shape and order of `status --json`'s `services`. |

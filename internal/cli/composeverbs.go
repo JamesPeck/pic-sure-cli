@@ -1,12 +1,10 @@
 package cli
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"io"
-	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -63,7 +61,7 @@ func (a *App) composeVerb(cmd *cobra.Command, id, title string, verb func(*ops.D
 		return err
 	}
 	defer func() { _ = lock.Unlock() }()
-	if d.Compose, err = a.stackCompose(d.Runner, st, false); err != nil {
+	if d.Compose, err = a.stackCompose(cmd, d.Runner, st); err != nil {
 		return err
 	}
 
@@ -108,7 +106,7 @@ func newPsCmd(a *App) *cobra.Command {
 			}
 			defer func() { _ = st.Close() }()
 			d := a.newDeps()
-			c, err := a.stackCompose(d.Runner, st, true)
+			c, err := a.stackCompose(cmd, d.Runner, st)
 			if err != nil {
 				return err
 			}
@@ -116,16 +114,7 @@ func newPsCmd(a *App) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			report := psReport{Services: []ops.StatusService{}}
-			for _, s := range ps {
-				report.Services = append(report.Services, ops.StatusService{
-					Service: s.Service, Container: s.Name, State: s.State,
-					Health: s.Health, Status: s.Status, ExitCode: s.ExitCode,
-				})
-			}
-			slices.SortFunc(report.Services, func(x, y ops.StatusService) int {
-				return cmp.Or(cmp.Compare(x.Service, y.Service), cmp.Compare(x.Container, y.Container))
-			})
+			report := psReport{Services: ops.StatusServices(ps)}
 			return a.printReport(report, func(w io.Writer) error { return writePs(w, report.Services) })
 		},
 	}
@@ -168,7 +157,7 @@ step "logs".`,
 			}
 			defer func() { _ = st.Close() }()
 			d := a.newDeps()
-			c, err := a.stackCompose(d.Runner, st, true)
+			c, err := a.stackCompose(cmd, d.Runner, st)
 			if err != nil {
 				return err
 			}
@@ -224,7 +213,7 @@ compose's own, so --json is refused.`,
 				return err
 			}
 			defer func() { _ = lock.Unlock() }()
-			c, err := a.stackCompose(a.newForegroundRunner(d.Log), st, false)
+			c, err := a.stackCompose(cmd, a.newForegroundRunner(d.Log), st)
 			if err != nil {
 				return err
 			}
@@ -246,9 +235,10 @@ compose's own, so --json is refused.`,
 
 // stackCompose returns the compose adapter for st, with the environment its
 // compose files need (render.ComposeEnv) and the progress format for the
-// output mode. A stack that hasn't been rendered is exit 3. For readOnly
-// commands, a config or secrets file this CLI can't read is no error.
-func (a *App) stackCompose(r docker.Runner, st *stack.Stack, readOnly bool) (*docker.Compose, error) {
+// output mode. A stack that hasn't been rendered is exit 3. For a read-only
+// command (gate.go), a config or secrets file this CLI can't read is no
+// error.
+func (a *App) stackCompose(cmd *cobra.Command, r docker.Runner, st *stack.Stack) (*docker.Compose, error) {
 	c, err := docker.NewCompose(r, st.Dir, nil)
 	if errors.Is(err, docker.ErrNotRendered) {
 		return nil, exitcode.Precondition("the stack hasn't been rendered yet; run `pic-sure up`")
@@ -257,7 +247,7 @@ func (a *App) stackCompose(r docker.Runner, st *stack.Stack, readOnly bool) (*do
 		return nil, err
 	}
 	env, err := stackComposeEnv(st)
-	if err != nil && readOnly {
+	if err != nil && commandClass(cmd) == stack.ReadOnly {
 		// ps and logs create no container, so the values matter only to
 		// keep compose from warning that they are unset. They must work
 		// on a stack whose config is invalid or newer (§10.6).

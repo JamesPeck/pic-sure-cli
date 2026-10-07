@@ -202,14 +202,14 @@ it.
   logger, so it can log argv. Until the others land, the sink discards
   events.
 
-- `composeverbs.go` (026): `a.stackCompose(runner, st, readOnly)` is the
+- `composeverbs.go` (026): `a.stackCompose(cmd, runner, st)` is the
   compose adapter for a command's stack: exit 3 with "run `pic-sure up`"
   when it isn't rendered, `render.ComposeEnv` from the config and secrets
-  (a read-only command falls back to the defaults when it can't read
-  them, so `ps` and `logs` work on a newer stack), and `ProgressJSON` under
+  (a read-only command, by `commandClass`, falls back to the defaults when
+  it can't read them, so `ps` and `logs` work on a newer stack), and `ProgressJSON` under
   `--json`. `down` and `restart` take the stack lock and run as one step
   whose `Log` events are compose's output. `ps --json` uses status's
-  service shape. `logs` writes the logs to stdout and compose's own
+  service shape (`ops.StatusServices`). `logs` writes the logs to stdout and compose's own
   messages to stderr (a `logs` step under `--json`), and reports Ctrl-C as
   the signal alone. `compose` refuses `--json`, holds the stack lock, runs
   in the foreground runner and exits with compose's code.
@@ -925,10 +925,12 @@ is ready to use.
   exec hpds sh`). The child stays in the CLI's process group, so it can
   read the terminal and gets Ctrl-C from it, and `Stream` hands it the
   writers as they are (an `*os.File` becomes its stdout), without line
-  buffering. The runner never signals it: Ctrl-C has reached it from the
-  terminal already, and a second signal would count as a second Ctrl-C
-  (compose's force-kill). The call waits for the child, then returns ctx's
-  error if ctx ended first. `cli.newForegroundRunner` builds one.
+  buffering. When ctx ends from SIGINT, the runner leaves the child alone:
+  Ctrl-C has reached it from the terminal already, and a second signal
+  would count as a second Ctrl-C (compose's force-kill). On any other
+  cancellation it sends SIGTERM, then SIGKILL `WaitDelay` later. The call
+  waits for the child, then returns ctx's error if ctx ended first.
+  `cli.newForegroundRunner` builds one.
 - **Environment.** A child gets only `PATH`, `HOME`, `TERM`,
   `SSH_AUTH_SOCK`, every `DOCKER_*` and `XDG_*` variable, and
   `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`/`ALL_PROXY` in either case from the

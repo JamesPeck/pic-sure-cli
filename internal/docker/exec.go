@@ -13,6 +13,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
 )
 
 // DefaultWaitDelay is ExecRunner's grace period when WaitDelay is unset.
@@ -72,10 +74,13 @@ type ExecRunner struct {
 	// directly. Stream hands its writers to the child as they are, without
 	// line buffering, so an *os.File such as the terminal becomes the
 	// child's own stdout or stderr, and its guarantees about whole lines
-	// and serialized writes don't hold. The runner never signals a
-	// foreground child: Ctrl-C has already reached it, and a second signal
-	// would count as a second Ctrl-C (compose's force-kill). The call waits
-	// for the child to exit, then reports ctx's error if ctx ended first.
+	// and serialized writes don't hold. When ctx ends because the CLI got
+	// SIGINT (its cause is exitcode.Signaled(os.Interrupt)), the runner
+	// leaves the child alone: Ctrl-C at the terminal has reached it
+	// already, and a second signal would count as a second Ctrl-C
+	// (compose's force-kill). Otherwise the child gets SIGTERM, and SIGKILL
+	// WaitDelay later. The call waits for the child to exit, then reports
+	// ctx's error if ctx ended first.
 	Foreground bool
 }
 
@@ -122,7 +127,7 @@ func (r *ExecRunner) run(ctx context.Context, c Cmd, stdout, stderr io.Writer) (
 	}
 
 	if r.Foreground {
-		return r.runForeground(ctx, c, stdout, stderr, delay)
+		return r.runForeground(ctx, c, argv, stdout, stderr, delay)
 	}
 	cmd := exec.CommandContext(ctx, c.Argv[0], c.Argv[1:]...)
 	cmd.Env = append(baseEnv(r.environ()), c.Env...)
@@ -189,10 +194,8 @@ func (r *ExecRunner) run(ctx context.Context, c Cmd, stdout, stderr io.Writer) (
 	}
 }
 
-// runForeground runs c in the CLI's process group, ignoring ctx until the
-// child exits (see Foreground).
-func (r *ExecRunner) runForeground(ctx context.Context, c Cmd, stdout, stderr io.Writer, delay time.Duration) (int, error) {
-	argv := FormatArgv(c.Argv)
+// runForeground runs c in the CLI's process group (see Foreground).
+func (r *ExecRunner) runForeground(ctx context.Context, c Cmd, argv string, stdout, stderr io.Writer, delay time.Duration) (int, error) {
 	if ctx.Err() != nil {
 		return -1, ctxError(ctx, argv)
 	}
@@ -205,11 +208,29 @@ func (r *ExecRunner) runForeground(ctx context.Context, c Cmd, stdout, stderr io
 	cmd.WaitDelay = delay // after the exit, for lingering pipes and stdin
 	r.debug(ctx, "exec in the foreground", "argv", argv, "dir", c.Dir, "env", envNames(c.Env))
 	start := time.Now()
-	err := cmd.Run()
-	code := exitCode(cmd.ProcessState)
-	if code == -1 && err != nil {
+	if err := cmd.Start(); err != nil {
 		return -1, fmt.Errorf("%s: %w", argv, err)
 	}
+	exited := make(chan struct{})
+	go func() {
+		select {
+		case <-exited:
+			return
+		case <-ctx.Done():
+		}
+		if interruptedAtTerminal(ctx) {
+			return
+		}
+		_ = cmd.Process.Signal(syscall.SIGTERM)
+		select {
+		case <-exited:
+		case <-time.After(delay):
+			_ = cmd.Process.Kill()
+		}
+	}()
+	err := cmd.Wait()
+	close(exited)
+	code := exitCode(cmd.ProcessState)
 	r.debug(ctx, "exec done", "argv", argv, "exit", code, "elapsed", time.Since(start).Round(time.Millisecond))
 	var exitErr *exec.ExitError
 	switch {
@@ -220,6 +241,13 @@ func (r *ExecRunner) runForeground(ctx context.Context, c Cmd, stdout, stderr io
 	default:
 		return code, fmt.Errorf("%s: %w", argv, err)
 	}
+}
+
+// interruptedAtTerminal reports whether ctx ended because the CLI got
+// SIGINT, which a terminal sends to its whole foreground process group.
+func interruptedAtTerminal(ctx context.Context) bool {
+	var e *exitcode.Error
+	return errors.As(context.Cause(ctx), &e) && e.Code == exitcode.CodeInterrupted
 }
 
 // stdinCopy feeds a Cmd.Stdin that isn't an *os.File to the child through

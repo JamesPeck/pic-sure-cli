@@ -366,16 +366,24 @@ func statusServices(ctx context.Context, d *Deps, r *StatusReport, composeErr er
 		r.ServicesError = err.Error()
 		return
 	}
+	r.Services = StatusServices(ps)
+}
+
+// StatusServices is compose ps's containers as status reports them, sorted
+// by service, then container. `ps --json` shares the shape.
+func StatusServices(ps []docker.ComposeService) []StatusService {
+	services := []StatusService{}
 	for _, s := range ps {
-		r.Services = append(r.Services, StatusService{
+		services = append(services, StatusService{
 			Service: s.Service, Container: s.Name, State: s.State,
 			Health: s.Health, Status: s.Status, ExitCode: s.ExitCode,
 		})
 	}
-	sort.Slice(r.Services, func(i, j int) bool {
-		a, b := r.Services[i], r.Services[j]
+	sort.Slice(services, func(i, j int) bool {
+		a, b := services[i], services[j]
 		return a.Service < b.Service || a.Service == b.Service && a.Container < b.Container
 	})
+	return services
 }
 
 func statusToken(d *Deps, r *StatusReport, st *stack.Stack) {
