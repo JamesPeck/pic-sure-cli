@@ -515,3 +515,22 @@ func TestWrite(t *testing.T) {
 		t.Errorf("compose.yaml not written: %v", err)
 	}
 }
+
+func TestShellScriptsAreExecutable(t *testing.T) {
+	files, err := Render(goldenInput(goldenCase{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, f := range files {
+		if strings.HasSuffix(f.Path, ".sh") {
+			n++
+			if f.Perm != 0o755 {
+				t.Errorf("%s: mode %o, want 0755", f.Path, f.Perm)
+			}
+		}
+	}
+	if n == 0 {
+		t.Error("no shell scripts rendered")
+	}
+}

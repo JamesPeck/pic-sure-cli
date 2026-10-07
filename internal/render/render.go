@@ -375,7 +375,14 @@ func renderFiles(d templateData) ([]File, error) {
 		if err != nil {
 			return fmt.Errorf("render %s: %w", name, err)
 		}
-		out = append(out, File{Path: FilesDir + "/" + rel, Data: data, Perm: 0o644})
+		perm := fs.FileMode(0o644)
+		if strings.HasSuffix(rel, ".sh") {
+			// MySQL's entrypoint runs an executable init script with its
+			// shebang; on Docker Desktop it can find a 0644 script
+			// executable and then fail to run it, so no schema is made.
+			perm = 0o755
+		}
+		out = append(out, File{Path: FilesDir + "/" + rel, Data: data, Perm: perm})
 		return nil
 	})
 	return out, err
