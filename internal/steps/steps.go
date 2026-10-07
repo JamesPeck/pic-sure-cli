@@ -42,8 +42,8 @@ type Options struct {
 // Run stops at the first failure and returns an *Error naming the step. A
 // re-run resumes there, because Check skips the steps already done.
 //
-// Run starts nothing once ctx is done, and returns an *Error marked
-// Interrupted. A Check or Apply that is running when ctx ends is left to
+// Once ctx is done, Run starts no more steps and returns an *Error marked
+// Interrupted that names the next one. A Check or Apply that is running when ctx ends is left to
 // return by itself, so its deferred cleanups run before Run returns. If it
 // fails, or Check finds the step not done, the step is reported failed. If
 // Apply succeeds or Check finds the step done, the step counts as done, so
@@ -116,7 +116,7 @@ type Error struct {
 
 func (e *Error) Error() string {
 	if e.Interrupted {
-		return fmt.Sprintf("step %s: %v; re-run the command to resume from it", e.Step, e.Err)
+		return fmt.Sprintf("stopped at step %s: %v; re-run the command to resume from it", e.Step, e.Err)
 	}
 	return fmt.Sprintf("step %s failed: %v; re-run the command to retry it (steps already done are skipped)", e.Step, e.Err)
 }

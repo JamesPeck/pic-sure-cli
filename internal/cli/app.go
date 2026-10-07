@@ -84,11 +84,11 @@ func (a *App) execute(ctx context.Context, root *cobra.Command, args []string) i
 	var coded *exitcode.Error
 	switch cause := context.Cause(ctx); {
 	case cause != nil && errors.As(cause, &coded):
-		if !errors.Is(err, cause) {
+		if errors.Is(err, cause) {
+			err = &exitcode.Error{Code: coded.Code, Err: err}
+		} else {
 			err = cause
 		}
-		a.reportError(cmd, err)
-		return coded.Code
 	case err == nil:
 		err = a.succeed()
 	case !a.running && !errors.As(err, &coded):

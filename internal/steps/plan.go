@@ -31,9 +31,10 @@ type Planned struct {
 // see the state as it is now, so a step whose Check needs an earlier step
 // to have been applied may come out PlanUnknown or PlanApply.
 //
-// Plan rejects what Validate rejects. It returns an Interrupted *Error if
-// ctx ends before it has the last Check's answer; a Check that fails after
-// ctx ended counts as interrupted, not PlanUnknown.
+// Plan rejects what Validate rejects. Once ctx is done it plans no more
+// steps and returns an Interrupted *Error. A Check running when ctx ends
+// still counts if it answers, so the plan is returned when that was the
+// last step; one that fails counts as interrupted, not PlanUnknown.
 func Plan(ctx context.Context, steps []Step, opts Options) ([]Planned, error) {
 	skip, err := prepare(steps, opts)
 	if err != nil {

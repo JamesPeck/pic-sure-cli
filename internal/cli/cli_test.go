@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"slices"
 	"strings"
@@ -247,28 +248,41 @@ func TestSignalDecidesExitCode(t *testing.T) {
 func TestSignalKeepsTheStepToResumeFrom(t *testing.T) {
 	ctx, cancel := context.WithCancelCause(context.Background())
 	defer cancel(nil)
-	a, _, stderr := testApp(t)
+	a, stdout, stderr := testApp(t)
 	root := newRootCmd(a)
 	up, _, err := root.Find([]string{"up"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	up.RunE = func(cmd *cobra.Command, _ []string) error {
-		return steps.Run(cmd.Context(), events.Discard, []steps.Step{{
+		err := steps.Run(cmd.Context(), a.newSink(), []steps.Step{{
 			ID: "db-migrate",
 			Apply: func(ctx context.Context, _ events.Sink) error {
 				cancel(exitcode.Signaled(syscall.SIGINT))
 				return ctx.Err()
 			},
 		}}, steps.Options{})
+		return exitcode.Failed("up: %w", err)
 	}
 	markRunning(a, up)
 
-	if code := a.execute(ctx, root, []string{"up"}); code != exitcode.CodeInterrupted {
+	if code := a.execute(ctx, root, []string{"up", "--json"}); code != exitcode.CodeInterrupted {
 		t.Errorf("exit = %d, want %d", code, exitcode.CodeInterrupted)
 	}
-	if got, want := stderr.String(), "pic-sure: step db-migrate: interrupted (interrupt); re-run the command to resume from it\n"; got != want {
+	msg := "up: stopped at step db-migrate: interrupted (interrupt); re-run the command to resume from it"
+	if got, want := stderr.String(), "pic-sure: "+msg+"\n"; got != want {
 		t.Errorf("stderr = %q, want %q", got, want)
+	}
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	var result struct {
+		Error events.ErrorInfo `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &result); err != nil {
+		t.Fatalf("last stdout line %q: %v", lines[len(lines)-1], err)
+	}
+	want := events.ErrorInfo{ExitCode: exitcode.CodeInterrupted, Message: msg, Step: "db-migrate"}
+	if result.Error != want {
+		t.Errorf("result error = %+v, want %+v", result.Error, want)
 	}
 }
 

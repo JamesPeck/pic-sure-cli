@@ -179,12 +179,12 @@ func TestRunRejectsUnknownSkipStep(t *testing.T) {
 
 			validateErr := steps.Validate(list, steps.Options{Skip: tt.skip})
 			err := steps.Run(context.Background(), &rec, list, steps.Options{Skip: tt.skip})
-			for _, err := range []error{validateErr, err} {
+			for fn, err := range map[string]error{"Validate": validateErr, "Run": err} {
 				if code := exitcode.FromError(err); code != exitcode.CodeUsage {
-					t.Errorf("exit code %d, want %d (err %v)", code, exitcode.CodeUsage, err)
+					t.Errorf("%s: exit code %d, want %d (err %v)", fn, code, exitcode.CodeUsage, err)
 				}
 				if err == nil || err.Error() != tt.want {
-					t.Errorf("error %v, want %q", err, tt.want)
+					t.Errorf("%s: error %v, want %q", fn, err, tt.want)
 				}
 			}
 			assertCalls(t, w)
@@ -323,7 +323,7 @@ func TestRunCancelledInsideApply(t *testing.T) {
 	if se.Step != "b" || !se.Interrupted || !errors.Is(err, context.Canceled) {
 		t.Errorf("error = %+v, want step b, interrupted, wrapping context.Canceled", se)
 	}
-	if want := "step b: context canceled; re-run the command to resume from it"; err.Error() != want {
+	if want := "stopped at step b: context canceled; re-run the command to resume from it"; err.Error() != want {
 		t.Errorf("message:\n  got  %q\n  want %q", err, want)
 	}
 	// The step's own exit code (1) gives way to the interruption's.
@@ -485,12 +485,12 @@ func TestRunRejectsMalformedSteps(t *testing.T) {
 			var rec events.Recorder
 			validateErr := steps.Validate(tt.steps, steps.Options{})
 			err := steps.Run(context.Background(), &rec, tt.steps, steps.Options{})
-			for _, err := range []error{validateErr, err} {
+			for fn, err := range map[string]error{"Validate": validateErr, "Run": err} {
 				if err == nil || !strings.Contains(err.Error(), tt.want) {
-					t.Fatalf("error %v, want one containing %q", err, tt.want)
+					t.Fatalf("%s: error %v, want one containing %q", fn, err, tt.want)
 				}
 				if code := exitcode.FromError(err); code != exitcode.CodeFailed {
-					t.Errorf("exit code %d, want %d: a malformed list is a bug, not a usage error", code, exitcode.CodeFailed)
+					t.Errorf("%s: exit code %d, want %d: a malformed list is a bug, not a usage error", fn, code, exitcode.CodeFailed)
 				}
 			}
 			assertEvents(t, &rec)

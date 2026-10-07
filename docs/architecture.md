@@ -452,9 +452,9 @@ It stops at the first failure and returns a `*steps.Error` with the step's
 resumes there because `Check` skips what is done. The error wraps what
 `Check` or `Apply` returned, so a step that returns
 `exitcode.Precondition(...)` makes the command exit 3. The cli layer
-(ticket 004) gets the step for `ErrorInfo.Step` with `errors.As`. When the
-run was interrupted between steps, `Step` is the next step, which has no
-events.
+fills `ErrorInfo.Step` from the first `StepDone{failed}`. When the run was
+interrupted between steps, no step failed: `Error.Step` is the next step,
+named only in the message.
 
 - **Validation.** Before running anything, `Run` rejects a `Skip` ID that
   names none of its steps with `exitcode.Usage` (exit 2), listing the
@@ -466,16 +466,17 @@ events.
   alone: an operation that prompts, takes a lock or fetches before `Run`
   calls it first, so a mistyped `--skip-step` fails before that work.
 - **Cancellation.** `Run` checks `ctx` before each step and before `Apply`,
-  and starts nothing once it's done. It never abandons a running `Check` or
-  `Apply`: it waits for it to return, so the step's deferred cleanups run
-  first. A step that then fails gets `StepDone{failed}`, and the error has
-  `Interrupted` set and wraps `context.Cause(ctx)` instead of the step's
-  own error, so the exit code comes from the cause: 130 for a cancellation,
-  128+N for a signal. A step that finishes anyway counts as done, so if it
-  was the last one `Run` returns nil. On a signal, the cli reports the
-  `*steps.Error` (it wraps the signal cause) rather than the bare cause, so
-  the message names the step to resume from. A cleanup that has to run
-  commands after cancellation needs a live context:
+  and starts no more steps once it's done. It never abandons a running
+  `Check` or `Apply`: it waits for it to return, so the step's deferred
+  cleanups run first. If it fails, or `Check` finds the step not done, the
+  step gets `StepDone{failed}`, and the error has `Interrupted` set and
+  wraps `context.Cause(ctx)` instead of the step's own error, so the exit
+  code comes from the cause: 130 for a cancellation, 128+N for a signal. A
+  step that finishes anyway counts as done, so if it was the last one `Run`
+  returns nil. On a signal, the cli reports the command's error when it
+  wraps the signal cause, as a `*steps.Error` does, so the message names
+  the step to resume from; the exit code is still the signal's. A cleanup
+  that has to run commands after cancellation needs a live context:
   `context.WithTimeout(context.WithoutCancel(ctx), d)`.
 - **Plan mode.** `steps.Plan(ctx, steps, opts)` returns a `[]Planned`
   (`ID`, `Title`, `Status`, `Error`, with JSON tags) without applying
