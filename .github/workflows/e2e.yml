@@ -1,0 +1,227 @@
+name: e2e
+
+# Real installs (spec §11) on amd64 and arm64: scripts/e2e-core.sh runs the
+# core sequence, then scripts/e2e-two-stacks.sh runs two stacks side by
+# side. No images are published for the release's commits yet, so the
+# stacks build from source; the images and the Maven repository are cached
+# per architecture (scripts/e2e-cache.sh).
+
+on:
+  schedule:
+    - cron: "23 5 * * *"
+  push:
+    branches: [v2, main]
+  pull_request:
+    branches: [v2, main]
+    types: [opened, synchronize, reopened, labeled]
+  workflow_dispatch:
+    inputs:
+      release_branch:
+        description: Release-control branch or tag
+        default: james_mono
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # Scheduled and push runs have no inputs, so the default is repeated here.
+  E2E_RELEASE_BRANCH: ${{ inputs.release_branch || 'james_mono' }}
+  E2E_JAVA_OPTS: -Xmx1g
+  E2E_LOAD_HEAP_MB: "1024"
+  RELEASE_CONTROL: https://github.com/hms-dbmi/pic-sure-baseline-release-control
+  CACHE_DIR: ${{ github.workspace }}/../e2e-cache
+
+jobs:
+  core:
+    name: core (${{ matrix.runner }})
+    # Pull requests run it only when labelled e2e.
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'e2e')
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Free disk space and show the tools
+        run: &prepare |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+          docker version --format 'docker {{.Server.Version}}'
+          docker compose version
+          docker buildx version
+
+      # The release-control commit the branch is at now: the stack's images
+      # follow from it.
+      - name: Cache keys
+        id: keys
+        run: &keys |
+          release="$(git ls-remote "$RELEASE_CONTROL" "refs/heads/$E2E_RELEASE_BRANCH" "refs/tags/$E2E_RELEASE_BRANCH^{}" "refs/tags/$E2E_RELEASE_BRANCH" | head -n 1 | cut -f 1)"
+          if [ -z "$release" ]; then
+            echo "::error::$E2E_RELEASE_BRANCH isn't a branch or tag of $RELEASE_CONTROL"
+            exit 1
+          fi
+          {
+            echo "images=e2e-images-$RUNNER_ARCH-$release-"
+            echo "images-any=e2e-images-$RUNNER_ARCH-"
+            echo "maven=e2e-m2-$RUNNER_ARCH-"
+          } >> "$GITHUB_OUTPUT"
+
+      # Keys end in the run ID, so a save never collides and a restore takes
+      # the newest entry for this release, else for any release.
+      - name: Restore images
+        id: images
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.CACHE_DIR }}/images
+          key: ${{ steps.keys.outputs.images }}${{ github.run_id }}
+          restore-keys: |
+            ${{ steps.keys.outputs.images }}
+            ${{ steps.keys.outputs.images-any }}
+
+      # Maven runs only when the release's pic-sure images aren't cached.
+      - name: Restore the Maven repository
+        if: ${{ !startsWith(steps.images.outputs.cache-matched-key, steps.keys.outputs.images) }}
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.CACHE_DIR }}/maven
+          key: ${{ steps.keys.outputs.maven }}${{ github.run_id }}
+          restore-keys: ${{ steps.keys.outputs.maven }}
+
+      - name: Load the caches
+        run: |
+          scripts/e2e-cache.sh load-images "$CACHE_DIR/images"
+          scripts/e2e-cache.sh load-maven "$CACHE_DIR/maven"
+          rm -rf "$CACHE_DIR"
+          docker image ls --format '{{.Repository}}:{{.Tag}}' --filter 'reference=hms-dbmi/*' | sort > "$RUNNER_TEMP/images-before"
+
+      - name: e2e core
+        env:
+          E2E_NAME: e2e-core
+          E2E_ARTIFACTS: ${{ runner.temp }}/e2e-artifacts
+          E2E_IMAGES_FILE: ${{ runner.temp }}/images-used
+        run: scripts/e2e-core.sh
+
+      # Saved once init has run, even if a later step failed, but only when
+      # init built an image the restored cache didn't have.
+      - name: Export the caches
+        id: export
+        if: ${{ !cancelled() }}
+        run: |
+          if [ ! -s "$RUNNER_TEMP/images-used" ]; then
+            echo "init didn't finish; nothing to save"
+            exit 0
+          fi
+          sort -u "$RUNNER_TEMP/images-used" > "$RUNNER_TEMP/images-wanted"
+          if [ -z "$(comm -13 "$RUNNER_TEMP/images-before" "$RUNNER_TEMP/images-wanted")" ]; then
+            echo "every image came from the cache"
+            exit 0
+          fi
+          scripts/e2e-cache.sh save-images "$CACHE_DIR/images" "$RUNNER_TEMP/images-wanted"
+          echo "images=true" >> "$GITHUB_OUTPUT"
+          scripts/e2e-cache.sh save-maven "$CACHE_DIR/maven"
+          if [ -f "$CACHE_DIR/maven/m2.tar" ]; then echo "maven=true" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Save images
+        if: ${{ !cancelled() && steps.export.outputs.images == 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.CACHE_DIR }}/images
+          key: ${{ steps.keys.outputs.images }}${{ github.run_id }}
+
+      - name: Save the Maven repository
+        if: ${{ !cancelled() && steps.export.outputs.maven == 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.CACHE_DIR }}/maven
+          key: ${{ steps.keys.outputs.maven }}${{ github.run_id }}
+
+      - name: Upload logs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-core-${{ matrix.runner }}
+          path: ${{ runner.temp }}/e2e-artifacts
+          if-no-files-found: warn
+          retention-days: 14
+
+  two-stacks:
+    name: two stacks (${{ matrix.runner }})
+    # After core, so it finds the images core cached; it still runs (and
+    # builds what it lacks) when core fails.
+    needs: core
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'e2e')) }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Free disk space and show the tools
+        run: *prepare
+
+      - name: Cache keys
+        id: keys
+        run: *keys
+
+      - name: Restore images
+        id: images
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.CACHE_DIR }}/images
+          key: ${{ steps.keys.outputs.images }}${{ github.run_id }}
+          restore-keys: |
+            ${{ steps.keys.outputs.images }}
+            ${{ steps.keys.outputs.images-any }}
+
+      - name: Restore the Maven repository
+        if: ${{ !startsWith(steps.images.outputs.cache-matched-key, steps.keys.outputs.images) }}
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.CACHE_DIR }}/maven
+          key: ${{ steps.keys.outputs.maven }}${{ github.run_id }}
+          restore-keys: ${{ steps.keys.outputs.maven }}
+
+      - name: Load the caches
+        run: |
+          scripts/e2e-cache.sh load-images "$CACHE_DIR/images"
+          scripts/e2e-cache.sh load-maven "$CACHE_DIR/maven"
+          rm -rf "$CACHE_DIR"
+
+      - name: e2e two stacks
+        env:
+          E2E_NAME: e2e-two
+          E2E_ARTIFACTS: ${{ runner.temp }}/e2e-artifacts
+        run: scripts/e2e-two-stacks.sh
+
+      - name: Upload logs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-two-stacks-${{ matrix.runner }}
+          path: ${{ runner.temp }}/e2e-artifacts
+          if-no-files-found: warn
+          retention-days: 14

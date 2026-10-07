@@ -112,7 +112,7 @@ jobs:
       - name: Shellcheck
         run: |
           shellcheck --version
-          shellcheck install.sh smoke/install_test.sh
+          shellcheck install.sh smoke/install_test.sh scripts/*.sh
 
   release:
     name: Release snapshot + install.sh

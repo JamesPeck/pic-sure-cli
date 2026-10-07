@@ -2485,6 +2485,26 @@ reads the AIO repository. The workflow fetches the AIO branch, runs it, and
 writes the run summary and the one tracking issue; the repository, branch
 and commit are dispatch inputs.
 
+## scripts (e2e)
+
+Ticket 062, spec §11. `.github/workflows/e2e.yml` runs `e2e-core.sh` and
+then `e2e-two-stacks.sh` on `ubuntu-latest` and `ubuntu-24.04-arm` (nightly,
+on pushes to `v2`/`main`, and on PRs labelled `e2e`); both run locally as
+they are. `e2e-lib.sh` holds what they share and documents the settings
+(`E2E_*` variables): open mode with no client secret (init generates one),
+`--auto-ports`, `--set hpds.java_opts`, and an EXIT trap that, on failure,
+saves each stack's compose logs, `status --json`, run logs and support
+bundle to `E2E_ARTIFACTS`, then destroys every stack it made. The
+assertions read `status --deep --json` and `update --json`'s plan
+(`docs/json-schemas.md`, `ops.UpdatePlan`), so changing those fields means
+changing the scripts.
+
+No images are published for the release's commits, so CI builds from
+source. `e2e-cache.sh` moves the images init recorded (`E2E_IMAGES_FILE`)
+and the `pic-sure-m2` volume to and from tarballs that actions/cache keeps
+per architecture; the images key carries the release-control commit, and a
+new entry is saved only when init built something.
+
 ## v1 leftovers
 
 These packages exist only until the TUI tickets replace what uses them:
