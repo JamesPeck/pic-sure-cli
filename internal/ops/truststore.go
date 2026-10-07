@@ -301,7 +301,11 @@ func (t *truststore) apply(ctx context.Context, sink events.Sink) error {
 		Stdout:     stdout,
 		Stderr:     io.MultiWriter(stderr, &errTail),
 	})
-	if err == nil && code != 0 {
+	if err != nil {
+		// docker run was interrupted, but its container may still be
+		// writing the volume, where it would race a retry.
+		_ = t.d.Docker.Rm(context.WithoutCancel(ctx), name, true)
+	} else if code != 0 {
 		err = fmt.Errorf("the helper container exited %d", code)
 		if msg := strings.TrimSpace(errTail.String()); msg != "" {
 			err = fmt.Errorf("%w: %s", err, msg[strings.LastIndexByte(msg, '\n')+1:])

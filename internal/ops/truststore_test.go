@@ -419,3 +419,16 @@ func TestTruststoreStepReportsAFailedImport(t *testing.T) {
 		t.Errorf("a failed build was recorded: %+v", state.Truststore)
 	}
 }
+
+func TestTruststoreStepRemovesAnInterruptedHelper(t *testing.T) {
+	st, cfg := newTrustStack(t)
+	writeTestFile(t, st.Path("certs/trust/a.crt"), pemCerts(newCACert(t, "a")))
+	v := newTrustVolume(t)
+	v.f.On(fakerunner.Glob("docker run *")).Err(context.Canceled)
+	v.f.On(fakerunner.Exact("docker", "rm", "-v", "-f", "demo-truststore-abababab"))
+	var rec events.Recorder
+	if err := runTrustStep(t, newTrustDeps(v.f, &rec), st, cfg); !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want context.Canceled", err)
+	}
+	v.f.AssertOrder(fakerunner.Glob("docker run *"), fakerunner.Glob("docker rm *"))
+}
