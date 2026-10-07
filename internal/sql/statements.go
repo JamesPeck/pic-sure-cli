@@ -51,19 +51,18 @@ func SeedAdminUser(email string, id [16]byte) []string {
 	_ = enc.Encode(struct {
 		Email string `json:"email"`
 	}{email})
-	// The role rows are keyed on the new UUID rather than the email, so a
-	// user that already had the email gets none; a replay with the same id
-	// skips the rows it already added.
+	// The roles are granted only when this session's insert added the
+	// user, so neither an existing user nor a replay with the same id gets
+	// back a role an admin has since revoked.
 	grant := func(role string) string {
-		r := "UNHEX('" + role + "')"
-		return "INSERT INTO auth.user_role (user_id, role_id) SELECT uuid, " + r + " FROM auth.user WHERE uuid = " + uuid +
-			" AND NOT EXISTS (SELECT 1 FROM auth.user_role WHERE user_id = " + uuid + " AND role_id = " + r + ")"
+		return "INSERT INTO auth.user_role (user_id, role_id) SELECT " + uuid + ", UNHEX('" + role + "') FROM DUAL WHERE @picsure_seeded_admin = 1"
 	}
 	return []string{
 		"START TRANSACTION",
 		"INSERT INTO auth.user (uuid, auth0_metadata, general_metadata, acceptedTOS, connectionId, email, matched, subject, is_active, long_term_token) " +
 			"SELECT " + uuid + ", NULL, " + QuoteMySQL(strings.TrimSuffix(meta.String(), "\n")) + ", NULL, (SELECT uuid FROM auth.connection WHERE label = 'Google'), " + e + ", 0, NULL, 1, NULL " +
 			"FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM auth.user WHERE email = " + e + ")",
+		"SET @picsure_seeded_admin = ROW_COUNT()",
 		grant(topAdminRoleID),
 		grant(userRoleID),
 		"COMMIT",

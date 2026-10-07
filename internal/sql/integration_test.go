@@ -121,12 +121,18 @@ func TestMySQLIntegration(t *testing.T) {
 			"INSERT INTO auth.application VALUES (0x01, 'PICSURE', NULL)",
 		)
 		email := `o'brien"\@example.org`
-		// The same id twice (a replay), then a fresh one (a later run).
-		for _, first := range []byte{1, 1, 2} {
-			var id [16]byte
-			id[0] = first
-			mustExec(t, e, root, sql.SeedAdminUser(email, id)...)
+		var id [16]byte
+		id[0] = 1
+		mustExec(t, e, root, sql.SeedAdminUser(email, id)...)
+		// A replay must not restore a role revoked in between.
+		mustExec(t, e, root, "DELETE FROM auth.user_role WHERE role_id = 0x002DC366B0D8420F998F885D0ED797FD")
+		mustExec(t, e, root, sql.SeedAdminUser(email, id)...)
+		if got := query(t, e, root, "SELECT COUNT(*) FROM auth.user_role"); got != "1" {
+			t.Errorf("roles after a replay = %s, want the 1 left after the revocation", got)
 		}
+		mustExec(t, e, root, "INSERT INTO auth.user_role VALUES (UNHEX('01000000000000000000000000000000'), 0x002DC366B0D8420F998F885D0ED797FD)")
+		id[0] = 2
+		mustExec(t, e, root, sql.SeedAdminUser(email, id)...)
 
 		got := query(t, e, root, sql.CountUsersWithEmail(email))
 		if got != "1" {
