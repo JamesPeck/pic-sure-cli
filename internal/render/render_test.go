@@ -417,7 +417,7 @@ func TestSharedProfile(t *testing.T) {
 func TestViteEnv(t *testing.T) {
 	cfg := stack.DefaultConfig()
 	env := ViteEnv(&cfg)
-	if env["VITE_OPEN"] != "false" || env["VITE_THEME"] != "picsure" || env["VITE_AUTH0_TENANT"] != "avillachlab" {
+	if env["VITE_OPEN"] != "false" || env["VITE_THEME"] != "picsure" || env["VITE_AUTH0_TENANT"] != "avillachlab" || env["VITE_ORIGIN"] != "http://localhost" {
 		t.Errorf("required mode: %v", env)
 	}
 	if _, ok := env["VITE_AUTH_PROVIDER_MODULE_GOOGLE"]; ok {

@@ -682,10 +682,12 @@ each AIO source still exists in the AIO checkout beside this repo (or
   `secretVars` name, always, plus `proxyVars` when a proxy is set (empty
   when only one scheme is). `DB_ROOT_PASSWORD` is the local or remote root
   password by `db.mode`.
-- `ViteEnv(cfg)` is the frontend's `VITE_*` set without `VITE_ORIGIN`: the
-  auth-mode flags, ToS, the Auth0 login module when `client_id` is set,
-  analytics and the theme. httpd-hmr gets it plus `VITE_ORIGIN`; the
-  frontend build (030) bakes it in and hashes it for the image tag.
+- `ViteEnv(cfg)` is the frontend's `VITE_*` set: the auth-mode flags, ToS,
+  the Auth0 login module when `client_id` is set, analytics, the theme and
+  `VITE_ORIGIN=http://localhost` (AIO's value: SSR config fetches go to
+  httpd inside its own container). The frontend build (030) bakes it in and
+  hashes it for the image tag; httpd-hmr gets it with `VITE_ORIGIN` replaced
+  by `HMROrigin(port)`.
 
 **Goldens.** `render_test.go` renders 11 stacks that cover every pair of
 auth mode, dev (none, hpds, httpd-hmr), db mode, HPDS data, proxy and

@@ -191,6 +191,9 @@ func TestBuildFrontendCopiesTheSourceAndWritesTheEnv(t *testing.T) {
 		if err != nil || string(got) != string(wantEnv) {
 			t.Errorf(".env in the context: %q, %v; want %q", got, err, wantEnv)
 		}
+		if !strings.Contains(string(got), "VITE_ORIGIN='http://localhost'\n") {
+			t.Errorf(".env has no VITE_ORIGIN for SSR config fetches: %q", got)
+		}
 		if link, err := os.Readlink(filepath.Join(ctxDir, "src", "link.ts")); err != nil || link != "routes/page.ts" {
 			t.Errorf("symlink copied as %q, %v", link, err)
 		}

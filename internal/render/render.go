@@ -388,10 +388,12 @@ func renderFiles(d templateData) ([]File, error) {
 	return out, err
 }
 
-// ViteEnv returns the frontend's VITE_* settings for the config, without
-// VITE_ORIGIN, which depends on where the frontend is served. The frontend
-// build bakes them in (§7.2), and httpd-hmr gets them as its environment.
-// Ported from AIO's picsure_frontend_env and the VITE_* lines of init.sh.
+// ViteEnv returns the frontend's VITE_* settings for the config. The
+// frontend build bakes them in (§7.2), and httpd-hmr gets them as its
+// environment with VITE_ORIGIN replaced by HMROrigin. VITE_ORIGIN is where
+// the frontend's server-side rendering fetches its configuration; for the
+// built image that is httpd's own HTTP listener inside the container, as in
+// AIO. Ported from AIO's picsure_frontend_env and the VITE_* lines of init.sh.
 func ViteEnv(cfg *stack.Config) map[string]string {
 	flags := stack.DeriveAuthFlags(cfg.Auth.Mode)
 	b := strconv.FormatBool
@@ -407,6 +409,7 @@ func ViteEnv(cfg *stack.Config) map[string]string {
 		"VITE_API_CONFIG_BRANDING": "ui:branding",
 		"VITE_AUTH0_TENANT":        cfg.Auth.Auth0.Tenant,
 		"VITE_THEME":               cfg.Frontend.Theme,
+		"VITE_ORIGIN":              "http://localhost",
 	}
 	if env["VITE_THEME"] == "" {
 		env["VITE_THEME"] = "picsure"
