@@ -844,8 +844,12 @@ func (x *Dictionary) requireConcepts(ctx context.Context, sink events.Sink, step
 func (x *Dictionary) waitAPI(ctx context.Context) error {
 	wait, cancel := context.WithTimeout(ctx, dictionaryAPIWait)
 	defer cancel()
+	var lastErr error
 	for {
 		svc, err := composeService(wait, x.d, dictionaryAPI)
+		if err != nil && wait.Err() == nil {
+			lastErr = err // a call cut short by the deadline would hide the daemon's own error
+		}
 		switch {
 		case err == nil && svc != nil && svc.State == "running" && svc.Health == "healthy":
 			return nil
@@ -857,8 +861,8 @@ func (x *Dictionary) waitAPI(ctx context.Context) error {
 			if ctx.Err() != nil {
 				return context.Cause(ctx)
 			}
-			if err != nil {
-				return fmt.Errorf("dictionary-api wasn't healthy within %s of its restart: %w", dictionaryAPIWait, err)
+			if lastErr != nil {
+				return fmt.Errorf("dictionary-api wasn't healthy within %s of its restart: %w", dictionaryAPIWait, lastErr)
 			}
 			return fmt.Errorf("dictionary-api wasn't healthy within %s of its restart", dictionaryAPIWait)
 		case <-time.After(dictionaryAPIPoll):
