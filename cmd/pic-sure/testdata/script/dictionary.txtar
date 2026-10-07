@@ -3,7 +3,7 @@ exitcode 2 pic-sure dictionary load-csv --datasets datasets.csv
 stderr 'required flag\(s\) "concepts" not set'
 exitcode 2 pic-sure dictionary load-facets --categories c.csv --facets f.csv
 exitcode 2 pic-sure --stack stack dictionary load-csv --datasets missing.csv --concepts datasets.csv
-stderr '^pic-sure: --datasets: stat .*missing.csv: no such file or directory$'
+stderr '^pic-sure: --datasets: open .*missing.csv: no such file or directory$'
 exitcode 2 pic-sure --stack stack dictionary weights --weights stack
 stderr '^pic-sure: --weights: .*stack is not a file$'
 exitcode 2 pic-sure --stack stack dictionary hydrate --heap 0

@@ -166,13 +166,19 @@ func openCache(cmd *cobra.Command) (*cache.Cache, error) {
 	return cache.Open(root, cache.Options{Holder: cmd.CommandPath()})
 }
 
-// inputFile returns path made absolute, which must be a regular file.
+// inputFile returns path made absolute, which must be a regular file we
+// can read.
 func inputFile(flag, path string) (string, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return "", exitcode.Usage("%s: %w", flag, err)
 	}
-	fi, err := os.Stat(abs)
+	f, err := os.Open(abs)
+	if err != nil {
+		return "", exitcode.Usage("%s: %w", flag, err)
+	}
+	fi, err := f.Stat()
+	_ = f.Close()
 	if err != nil {
 		return "", exitcode.Usage("%s: %w", flag, err)
 	}

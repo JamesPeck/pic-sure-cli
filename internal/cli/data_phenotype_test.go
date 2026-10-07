@@ -48,7 +48,13 @@ func TestPhenotypeRerunHint(t *testing.T) {
 		{"weights", auto, dictErr(ops.StepWeights),
 			"dictionary step weights failed: boom. HPDS has the new data (phenotype:abc); to finish the load, run: " + pic + "dictionary weights"},
 		{"refresh", auto, dictErr(ops.StepDictionaryRefresh),
-			"dictionary step dictionary-refresh failed: boom. HPDS has the new data (phenotype:abc); to finish the load, run: " + pic + "restart dictionary-api"},
+			"dictionary step dictionary-refresh failed: boom. HPDS has the new data (phenotype:abc); to finish the load, run: " + pic + "dictionary weights"},
+		{"refresh without weights", noWeights, dictErr(ops.StepDictionaryRefresh),
+			"dictionary step dictionary-refresh failed: boom. HPDS has the new data (phenotype:abc); to finish the load, run: " +
+				pic + "dictionary load-csv --datasets /d/datasets.csv --concepts /d/c.zip --clear"},
+		{"unknown step", auto, dictErr("new-step"),
+			"dictionary step new-step failed: boom. HPDS has the new data (phenotype:abc); to finish the load, run: " +
+				pic + "dictionary hydrate --clear --heap 1024 && " + pic + "dictionary weights"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

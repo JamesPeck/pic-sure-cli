@@ -64,7 +64,7 @@ load.`,
 	f.String("file", "", "phenotype CSV, or a tar.gz, gzip or zip `FILE` holding one")
 	f.String("entry", "", "the CSV `ENTRY` to load from an archive with several")
 	f.String("input-dir", "", "`DIR` of phenotype files for the sequential loader (ticket 043)")
-	f.Int("heap", 0, "loader JVM heap in `MB` (default 4096 for --file)")
+	f.Int("heap", 0, "JVM heap in `MB` of the loader and of the auto dictionary's CreateColumnmetaCSV (default 4096 for --file)")
 	f.String("dictionary", ops.DictionaryAuto, "dictionary `SOURCE`: auto (built from the loaded data) or custom")
 	f.String("datasets", "", "custom dictionary: the datasets CSV `FILE`")
 	f.String("concepts", "", "custom dictionary: a zip `FILE` of concepts_*.csv")

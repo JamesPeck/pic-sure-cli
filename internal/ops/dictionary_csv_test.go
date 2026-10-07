@@ -199,3 +199,42 @@ func TestOpenCSVLoadRejectsBadInput(t *testing.T) {
 		})
 	}
 }
+
+// TestDictionaryFixture checks testdata/dictionary is a valid custom
+// dictionary: the inputs load-csv accepts, the zip matching its CSV, and
+// the facet headers dictionary-etl c97a813 requires.
+func TestDictionaryFixture(t *testing.T) {
+	dir := filepath.Join("..", "..", "testdata", "dictionary")
+	in, err := openCSVLoad(filepath.Join(dir, "datasets.csv"), filepath.Join(dir, "concepts.zip"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = in.Close() })
+	files, err := in.split(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(files["synthetic_custom"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := os.ReadFile(filepath.Join(dir, "concepts_0.csv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(want) {
+		t.Errorf("concepts.zip's concepts for synthetic_custom differ from concepts_0.csv:\n%s", got)
+	}
+	for file, header := range map[string]string{
+		"facet_categories.csv": "name(unique),display name,description",
+		"facets.csv":           "facet_category,facet_name(unique),display_name,description,parent_name",
+	} {
+		b, err := os.ReadFile(filepath.Join(dir, file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if first, _, _ := strings.Cut(string(b), "\n"); first != header {
+			t.Errorf("%s's header = %q, want %q", file, first, header)
+		}
+	}
+}

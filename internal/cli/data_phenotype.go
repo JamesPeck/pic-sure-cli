@@ -47,7 +47,7 @@ type phenotypeArgs struct {
 // as AIO's etl.sh load_phenotype does.
 func phenotypeFlags(f *pflag.FlagSet) (phenotypeArgs, error) {
 	var p phenotypeArgs
-	p.file, _ = f.GetString("file")
+	file, _ := f.GetString("file")
 	p.entry, _ = f.GetString("entry")
 	p.heap, _ = f.GetInt("heap")
 	p.dictionary, _ = f.GetString("dictionary")
@@ -55,42 +55,50 @@ func phenotypeFlags(f *pflag.FlagSet) (phenotypeArgs, error) {
 	if p.heap < 0 || f.Changed("heap") && p.heap == 0 {
 		return p, exitcode.Usage("--heap must be a positive number of MB, not %d", p.heap)
 	}
+	var err error
+	if p.file, err = filepath.Abs(file); err != nil {
+		return p, exitcode.Usage("--file: %w", err)
+	}
 	if p.dictionary != ops.DictionaryAuto && p.dictionary != ops.DictionaryCustom {
 		return p, exitcode.Usage("--dictionary must be %s or %s, not %q", ops.DictionaryAuto, ops.DictionaryCustom, p.dictionary)
 	}
-	custom := []string{"datasets", "concepts", "facets-categories", "facets", "facet-concepts"}
+	csvs := []struct {
+		flag string
+		path *string
+	}{{"datasets", &p.datasets}, {"concepts", &p.concepts}}
+	facets := []struct {
+		flag string
+		path *string
+	}{{"facets-categories", &p.facets.Categories}, {"facets", &p.facets.Facets}, {"facet-concepts", &p.facets.Concepts}}
 	if p.dictionary == ops.DictionaryAuto {
-		for _, name := range custom {
-			if f.Changed(name) {
-				return p, exitcode.Usage("--%s is for --dictionary custom", name)
+		for _, c := range append(csvs, facets...) {
+			if f.Changed(c.flag) {
+				return p, exitcode.Usage("--%s is for --dictionary custom", c.flag)
 			}
 		}
-	} else if !f.Changed("datasets") || !f.Changed("concepts") {
-		return p, exitcode.Usage("--dictionary custom requires --datasets and --concepts")
-	}
-	var facets int
-	for _, name := range custom[2:] {
-		if f.Changed(name) {
-			facets++
-		}
-	}
-	if facets != 0 && facets != 3 {
-		return p, exitcode.Usage("--facets-categories, --facets and --facet-concepts go together: give all three or none")
-	}
-	if p.dictionary == ops.DictionaryAuto {
 		return p, nil
 	}
-	paths := map[string]*string{
-		"datasets": &p.datasets, "concepts": &p.concepts,
-		"facets-categories": &p.facets.Categories, "facets": &p.facets.Facets, "facet-concepts": &p.facets.Concepts,
+	if !f.Changed("datasets") || !f.Changed("concepts") {
+		return p, exitcode.Usage("--dictionary custom requires --datasets and --concepts")
 	}
-	for _, name := range custom[:2+facets] {
-		v, _ := f.GetString(name)
-		abs, err := inputFile("--"+name, v)
-		if err != nil {
+	given := 0
+	for _, c := range facets {
+		if f.Changed(c.flag) {
+			given++
+		}
+	}
+	switch given {
+	case 0:
+	case len(facets):
+		csvs = append(csvs, facets...)
+	default:
+		return p, exitcode.Usage("--facets-categories, --facets and --facet-concepts go together: give all three or none")
+	}
+	for _, c := range csvs {
+		v, _ := f.GetString(c.flag)
+		if *c.path, err = inputFile("--"+c.flag, v); err != nil {
 			return p, err
 		}
-		*paths[name] = abs
 	}
 	return p, nil
 }
@@ -206,11 +214,6 @@ func (p phenotypeArgs) rerunHint(dir, dataset string, err error) error {
 	if !errors.As(err, &de) {
 		return fmt.Errorf("%w; to retry the load, run: %s", err, pic+p.command())
 	}
-	var cmds []string
-	if de.Step == ops.StepDictionaryRefresh {
-		cmds = append(cmds, "restart dictionary-api")
-	}
-	// The dictionary commands in run order, each with the steps it runs.
 	type group struct {
 		cmd   string
 		steps []string
@@ -233,33 +236,25 @@ func (p phenotypeArgs) rerunHint(dir, dataset string, err error) error {
 	if !p.skipWeights {
 		groups = append(groups, group{"dictionary weights", []string{ops.StepWeights}})
 	}
-	from := -1
+	// Every dictionary command ends with the refresh, so re-running the
+	// last one retries a failed refresh. A step no command lists reruns
+	// them all.
+	from := 0
 	for i, g := range groups {
-		if slices.Contains(g.steps, de.Step) {
+		if slices.Contains(g.steps, de.Step) || de.Step == ops.StepDictionaryRefresh && i == len(groups)-1 {
 			from = i
 		}
 	}
-	if from >= 0 {
-		for _, g := range groups[from:] {
-			cmds = append(cmds, g.cmd)
-		}
-	}
-	if len(cmds) == 0 {
-		return err
-	}
-	for i := range cmds {
-		cmds[i] = pic + cmds[i]
+	var cmds []string
+	for _, g := range groups[from:] {
+		cmds = append(cmds, pic+g.cmd)
 	}
 	return fmt.Errorf("%w. HPDS has the new data (%s); to finish the load, run: %s", err, dataset, strings.Join(cmds, " && "))
 }
 
 // command is the load-phenotype command line for p.
 func (p phenotypeArgs) command() string {
-	file, err := filepath.Abs(p.file)
-	if err != nil {
-		file = p.file
-	}
-	parts := []string{"data", "load-phenotype", "--file", shellQuote(file)}
+	parts := []string{"data", "load-phenotype", "--file", shellQuote(p.file)}
 	if p.entry != "" {
 		parts = append(parts, "--entry", shellQuote(p.entry))
 	}

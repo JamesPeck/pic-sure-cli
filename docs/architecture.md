@@ -339,7 +339,7 @@ it.
   AIO's `etl.sh load_phenotype` does (all exit 2): `--heap` positive,
   `--dictionary` auto or custom, custom needs `--datasets` and `--concepts`,
   auto takes none of the custom flags, the facet trio is all or none, and
-  each custom file exists. No `--skip-step`, since the steps depend on each
+  each custom file is a readable file (`inputFile`, which the `dictionary` commands share). No `--skip-step`, since the steps depend on each
   other. Under the stack lock, shared HPDS data is exit 1 and an
   uninitialised stack exit 3; then `phenoinput.Resolve` with the cache's
   `TempDir` (a missing file or an `*EntryError` is exit 2), and
@@ -347,8 +347,9 @@ it.
   state.json. A failure that isn't a usage error gets a copy-pasteable
   retry (`rerunHint`, paths quoted with `shellQuote`): after HPDS has the
   new data (`*ops.PhenotypeDictionaryError`), the `dictionary` commands
-  from the failed step on (or `restart dictionary-api` for the refresh);
-  before that, the whole `data load-phenotype` command. `--json`'s data is
+  from the failed step on (the last one again for a failed refresh, since
+  each ends with it; all of them for a step none lists); before that, the
+  whole `data load-phenotype` command. `--json`'s data is
   `{"dataset": "phenotype:<sha256>", "dictionary": "auto", "weights": true}`.
 - `data_demo.go` (046): `data demo [nhanes|synthea|1000genomes|all]
   [--heap MB]`, default nhanes. The same usage checks and refusals as

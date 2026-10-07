@@ -36,6 +36,10 @@ exitcode 2 pic-sure data load-phenotype --file pheno.csv --dictionary custom --d
 stderr '--datasets: .*missing.csv'
 exitcode 2 pic-sure data load-phenotype --file pheno.csv --dictionary custom --datasets datasets.csv --concepts concepts.zip --facets-categories cat.csv --facets facets.csv --facet-concepts missing.csv
 stderr '--facet-concepts: .*missing.csv'
+chmod 000 cat.csv
+exitcode 2 pic-sure data load-phenotype --file pheno.csv --dictionary custom --datasets datasets.csv --concepts concepts.zip --facets-categories cat.csv --facets facets.csv --facet-concepts facets.csv
+stderr '--facets-categories: .*permission denied'
+chmod 644 cat.csv
 
 # No stack: exit 3.
 exitcode 3 pic-sure data load-phenotype --file pheno.csv
