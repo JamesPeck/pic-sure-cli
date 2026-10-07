@@ -33,7 +33,9 @@ type TeardownOptions struct {
 	// PruneImages has destroy also remove the commit-tagged images nothing
 	// else uses, by cache prune's rules; Cache must be set.
 	PruneImages bool
-	Cache       *cache.Cache
+	// Cache, if set, is the cache whose stack registry destroy removes the
+	// stack from.
+	Cache *cache.Cache
 }
 
 // TeardownReport is reset's and destroy's report.
@@ -121,7 +123,10 @@ func Destroy(ctx context.Context, d *Deps, st *stack.Stack, opts TeardownOptions
 				for _, p := range files.Kept {
 					sink.Emit(events.Warning{ID: StepFiles, Text: "kept " + st.Path(p) + ": it holds files pic-sure didn't create, or isn't what pic-sure created"})
 				}
-				return err
+				if err != nil || opts.Cache == nil {
+					return err
+				}
+				return opts.Cache.UnregisterStack(st.Dir)
 			},
 		},
 	}

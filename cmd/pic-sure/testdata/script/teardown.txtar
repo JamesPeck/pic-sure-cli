@@ -1,3 +1,5 @@
+env XDG_CACHE_HOME=$WORK/cache
+
 # Both need a stack: exit 3.
 exitcode 3 pic-sure reset
 stderr 'no pic-sure stack found'
@@ -42,6 +44,7 @@ stdout '"type":"result","ok":true,"data":\{"stack":"demo","volumes":\["demo_hpds
 # the files pic-sure created. The operator's files survive and are listed.
 rm $WORK/docker.log
 exec pic-sure --plain --yes destroy
+! stderr 'warning'
 grep '^docker volume rm demo_hpds-logs$' $WORK/docker.log
 grep '^docker image rm hms-dbmi/pic-sure-psama:dev-demo-0123456789ab$' $WORK/docker.log
 ! grep 'image rm hms-dbmi/pic-sure-psama:dev-demo2' $WORK/docker.log

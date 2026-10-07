@@ -98,13 +98,15 @@ func (a *App) teardown(cmd *cobra.Command, opts ops.TeardownOptions) error {
 	if d.Compose, err = a.teardownCompose(d.Runner, st, cfg); err != nil {
 		return err
 	}
-	if opts.PruneImages {
-		root, err := cache.DefaultRoot()
-		if err != nil {
-			return err
-		}
-		if opts.Cache, err = cache.Open(root, cache.Options{Holder: cmd.CommandPath(), LockTimeout: pruneLockTimeout}); err != nil {
-			return err
+	if destroy {
+		// For --prune-images, and to drop the stack from the cache's
+		// registry; without --prune-images a cache that can't be opened
+		// only leaves a stale entry, which prune forgets.
+		if opts.Cache, err = openTeardownCache(cmd); err != nil {
+			if opts.PruneImages {
+				return err
+			}
+			a.warnStderr("can't open the cache to drop the stack from its registry: %v", err)
 		}
 	}
 
@@ -120,6 +122,14 @@ func (a *App) teardown(cmd *cobra.Command, opts ops.TeardownOptions) error {
 		return err
 	}
 	return a.finish(report, func(w io.Writer) error { return writeDestroySummary(w, st.Dir, report) })
+}
+
+func openTeardownCache(cmd *cobra.Command) (*cache.Cache, error) {
+	root, err := cache.DefaultRoot()
+	if err != nil {
+		return nil, err
+	}
+	return cache.Open(root, cache.Options{Holder: cmd.CommandPath(), LockTimeout: pruneLockTimeout})
 }
 
 // confirmName asks the user to type the stack name (§9.8). --yes answers

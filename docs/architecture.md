@@ -319,8 +319,10 @@ it.
   `teardownCompose`, which, unlike `stackCompose`, gives a never-rendered
   stack none (a nil `docker.Composer`) and a stack whose secrets.yaml is
   missing or unreadable empty secrets, so a half-made stack can still be
-  torn down. Then `ops.Reset` or `ops.Destroy`;
-  `--prune-images` opens the default cache with `pruneLockTimeout`.
+  torn down. Then `ops.Reset` or `ops.Destroy`. destroy opens the
+  default cache with `pruneLockTimeout`, for `--prune-images` and the
+  stack registry; without `--prune-images` a cache it can't open is only
+  a warning.
 
 | File | Commands | Ticket |
 |---|---|---|
@@ -1164,7 +1166,8 @@ whose `com.docker.compose.volume` is a catalog `SharedData` or
 - `Destroy(d, st, TeardownOptions{Name, PruneImages, Cache})` removes
   every such volume, then (`dev-images`) the `dev-<name>-*` tags of the
   built images, then (`files`) `st.RemoveCreated()`, warning for each
-  kept path. With `PruneImages` a `prune` step runs `PruneCache`'s body
+  kept path, and, once that succeeded, `Cache.UnregisterStack` (073) when
+  `Cache` is set. With `PruneImages` a `prune` step runs `PruneCache`'s body
   with `PruneOptions.CommitImagesOnly`: commit-tagged images only, under
   `LockPrune`, by §7.1's rules, once the stack's state and labelled
   resources are gone. `TeardownReport` is the `--json` data.

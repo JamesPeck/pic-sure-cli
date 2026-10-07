@@ -152,6 +152,9 @@ func TestDestroyRemovesTheStackAndNothingElse(t *testing.T) {
 	fx.daemon.containers = slices.DeleteFunc(fx.daemon.containers, func(c fakeContainer) bool { return c.name == "gone-hpds-1" })
 	fx.daemon.images = append(fx.daemon.images, fakeImage{"hms-dbmi/pic-sure-hpds:dev-alpha_beta-aaaaaaaaaaaa", "sha256:beta-dev", 100, cacheNow.AddDate(0, 0, -2)})
 	st := openFixtureStack(t, fx.alpha)
+	if err := fx.cache.RegisterStack(context.Background(), fx.alpha, "alpha"); err != nil {
+		t.Fatal(err)
+	}
 	f := teardownRunner(t, fx.daemon)
 	var rec events.Recorder
 	d := &ops.Deps{Runner: f, Docker: docker.NewEngine(f), Compose: &downComposer{}, Clock: ops.FixedClock(cacheNow), Sink: &rec}
@@ -187,6 +190,9 @@ func TestDestroyRemovesTheStackAndNothingElse(t *testing.T) {
 	}
 	if _, err := os.Stat(fx.cache.Root() + "/src/pic-sure/" + shaC); err != nil {
 		t.Errorf("destroy pruned a source tree: %v", err)
+	}
+	if reg, err := fx.cache.RegisteredStacks(); err != nil || len(reg) > 0 {
+		t.Errorf("registry after destroy: %+v, %v; want it empty", reg, err)
 	}
 }
 
