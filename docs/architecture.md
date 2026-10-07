@@ -419,11 +419,13 @@ it.
   `--skip-step`. Under the stack lock: `dev off` of a variant that isn't on
   changes nothing; `dev on` needs the component's source and refuses httpd
   beside httpd-hmr (`ops.CheckDevOn`, exit 3); then up's checks (an
-  initialised stack, `upSecrets`) and, for `on`, its port free or the
-  stack's own. It records the `dev on`/`dev off` operation and runs
+  initialised stack, `upSecrets`) and, for `on`, `StackNameInUse` and its
+  port free or the stack's own. It records the `dev on`/`dev off` operation and runs
   `ops.DevSteps` with up's lazy-env Composer. `--json`'s data is
   `{"service", "on", "services", "port", "source"}`. `dev off`'s text says
-  the service keeps the source build while the source is set (§7.3).
+  the service keeps the source build while the source is set (§7.3), and
+  that unsetting it then takes `build COMPONENT` before `up`, since up's
+  image step doesn't resolve commits.
 
 | File | Commands | Ticket |
 |---|---|---|
@@ -1235,19 +1237,22 @@ that changes nothing restarts nothing. A failure leaves the old images
 a re-run resumes from.
 
 **Dev variants (052, `dev.go`).** §7.3. `DevSteps(d, st, doc, cfg, state,
-DevOptions{ConvergeOptions, Variant, On})` switches one variant: for `on`,
-the image step limited to the variant's component (with the variant
-already in `cfg.Dev.Services`, so it records `dev_images`); `dev-config`
-(writes `dev.services` to pic-sure.yaml through `doc`, after a successful
-build, and for `off` drops the variant's `dev_images`); up's render step
-with its rendered-file watch, up's `restart` step; and `dev-start`,
+DevOptions{ConvergeOptions, Variant, On})` switches one variant. `on`: the
+image step limited to the variant's component (with the variant already in
+`cfg.Dev.Services`, so it records `dev_images`), up's render step with its
+rendered-file watch, `dev-config` (writes `dev.services` through `doc`, so
+a failed build or render leaves pic-sure.yaml unchanged), up's `restart`
+step, and `dev-start`. `off`: render, `restart`, `dev-start`, then
+`dev-config` (which also drops the variant's `dev_images`), last so a
+failed `dev off` can be retried; it doesn't build, so the services keep the
+component's source build while the source is set. `dev-start` runs
 `compose up -d --no-deps --wait` (new `ComposeUpOpts.NoDeps`) for the
-variant's services plus any other start service whose image the build
-retagged, since a source applies to the whole component. `dev off` doesn't
-build: the services keep the component's source build while the source is
-set. `DevList(cfg)`, `DevPort`, `LookupDev`, `CheckDevOn` and
-`ComponentSource` serve the command. httpd-hmr's `node` image tag
-(`images["node"]` from `.nvmrc`) is 053's.
+variant's services plus the running services built from its component
+(a dirty checkout rebuilds them under the same tag; compose recreates only
+what changed), and on a stack with nothing running only warns, leaving the
+start to `up`. `on` of httpd-hmr is exit 3 while state.json has no `node`
+image (its `.nvmrc` tag is 053's). `DevList(cfg)`, `DevPort`, `LookupDev`,
+`CheckDevOn` and `ComponentSource` serve the command.
 
 **Phenotype loader (042, `loader.go`).** §9.6's one loader, for `data
 demo` (046) and `data load-phenotype`. `LoadPhenotype(ctx, d, st, cfg,

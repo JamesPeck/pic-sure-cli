@@ -2,8 +2,6 @@ package ops
 
 import (
 	"context"
-	"fmt"
-	"maps"
 	"slices"
 	"strings"
 
@@ -104,18 +102,19 @@ func CheckDevOn(cfg *stack.Config, v catalog.DevVariant) error {
 // DevSteps switch a dev variant on or off on an initialised stack (§7.3).
 //
 // On: the image step builds the variant's component from its local
-// source and records the dev builds in state.json's dev_images; dev-config
-// adds the variant to dev.services in doc and saves it; render adds the dev
-// fragment (dev image, debug port on 127.0.0.1, JDWP agent); up's restart
-// step restarts what reads a changed rendered file; dev-start runs
-// `compose up -d --no-deps --wait` for the variant's services, and for any
-// other service of the component whose image the build replaced.
+// source and records the dev builds in state.json's dev_images; render
+// adds the dev fragment (dev image, debug port on 127.0.0.1, JDWP agent);
+// dev-config then saves dev.services, so a failed build or render leaves
+// pic-sure.yaml as it was; up's restart step restarts what reads a changed
+// rendered file; and dev-start recreates what changed.
 //
-// Off: dev-config removes the variant and its dev_images entries, then
-// render, restart and dev-start as above. The services keep running the
-// source build while the component's source is set.
+// Off: render, restart and dev-start as above, then dev-config, last so
+// that a failed run can be retried; it also drops the variant's
+// dev_images. The services keep running the source build while the
+// component's source is set.
 //
-// cfg is doc decoded; DevSteps updates both.
+// cfg is doc decoded. DevSteps sets cfg.Dev.Services at once; dev-config
+// writes it to doc.
 func DevSteps(d *Deps, st *stack.Stack, doc *stack.ConfigDoc, cfg *stack.Config, state *stack.State, opts DevOptions) ([]steps.Step, error) {
 	v, err := LookupDev(opts.Variant)
 	if err != nil {
@@ -126,33 +125,29 @@ func DevSteps(d *Deps, st *stack.Stack, doc *stack.ConfigDoc, cfg *stack.Config,
 		services = append(services, v.Name)
 	}
 	cfg.Dev.Services = services
+	if v.Image != "" && opts.On && state.Images[v.Image] == "" {
+		return nil, exitcode.Precondition("dev %s needs the %s image from the %s source's .nvmrc, which this pic-sure doesn't set up yet", v.Name, v.Image, v.Component)
+	}
 	r := &upRestarts{d: d, st: st, cfg: cfg, opts: opts.ConvergeOptions}
-	start := &devStart{d: d, cfg: cfg, v: v}
-
-	var list []steps.Step
+	save := steps.Step{
+		ID:    DevConfigStepID,
+		Title: "Save dev.services",
+		Apply: func(context.Context, events.Sink) error {
+			return saveDevServices(st, doc, state, v, services, opts.On)
+		},
+	}
+	list := []steps.Step{r.watchRender(RenderStep(d, st, cfg, state, opts.ConvergeOptions))}
 	if opts.On {
 		images := ImagesStep(d, st, cfg, state, ImagesOptions{Cache: opts.Cache, Components: []string{v.Component}})
-		apply := images.Apply
-		images.Apply = func(ctx context.Context, sink events.Sink) error {
-			before := maps.Clone(state.Images)
-			err := apply(ctx, sink)
-			start.replaced = changedImages(before, state.Images)
-			return err
-		}
-		list = append(list, images)
+		list = append([]steps.Step{images}, append(list, save)...)
 	}
 	list = append(list,
-		steps.Step{
-			ID:    DevConfigStepID,
-			Title: "Save dev.services",
-			Apply: func(context.Context, events.Sink) error {
-				return saveDevServices(st, doc, state, v, services, opts.On)
-			},
-		},
-		r.watchRender(RenderStep(d, st, cfg, state, opts.ConvergeOptions)),
 		withCompose(d, opts.ConvergeOptions, r.step()),
-		withCompose(d, opts.ConvergeOptions, start.step()),
+		withCompose(d, opts.ConvergeOptions, devStartStep(d, cfg, v)),
 	)
+	if !opts.On {
+		list = append(list, save)
+	}
 	return list, nil
 }
 
@@ -189,52 +184,42 @@ func saveDevServices(st *stack.Stack, doc *stack.ConfigDoc, state *stack.State, 
 	return nil
 }
 
-// changedImages are the images whose tag differs between before and after.
-func changedImages(before, after map[string]string) []string {
-	var out []string
-	for img, tag := range after {
-		if before[img] != tag {
-			out = append(out, img)
-		}
-	}
-	return out
-}
-
-// devStart is the dev-start step.
-type devStart struct {
-	d   *Deps
-	cfg *stack.Config
-	v   catalog.DevVariant
-	// replaced are the images the image step retagged.
-	replaced []string
-}
-
-// services are the variant's services plus the stack's other services
-// that run a replaced image, in StartServices order.
-func (s *devStart) services() []string {
-	var out []string
-	for _, svc := range StartServices(s.cfg) {
-		cs, _ := catalog.LookupService(svc)
-		if slices.Contains(s.v.Services, svc) || slices.Contains(s.replaced, cs.Image) {
-			out = append(out, svc)
-		}
-	}
-	return out
-}
-
-func (s *devStart) step() steps.Step {
+// devStartStep is dev-start. On a running stack it runs `compose up -d
+// --no-deps --wait` for the variant's services and the running services
+// built from its component, which a rebuild from the source may have
+// changed even under the same tag (a dirty checkout's); compose recreates
+// only those whose config or image changed. On a stopped stack it leaves
+// the new render to up.
+func devStartStep(d *Deps, cfg *stack.Config, v catalog.DevVariant) steps.Step {
 	return steps.Step{
 		ID:    DevStartStepID,
-		Title: fmt.Sprintf("Recreate %s", strings.Join(s.v.Services, ", ")),
+		Title: "Recreate " + strings.Join(v.Services, ", "),
 		Apply: func(ctx context.Context, sink events.Sink) error {
-			svcs := s.services()
-			if extra := slices.DeleteFunc(slices.Clone(svcs), func(x string) bool { return slices.Contains(s.v.Services, x) }); len(extra) > 0 {
-				sink.Emit(events.Progress{ID: DevStartStepID, Text: "also recreating " + strings.Join(extra, ", ") +
-					", whose images were rebuilt from components." + s.v.Component + ".source"})
+			ps, err := d.Compose.Ps(ctx)
+			if err != nil {
+				return err
+			}
+			running := map[string]bool{}
+			for _, c := range ps {
+				if c.State == "running" {
+					running[c.Service] = true
+				}
+			}
+			if len(running) == 0 {
+				sink.Emit(events.Warning{ID: DevStartStepID, Text: "the stack isn't running; pic-sure up starts it with this change"})
+				return nil
+			}
+			var svcs []string
+			for _, svc := range StartServices(cfg) {
+				s, _ := catalog.LookupService(svc)
+				img, _ := catalog.LookupImage(s.Image)
+				if slices.Contains(v.Services, svc) || running[svc] && img.Component == v.Component {
+					svcs = append(svcs, svc)
+				}
 			}
 			out := events.NewLogWriter(sink, DevStartStepID, events.StreamStderr)
 			defer func() { _ = out.Close() }()
-			return s.d.Compose.Up(ctx, docker.ComposeUpOpts{
+			return d.Compose.Up(ctx, docker.ComposeUpOpts{
 				Services:    svcs,
 				NoDeps:      true,
 				Wait:        true,

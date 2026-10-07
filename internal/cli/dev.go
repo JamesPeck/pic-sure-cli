@@ -34,8 +34,9 @@ func newDevCmd(a *App) *cobra.Command {
 			Short: "Run SERVICE from local source",
 			Long: `Build SERVICE's component from its local checkout
 (components.<component>.source), add SERVICE to dev.services, re-render and
-recreate SERVICE. A Java service also gets a JDWP debug port on 127.0.0.1,
-from the stack's network.dev_ports block; dev list shows it.
+recreate SERVICE. psama, hpds, gateway, operations and query also get a
+JDWP debug port on 127.0.0.1, from the stack's network.dev_ports block;
+dev list shows it. On a stopped stack, pic-sure up starts it.
 
 Run it again after changing the source to rebuild and recreate.`,
 			Args: cobra.ExactArgs(1),
@@ -47,8 +48,8 @@ Run it again after changing the source to rebuild and recreate.`,
 			Long: `Remove SERVICE from dev.services, re-render and recreate SERVICE without
 its debug port. While components.<component>.source is set, SERVICE keeps
 running the build of that checkout, since a source applies to the whole
-component. To return to the release images, unset the source and run
-pic-sure up.`,
+component. To return to the release images, unset the source, then run
+pic-sure build COMPONENT and pic-sure up.`,
 			Args: cobra.ExactArgs(1),
 			RunE: func(cmd *cobra.Command, args []string) error { return a.dev(cmd, args[0], false) },
 		},
@@ -215,11 +216,11 @@ func writeDev(w io.Writer, r *devReport, v catalog.DevVariant) error {
 	if r.On {
 		_, err := fmt.Fprintf(w, "dev %s is on: %s %s from %s", r.Service, strings.Join(r.Services, ", "), verb(r.Services, "runs", "run"), r.Source)
 		if err == nil && r.Port != 0 {
-			what := "debugger (JDWP)"
 			if v.Image != "" {
-				what = "dev server"
+				_, err = fmt.Fprintf(w, "; its dev server listens on 127.0.0.1:%d", r.Port)
+			} else {
+				_, err = fmt.Fprintf(w, "; attach a debugger (JDWP) to 127.0.0.1:%d", r.Port)
 			}
-			_, err = fmt.Fprintf(w, "; attach a %s to 127.0.0.1:%d", what, r.Port)
 		}
 		if err == nil {
 			_, err = fmt.Fprintln(w, ".")
@@ -229,8 +230,8 @@ func writeDev(w io.Writer, r *devReport, v catalog.DevVariant) error {
 	_, err := fmt.Fprintf(w, "dev %s is off: %s %s no debug port.\n", r.Service, strings.Join(r.Services, ", "), verb(r.Services, "has", "have"))
 	if err == nil && r.Source != "" {
 		_, err = fmt.Fprintf(w, "%s still %s the build of components.%s.source (%s), which applies to the whole component.\n"+
-			"To return to the release images: pic-sure config set components.%s.source '' && pic-sure up\n",
-			strings.Join(r.Services, ", "), verb(r.Services, "runs", "run"), v.Component, r.Source, v.Component)
+			"To return to the release images: pic-sure config set components.%s.source '' && pic-sure build %s && pic-sure up\n",
+			strings.Join(r.Services, ", "), verb(r.Services, "runs", "run"), v.Component, r.Source, v.Component, v.Component)
 	}
 	return err
 }
@@ -243,14 +244,10 @@ func verb(services []string, one, many string) string {
 	return many
 }
 
-// checkDevPort makes sure the port dev on v publishes is free, or already
-// published by the stack's own containers, so another stack's or program's
-// port is exit 3 before anything is built.
+// checkDevPort makes sure no other stack or compose project uses the stack's
+// name, and the port dev on v publishes is free or already published by the
+// stack's own containers, so either is exit 3 before anything is built.
 func checkDevPort(cmd *cobra.Command, d *ops.Deps, st *stack.Stack, cfg *stack.Config, v catalog.DevVariant) error {
-	port := ops.DevPort(cfg, v)
-	if port == 0 {
-		return nil
-	}
 	user, published, err := ops.StackNameInUse(cmd.Context(), d, cfg.Name, st.Dir)
 	if err != nil {
 		return err
@@ -258,7 +255,7 @@ func checkDevPort(cmd *cobra.Command, d *ops.Deps, st *stack.Stack, cfg *stack.C
 	if user != "" {
 		return exitcode.Precondition("the stack name %s is in use by another stack or compose project (%s)", cfg.Name, user)
 	}
-	if !published[port] && !(systemHost{}).PortFree(port) {
+	if port := ops.DevPort(cfg, v); port != 0 && !published[port] && !(systemHost{}).PortFree(port) {
 		return exitcode.Precondition("port %d, dev %s's port from network.dev_ports.base (%d), is in use", port, v.Name, cfg.Network.DevPorts.Base)
 	}
 	return nil

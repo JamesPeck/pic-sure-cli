@@ -37,12 +37,22 @@ func devFixture(t *testing.T) (*buildFixture, string) {
 	x.saveConfig()
 	tag := ops.DevTag("demo", localSHA, false)
 	x.reactorFresh(tag, localSHA)
-	// No service is running, and compose config can't say what reads the
-	// rendered files, so nothing is restarted.
-	x.f.On(fakerunner.Glob("docker compose * ps *"))
+	// compose config fails, so render's changed files restart every
+	// running service.
 	x.f.On(fakerunner.Glob("docker compose * config *")).Exit(1)
-	x.f.On(fakerunner.Glob("docker compose * up *"))
+	x.f.On(fakerunner.Glob("docker compose * restart *"))
 	return x, tag
+}
+
+// running makes compose ps report services running, and compose up
+// succeed.
+func (x *buildFixture) running(services ...string) {
+	x.f.On(fakerunner.Glob("docker compose * up *"))
+	var ps strings.Builder
+	for _, s := range services {
+		ps.WriteString(`{"Service":"` + s + `","State":"running"}` + "\n")
+	}
+	x.f.On(fakerunner.Glob("docker compose * ps *")).Stdout(ps.String())
 }
 
 func (x *buildFixture) saveConfig() {
@@ -96,6 +106,7 @@ func (x *buildFixture) compose() string {
 
 func TestDevOnBuildsRendersAndRecreatesOnlyItsComponent(t *testing.T) {
 	x, tag := devFixture(t)
+	x.running("picsure-db", "httpd", "gateway", "hpds")
 	if err := x.dev("psama", true); err != nil {
 		t.Fatal(err)
 	}
@@ -116,15 +127,36 @@ func TestDevOnBuildsRendersAndRecreatesOnlyItsComponent(t *testing.T) {
 	if c := x.compose(); !strings.Contains(c, "127.0.0.1:15000:5005") || !strings.Contains(c, "jdwp") {
 		t.Errorf("compose.yaml lacks psama's debug port:\n%s", c)
 	}
-	// The source replaced every reactor image, so every service of the
-	// component is recreated, and nothing else.
-	x.f.AssertCalled(fakerunner.Glob("docker compose * up -d --no-deps --wait --wait-timeout 900 gateway * psama *pic-sure-logging"))
-	x.f.AssertNotCalled(fakerunner.Glob("docker compose * up * httpd*"))
-	x.f.AssertNotCalled(fakerunner.Glob("docker compose * up * picsure-db*"))
+	// The source rebuilt every reactor image, so the component's running
+	// services go to compose up too, and nothing else.
+	x.f.AssertCalled(fakerunner.Glob("docker compose * up -d --no-deps --wait --wait-timeout 900 gateway psama hpds"))
+}
+
+func TestDevOnAStoppedStackLeavesTheStartToUp(t *testing.T) {
+	x, _ := devFixture(t)
+	x.running()
+	if err := x.dev("psama", true); err != nil {
+		t.Fatal(err)
+	}
+	x.f.AssertNotCalled(fakerunner.Glob("docker compose * up *"))
+	if c := x.compose(); !strings.Contains(c, "127.0.0.1:15000:5005") {
+		t.Errorf("compose.yaml lacks psama's debug port:\n%s", c)
+	}
+}
+
+func TestDevOnRefusesHMRWithoutTheNodeImage(t *testing.T) {
+	x, _ := devFixture(t)
+	x.cfg.Components.Frontend.Source = "/src/fe"
+	x.saveConfig()
+	delete(x.state.Images, "node")
+	if err := x.dev("httpd-hmr", true); exitcode.FromError(err) != 3 || !strings.Contains(err.Error(), ".nvmrc") {
+		t.Fatalf("err = %v", err)
+	}
 }
 
 func TestDevOffKeepsTheSourceBuildWithoutTheDebugPort(t *testing.T) {
 	x, tag := devFixture(t)
+	x.running("psama")
 	if err := x.dev("psama", true); err != nil {
 		t.Fatal(err)
 	}
@@ -156,6 +188,29 @@ func TestDevOffKeepsTheSourceBuildWithoutTheDebugPort(t *testing.T) {
 	last := calls[len(calls)-1].String()
 	if !strings.HasSuffix(last, "up -d --no-deps --wait --wait-timeout 900 psama") {
 		t.Errorf("last call %q, want psama alone recreated", last)
+	}
+}
+
+func TestDevOffSavesTheConfigLastSoAFailureCanBeRetried(t *testing.T) {
+	x, _ := devFixture(t)
+	x.cfg.Dev.Services = []string{"psama"}
+	x.state.DevImages = map[string]string{"pic-sure-psama": "rel"}
+	if err := x.st.SaveState(x.state); err != nil {
+		t.Fatal(err)
+	}
+	x.saveConfig()
+	x.f.On(fakerunner.Glob("docker compose * up *")).Exit(1)
+	x.running("psama")
+	var se *steps.Error
+	if err := x.dev("psama", false); !errors.As(err, &se) || se.Step != ops.DevStartStepID {
+		t.Fatalf("err = %v, want dev-start's", err)
+	}
+	saved, err := x.st.LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(saved.Dev.Services, []string{"psama"}) {
+		t.Errorf("dev.services = %v after a failed dev off", saved.Dev.Services)
 	}
 }
 
