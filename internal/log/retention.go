@@ -18,8 +18,8 @@ const (
 // prune deletes run logs (cli-*.log) in st's Dir so that the newest that
 // fit in maxFiles and maxBytes remain. current, the running command's log,
 // is always kept and counts toward both limits. Logs are ordered by their
-// names' UTC timestamps. Other files, directories and symlinks are left
-// alone.
+// names' UTC timestamps. Logs st doesn't own, other files, directories and
+// symlinks are left alone and don't count.
 func prune(st Store, current string, maxFiles int, maxBytes int64) error {
 	entries, err := os.ReadDir(st.Path(Dir))
 	if err != nil {
@@ -33,7 +33,7 @@ func prune(st Store, current string, maxFiles int, maxBytes int64) error {
 	var logs []runLog
 	kept, total := 0, int64(0)
 	for _, e := range entries {
-		if !e.Type().IsRegular() || !isRunLog(e.Name()) {
+		if !e.Type().IsRegular() || !isRunLog(e.Name()) || !st.Owns(Dir+"/"+e.Name()) {
 			continue
 		}
 		info, err := e.Info()
@@ -46,8 +46,8 @@ func prune(st Store, current string, maxFiles int, maxBytes int64) error {
 		}
 		logs = append(logs, runLog{e.Name(), info.Size()})
 	}
-	// Newest first. Without ".log", a collision's cli-<ts>-1 sorts after
-	// cli-<ts>.
+	// Newest first. Without ".log", a collision's cli-<ts>-<pid>-1 sorts
+	// after cli-<ts>-<pid>.
 	slices.SortFunc(logs, func(a, b runLog) int {
 		return strings.Compare(strings.TrimSuffix(b.name, ".log"), strings.TrimSuffix(a.name, ".log"))
 	})

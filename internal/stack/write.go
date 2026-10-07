@@ -69,7 +69,16 @@ func (s *Stack) MkdirAll(rel string, perm fs.FileMode) error {
 		}
 		dir := prefix
 		err = s.recordThenCreate(Entry{Path: filepath.ToSlash(dir), Type: EntryDir}, func() error {
-			if err := s.root.Mkdir(dir, perm); err != nil {
+			err := s.root.Mkdir(dir, perm)
+			if errors.Is(err, fs.ErrExist) {
+				// Another pic-sure run, such as a read-only command
+				// starting its log, made it since the Lstat and recorded
+				// it too. Failing would drop that run's manifest entry.
+				if fi, lerr := s.root.Lstat(dir); lerr == nil && fi.IsDir() {
+					return nil
+				}
+			}
+			if err != nil {
 				return err
 			}
 			return s.root.Chmod(dir, perm)

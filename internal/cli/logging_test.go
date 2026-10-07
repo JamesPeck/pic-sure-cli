@@ -189,3 +189,48 @@ func TestStackSecretsNeverReachTheLogs(t *testing.T) {
 		}
 	}
 }
+
+// Pruning through the stack keeps the newest 50 of the CLI's run logs,
+// drops the pruned ones from the manifest, and ignores a log the manifest
+// doesn't list.
+func TestRunLogPruningUsesTheManifest(t *testing.T) {
+	dir := newTestStack(t)
+	st, err := stack.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	if err := st.MkdirAll(log.Dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var ours []string
+	for i := range 50 {
+		name := fmt.Sprintf("%s/cli-20260101T0000%02d.000Z-1.log", log.Dir, i)
+		f, err := st.CreateFile(name, 0o600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = f.Close()
+		ours = append(ours, name)
+	}
+	// Newer than every log of ours, so it would push one out if it counted.
+	foreign := log.Dir + "/cli-29990101T000000.000Z-1.log"
+	if err := os.WriteFile(st.Path(foreign), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	logs, stderr := runWithStack(t, dir, "up", nil)
+	if len(logs) != 51 || strings.Contains(stderr, "WARN") {
+		t.Fatalf("left %d logs, want 51 (49 old, the new one, the foreign one); stderr:\n%s", len(logs), stderr)
+	}
+	m, err := st.Manifest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(st.Path(ours[0])); !errors.Is(err, os.ErrNotExist) || m.Has(ours[0]) {
+		t.Errorf("the oldest log wasn't pruned and forgotten: %v, listed %v", err, m.Has(ours[0]))
+	}
+	if !m.Has(ours[1]) || m.Has(foreign) {
+		t.Errorf("manifest = %v", m)
+	}
+}

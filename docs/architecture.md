@@ -1288,14 +1288,15 @@ Ticket 005. Debug logging that is safe to attach to a bug report (§6.1,
   logging; `Run.Logger()` is what `Deps.Log` holds. Records at the
   `--log-level` go to stderr as text. With `File`, every record down to
   debug also goes, as JSON lines, to `<stack>/.pic-sure/logs/cli-<UTC
-  ts>.log` (0600, directories 0700), once `Run.OpenFile(store, now)` is
-  called. The `log.Store` is the stack (`*stack.Stack`), so the log files
-  and their directory are recorded in the manifest, and pruning goes
-  through `Stack.Remove`. Records from before that are held in memory (up
-  to 1 MiB) and written first. `OpenFile` then prunes
-  the stack's run logs to the newest that fit in both 50 files and 50 MiB,
-  always keeping the current one. Failing to open or prune is never a
-  command failure. `OpenFile` returns the file's path.
+  ts>-<pid>.log` (0600, directories 0700), once `Run.OpenFile(store, now)`
+  is called. The pid keeps runs that start in the same millisecond from
+  racing for a name. The cli's `log.Store` is the stack, so the log files
+  and their directory are recorded in the manifest, and pruning goes through
+  `Stack.Remove`; pruning ignores a log the manifest doesn't list. Records
+  logged before `OpenFile` are held in memory (up to 1 MiB) and written first.
+  `OpenFile` then prunes the stack's run logs to the newest that fit in both
+  50 files and 50 MiB, always keeping the current one. Failing to open or
+  prune is never a command failure. `OpenFile` returns the file's path.
 - **Secret values.** `log.RegisterSecrets(values...)` adds to a
   process-wide registry. Every byte a run writes, to stderr or the file,
   passes through it, so a registered value is replaced with `[REDACTED]`

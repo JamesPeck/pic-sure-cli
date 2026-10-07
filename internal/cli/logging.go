@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"errors"
 	"log/slog"
 	"runtime"
 	"strings"
@@ -64,15 +63,13 @@ func (a *App) openRunLog(st *stack.Stack) {
 	}
 }
 
-// runLogStore is the stack as log.Run uses it. Pruning leaves alone a run
-// log the manifest doesn't list, since pic-sure didn't create it.
+// runLogStore is the stack as log.Run uses it: a run log is the CLI's if
+// the manifest lists it.
 type runLogStore struct{ *stack.Stack }
 
-func (s runLogStore) Remove(rel string) error {
-	if err := s.Stack.Remove(rel); !errors.Is(err, stack.ErrNotCreated) {
-		return err
-	}
-	return nil
+func (s runLogStore) Owns(rel string) bool {
+	m, err := s.Manifest()
+	return err == nil && m.Has(rel)
 }
 
 // endRunLog records how the run ended and closes its log file.

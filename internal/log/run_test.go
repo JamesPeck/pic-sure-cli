@@ -3,6 +3,7 @@ package log
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -77,7 +78,7 @@ func TestOpenFileWritesEveryRecordFromTheStart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := filepath.Join(dir, ".pic-sure", "logs", "cli-20261006T153045.123Z.log"); path != want {
+	if want := filepath.Join(dir, ".pic-sure", "logs", fmt.Sprintf("cli-20261006T153045.123Z-%d.log", os.Getpid())); path != want {
 		t.Errorf("path = %q, want %q", path, want)
 	}
 	run.Logger().Info("after")
@@ -111,7 +112,8 @@ func TestOpenFileNameCollision(t *testing.T) {
 		paths = append(paths, filepath.Base(p))
 		_ = run.Close()
 	}
-	if paths[0] != "cli-20261006T153045.123Z.log" || paths[1] != "cli-20261006T153045.123Z-1.log" {
+	base := fmt.Sprintf("cli-20261006T153045.123Z-%d", os.Getpid())
+	if paths[0] != base+".log" || paths[1] != base+"-1.log" {
 		t.Errorf("names = %q", paths)
 	}
 }
@@ -202,5 +204,7 @@ func (d dirStore) Remove(rel string) error {
 	defer func() { _ = r.Close() }()
 	return r.Remove(rel)
 }
+
+func (dirStore) Owns(string) bool { return true }
 
 func (d dirStore) Path(rel string) string { return filepath.Join(string(d), filepath.FromSlash(rel)) }

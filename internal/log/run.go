@@ -18,15 +18,18 @@ import (
 const Dir = ".pic-sure/logs"
 
 // Store is the stack directory a run keeps its log files in, with paths
-// relative to it. *stack.Stack is one: it confines the writes to the stack
+// relative to it. The cli's is the stack, which confines the writes to it
 // and records what it creates in the stack's manifest, so destroy removes
-// the logs (§6.3).
+// the logs (§6.1).
 type Store interface {
 	MkdirAll(rel string, perm fs.FileMode) error
 	// CreateFile creates the new file rel; it fails with fs.ErrExist if
 	// rel exists.
 	CreateFile(rel string, perm fs.FileMode) (*os.File, error)
 	Remove(rel string) error
+	// Owns reports whether the CLI created rel. Pruning ignores a run log
+	// it doesn't own.
+	Owns(rel string) bool
 	// Path returns rel as a path the os package can open.
 	Path(rel string) string
 }
@@ -99,8 +102,7 @@ func New(opts Options) *Run {
 // Logger returns the run's logger.
 func (r *Run) Logger() *slog.Logger { return r.logger }
 
-// OpenFile starts the run's log file in st's Dir, named cli-<now in
-// UTC>.log, writes the records logged so far to it, and prunes old run logs
+// OpenFile starts the run's log file in st's Dir (createRunFile), writes the records logged so far to it, and prunes old run logs
 // (prune). It returns the file's path, or "" when the run writes no file
 // (Options.File is false, or the run is closed). Once a file is open, later
 // calls return its path. Failing to prune is logged, not returned.
@@ -199,14 +201,15 @@ func (s *fileSink) close() error {
 	return err
 }
 
-// createRunFile creates Dir/cli-<ts>.log in st, mode 0600, adding a counter
-// if another run took the name in the same millisecond.
+// createRunFile creates Dir/cli-<ts>-<pid>.log in st, mode 0600. The
+// process ID keeps two runs that start in the same millisecond from racing
+// for one name; a counter is added if the name is taken anyway.
 func createRunFile(st Store, now time.Time) (string, *os.File, error) {
-	ts := now.UTC().Format("20060102T150405.000Z")
+	base := fmt.Sprintf("cli-%s-%d", now.UTC().Format("20060102T150405.000Z"), os.Getpid())
 	for i := 0; ; i++ {
-		name := "cli-" + ts + ".log"
+		name := base + ".log"
 		if i > 0 {
-			name = fmt.Sprintf("cli-%s-%d.log", ts, i)
+			name = fmt.Sprintf("%s-%d.log", base, i)
 		}
 		f, err := st.CreateFile(Dir+"/"+name, 0o600)
 		if errors.Is(err, fs.ErrExist) && i < 100 {
