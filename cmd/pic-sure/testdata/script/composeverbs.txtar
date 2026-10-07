@@ -12,6 +12,9 @@ exitcode 3 pic-sure --stack unrendered restart hpds
 exitcode 3 pic-sure --stack unrendered ps
 exitcode 3 pic-sure --stack unrendered logs
 exitcode 3 pic-sure --stack unrendered compose -- ps
+exitcode 3 pic-sure --stack nosecrets down
+stderr 'no secrets.yaml; run `pic-sure init`'
+exitcode 3 pic-sure --stack nosecrets compose -- up -d
 exitcode 3 pic-sure --stack unrendered --json ps
 stdout '"exit_code":3'
 ! exists docker.log
@@ -127,7 +130,9 @@ exec sh -c 'while [ ! -f follow.pid ]; do sleep 0.05; done'
 exitcode 1 pic-sure --stack stack down
 stderr 'pic-sure compose'
 stderr 'pass --wait-lock'
-exitcode 1 pic-sure --stack stack compose -- --dry-run up -d
+exitcode 1 pic-sure --stack stack compose -- up -d
+stderr 'pass --wait-lock'
+exitcode 1 pic-sure --stack stack compose -- --dry-run wait --down-project hpds
 stderr 'pass --wait-lock'
 
 # Its read-only subcommands, like logs, take no lock, so they run.
@@ -139,19 +144,22 @@ exec pic-sure --stack stack logs hpds
 
 # With --wait-lock, a mutating one waits for the holder, then runs.
 exec sh -c '(pic-sure --stack stack --wait-lock compose -- up -d; echo $? >wait.code) </dev/null >/dev/null 2>wait.err &'
-exec sh -c 'until grep -q "waiting for" wait.err; do sleep 0.05; done'
+exec sh -c 'i=0; until grep -q "waiting for" wait.err; do i=$((i+1)); [ $i -lt 200 ] || exit 1; sleep 0.05; done'
 exec sh -c 'kill -TERM "$(cat parent.pid)"'
 wait pass
 stderr '^pic-sure: interrupted \(terminated\)$'
 exec sh -c '! kill -0 "$(cat follow.pid)" 2>/dev/null'
-exec sh -c 'until [ -s wait.code ]; do sleep 0.05; done'
+exec sh -c 'i=0; until [ -s wait.code ]; do i=$((i+1)); [ $i -lt 200 ] || exit 1; sleep 0.05; done'
 grep '^0$' wait.code
 grep 'up -d$' docker.log
 
-# Compose's and the containers' output reaches the terminal only, never
-# the run log. (A failed command's error, such as restart's above, carries
-# compose's message there; the passthrough's doesn't.)
+# The passthrough's output, and the logs that logs streams, reach the
+# terminal only, never the run log. (A failed command's error, such as
+# restart's above, carries compose's last lines there, redacted.) Like ps,
+# a read-only compose writes a run log only at debug level.
 rm stack/.pic-sure/logs
+exec pic-sure --stack stack compose -- ps -a
+! exists stack/.pic-sure/logs
 exec pic-sure --log-level debug --stack stack compose -- logs hpds
 stdout started
 ! exec pic-sure --log-level debug --stack stack compose -- logs nosuch
@@ -216,6 +224,16 @@ name: unrendered
 auth: {mode: open, admin_email: admin@example.com}
 -- unrendered/.pic-sure/state.json --
 {"cli_version": "dev", "schema_version": 1}
+-- unrendered/.pic-sure/secrets.yaml --
+db_root_password: rootpw
+-- nosecrets/pic-sure.yaml --
+schema: 1
+name: nosecrets
+auth: {mode: open, admin_email: admin@example.com}
+-- nosecrets/.pic-sure/state.json --
+{"cli_version": "dev", "schema_version": 1}
+-- nosecrets/.pic-sure/render/compose.yaml --
+services: {}
 -- newer/pic-sure.yaml --
 schema: 2
 name: newer

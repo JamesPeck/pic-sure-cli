@@ -224,9 +224,11 @@ it.
   runner and exits with compose's code. Its class for the gate and the lock
   comes from its compose subcommand (`composeClass` in `composeclass.go`,
   skipping compose's global flags): `ps`, `logs`, `exec` and the other
-  read-only ones run without the lock and on a newer stack; any other, an
-  unknown one or none, holds the stack lock until compose exits. The
-  passthrough's output goes straight to the terminal, never to the run log.
+  read-only ones run without the lock and on a newer stack, and write a run
+  log file only at debug level, like `ps`; any other, an unknown one or
+  none, and `wait --down-project`, holds the stack lock until compose
+  exits. The passthrough's output goes straight to the terminal, never to
+  the run log.
 
 | File | Commands | Ticket |
 |---|---|---|

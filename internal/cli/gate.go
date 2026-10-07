@@ -14,9 +14,8 @@ import (
 // keyed by its path without "pic-sure". The read-only ones are §10.6's
 // list, including the list subcommands; everything else is mutating, and
 // update migrates. compose's entry stands for its mutating subcommands.
-// openStack
-// applies the gate, so a command that never opens a stack, such as version
-// or cache, isn't gated whatever its class.
+// openStack applies the gate, so a command that never opens a stack, such
+// as version or cache, isn't gated whatever its class.
 var commandClasses = map[string]stack.CommandClass{
 	"status":           stack.ReadOnly,
 	"ps":               stack.ReadOnly,

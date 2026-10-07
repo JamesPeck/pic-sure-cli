@@ -8,7 +8,8 @@ import (
 
 // composeReadOnly is the compose subcommands that change nothing in the
 // stack, so `compose -- ARGS` runs them without the stack lock and as a
-// read-only command for the version gate (§10.6).
+// read-only command for the version gate (§10.6). wait --down-project is
+// the exception: it takes the project down.
 var composeReadOnly = map[string]bool{
 	"ps": true, "logs": true, "top": true, "config": true, "events": true,
 	"images": true, "ls": true, "port": true, "version": true, "exec": true,
@@ -37,10 +38,10 @@ func composeClass(args []string) stack.CommandClass {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if !strings.HasPrefix(arg, "-") {
-			if composeReadOnly[arg] {
-				return stack.ReadOnly
+			if !composeReadOnly[arg] || arg == "wait" && downsProject(args[i+1:]) {
+				return stack.Mutating
 			}
-			return stack.Mutating
+			return stack.ReadOnly
 		}
 		name, _, hasValue := strings.Cut(arg, "=")
 		switch {
@@ -56,4 +57,16 @@ func composeClass(args []string) stack.CommandClass {
 		}
 	}
 	return stack.Mutating
+}
+
+func downsProject(args []string) bool {
+	for _, arg := range args {
+		if arg == "--" {
+			return false
+		}
+		if strings.HasPrefix(arg, "--down-project") {
+			return true
+		}
+	}
+	return false
 }

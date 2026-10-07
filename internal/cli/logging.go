@@ -20,10 +20,14 @@ func init() { stack.SetSecretRegistrar(log.RegisterSecrets) }
 
 // readOnlyCommands write a run log file only at --log-level debug, so that
 // polling them never fills .pic-sure/logs (spec §6.1). Keys are command
-// paths without "pic-sure ".
+// paths without "pic-sure ". compose's read-only subcommands do the same.
 var readOnlyCommands = map[string]bool{
 	"status": true, "ps": true, "logs": true, "doctor": true,
 	"config show": true, "config get": true, "version": true,
+}
+
+func quietRunLog(cmd *cobra.Command, path string) bool {
+	return readOnlyCommands[path] || path == "compose" && commandClass(cmd) == stack.ReadOnly
 }
 
 // startRunLog starts the logging for a command run. markRunning calls it as
@@ -38,7 +42,7 @@ func (a *App) startRunLog(cmd *cobra.Command, args []string) {
 	a.runLog = log.New(log.Options{
 		Level:  level,
 		Stderr: logStderr{a},
-		File:   level <= slog.LevelDebug || !readOnlyCommands[path],
+		File:   level <= slog.LevelDebug || !quietRunLog(cmd, path),
 	})
 	var flags []string
 	cmd.Flags().Visit(func(f *pflag.Flag) {

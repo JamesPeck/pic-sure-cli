@@ -194,10 +194,11 @@ environment the CLI uses. Put -- before the compose arguments. pic-sure
 exits with compose's exit code. Its output is compose's own, so --json is
 refused.
 
-Subcommands that only read (ps, logs, top, config, events, images, ls,
-port, version, exec, stats, wait, attach) run as read-only commands. Any
-other holds the stack lock until compose exits, as every command that can
-change the stack does.`,
+These subcommands run without the stack lock, and on a stack a newer
+pic-sure rendered: ps, logs, top, config, events, images, ls, port,
+version, exec, stats, wait (without --down-project) and attach. Any other
+holds the stack lock until compose exits, as every command that can change
+the stack does.`,
 		Example: `  pic-sure compose -- ps -a
   pic-sure compose -- exec hpds sh`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -256,14 +257,15 @@ func (a *App) stackCompose(cmd *cobra.Command, r docker.Runner, st *stack.Stack)
 // stackComposeConfig is stackCompose, also returning the config and secrets
 // the environment came from.
 func (a *App) stackComposeConfig(cmd *cobra.Command, r docker.Runner, st *stack.Stack) (*docker.Compose, *stack.Config, *stack.Secrets, error) {
+	// Secrets first: a stack without them needs init before up.
+	cfg, sec, err := a.stackComposeInputs(cmd, st)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	c, err := docker.NewCompose(r, st.Dir, nil)
 	if errors.Is(err, docker.ErrNotRendered) {
 		return nil, nil, nil, exitcode.Precondition("%w yet; run `pic-sure up`", docker.ErrNotRendered)
 	}
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	cfg, sec, err := a.stackComposeInputs(cmd, st)
 	if err != nil {
 		return nil, nil, nil, err
 	}

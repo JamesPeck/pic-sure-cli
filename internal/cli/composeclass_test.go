@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"regexp"
 	"testing"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/stack"
@@ -20,6 +21,9 @@ func TestComposeClass(t *testing.T) {
 		{[]string{"cp", "hpds:/x", "."}, mut},
 		{[]string{"nosuch"}, mut},
 		{[]string{"help"}, mut},
+		{[]string{"wait", "hpds"}, ro},
+		{[]string{"wait", "--down-project", "hpds"}, mut},
+		{[]string{"-p", "x", "wait", "hpds", "--down-project=true"}, mut},
 		// A read-only word in a mutating subcommand's arguments.
 		{[]string{"run", "ps"}, mut},
 		// Global flags, with their values separate, joined or attached.
@@ -42,6 +46,16 @@ func TestComposeClass(t *testing.T) {
 	} {
 		if got := composeClass(tc.args); got != tc.want {
 			t.Errorf("composeClass(%q) = %v, want %v", tc.args, got, tc.want)
+		}
+	}
+}
+
+// compose's help lists the subcommands that run without the lock.
+func TestComposeHelpListsReadOnly(t *testing.T) {
+	long := newComposeCmd(&App{}).Long
+	for sub := range composeReadOnly {
+		if !regexp.MustCompile(`\b` + sub + `\b`).MatchString(long) {
+			t.Errorf("compose's help doesn't list %q", sub)
 		}
 	}
 }
