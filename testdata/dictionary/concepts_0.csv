@@ -1,0 +1,7 @@
+dataset_ref,name,display,concept_type,concept_path,parent_concept_path,values,description
+synthetic_custom,Synthetic Custom,Synthetic Custom,categorical,\Synthetic Custom\,\,,Root node
+synthetic_custom,Demographics,Demographics,categorical,\Synthetic Custom\Demographics\,\Synthetic Custom\,,Demographics folder
+synthetic_custom,Lifestyle,Lifestyle,categorical,\Synthetic Custom\Lifestyle\,\Synthetic Custom\,,Lifestyle folder
+synthetic_custom,Age,Participant age,continuous,\Synthetic Custom\Demographics\Age\,\Synthetic Custom\Demographics\,"23,69",Age in years
+synthetic_custom,Sex,Participant sex,categorical,\Synthetic Custom\Demographics\Sex\,\Synthetic Custom\Demographics\,"Female,Male",Reported sex
+synthetic_custom,Smoker,Current smoker,categorical,\Synthetic Custom\Lifestyle\Smoker\,\Synthetic Custom\Lifestyle\,"No,Yes",Smoking status

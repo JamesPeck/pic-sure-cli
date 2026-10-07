@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -75,6 +76,7 @@ type Dictionary struct {
 	state *stack.State
 
 	etl     string // the ETL container's name once started
+	scanned string // the ETL container whose log Close has scanned
 	closers []io.Closer
 }
 
@@ -85,12 +87,18 @@ func NewDictionary(d *Deps, st *stack.Stack, cfg *stack.Config, sec *stack.Secre
 }
 
 // Close removes the ETL container, if one was started, and closes the
-// inputs the steps opened. It works after ctx is cancelled.
+// inputs the steps opened. It works after ctx is cancelled. Before the
+// removal it scans the ETL's log for errors the ETL logged but didn't
+// report (scanETLLog).
 func (x *Dictionary) Close(ctx context.Context) error {
 	var errs []error
 	if x.etl != "" {
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
 		defer cancel()
+		if x.scanned != x.etl {
+			x.scanned = x.etl
+			x.scanETLLog(ctx)
+		}
 		if err := x.d.Docker.Rm(ctx, x.etl, true); err != nil {
 			errs = append(errs, fmt.Errorf("removing %s: %w", x.etl, err))
 		} else {
@@ -418,18 +426,26 @@ func (x *Dictionary) weightsFile(opts WeightsOptions) (string, error) {
 // weights images and the weights file. A load that replaces the HPDS data
 // first calls it, so a missing piece fails before the data is gone.
 func (x *Dictionary) Preflight(ctx context.Context, weights WeightsOptions) error {
+	if err := x.PreflightETL(ctx); err != nil {
+		return err
+	}
+	if _, err := x.image(ctx, "dictionary-weights"); err != nil {
+		return err
+	}
+	_, err := x.weightsFile(weights)
+	return err
+}
+
+// PreflightETL is Preflight for a load that skips the weights: a healthy
+// dictionary-db, its password and the ETL image.
+func (x *Dictionary) PreflightETL(ctx context.Context) error {
 	if _, err := x.dictionaryDB(ctx); err != nil {
 		return err
 	}
 	if x.sec.DictionaryDBPassword == "" {
 		return exitcode.Precondition("secrets.yaml has no dictionary_db_password; run `pic-sure up`")
 	}
-	for _, name := range []string{"dictionary-etl", "dictionary-weights"} {
-		if _, err := x.image(ctx, name); err != nil {
-			return err
-		}
-	}
-	_, err := x.weightsFile(weights)
+	_, err := x.image(ctx, "dictionary-etl")
 	return err
 }
 
@@ -665,6 +681,83 @@ func (x *Dictionary) logTail(ctx context.Context, sink events.Sink, step string)
 	for _, l := range lines {
 		sink.Emit(events.Log{ID: step, Stream: events.StreamStderr, Line: l})
 	}
+}
+
+// etlLogRecord matches the first line of a Spring Boot log record,
+// capturing its level, the logger (abbreviated) and the message.
+var etlLogRecord = regexp.MustCompile(`^\d{4}-\d\d-\d\d[T ]\S+\s+(TRACE|DEBUG|INFO|WARN|ERROR)\s.*?(\S+)\s+:\s(.*)$`)
+
+// etlSwallowed reports whether a dictionary-etl log record is an error the
+// ETL caught without failing the request (dictionary-etl c97a813).
+// DictionaryLoaderService answers a hydrate with Success after logging
+// whatever the load threw, as INFO, and logs nothing else but "Processing
+// Studies"; ConceptService logs a failure to link concepts to their
+// parents as an ERROR and carries on.
+func etlSwallowed(level, logger, msg string) bool {
+	switch logger {
+	case "DictionaryLoaderService":
+		return !strings.HasPrefix(msg, "Processing Studies:")
+	case "ConceptService":
+		return level == "ERROR"
+	}
+	return false
+}
+
+// etlLogLimit bounds one excerpt of the ETL's log.
+const etlLogLimit = 200
+
+// swallowedErrors finds the records etlSwallowed matches in an ETL log and
+// returns each as an excerpt: its first line plus the lines up to the next
+// record (a stack trace), at most etlLogLimit lines.
+func swallowedErrors(r io.Reader) ([][]string, error) {
+	var found [][]string
+	in := false
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 64*1024), 1024*1024)
+	for sc.Scan() {
+		line := sc.Text()
+		if m := etlLogRecord.FindStringSubmatch(line); m != nil {
+			logger := m[2][strings.LastIndex(m[2], ".")+1:]
+			in = etlSwallowed(m[1], logger, m[3])
+			if in {
+				found = append(found, []string{line})
+			}
+			continue
+		}
+		if in && len(found[len(found)-1]) < etlLogLimit {
+			found[len(found)-1] = append(found[len(found)-1], line)
+		}
+	}
+	return found, sc.Err()
+}
+
+// scanETLLog warns about errors the ETL logged without failing the request
+// (see etlSwallowed): the warning quotes the first, and the run log gets
+// every excerpt (debug records, which only the file keeps at the default
+// --log-level). The command's exit status doesn't change; a log it can't
+// read is only noted in the run log.
+func (x *Dictionary) scanETLLog(ctx context.Context) {
+	rc := x.d.Docker.Logs(ctx, x.etl, false)
+	found, err := swallowedErrors(rc)
+	_ = rc.Close()
+	if err != nil && x.d.Log != nil {
+		x.d.Log.Debug("reading dictionary-etl's log", "container", x.etl, "err", err)
+	}
+	if len(found) == 0 {
+		return
+	}
+	if x.d.Log != nil {
+		for _, lines := range found {
+			x.d.Log.Debug("dictionary-etl logged an error it didn't report", "container", x.etl, "excerpt", strings.Join(lines, "\n"))
+		}
+	}
+	msg := etlLogRecord.FindStringSubmatch(found[0][0])[3]
+	more := ""
+	if len(found) > 1 {
+		more = fmt.Sprintf(" (and %d more)", len(found)-1)
+	}
+	x.d.Sink.Emit(events.Warning{Text: fmt.Sprintf("dictionary-etl logged an error but reported success%s: %q. The dictionary may be incomplete; the run log has the full excerpt",
+		more, truncate(msg, 300))})
 }
 
 // run runs a one-off container with a unique name, --rm and the stack's

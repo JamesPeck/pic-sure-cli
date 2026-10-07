@@ -21,8 +21,26 @@ stderr 'invalid argument "4g" for "--heap"'
 exitcode 2 pic-sure --stack stack data load-phenotype --file pheno.csv --skip-step hpds-input
 stderr 'load-phenotype''s steps depend on each other, so none can be skipped'
 
+# The dictionary flags are checked before the stack is looked at.
+exitcode 2 pic-sure data load-phenotype --file pheno.csv --dictionary manual
+stderr '--dictionary must be auto or custom, not "manual"'
+exitcode 2 pic-sure data load-phenotype --file pheno.csv --dictionary custom --datasets datasets.csv
+stderr '--dictionary custom requires --datasets and --concepts'
+exitcode 2 pic-sure data load-phenotype --file pheno.csv --datasets datasets.csv
+stderr '--datasets is for --dictionary custom'
+exitcode 2 pic-sure data load-phenotype --file pheno.csv --facets facets.csv
+stderr '--facets is for --dictionary custom'
+exitcode 2 pic-sure data load-phenotype --file pheno.csv --dictionary custom --datasets datasets.csv --concepts concepts.zip --facets facets.csv
+stderr '--facets-categories, --facets and --facet-concepts go together: give all three or none'
+exitcode 2 pic-sure data load-phenotype --file pheno.csv --dictionary custom --datasets missing.csv --concepts concepts.zip
+stderr '--datasets: .*missing.csv'
+exitcode 2 pic-sure data load-phenotype --file pheno.csv --dictionary custom --datasets datasets.csv --concepts concepts.zip --facets-categories cat.csv --facets facets.csv --facet-concepts missing.csv
+stderr '--facet-concepts: .*missing.csv'
+
 # No stack: exit 3.
 exitcode 3 pic-sure data load-phenotype --file pheno.csv
+stderr 'no pic-sure stack found'
+exitcode 3 pic-sure data load-phenotype --file pheno.csv --dictionary custom --datasets datasets.csv --concepts concepts.zip --facets-categories cat.csv --facets facets.csv --facet-concepts facets.csv --skip-weights
 stderr 'no pic-sure stack found'
 
 # A stack using shared HPDS data is read-only: exit 1.
@@ -47,6 +65,14 @@ stderr 'missing.csv'
 -- pheno.csv --
 PATIENT_NUM,CONCEPT_PATH,NUMERIC_VALUE,TEXT_VALUE
 1,\demo\age\,42,
+-- datasets.csv --
+ref,full_name,abbreviation,description
+-- concepts.zip --
+not checked before the stack
+-- cat.csv --
+name(unique)
+-- facets.csv --
+facet_name(unique)
 -- compose.yaml --
 name: demo
 -- stack/pic-sure.yaml --

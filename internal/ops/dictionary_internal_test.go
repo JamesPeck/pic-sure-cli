@@ -1,10 +1,12 @@
 package ops
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -101,6 +103,7 @@ func (x *dictFixture) stackUp() {
 		return docker.Result{}, nil
 	})
 	x.f.On(fakerunner.Glob("docker compose * restart dictionary-api"))
+	x.f.On(fakerunner.Glob("docker logs demo-dictionaryetl-*"))
 }
 
 func (x *dictFixture) dict() *Dictionary { return NewDictionary(x.d, x.st, x.cfg, x.sec, x.state) }
@@ -636,4 +639,78 @@ func TestDictionaryWaitsForAPIHealth(t *testing.T) {
 			t.Fatalf("err = %v", err)
 		}
 	})
+}
+
+// etlLog is dictionary-etl's log after a hydrate whose load threw: the
+// service logs the message at INFO and still answers Success.
+const etlLog = `2026-10-07T14:02:11.410Z  INFO 1 --- [dictionaryetl] [           main] e.h.d.a.d.DictionaryEtlApplication       : Started DictionaryEtlApplication in 3.9 seconds
+2026-10-07T14:02:15.002Z  INFO 1 --- [dictionaryetl] [nio-8086-exec-1] e.h.d.a.d.l.DictionaryLoaderController   : initialDatabaseHydration __ csvPath: null
+2026-10-07T14:02:15.010Z  INFO 1 --- [dictionaryetl] [nio-8086-exec-1] e.h.d.a.d.l.DictionaryLoaderService      : Processing Studies: []
+2026-10-07T14:02:16.533Z  INFO 1 --- [dictionaryetl] [nio-8086-exec-1] e.h.d.a.d.l.DictionaryLoaderService      : could not execute batch [ERROR: value too long for type character varying(255)]
+2026-10-07T14:02:16.540Z ERROR 1 --- [dictionaryetl] [nio-8086-exec-1] e.h.d.a.d.concept.ConceptService         : Cannot invoke "java.lang.Long.longValue()"
+java.lang.NullPointerException: Cannot invoke "java.lang.Long.longValue()"
+	at edu.harvard.dbmi.avillach.dictionaryetl.concept.ConceptService.updateConceptsFromCSV(ConceptService.java:141)
+2026-10-07T14:02:16.600Z ERROR 1 --- [dictionaryetl] [nio-8086-exec-1] o.a.c.c.C.[Tomcat].[localhost]           : unrelated
+2026-10-07T14:02:16.700Z  INFO 1 --- [dictionaryetl] [nio-8086-exec-1] e.h.d.a.d.l.ColumnMetaErrorWriter        : wrote 0 errors
+`
+
+func TestSwallowedErrors(t *testing.T) {
+	found, err := swallowedErrors(strings.NewReader(etlLog))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(found) != 2 {
+		t.Fatalf("found %d excerpts: %q", len(found), found)
+	}
+	if !strings.HasSuffix(found[0][0], "could not execute batch [ERROR: value too long for type character varying(255)]") || len(found[0]) != 1 {
+		t.Errorf("first excerpt = %q", found[0])
+	}
+	if len(found[1]) != 3 || !strings.Contains(found[1][2], "ConceptService.java:141") {
+		t.Errorf("second excerpt = %q", found[1])
+	}
+}
+
+func TestDictionaryWarnsAboutSwallowedETLErrors(t *testing.T) {
+	x := newDictFixture(t)
+	x.f.On(fakerunner.Glob("docker logs demo-dictionaryetl-*")).Stdout(etlLog)
+	x.f.On(fakerunner.Glob("docker run * --name demo-columnmeta-* *"))
+	x.stackUp()
+	var logged bytes.Buffer
+	x.d.Log = slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	err := DictionaryHydrate(context.Background(), x.d, x.st, x.cfg, x.sec, x.state, HydrateOptions{Clear: true}, nil)
+	if err != nil {
+		t.Fatalf("a swallowed error failed the hydrate: %v", err)
+	}
+	var warnings []string
+	for _, e := range x.rec.Events() {
+		if w, ok := e.(events.Warning); ok {
+			warnings = append(warnings, w.Text)
+		}
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], `(and 1 more): "could not execute batch [ERROR: value too long`) {
+		t.Errorf("warnings = %q", warnings)
+	}
+	if n := len(x.f.CallsMatching(fakerunner.Glob("docker logs demo-dictionaryetl-*"))); n != 1 {
+		t.Errorf("the log was read %d times", n)
+	}
+	x.f.AssertOrder(fakerunner.Glob("docker logs demo-dictionaryetl-*"), fakerunner.Glob("docker rm -v -f demo-dictionaryetl-*"))
+	if !strings.Contains(logged.String(), "ConceptService.java:141") {
+		t.Errorf("the run log lacks the excerpt:\n%s", logged.String())
+	}
+}
+
+func TestDictionaryQuietETLLog(t *testing.T) {
+	x := newDictFixture(t)
+	x.f.On(fakerunner.Glob("docker logs demo-dictionaryetl-*")).Stdout(strings.Join(strings.Split(etlLog, "\n")[:3], "\n"))
+	x.f.On(fakerunner.Glob("docker run * --name demo-columnmeta-* *"))
+	x.stackUp()
+	if err := DictionaryHydrate(context.Background(), x.d, x.st, x.cfg, x.sec, x.state, HydrateOptions{Clear: true}, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range x.rec.Events() {
+		if w, ok := e.(events.Warning); ok {
+			t.Errorf("warning: %s", w.Text)
+		}
+	}
 }

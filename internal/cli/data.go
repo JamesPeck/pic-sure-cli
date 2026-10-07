@@ -47,7 +47,16 @@ started again once the loader has finished.
 
 The previous load's files are removed before the loader runs, so if it
 fails HPDS stays stopped with no phenotype data: fix the problem and run the
-load again.`,
+load again.
+
+Then the dictionary is rebuilt. --dictionary auto (the default) builds it
+from the loaded data. --dictionary custom loads --datasets and --concepts
+(as ` + "`dictionary load-csv`" + `), and the facets if --facets-categories,
+--facets and --facet-concepts are all given (as ` + "`dictionary load-facets`" + `).
+Both replace the dictionary's contents. Last, the search weights are
+recomputed, unless --skip-weights. If a dictionary step fails, HPDS keeps
+the new data and the error gives the dictionary commands that finish the
+load.`,
 		Args: cobra.NoArgs,
 		RunE: a.loadPhenotype,
 	}
@@ -56,7 +65,12 @@ load again.`,
 	f.String("entry", "", "the CSV `ENTRY` to load from an archive with several")
 	f.String("input-dir", "", "`DIR` of phenotype files for the sequential loader (ticket 043)")
 	f.Int("heap", 0, "loader JVM heap in `MB` (default 4096 for --file)")
-	f.String("dictionary", "auto", "dictionary source: auto or custom (ticket 045)")
+	f.String("dictionary", ops.DictionaryAuto, "dictionary `SOURCE`: auto (built from the loaded data) or custom")
+	f.String("datasets", "", "custom dictionary: the datasets CSV `FILE`")
+	f.String("concepts", "", "custom dictionary: a zip `FILE` of concepts_*.csv")
+	f.String("facets-categories", "", "custom dictionary: the facet categories CSV `FILE`")
+	f.String("facets", "", "custom dictionary: the facets CSV `FILE`")
+	f.String("facet-concepts", "", "custom dictionary: the facet concepts CSV `FILE`")
 	f.Bool("skip-weights", false, "skip recomputing the search weights")
 	c.MarkFlagsMutuallyExclusive("file", "input-dir")
 	c.MarkFlagsOneRequired("file", "input-dir")

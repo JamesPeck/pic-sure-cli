@@ -332,15 +332,24 @@ it.
   Composer from `upCompose` (env computed per call from the `*Secrets` the
   rotation updates), and `ops.RotateSecret`, recording the `secrets rotate`
   operation in state.json.
-- `data_phenotype.go` (042): `data load-phenotype --file F [--entry E]
-  [--heap MB]`, the load step only (045 adds the dictionary steps, 043
-  `--input-dir`). Usage checks first (`--heap` must be positive, and
-  no `--skip-step`, since the loader's steps depend on each other); under the stack lock, shared
-  HPDS data is exit 1 and an uninitialised stack exit 3; then
-  `phenoinput.Resolve` with the cache's `TempDir` (a missing file or an
-  `*EntryError` is exit 2), and `ops.LoadPhenotype`, recording the `data
-  load-phenotype` operation in state.json. `--json`'s data is
-  `{"dataset": "phenotype:<sha256>"}`.
+- `data_phenotype.go` (042, 045): `data load-phenotype --file F [--entry E]
+  [--heap MB] [--dictionary auto|custom --datasets F --concepts Z
+  [--facets-categories F --facets F --facet-concepts F]] [--skip-weights]`
+  (043 adds `--input-dir`). `phenotypeFlags` checks the flags first, as
+  AIO's `etl.sh load_phenotype` does (all exit 2): `--heap` positive,
+  `--dictionary` auto or custom, custom needs `--datasets` and `--concepts`,
+  auto takes none of the custom flags, the facet trio is all or none, and
+  each custom file exists. No `--skip-step`, since the steps depend on each
+  other. Under the stack lock, shared HPDS data is exit 1 and an
+  uninitialised stack exit 3; then `phenoinput.Resolve` with the cache's
+  `TempDir` (a missing file or an `*EntryError` is exit 2), and
+  `ops.DataLoadPhenotype`, recording the `data load-phenotype` operation in
+  state.json. A failure that isn't a usage error gets a copy-pasteable
+  retry (`rerunHint`, paths quoted with `shellQuote`): after HPDS has the
+  new data (`*ops.PhenotypeDictionaryError`), the `dictionary` commands
+  from the failed step on (or `restart dictionary-api` for the refresh);
+  before that, the whole `data load-phenotype` command. `--json`'s data is
+  `{"dataset": "phenotype:<sha256>", "dictionary": "auto", "weights": true}`.
 - `data_demo.go` (046): `data demo [nhanes|synthea|1000genomes|all]
   [--heap MB]`, default nhanes. The same usage checks and refusals as
   load-phenotype, then `ops.DataDemo` with the stack's proxy (the
@@ -1230,6 +1239,19 @@ a fresh `tmp/` dir that prune keeps while it is recent or mounted. A caller
 that reuses an older cache file (046's downloads) must hold `c.LockUse`
 until the loader runs.
 
+**Phenotype load (045, `load_phenotype.go`).** `DataLoadPhenotype(ctx, d,
+st, cfg, sec, state, PhenotypeOptions{Load, Dictionary, Datasets,
+Concepts, Facets, SkipWeights, Cache})` is `data load-phenotype --file`:
+042's `LoadPhenotype`, then one dictionary run on 044's `Dictionary`.
+`DictionaryAuto` is `HydrateSteps{Clear, Heap: Load.HeapMB}` (no default
+facets, as AIO's `hydrate-dictionary --clear`); `DictionaryCustom` is
+`LoadCSVSteps{Clear}` plus `FacetSteps` when the facets are given. Then
+`WeightsSteps` unless `SkipWeights`, and `RefreshStep`. Before HPDS is
+touched it builds the step list (so a bad custom CSV is exit 2) and runs
+`Preflight`, or `PreflightETL` with `SkipWeights`. A dictionary step's
+failure or interrupt is a `*PhenotypeDictionaryError{Step, Interrupted,
+Err}` (its exit code is Err's), returned with the dataset HPDS now has.
+
 **Dictionary (044, `dictionary.go`, `dictionary_csv.go`).** §9.6's
 dictionary operations. `NewDictionary(d, st, cfg, sec, state)` holds one
 dictionary-etl container for all its steps; defer `Close(ctx)`, which
@@ -1246,6 +1268,14 @@ concatenate its step lists with their own and end with one `RefreshStep()`.
   inside the container (120 s); an exit or the timeout shows its last 30
   log lines. dictionary-db must be running and healthy (exit 3, "run
   `pic-sure up`"); every operation checks that first.
+- **Swallowed errors (045).** Before `Close` removes the ETL it scans the
+  ETL's log once (`scanETLLog`) for errors the ETL logged but didn't
+  report: anything `DictionaryLoaderService` logs other than "Processing
+  Studies" (a hydrate's load exception, logged at INFO before it answers
+  `Success`) and `ConceptService` ERRORs (a failed parent link during a
+  concept load). A match is a Warning quoting the first (exit status
+  unchanged), and each excerpt (the record plus its stack trace, up to
+  200 lines) goes to the run log as a debug record.
 - **Requests** go from a `--rm` `curlimages/curl` container (catalog
   `curl`) on the data network, the body on stdin, with
   `--fail-with-body`, so a non-2xx answer is an error carrying the body.
@@ -1270,6 +1300,8 @@ concatenate its step lists with their own and end with one `RefreshStep()`.
   `Preflight(ctx, WeightsOptions)` (046) checks what hydrate and weights
   need (dictionary-db healthy, its password, both images, the weights
   file) without changing anything, for loads that replace HPDS data first.
+  `PreflightETL(ctx)` (045) is the same without the weights image and
+  file.
   `WeightsSteps`: `weights`, the reactor's `dictionary-weights` image with
   the file bind-mounted read-only at `/weights.csv`; the default file is
   the pic-sure tree's (`components.pic-sure.source`, else the cache).
