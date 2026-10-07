@@ -34,6 +34,10 @@ type State struct {
 	// HPDSKey is the HPDS key the hpds-key step last copied into the
 	// hpds-data volume.
 	HPDSKey *VolumeCopy `json:"hpds_key,omitempty"`
+	// PendingRestarts are the services a converging step changed the files
+	// or volumes of while they ran, which must restart to read them. It is
+	// kept until they have, so a failed run's re-run still restarts them.
+	PendingRestarts []string `json:"pending_restarts,omitempty"`
 	// InitializedAt is when init finished; a stack without it is still
 	// being created, and init resumes it.
 	InitializedAt time.Time `json:"initialized_at,omitzero"`

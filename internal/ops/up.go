@@ -4,15 +4,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"io/fs"
-	"maps"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
-
-	"go.yaml.in/yaml/v3"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/docker"
 	"github.com/JamesPeck/pic-sure-cli/internal/events"
@@ -21,8 +17,8 @@ import (
 	"github.com/JamesPeck/pic-sure-cli/internal/steps"
 )
 
-// RestartStepID is the ID of up's last step, which restarts the services
-// that were running on files or volumes the earlier steps changed.
+// RestartStepID is the ID of up's restart step, which restarts the
+// running services whose files or volumes the earlier steps changed.
 const RestartStepID = "restart"
 
 const httpd = "httpd"
@@ -34,109 +30,79 @@ func UpStepIDs(cfg *stack.Config) []string {
 	if cfg.DB.Mode == stack.DBRemote {
 		ids = append(ids, StepDBBootstrap)
 	}
-	return append(ids, StepMigrate, StepSeed, HPDSKeyStepID, StartStepID, RestartStepID)
+	return append(ids, StepMigrate, StepSeed, HPDSKeyStepID, RestartStepID, StartStepID)
 }
 
 // UpSteps are §9.2 for an initialised stack: the images (built if
-// missing), TLS and the truststore, a fresh render, then ConvergeSteps,
-// each skipped when its Check finds it done. On a running stack whose
-// images, files and data are current, `compose up` changes nothing, so up
-// only verifies.
+// missing), TLS and the truststore, a fresh render, then ConvergeSteps
+// with a restart step before start, each skipped when its Check finds it
+// done. On a running stack whose images, files and data are current,
+// `compose up` changes nothing, so up only verifies.
 //
 // Neither the TLS nor the truststore step restarts what reads its volume,
 // and compose doesn't recreate a container whose rendered files changed
 // but whose compose config didn't. So when one of them applies, or the
-// render changes a file under render/files, the services that were
-// running on the old files before up are restarted by the last step,
-// "restart", once the stack is up.
+// render changes a file under render/files, the services that read it are
+// recorded in state.json's PendingRestarts, and the restart step restarts
+// those that are running before start waits for the stack to be healthy.
 func UpSteps(d *Deps, st *stack.Stack, cfg *stack.Config, sec *stack.Secrets, state *stack.State, opts ConvergeOptions) []steps.Step {
-	r := &upRestarts{d: d, st: st, opts: opts}
+	r := &upRestarts{d: d, st: st, cfg: cfg, opts: opts}
+	converge := ConvergeSteps(d, st, cfg, sec, opts)
+	last := len(converge) - 1
 	list := []steps.Step{
 		ImagesStep(d, st, cfg, state, ImagesOptions{Cache: opts.Cache}),
 		r.restartAfter(TLSStep(d, st, cfg), httpd),
 		r.restartAfter(StackTruststoreStep(d, st, cfg, state), psama),
 		r.watchRender(RenderStep(d, st, cfg, state, opts)),
 	}
-	list = append(list, ConvergeSteps(d, st, cfg, sec, opts)...)
-	return append(list, withCompose(d, opts, r.step()))
+	list = append(list, converge[:last]...)
+	return append(list, withCompose(d, opts, r.step()), converge[last])
 }
 
-// upRestarts collects the services up must restart after `compose up`.
+// upRestarts records and runs the restarts up's steps call for.
 type upRestarts struct {
 	d    *Deps
 	st   *stack.Stack
+	cfg  *stack.Config
 	opts ConvergeOptions
-
-	// running is the set of services running before up changed anything,
-	// read once, when first needed; nil until then.
-	running map[string]bool
-	// services were running and read a volume a step refilled.
-	services []string
-	// changed are the absolute paths of the rendered files the render
-	// step changed, added or removed.
-	changed []string
 }
 
-// wasRunning reports whether service was running before up changed
-// anything. If compose can't say, it assumes it was, so a needless
-// restart is the worst outcome.
-func (r *upRestarts) wasRunning(ctx context.Context, service string) bool {
-	if r.running == nil {
-		r.running = map[string]bool{}
-		svcs, err := r.ps(ctx)
-		if err != nil {
-			r.running = nil
-			return true
-		}
-		for _, s := range svcs {
-			if s.State == "running" {
-				r.running[s.Service] = true
-			}
+// mark adds services to state.json's PendingRestarts.
+func (r *upRestarts) mark(services ...string) error {
+	state, err := r.st.LoadState()
+	if err != nil {
+		return err
+	}
+	n := len(state.PendingRestarts)
+	for _, s := range services {
+		if !slices.Contains(state.PendingRestarts, s) {
+			state.PendingRestarts = append(state.PendingRestarts, s)
 		}
 	}
-	return r.running[service]
-}
-
-// ps lists the stack's containers through the adapter the steps use, or
-// one over the current render when they have none yet.
-func (r *upRestarts) ps(ctx context.Context) ([]docker.ComposeService, error) {
-	c := r.d.Compose
-	if c == nil {
-		if r.opts.Compose == nil {
-			return nil, errors.New("no compose adapter for the stack")
-		}
-		var err error
-		if c, err = r.opts.Compose(); err != nil {
-			return nil, err
-		}
+	if len(state.PendingRestarts) == n {
+		return nil
 	}
-	return c.Ps(ctx)
+	return r.st.SaveState(state)
 }
 
-// restartAfter makes s, when it applies, mark service for a restart if it
-// was running.
+// restartAfter makes s, once it applies, mark service for a restart.
 func (r *upRestarts) restartAfter(s steps.Step, service string) steps.Step {
 	apply := s.Apply
 	s.Apply = func(ctx context.Context, sink events.Sink) error {
-		running := r.wasRunning(ctx, service)
 		if err := apply(ctx, sink); err != nil {
 			return err
 		}
-		if running && !slices.Contains(r.services, service) {
-			r.services = append(r.services, service)
-		}
-		return nil
+		return r.mark(service)
 	}
 	return s
 }
 
-// watchRender makes the render step record which files under render/files
-// it changed. The running services are read first, while d.Compose still
-// reads the old render.
+// watchRender makes the render step mark the services that bind-mount a
+// file under render/files it changed, added or removed, or a directory
+// holding one.
 func (r *upRestarts) watchRender(s steps.Step) steps.Step {
 	apply := s.Apply
 	s.Apply = func(ctx context.Context, sink events.Sink) error {
-		r.wasRunning(ctx, httpd)
 		dir := r.st.Path(render.FilesDir)
 		before, err := readTree(dir)
 		if err != nil {
@@ -149,20 +115,61 @@ func (r *upRestarts) watchRender(s steps.Step) steps.Step {
 		if err != nil {
 			return err
 		}
+		var changed []string
 		for p, data := range after {
 			if old, ok := before[p]; !ok || !bytes.Equal(old, data) {
-				r.changed = append(r.changed, p)
+				changed = append(changed, p)
 			}
 		}
 		for p := range before {
 			if _, ok := after[p]; !ok {
-				r.changed = append(r.changed, p)
+				changed = append(changed, p)
 			}
 		}
-		slices.Sort(r.changed)
-		return nil
+		if len(changed) == 0 {
+			return nil
+		}
+		readers, err := r.readers(ctx, changed)
+		if err != nil {
+			// The files are written, so a re-run would see no change:
+			// restart everything rather than lose the restart.
+			sink.Emit(events.Warning{ID: RenderStepID, Text: "can't tell which services read the changed files (" + err.Error() +
+				"); restarting every running service"})
+			readers = StartServices(r.cfg)
+		}
+		return r.mark(readers...)
 	}
 	return s
+}
+
+// readers returns the services that bind-mount one of paths, or a
+// directory holding one, per `compose config` over the new render.
+func (r *upRestarts) readers(ctx context.Context, paths []string) ([]string, error) {
+	c := r.d.Compose
+	if c == nil {
+		if r.opts.Compose == nil {
+			return nil, errors.New("no compose adapter for the stack")
+		}
+		var err error
+		if c, err = r.opts.Compose(); err != nil {
+			return nil, err
+		}
+	}
+	mounts, err := bindMounts(ctx, c)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for svc, m := range mounts {
+		for _, src := range m {
+			if slices.ContainsFunc(paths, func(p string) bool { return within(p, src) }) {
+				out = append(out, svc)
+				break
+			}
+		}
+	}
+	slices.Sort(out)
+	return out, nil
 }
 
 // readTree reads every regular file under dir, keyed by absolute path. A
@@ -189,98 +196,54 @@ func readTree(dir string) (map[string][]byte, error) {
 	return out, err
 }
 
-// pending returns the services to restart: those marked by a step, and
-// the running ones that bind-mount a changed rendered file or a directory
-// holding one, sorted.
-func (r *upRestarts) pending(ctx context.Context) ([]string, error) {
-	want := map[string]bool{}
-	for _, s := range r.services {
-		want[s] = true
-	}
-	if len(r.changed) > 0 {
-		mounts, err := bindSources(ctx, r.d)
+// step is up's restart step. It is done when nothing is pending. It
+// restarts the pending services that are running; compose up starts the
+// others on the new files. They come off the list only once restarted.
+func (r *upRestarts) step() steps.Step {
+	pending := func() ([]string, error) {
+		state, err := r.st.LoadState()
 		if err != nil {
 			return nil, err
 		}
-		for svc, sources := range mounts {
-			if want[svc] || !r.wasRunning(ctx, svc) {
-				continue
-			}
-			for _, src := range sources {
-				if slices.ContainsFunc(r.changed, func(p string) bool { return within(p, src) }) {
-					want[svc] = true
-					break
-				}
-			}
-		}
+		return state.PendingRestarts, nil
 	}
-	return slices.Sorted(maps.Keys(want)), nil
-}
-
-// bindSources reads each service's bind mount sources from `compose
-// config`, so overrides count.
-func bindSources(ctx context.Context, d *Deps) (map[string][]string, error) {
-	out, err := d.Compose.Config(ctx, false)
-	if err != nil {
-		return nil, fmt.Errorf("reading the compose config: %w", err)
-	}
-	var doc struct {
-		Services map[string]struct {
-			Volumes []struct {
-				Type   string `yaml:"type"`
-				Source string `yaml:"source"`
-			} `yaml:"volumes"`
-		} `yaml:"services"`
-	}
-	if err := yaml.Unmarshal(out, &doc); err != nil {
-		return nil, fmt.Errorf("reading the compose config: %w", err)
-	}
-	mounts := map[string][]string{}
-	for name, svc := range doc.Services {
-		for _, v := range svc.Volumes {
-			if v.Type == "bind" {
-				mounts[name] = append(mounts[name], v.Source)
-			}
-		}
-	}
-	return mounts, nil
-}
-
-// step is up's restart step. It is done when no step marked a service and
-// the render changed no file. A
-// failed restart is a warning naming the command to run, since a re-run
-// would find nothing changed and skip the step.
-func (r *upRestarts) step() steps.Step {
 	return steps.Step{
 		ID:    RestartStepID,
 		Title: "Restart services on changed files",
 		Check: func(context.Context) (bool, error) {
-			return len(r.services) == 0 && len(r.changed) == 0, nil
+			svcs, err := pending()
+			return len(svcs) == 0, err
 		},
 		Apply: func(ctx context.Context, sink events.Sink) error {
-			svcs, err := r.pending(ctx)
+			svcs, err := pending()
 			if err != nil {
-				if ctx.Err() != nil {
+				return err
+			}
+			running, err := r.d.Compose.Ps(ctx)
+			if err != nil {
+				return err
+			}
+			var restart []string
+			for _, s := range svcs {
+				if slices.ContainsFunc(running, func(c docker.ComposeService) bool { return c.Service == s && c.State == "running" }) {
+					restart = append(restart, s)
+				}
+			}
+			if len(restart) > 0 {
+				sink.Emit(events.Progress{ID: RestartStepID, Text: "restarting " + strings.Join(restart, ", ") + " to pick up the changed files"})
+				out := events.NewLogWriter(sink, RestartStepID, events.StreamStderr)
+				err := r.d.Compose.Restart(ctx, out, restart...)
+				_ = out.Close()
+				if err != nil {
 					return err
 				}
-				sink.Emit(events.Warning{ID: RestartStepID, Text: "can't tell which services read the changed files: " + err.Error() +
-					"; run `pic-sure restart` if the stack misbehaves"})
-				return nil
 			}
-			if len(svcs) == 0 {
-				return nil
+			state, err := r.st.LoadState()
+			if err != nil {
+				return err
 			}
-			sink.Emit(events.Progress{ID: RestartStepID, Text: "restarting " + strings.Join(svcs, ", ") + " to pick up the changed files"})
-			out := events.NewLogWriter(sink, RestartStepID, events.StreamStderr)
-			defer func() { _ = out.Close() }()
-			if err := r.d.Compose.Restart(ctx, out, svcs...); err != nil {
-				if ctx.Err() != nil {
-					return err
-				}
-				sink.Emit(events.Warning{ID: RestartStepID, Text: "restarting " + strings.Join(svcs, ", ") + " failed: " + err.Error() +
-					"; run `pic-sure restart " + strings.Join(svcs, " ") + "`"})
-			}
-			return nil
+			state.PendingRestarts = slices.DeleteFunc(state.PendingRestarts, func(s string) bool { return slices.Contains(svcs, s) })
+			return r.st.SaveState(state)
 		},
 	}
 }

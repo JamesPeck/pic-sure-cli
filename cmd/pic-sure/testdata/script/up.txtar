@@ -8,8 +8,12 @@ stderr 'no pic-sure stack found'
 
 # A --skip-step up doesn't have is exit 2, listing the ones it has.
 exitcode 2 pic-sure --stack stack up --skip-step resolve
-stderr '--skip-step resolve: up has no such step; it can skip images, tls, truststore, render, db, migrate, seed, hpds-key, start, restart$'
+stderr '--skip-step resolve: up has no such step; it can skip images, tls, truststore, render, db, migrate, seed, hpds-key, restart, start$'
 ! exists docker.log
+
+# Shared HPDS data needs ticket 051.
+exitcode 2 pic-sure --stack shared up
+stderr 'up doesn''t support shared HPDS data yet; set hpds.data to local'
 
 # A stack init hasn't finished is exit 3, pointing at init.
 exitcode 3 pic-sure --stack partial up
@@ -65,3 +69,10 @@ auth: {mode: explore, admin_email: admin@example.com, auth0: {tenant: example, c
 {"cli_version": "dev", "schema_version": 1, "initialized_at": "2026-10-07T12:00:00Z"}
 -- no-client-secret/.pic-sure/secrets.yaml --
 db_root_password: rootpw
+-- shared/pic-sure.yaml --
+schema: 1
+name: shared
+auth: {mode: open, admin_email: admin@example.com}
+hpds: {data: shared, shared_name: demo-set}
+-- shared/.pic-sure/state.json --
+{"cli_version": "dev", "schema_version": 1, "initialized_at": "2026-10-07T12:00:00Z"}

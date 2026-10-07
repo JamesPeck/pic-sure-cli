@@ -55,6 +55,10 @@ func (a *App) up(cmd *cobra.Command, _ []string) (err error) {
 	if err := checkUpSkips(cfg, a.Global.SkipSteps); err != nil {
 		return err
 	}
+	if cfg.HPDS.Data == stack.HPDSShared {
+		// Render needs the data set's recorded HPDS profile (ticket 051).
+		return exitcode.Usage("up doesn't support shared HPDS data yet; set hpds.data to local")
+	}
 	d := a.newDeps()
 	lock, err := a.lockStack(ctx, cmd, st, d.Sink)
 	if err != nil {
@@ -114,7 +118,6 @@ func (a *App) up(cmd *cobra.Command, _ []string) (err error) {
 		return err
 	}
 	summary := ops.Summary(st, cfg, sec)
-	summary.NextSteps = nil
 	return a.finish(summary, func(w io.Writer) error {
 		_, err := fmt.Fprintf(w, "Stack %s is up: %s\n", summary.Stack, summary.URL)
 		return err

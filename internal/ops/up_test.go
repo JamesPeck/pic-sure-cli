@@ -25,8 +25,9 @@ func TestUpStepIDsMatchUpSteps(t *testing.T) {
 		if want := ops.UpStepIDs(&cfg); !slices.Equal(ids, want) {
 			t.Errorf("db.mode %s: UpSteps %v, UpStepIDs %v", mode, ids, want)
 		}
-		// up is init's plan without resolve, plus the restart.
-		if want := append(ops.InitStepIDs(&cfg)[1:], ops.RestartStepID); !slices.Equal(ids, want) {
+		// up is init's plan without resolve, with the restart before start.
+		init := ops.InitStepIDs(&cfg)
+		if want := append(slices.Clone(init[1:len(init)-1]), ops.RestartStepID, ops.StartStepID); !slices.Equal(ids, want) {
 			t.Errorf("db.mode %s: UpSteps %v, want %v", mode, ids, want)
 		}
 	}

@@ -592,7 +592,24 @@ func compareVersions(a, b []string) int {
 // dictionary-db from `compose config`, so the migrations checked are the
 // ones Flyway will see, overrides included: service → target → host path.
 func composeMounts(ctx context.Context, d *Deps) (map[string]map[string]string, error) {
-	out, err := d.Compose.Config(ctx, false)
+	all, err := bindMounts(ctx, d.Compose)
+	if err != nil {
+		return nil, err
+	}
+	mounts := map[string]map[string]string{}
+	for _, name := range []string{flywayInit, flywayDictionaryInit, dictionaryDB} {
+		mounts[name] = all[name]
+		if mounts[name] == nil {
+			mounts[name] = map[string]string{}
+		}
+	}
+	return mounts, nil
+}
+
+// bindMounts reads every service's bind mounts from `compose config`:
+// service → target → host path.
+func bindMounts(ctx context.Context, c docker.Composer) (map[string]map[string]string, error) {
+	out, err := c.Config(ctx, false)
 	if err != nil {
 		return nil, fmt.Errorf("reading the compose config: %w", err)
 	}
@@ -609,9 +626,9 @@ func composeMounts(ctx context.Context, d *Deps) (map[string]map[string]string, 
 		return nil, fmt.Errorf("reading the compose config: %w", err)
 	}
 	mounts := map[string]map[string]string{}
-	for _, name := range []string{flywayInit, flywayDictionaryInit, dictionaryDB} {
+	for name, svc := range doc.Services {
 		m := map[string]string{}
-		for _, v := range doc.Services[name].Volumes {
+		for _, v := range svc.Volumes {
 			if v.Type == "bind" {
 				m[v.Target] = v.Source
 			}
