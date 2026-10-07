@@ -149,12 +149,14 @@ it.
   `cmd` (009), `a.initDir(args)` resolves init's
   directory, and `a.lockStack(ctx, cmd, st, sink)` takes the stack lock
   for a mutating command: exit 1 if it is held, or a wait with
-  `--wait-lock`.
+  `--wait-lock`. Holding the lock, it applies the gate again (009), since
+  the command it waited for may have been a newer pic-sure.
 - `gate.go` (009): `commandClasses`, the version-gate class of every
   command (§10.6; a test keeps it complete): read-only, mutating, or
   `update`'s own class. `openStack` runs `a.gate`, so every command that
-  opens a stack is gated. A read-only command's warning goes to stderr, so
-  `--json` output stays clean. A new command needs a row here.
+  opens a stack is gated, and `lockStack` runs it again under the lock. A
+  read-only command's warning goes to stderr, so `--json` output stays
+  clean. A new command needs a row here.
 - `root.go`: registers every command. It wraps each `RunE` so that any
   error raised before a `RunE` starts is reported as a usage error. A
   `PreRunE` that fails for any other reason must return an
@@ -379,15 +381,16 @@ difference (§10.6).
   memory, which read-only commands use to read an older config.
   `Apply(st, now)` (for `update`, under the stack lock) migrates in memory,
   validates when Target is `ConfigSchema`, then copies `pic-sure.yaml` and
-  `state.json` as they were to `.pic-sure/backups/<UTC ts>/` and writes the
-  config. With nothing pending it does nothing. It leaves state.json's
+  `state.json` as they were, with their modes, to
+  `.pic-sure/backups/<UTC ts>/` and writes the config. With nothing pending it does nothing. It leaves state.json's
   `schema_version` to the next render.
 - **Comparing versions.** `CompareVersions(a, b)` orders versions as semver,
   ignoring a leading `v`, `+build` and a git-describe suffix (`-N-gSHA`,
   `-dirty`). It reports not-ok for anything else, such as `dev`. 028 uses it
   for PSCLI.
-- **The gate.** `st.CheckVersions(cli, reg)` reads state.json (missing is
-  fine, corrupt is an error) and pic-sure.yaml's schema. On the result,
+- **The gate.** `st.CheckVersions(cli, reg)` reads state.json's two
+  version fields (missing is fine, corrupt is an error) and pic-sure.yaml's
+  schema. On the result,
   `Newer()` is true if either schema is above this pic-sure's or
   `cli_version` is a later version, and `Pending` lists the migrations.
   `Gate(class)`: `ReadOnly` always runs, with a warning when newer;
@@ -395,7 +398,7 @@ difference (§10.6).
   pic-sure update"); `Migrating` (update) is exit 5 only when newer. A
   config without a readable schema doesn't gate; the command reports it.
 - `doc.Raw(key)` reads a value as written, with no defaults. `config
-  show/get` use it on a newer schema, which this pic-sure can't decode.
+  show/get` use it on a schema this pic-sure can't decode or migrate.
 
 ## internal/render
 

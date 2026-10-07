@@ -2,6 +2,7 @@ package stack
 
 import (
 	"cmp"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -54,14 +55,22 @@ type VersionCheck struct {
 // versions and pic-sure.yaml's schema. cli is this pic-sure's version and
 // reg the migrations it runs (ConfigMigrations()). Before the first render
 // there is no state.json, and nothing to compare but the config's schema;
-// a state.json that can't be read is an error.
+// a state.json that can't be read is an error. Only its two version fields
+// are decoded, so a newer pic-sure may change the rest of State.
 func (s *Stack) CheckVersions(cli string, reg Registry) (*VersionCheck, error) {
-	st, err := s.LoadState()
+	var st struct {
+		CLIVersion    string `json:"cli_version"`
+		SchemaVersion int    `json:"schema_version"`
+	}
+	data, err := s.ReadFile(StateFile)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		st = &State{}
 	case err != nil:
 		return nil, err
+	default:
+		if err := json.Unmarshal(data, &st); err != nil {
+			return nil, fmt.Errorf("reading %s: %w", s.Path(StateFile), err)
+		}
 	}
 	schema, configOK := 0, false
 	if doc, err := s.ReadConfigDoc(); err == nil {

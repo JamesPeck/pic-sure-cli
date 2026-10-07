@@ -21,9 +21,9 @@ type ConfigDoc struct {
 	root *yaml.Node // a DocumentNode holding one MappingNode
 }
 
-// SchemaVersionError is a pic-sure.yaml whose schema isn't ConfigSchema.
-// The version gate turns it into "run pic-sure update" or "this pic-sure is
-// too old".
+// SchemaVersionError is a pic-sure.yaml in a schema this pic-sure can't
+// read: Config wants ConfigSchema, and Registry.Plan a schema its
+// migrations lead from.
 type SchemaVersionError struct {
 	Found int
 }

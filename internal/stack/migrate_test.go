@@ -161,6 +161,9 @@ func writeStack(t *testing.T, config, state string) *Stack {
 func TestApplyBacksUpThenMigrates(t *testing.T) {
 	state := `{"cli_version": "v2.0.0", "schema_version": 1}`
 	s := writeStack(t, schema1YAML, state)
+	if err := os.Chmod(s.Path(ConfigFile), 0o600); err != nil { // say it holds proxy credentials
+		t.Fatal(err)
+	}
 
 	got, err := fakeRegistry().Apply(s, t0.In(time.FixedZone("EST", -5*3600)))
 	if err != nil {
@@ -172,7 +175,10 @@ func TestApplyBacksUpThenMigrates(t *testing.T) {
 	}
 	wantContent(t, s.Path(dir+"/pic-sure.yaml"), schema1YAML)
 	wantContent(t, s.Path(dir+"/state.json"), state)
+	wantMode(t, s.Path(dir+"/pic-sure.yaml"), 0o600)
+	wantMode(t, s.Path(dir+"/state.json"), 0o644)
 	wantContent(t, s.Path(ConfigFile), schema2YAML)
+	wantMode(t, s.Path(ConfigFile), 0o600)
 	wantContent(t, s.Path(StateFile), state) // rendering updates it, not Apply
 	if m, _ := s.Manifest(); !m.Has(BackupsDir) || !m.Has(dir) || !m.Has(dir+"/pic-sure.yaml") || !m.Has(dir+"/state.json") {
 		t.Errorf("backups not all recorded in the manifest: %+v", m)
@@ -237,6 +243,14 @@ func TestApplyChangesNothingOnFailure(t *testing.T) {
 			return errors.New("boom")
 		}}}},
 		want: "migrating pic-sure.yaml from schema 1 to 2: boom",
+	}, {
+		name:   "a step removes schema",
+		config: schema1YAML,
+		reg: Registry{Target: 2, Steps: []Migration{{From: 1, Apply: func(top *yaml.Node) error {
+			top.Content = top.Content[2:]
+			return nil
+		}}}},
+		want: "migrating pic-sure.yaml from schema 1 to 2: the step removed schema",
 	}, {
 		name:   "the result is invalid",
 		config: "schema: 0\nname: demo\n" + valid,

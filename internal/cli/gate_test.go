@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -90,31 +91,31 @@ func TestOpenStackGates(t *testing.T) {
 		schema int
 		state  string
 		reg    *stack.Registry
-		// Exit codes for config get (read-only), config set (mutating)
-		// and update (migrating); -1 for a warning and no error.
-		want [3]int
+		// What config get (read-only), config set (mutating) and update
+		// (migrating) do: "runs", "warns" (runs with a warning) or "exit N".
+		want [3]string
 		msg  string
 	}{{
 		name: "current", schema: 1, state: `{"cli_version": "v2.0.0-test", "schema_version": 1}`,
-		want: [3]int{0, 0, 0},
+		want: [3]string{"runs", "runs", "runs"},
 	}, {
 		name: "rendered by an older pic-sure", schema: 1, state: `{"cli_version": "v1.9.0", "schema_version": 1}`,
-		want: [3]int{0, 0, 0},
+		want: [3]string{"runs", "runs", "runs"},
 	}, {
 		name: "rendered by a newer pic-sure", schema: 1, state: `{"cli_version": "v2.1.0", "schema_version": 1}`,
-		want: [3]int{-1, 5, 5},
+		want: [3]string{"warns", "exit 5", "exit 5"},
 		msg:  "this stack was last rendered by pic-sure v2.1.0, which is newer than this pic-sure (v2.0.0-test)",
 	}, {
 		name: "newer schema", schema: 2, state: `{"cli_version": "v3.0.0", "schema_version": 2}`,
-		want: [3]int{-1, 5, 5},
+		want: [3]string{"warns", "exit 5", "exit 5"},
 		msg:  "schema 2",
 	}, {
 		name: "migrations pending", schema: 0, state: `{"cli_version": "v1.0.0", "schema_version": 0}`, reg: toSchema1(),
-		want: [3]int{0, 5, 0},
+		want: [3]string{"runs", "exit 5", "runs"},
 		msg:  "run pic-sure update",
 	}, {
 		name: "corrupt state.json", schema: 1, state: `{`,
-		want: [3]int{-1, 1, 1},
+		want: [3]string{"warns", "exit 1", "exit 1"},
 		msg:  "state.json",
 	}} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -127,18 +128,17 @@ func TestOpenStackGates(t *testing.T) {
 				if err == nil {
 					_ = st.Close()
 				}
-				got := exitcode.FromError(err)
-				if got == 0 && stderr.Len() > 0 {
-					got = -1
+				got, msg := "runs", stderr.String()
+				switch {
+				case err != nil:
+					got, msg = fmt.Sprintf("exit %d", exitcode.FromError(err)), err.Error()
+				case msg != "":
+					got = "warns"
 				}
 				if got != tc.want[i] {
-					t.Errorf("%s: exit %d (err %v, stderr %q), want %d", path, got, err, stderr, tc.want[i])
+					t.Errorf("%s %s (err %v, stderr %q), want %s", path, got, err, stderr, tc.want[i])
 				}
-				msg := stderr.String()
-				if err != nil {
-					msg = err.Error()
-				}
-				if tc.want[i] != 0 && !strings.Contains(msg, tc.msg) {
+				if got != "runs" && !strings.Contains(msg, tc.msg) {
 					t.Errorf("%s: %q doesn't contain %q", path, msg, tc.msg)
 				}
 			}
@@ -193,5 +193,21 @@ func TestConfigOnAnOlderSchemaMigratesInMemory(t *testing.T) {
 	}
 	if after := readFile(t, filepath.Join(dir, "pic-sure.yaml")); after != before {
 		t.Errorf("pic-sure.yaml changed:\n%s", after)
+	}
+}
+
+// A schema older than every migration can't be read either, but read-only
+// commands still run.
+func TestConfigOnAnUnmigratableSchemaShowsTheFile(t *testing.T) {
+	dir := gateStack(t, 0, "")
+	a, outBuf, errBuf := testApp(t)
+	if code := a.Run(context.Background(), []string{"--stack", dir, "config", "get", "name"}); code != 0 || outBuf.String() != "demo\n" ||
+		!strings.Contains(errBuf.String(), "can't decode pic-sure.yaml schema 0") {
+		t.Errorf("config get: exit %d, stdout %q, stderr %q", code, outBuf, errBuf)
+	}
+	a, _, errBuf = testApp(t)
+	if code := a.Run(context.Background(), []string{"--stack", dir, "config", "set", "name", "x"}); code != exitcode.CodeIncompatible ||
+		!strings.Contains(errBuf.String(), "pic-sure.yaml is schema 0, but this pic-sure reads schema 1") {
+		t.Errorf("config set: exit %d, stderr %q; want exit 5", code, errBuf)
 	}
 }

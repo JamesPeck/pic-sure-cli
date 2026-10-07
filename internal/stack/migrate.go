@@ -86,25 +86,26 @@ func (r Registry) Migrate(doc *ConfigDoc) ([]Migration, error) {
 	if err != nil {
 		return nil, err
 	}
-	top := doc.root.Content[0]
 	for _, m := range steps {
-		if err := m.Apply(top); err != nil {
+		if err := applyStep(doc.root.Content[0], m); err != nil {
 			return nil, fmt.Errorf("migrating %s from schema %d to %d: %w", ConfigFile, m.From, m.From+1, err)
 		}
-		setSchema(top, m.From+1)
 	}
 	return steps, nil
 }
 
-// setSchema sets the schema key of the top-level mapping, keeping its
-// comments.
-func setSchema(top *yaml.Node, v int) {
+// applyStep runs m on the top-level mapping, then sets schema to m.From+1,
+// keeping its comments.
+func applyStep(top *yaml.Node, m Migration) error {
+	if err := m.Apply(top); err != nil {
+		return err
+	}
 	n := lookupNode(top, []string{"schema"})
 	if n == nil {
-		n = &yaml.Node{Kind: yaml.ScalarNode}
-		top.Content = append([]*yaml.Node{{Kind: yaml.ScalarNode, Tag: "!!str", Value: "schema"}, n}, top.Content...)
+		return errors.New("the step removed schema")
 	}
-	n.Kind, n.Tag, n.Style, n.Value, n.Content = yaml.ScalarNode, "!!int", 0, strconv.Itoa(v), nil
+	n.Kind, n.Tag, n.Style, n.Value, n.Content = yaml.ScalarNode, "!!int", 0, strconv.Itoa(m.From+1), nil
+	return nil
 }
 
 // Applied is what Apply did.
@@ -180,13 +181,23 @@ func (s *Stack) backup(config []byte, now time.Time) (string, error) {
 	if err := s.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
-	if err := s.WriteFile(path.Join(dir, path.Base(ConfigFile)), config, 0o644); err != nil {
+	if err := s.backupFile(dir, ConfigFile, config); err != nil {
 		return "", err
 	}
 	if state != nil {
-		if err := s.WriteFile(path.Join(dir, path.Base(StateFile)), state, 0o644); err != nil {
+		if err := s.backupFile(dir, StateFile, state); err != nil {
 			return "", err
 		}
 	}
 	return dir, nil
+}
+
+// backupFile writes data, the content of rel, into dir with rel's mode, so
+// a copy of a file the operator restricted stays restricted.
+func (s *Stack) backupFile(dir, rel string, data []byte) error {
+	fi, err := s.root.Stat(filepath.FromSlash(rel))
+	if err != nil {
+		return err
+	}
+	return s.WriteFile(path.Join(dir, path.Base(rel)), data, fi.Mode().Perm())
 }

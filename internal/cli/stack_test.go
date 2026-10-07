@@ -113,6 +113,32 @@ func TestLockStack(t *testing.T) {
 	}
 }
 
+// A newer pic-sure may re-render the stack while a command waits for the
+// lock, so the gate is checked again once the lock is held.
+func TestLockStackGatesAgain(t *testing.T) {
+	dir := gateStack(t, 1, `{"cli_version": "v2.0.0-test", "schema_version": 1}`)
+	a, _, _ := testApp(t)
+	a.Global.Stack = dir
+	cmd := findCmd(t, "config set")
+	st, err := a.openStack(cmd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+
+	if err := os.WriteFile(filepath.Join(dir, ".pic-sure", "state.json"), []byte(`{"cli_version": "v2.1.0", "schema_version": 1}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.lockStack(context.Background(), cmd, st, events.Discard); exitcode.FromError(err) != exitcode.CodeIncompatible {
+		t.Fatalf("err = %v, want exit 5", err)
+	}
+	l, err := st.Lock(context.Background(), stack.LockOptions{})
+	if err != nil {
+		t.Fatalf("the refused command kept the lock: %v", err)
+	}
+	_ = l.Unlock()
+}
+
 func TestWaitLockFlag(t *testing.T) {
 	a, _, _ := testApp(t)
 	if code := a.Run(context.Background(), []string{"version", "--wait-lock"}); code != 0 {

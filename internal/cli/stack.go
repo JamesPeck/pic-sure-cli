@@ -52,7 +52,8 @@ func (a *App) initDir(args []string) (string, error) {
 
 // lockStack takes st's lock for a mutating command (§10.5). If another
 // command holds it, that is exit 1, or with --wait-lock a wait, announced on
-// sink.
+// sink. Holding the lock, it applies the version gate again: the holder it
+// waited for may have been a newer pic-sure that re-rendered the stack.
 func (a *App) lockStack(ctx context.Context, cmd *cobra.Command, st *stack.Stack, sink events.Sink) (*stack.Lock, error) {
 	l, err := st.Lock(ctx, stack.LockOptions{
 		Wait:    a.Global.WaitLock,
@@ -64,5 +65,12 @@ func (a *App) lockStack(ctx context.Context, cmd *cobra.Command, st *stack.Stack
 	if errors.Is(err, stack.ErrLocked) {
 		return nil, exitcode.Failed("%w; try again when it finishes, or pass --wait-lock to wait for it", err)
 	}
-	return l, err
+	if err != nil {
+		return nil, err
+	}
+	if err := a.gate(cmd, st); err != nil {
+		_ = l.Unlock()
+		return nil, err
+	}
+	return l, nil
 }

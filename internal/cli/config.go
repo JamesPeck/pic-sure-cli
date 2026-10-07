@@ -125,8 +125,9 @@ func (a *App) configGet(cmd *cobra.Command, key string) error {
 }
 
 // readConfig loads the config for show and get. A pic-sure.yaml in an older
-// schema is migrated in memory, as update would migrate it. One in a newer
-// schema can't be decoded, so cfg is nil and doc holds the file as written.
+// schema is migrated in memory, as update would migrate it. One in a schema
+// this pic-sure can't read, newer or older than any migration, can't be
+// decoded, so cfg is nil and doc holds the file as written.
 func (a *App) readConfig(cmd *cobra.Command) (cfg *stack.Config, doc *stack.ConfigDoc, err error) {
 	st, err := a.openStack(cmd)
 	if err != nil {
@@ -137,10 +138,9 @@ func (a *App) readConfig(cmd *cobra.Command) (cfg *stack.Config, doc *stack.Conf
 	if err != nil {
 		return nil, nil, configError(err)
 	}
-	reg := a.configMigrations()
-	if _, err := reg.Migrate(doc); err != nil {
+	if _, err := a.configMigrations().Migrate(doc); err != nil {
 		var se *stack.SchemaVersionError
-		if errors.As(err, &se) && se.Found > reg.Target {
+		if errors.As(err, &se) {
 			a.warnStderr("this pic-sure can't decode %s schema %d, so this is the file as written, without defaults", stack.ConfigFile, se.Found)
 			return nil, doc, nil
 		}

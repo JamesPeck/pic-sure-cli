@@ -68,7 +68,6 @@ func commandClass(cmd *cobra.Command) stack.CommandClass {
 	return stack.Mutating
 }
 
-// configMigrations returns the config migrations this pic-sure runs.
 func (a *App) configMigrations() stack.Registry {
 	if a.migrations != nil {
 		return *a.migrations
@@ -97,7 +96,7 @@ func (a *App) gate(cmd *cobra.Command, st *stack.Stack) error {
 	return err
 }
 
-// warnStderr prints a warning to stderr. Stdout may be carrying --json output.
+// warnStderr goes to stderr because stdout may carry --json output.
 func (a *App) warnStderr(format string, args ...any) {
 	_, _ = fmt.Fprintf(a.Stderr, "pic-sure: warning: "+format+"\n", args...)
 }

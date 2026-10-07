@@ -30,7 +30,6 @@ func TestCompareVersions(t *testing.T) {
 		{"v2.0.0-5-gabc1234-dirty", "v2.0.1", -1, true},
 		{"v2.0.0-dirty", "v2.0.0", 0, true},
 		{"v2.0.0-rc.1-3-gdeadbeef", "v2.0.0-rc.1", 0, true},
-		// Not versions.
 		{"dev", "v2.0.0", 0, false},
 		{"v2.0.0", "", 0, false},
 		{"abc1234", "v2.0.0", 0, false},
@@ -231,6 +230,13 @@ func TestCheckVersions(t *testing.T) {
 			if err != nil || v.configOK || v.ConfigSchema != 0 {
 				t.Errorf("%q: CheckVersions = %+v, %v; want no config schema", config, v, err)
 			}
+		}
+	})
+	t.Run("a newer pic-sure changed the rest of state.json", func(t *testing.T) {
+		s := writeStack(t, schema1YAML, `{"cli_version": "v9.0.0", "schema_version": 1, "images": {"hpds": {"tag": "abc"}}, "release": "main"}`)
+		v, err := s.CheckVersions("v2.0.0", ConfigMigrations())
+		if err != nil || v.StackCLI != "v9.0.0" || !v.Newer() {
+			t.Errorf("CheckVersions = %+v, %v; want it newer", v, err)
 		}
 	})
 	t.Run("corrupt state", func(t *testing.T) {
