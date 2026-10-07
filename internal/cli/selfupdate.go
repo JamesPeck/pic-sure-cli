@@ -71,13 +71,39 @@ func (a *App) newSelfUpdater(proxy *netproxy.Proxy, sink events.Sink, step strin
 	}
 }
 
-// gateConfirm is the compatibility gate's Confirm for init and update on a
-// terminal (D12). The progress renderer owns the terminal during the
-// release step, so it ends it first and asks [y/N] on stderr; the next
-// event starts the renderer again. A cancelled ctx (Ctrl-C) stops waiting
-// for the answer.
-func (a *App) gateConfirm(ctx context.Context, question string) (bool, error) {
-	a.output().endTUI()
+// canOfferSelfUpdate reports whether the compatibility gate may offer the
+// self-update (D12): the command may prompt, and stderr, where the question
+// goes, is a terminal too.
+func (a *App) canOfferSelfUpdate() bool {
+	stderrTerminal := a.stderrTerminal
+	if stderrTerminal == nil {
+		stderrTerminal = func() bool { return isTerminalWriter(a.Stderr) }
+	}
+	return a.canPrompt() && stderrTerminal()
+}
+
+// gateConfirm returns the compatibility gate's Confirm for init and update
+// on a terminal (D12); step is the step the gate runs in. The progress
+// renderer owns the terminal during that step, so it ends it first and
+// asks [y/N] on stderr. Once answered, the step is started again in the
+// renderer's next program, so the self-update's progress and the step's
+// result have a row to land on. A cancelled ctx (Ctrl-C) stops waiting for
+// the answer.
+func (a *App) gateConfirm(step events.StepStarted) func(context.Context, string) (bool, error) {
+	return func(ctx context.Context, question string) (bool, error) {
+		o := a.output()
+		redraw := o.tui != nil
+		o.endTUI()
+		yes, err := a.askYesNo(ctx, question)
+		if err == nil && redraw {
+			o.sink.Emit(step)
+		}
+		return yes, err
+	}
+}
+
+// askYesNo asks question on stderr and reads the answer from stdin.
+func (a *App) askYesNo(ctx context.Context, question string) (bool, error) {
 	_, _ = fmt.Fprintf(a.stderr(), "%s [y/N] ", question)
 	type answer struct {
 		line string
@@ -85,7 +111,7 @@ func (a *App) gateConfirm(ctx context.Context, question string) (bool, error) {
 	}
 	got := make(chan answer, 1)
 	go func() {
-		// On cancellation this read is left blocked; the process is ending.
+		// On cancellation this read is left blocked until the process exits.
 		line, err := bufio.NewReader(a.Stdin).ReadString('\n')
 		got <- answer{line, err}
 	}()

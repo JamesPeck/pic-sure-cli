@@ -264,9 +264,9 @@ it.
   `ChooseDevPortsBase`, on a resumed one its ports must be free or its own;
   a loopback remote `--db-host` warns), `release` (`release.Fetch` at a
   resumed stack's recorded commit, else the branch head, then `Gate` with
-  `newSelfUpdater`, offering the self-update through `a.gateConfirm` as
-  update does, except when a `--*-stdin` flag is given) and `config` (`stack.Create`, the run log, the stack
-  lock, pic-sure.yaml, `EnsureSecrets` with `OpenAuth`, state.json with
+  `newSelfUpdater`, offering the self-update as update does, except when
+  a `--*-stdin` flag is given) and `config` (`stack.Create`, the run log,
+  the stack lock, pic-sure.yaml, `EnsureSecrets` with `OpenAuth`, state.json with
   the release and the operation). Then `ops.InitSteps` with `--skip-step`,
   and `initialized_at` once they succeed. `r.compose` builds the adapter
   with a lazy env over init's `*Secrets`, so `compose up` sees the token
@@ -306,10 +306,12 @@ it.
   with the plan as the report. Otherwise, past the gate, up's `upSecrets`
   (`EnsureSecrets`), then it records the `update` operation and runs
   `ops.UpdateSteps` (`--no-build` skips `images`). The report is the plan,
-  and the text says whether anything changed. When `canPrompt`, the gate
-  offers the self-update through `a.gateConfirm` (`selfupdate.go`), which
-  ends the progress renderer and asks `[y/N]` on stderr; otherwise only
-  `--self-update` replaces the binary (exit 5 without it).
+  and the text says whether anything changed. When `canOfferSelfUpdate`
+  (`canPrompt`, and stderr is a terminal), the gate offers the self-update
+  through `a.gateConfirm` (`selfupdate.go`): it ends the progress renderer,
+  asks `[y/N]` on stderr, then starts the release step again in the
+  renderer's next program. Otherwise only `--self-update` replaces the
+  binary (exit 5 without it).
 - `tuiinit.go` (039): `initFromTUI`, the TUI's `Options.Init`, runs
   `initRun.run` in-process on the wizard's config (its ports given
   explicitly) or, with none, resumes DIR's pic-sure.yaml. For the call it

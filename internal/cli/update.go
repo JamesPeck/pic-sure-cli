@@ -119,7 +119,7 @@ func (a *App) update(cmd *cobra.Command, _ []string) (err error) {
 	}
 
 	prep := []steps.Step{
-		{ID: updateRelease, Title: "Fetch the release", Apply: r.fetchRelease},
+		{ID: updateRelease, Title: releaseTitle, Apply: r.fetchRelease},
 		{ID: updatePlan, Title: "Plan the update", Apply: r.makePlan},
 	}
 	if err := steps.Run(ctx, r.d.Sink, prep, steps.Options{}); err != nil {
@@ -304,8 +304,8 @@ func (r *updateRun) gateOptions(sink events.Sink) release.GateOptions {
 		Sink:             sink,
 		Step:             updateRelease,
 	}
-	if r.a.canPrompt() {
-		opts.Confirm = r.a.gateConfirm
+	if r.a.canOfferSelfUpdate() {
+		opts.Confirm = r.a.gateConfirm(events.StepStarted{ID: updateRelease, Title: releaseTitle})
 	}
 	return opts
 }

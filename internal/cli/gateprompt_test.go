@@ -19,7 +19,7 @@ import (
 )
 
 // recordingUpdater stands in for self-update: it records the version and
-// returns as a failed re-exec would.
+// returns without re-executing.
 type recordingUpdater struct{ version string }
 
 func (u *recordingUpdater) SelfUpdate(_ context.Context, version string) error {
@@ -40,6 +40,7 @@ func newerCLIRelease(t *testing.T) *release.Release {
 type gatePromptCase struct {
 	name                       string
 	terminal                   bool
+	stderrRedirected           bool
 	json, nonInteractive, yes  bool
 	selfUpdate                 bool
 	stdin                      string
@@ -52,6 +53,7 @@ var gatePromptCases = []gatePromptCase{
 	{name: "no answer on a terminal", terminal: true, stdin: "", wantAsked: true},
 	{name: "no terminal", stdin: "y\n"},
 	{name: "no terminal, --self-update", selfUpdate: true, wantSelfUpdated: true},
+	{name: "stderr redirected", terminal: true, stderrRedirected: true, stdin: "y\n"},
 	{name: "--json", terminal: true, json: true, stdin: "y\n"},
 	{name: "--non-interactive", terminal: true, nonInteractive: true, stdin: "y\n"},
 	{name: "--yes", terminal: true, yes: true, stdin: "y\n"},
@@ -83,6 +85,7 @@ func TestUpdateGatePrompt(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			a, _, stderr := testApp(t)
 			a.IsTerminal = func() bool { return tc.terminal }
+			a.stderrTerminal = func() bool { return tc.terminal && !tc.stderrRedirected }
 			a.Global.JSON, a.Global.NonInteractive, a.Global.Yes = tc.json, tc.nonInteractive, tc.yes
 			a.Stdin = strings.NewReader(tc.stdin)
 			r := &updateRun{a: a, cfg: &stack.Config{}, selfUpdate: tc.selfUpdate}
@@ -106,6 +109,7 @@ func TestInitGatePrompt(t *testing.T) {
 			var stderr bytes.Buffer
 			r.a.Stderr = &stderr
 			r.a.IsTerminal = func() bool { return tc.terminal }
+			r.a.stderrTerminal = func() bool { return tc.terminal && !tc.stderrRedirected }
 			r.a.Global.JSON, r.a.Global.NonInteractive, r.a.Global.Yes = tc.json, tc.nonInteractive, tc.yes
 			r.readGateFlags()
 			checkGate(t, tc, r.gateOptions(&events.Recorder{}), &stderr)
@@ -121,6 +125,7 @@ func TestInitGateNoPromptWithStdinSecret(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.a.IsTerminal = func() bool { return true }
+	r.a.stderrTerminal = func() bool { return true }
 	r.readGateFlags()
 	if r.confirm != nil {
 		t.Error("init prompts with stdin holding a secret")
@@ -137,7 +142,7 @@ func TestGateConfirmAnswers(t *testing.T) {
 	} {
 		a, _, stderr := testApp(t)
 		a.Stdin = strings.NewReader(tc.in)
-		got, err := a.gateConfirm(context.Background(), "Update?")
+		got, err := a.askYesNo(context.Background(), "Update?")
 		if err != nil || got != tc.want {
 			t.Errorf("answer %q: got %v, %v; want %v", tc.in, got, err, tc.want)
 		}
@@ -156,7 +161,7 @@ func TestGateConfirmStopsOnCancel(t *testing.T) {
 	a.Stdin = pr
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := a.gateConfirm(ctx, "Update?"); !errors.Is(err, context.Canceled) {
+	if _, err := a.askYesNo(ctx, "Update?"); !errors.Is(err, context.Canceled) {
 		t.Errorf("err = %v, want canceled", err)
 	}
 }
@@ -204,7 +209,9 @@ func TestGateConfirmOnATerminal(t *testing.T) {
 		t.Fatal("no TUI renderer on a terminal")
 	}
 	sink := a.newSink()
-	sink.Emit(events.StepStarted{ID: "release", Title: "Fetch the release"})
+	release := events.StepStarted{ID: "release", Title: "Fetch the release"}
+	sink.Emit(release)
+	confirm := a.gateConfirm(release)
 
 	ask := func(question, answer string) bool {
 		t.Helper()
@@ -214,7 +221,7 @@ func TestGateConfirmOnATerminal(t *testing.T) {
 		}
 		got := make(chan result, 1)
 		go func() {
-			yes, err := a.gateConfirm(context.Background(), question)
+			yes, err := confirm(context.Background(), question)
 			got <- result{yes, err}
 		}()
 		waitFor(t, out, question+" [y/N] ")
@@ -235,8 +242,11 @@ func TestGateConfirmOnATerminal(t *testing.T) {
 	if !ask("Update pic-sure now?", "y\n") {
 		t.Error("yes read as no")
 	}
-	sink.Emit(events.StepStarted{ID: "next", Title: "Next step"})
-	waitFor(t, out, "Next step")
+	// The self-update reports on the release step, and its re-exec ends the
+	// renderer: the report must be in the final frame.
+	sink.Emit(events.Progress{ID: "release", Text: "Updated pic-sure to v2.1.0"})
+	a.newSelfUpdater(nil, sink, "release").BeforeExec()
+	waitFor(t, out, "Updated pic-sure to v2.1.0")
 	if ask("Update it again?", "n\n") {
 		t.Error("no read as yes")
 	}

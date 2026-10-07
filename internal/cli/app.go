@@ -42,6 +42,9 @@ type App struct {
 
 	// migrations replaces stack.ConfigMigrations() in tests (gate.go).
 	migrations *stack.Registry
+	// stderrTerminal replaces the check that Stderr is a terminal in tests
+	// (canOfferSelfUpdate).
+	stderrTerminal func() bool
 
 	// running is set when a command's RunE starts. An error from before
 	// that point came from cobra rejecting the command line, so Run reports

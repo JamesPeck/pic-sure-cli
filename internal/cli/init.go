@@ -40,6 +40,9 @@ const (
 	initConfig        = "config"
 )
 
+// releaseTitle is the title of init's and update's release step.
+const releaseTitle = "Fetch the release"
+
 func newInitCmd(a *App) *cobra.Command {
 	c := &cobra.Command{
 		Use:   "init [DIR]",
@@ -178,7 +181,7 @@ func (r *initRun) run(ctx context.Context) (_ *ops.InitSummary, err error) {
 	}()
 	prep := []steps.Step{
 		{ID: initPreconditions, Title: "Check the host", Apply: r.preconditions},
-		{ID: initRelease, Title: "Fetch the release", Apply: r.fetchRelease},
+		{ID: initRelease, Title: releaseTitle, Apply: r.fetchRelease},
 		{ID: initConfig, Title: "Write the config and secrets", Apply: r.writeConfig},
 	}
 	if err := steps.Run(ctx, r.d.Sink, prep, steps.Options{}); err != nil {
@@ -567,8 +570,8 @@ func (r *initRun) flagProblems(err error) error {
 func (r *initRun) readGateFlags() {
 	r.selfUpdate, _ = r.cmd.Flags().GetBool("self-update")
 	r.ignoreCLIVersion, _ = r.cmd.Flags().GetBool("ignore-cli-version")
-	if r.a.canPrompt() && len(r.stdinFields()) == 0 {
-		r.confirm = r.a.gateConfirm
+	if r.a.canOfferSelfUpdate() && len(r.stdinFields()) == 0 {
+		r.confirm = r.a.gateConfirm(events.StepStarted{ID: initRelease, Title: releaseTitle})
 	}
 }
 
