@@ -24,7 +24,7 @@ import (
 	"github.com/JamesPeck/pic-sure-cli/internal/stack"
 )
 
-// bundleSecrets holds one value of every secret kind in secrets.yaml:
+// bundleSecretValues holds one value of every secret kind in secrets.yaml:
 // generated ones, the operator's (the remote root password, with
 // characters JSON escapes, and a short email password), open mode's
 // generated Auth0 secret, and a key a newer pic-sure might add.
@@ -83,7 +83,7 @@ func newBundleStack(t *testing.T) *stack.Stack {
 	}
 	writeStackFile(t, st, stack.StateFile, strings.Replace(string(state), "james_mono", "james_mono "+bundleSecretValues["db_root_password"], 1))
 
-	// Seven run logs, each quoting every secret; the oldest two stay out.
+	// Eight run logs, each quoting every secret; the oldest three stay out.
 	for i := range 7 {
 		writeStackFile(t, st, fmt.Sprintf("%s/cli-20261007T10000%d.000Z-42.log", log.Dir, i), leakyText())
 	}
@@ -234,8 +234,8 @@ func TestSupportBundleRedactsEverySecret(t *testing.T) {
 	if r.ShortSecrets != 1 {
 		t.Errorf("short secrets %d, want 1", r.ShortSecrets)
 	}
+	assertJSONFiles(t, files)
 
-	// Redaction leaves the rest readable.
 	for _, s := range []string{
 		"EMAIL_PASSWORD=[REDACTED]\n", "jdbc:mysql://[REDACTED]@picsure-db", "HPDS key [REDACTED] loaded",
 		"http://[REDACTED]@proxy.example.com", "config client_secret=[REDACTED]",
@@ -245,7 +245,7 @@ func TestSupportBundleRedactsEverySecret(t *testing.T) {
 			t.Errorf("gateway.log lacks %q", s)
 		}
 	}
-	if !strings.Contains(files["stack/pic-sure.yaml"], "client_secret: '[REDACTED]'") || !strings.Contains(files["stack/pic-sure.yaml"], "admin_email: admin@example.com") ||
+	if !strings.Contains(files["stack/pic-sure.yaml"], "client_secret: '[REDACTED]'") || !strings.Contains(files["stack/pic-sure.yaml"], "admin_email: '[REDACTED]'") ||
 		!strings.Contains(files["stack/pic-sure.yaml"], "consent_authorization: false") {
 		t.Errorf("pic-sure.yaml:\n%s", files["stack/pic-sure.yaml"])
 	}
@@ -256,7 +256,6 @@ func TestSupportBundleRedactsEverySecret(t *testing.T) {
 		t.Errorf("ps.json: %s", files["compose/ps.json"])
 	}
 
-	// hpds's logs failed; the problem says so, redacted.
 	if len(r.Problems) != 1 || !strings.Contains(r.Problems[0], "compose logs hpds") || !strings.Contains(r.Problems[0], "password [REDACTED] rejected") {
 		t.Errorf("problems %q", r.Problems)
 	}
@@ -275,10 +274,16 @@ func TestSupportBundleWithInvalidSecretsYAML(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeStackFile(t, st, stack.SecretsFile, string(data)+"broken: [\n")
-	r, files := buildBundle(t, st, bundleRunner(t))
+	f := bundleRunner(t)
+	r, files := buildBundle(t, st, f)
 	assertNoSecrets(t, files)
+	assertJSONFiles(t, files)
+	f.AssertNotCalled(fakerunner.Glob("docker compose * logs *"))
 	if !strings.Contains(strings.Join(r.Problems, "\n"), "not valid YAML") {
 		t.Errorf("problems %q", r.Problems)
+	}
+	if r.ShortSecrets != 1 {
+		t.Errorf("short secrets %d, want 1", r.ShortSecrets)
 	}
 }
 
@@ -345,5 +350,67 @@ func TestSupportBundleWithInvalidConfig(t *testing.T) {
 		if !strings.Contains(cfg, s) {
 			t.Errorf("pic-sure.yaml lacks %q:\n%s", s, cfg)
 		}
+	}
+}
+
+// assertJSONFiles fails for a .json file, or a run log line, that isn't
+// valid JSON.
+func assertJSONFiles(t *testing.T, files map[string]string) {
+	t.Helper()
+	for name, data := range files {
+		switch {
+		case strings.HasSuffix(name, ".json"):
+			if !json.Valid([]byte(data)) {
+				t.Errorf("%s isn't valid JSON:\n%s", name, data)
+			}
+		case strings.HasPrefix(name, "logs/"):
+			for line := range strings.Lines(data) {
+				if strings.HasPrefix(line, "{") && !json.Valid([]byte(line)) {
+					t.Errorf("%s: line isn't valid JSON: %s", name, line)
+				}
+			}
+		}
+	}
+}
+
+// A secret that looks like a bool or a number is still redacted from the
+// text files, and the JSON files stay valid: secret values are replaced
+// only inside their strings.
+func TestSupportBundleSecretsThatLookLikeLiterals(t *testing.T) {
+	st := newBundleStack(t)
+	writeStackFile(t, st, stack.SecretsFile, "email_password: false\ndb_remote_root_password: 3306\ndb_auth_password: \"2\"\nfuture_flag: true\nfuture_count: 7\n")
+	writeStackFile(t, st, log.Dir+"/cli-20261007T100009.000Z-42.log", `{"msg":"ok","port":3306,"ok":true,"n":2,"pw":"3306","auth":"2"}`+"\n")
+	f := fakerunner.New(t)
+	f.On(fakerunner.Glob("docker compose * ps --all --format json")).Stdout(`{"Name":"demo-gateway-1","Service":"gateway","State":"exited","ExitCode":2}` + "\n")
+	f.On(fakerunner.Glob("docker compose * logs --tail 500 gateway")).Stdout("EMAIL_PASSWORD=false\nDB=3306\nAUTH=2\nflag true, count 7\n")
+	f.On(fakerunner.Glob("docker *")).Exit(1)
+	r, files := buildBundle(t, st, f)
+	assertJSONFiles(t, files)
+	if got, want := files["compose/logs/gateway.log"], "EMAIL_PASSWORD=[REDACTED]\nDB=[REDACTED]\nAUTH=[REDACTED]\nflag true, count 7\n"; got != want {
+		t.Errorf("gateway.log\n got %q\nwant %q", got, want)
+	}
+	if got := files["logs/cli-20261007T100009.000Z-42.log"]; !strings.Contains(got, `"pw":"[REDACTED]","auth":"[REDACTED]"`) {
+		t.Errorf("run log %s", got)
+	}
+	if r.ShortSecrets != 1 {
+		t.Errorf("short secrets %d, want 1", r.ShortSecrets)
+	}
+}
+
+// A pic-sure.yaml that isn't valid YAML still has its secret-named keys
+// blanked, in block and flow style, and their values redacted elsewhere.
+func TestSupportBundleWithInvalidFlowConfig(t *testing.T) {
+	st := newBundleStack(t)
+	writeStackFile(t, st, stack.ConfigFile, "schema: 1\nemail: {user: me, password: Flow0Secret0iiii}\ndb: {remote: {root_password: 'Flow0Root0jjjj', port: 3306}}\nauth: {tos: false\n")
+	f := bundleRunner(t)
+	f.On(fakerunner.Glob("docker compose * logs --tail 500 gateway")).Stdout("pw Flow0Secret0iiii root Flow0Root0jjjj\n")
+	_, files := buildBundle(t, st, f)
+	for name, data := range files {
+		if strings.Contains(data, "Flow0Secret0iiii") || strings.Contains(data, "Flow0Root0jjjj") {
+			t.Errorf("%s holds a flow-style secret:\n%s", name, data)
+		}
+	}
+	if cfg := files["stack/pic-sure.yaml"]; !strings.Contains(cfg, "user: me, password: [REDACTED]}") || !strings.Contains(cfg, "port: 3306") || !strings.Contains(cfg, "tos: false") {
+		t.Errorf("pic-sure.yaml:\n%s", cfg)
 	}
 }

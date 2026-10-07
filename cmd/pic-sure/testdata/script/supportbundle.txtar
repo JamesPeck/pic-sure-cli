@@ -5,7 +5,7 @@ chmod 600 stack/.pic-sure/secrets.yaml
 
 exec pic-sure --stack stack support-bundle -o out.tar.gz
 stdout '^Wrote .*/out\.tar\.gz \(\d+ files\)$'
-stdout '^1 secret\(s\) are shorter than 4 characters'
+stdout '^1 secret\(s\) are shorter than 4 bytes'
 stdout '^Not collected:$'
 stdout 'compose logs hpds: .*password \[REDACTED\] rejected'
 ! stdout 'Hpds0Auth0password0aaaa'

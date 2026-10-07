@@ -115,4 +115,4 @@ when parts couldn't be collected; 1 when it can't be written; 3 when
 | `path` | string | The archive's absolute path. |
 | `files` | array of strings | The archive's files, relative to its top directory, such as `status.json` or `compose/logs/hpds.log`. |
 | `problems` | array of strings | What couldn't be collected, and why; also in the archive's `README.txt`. Empty when everything was. |
-| `short_secrets` | int | How many secrets are shorter than 4 characters. They are redacted only where no letter or digit touches them, so check the archive for them before sharing it. |
+| `short_secrets` | int | How many secrets are shorter than 4 bytes. They are redacted only where no letter or digit touches them, so check the archive for them before sharing it. |

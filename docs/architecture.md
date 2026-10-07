@@ -1576,18 +1576,24 @@ state.json and manifest.json; and `README.txt`. It only reads. Whatever it
 can't collect is a `Problems` line, in the report and README, and only
 failing to write w is an error. With no Stack it holds doctor alone.
 - **Redaction.** Every file, and every problem, passes through a redactor
-  of each scalar in secrets.yaml, read as plain YAML so a key a newer
-  pic-sure added counts too (the UUIDs, the token expiry and the generated
-  flag excepted), the HPDS key file, and the value of each secret-named
-  key (`log.IsSecretName`) in pic-sure.yaml, which `stack/pic-sure.yaml`
-  shows as `[REDACTED]`. A secrets.yaml that isn't valid YAML has each
-  line's value taken. Values of `log.MinSecret` (4) bytes or more go
+  of: each scalar in secrets.yaml, read as plain YAML so a key a newer
+  pic-sure added counts too (a `stack.Secret` key's value whatever it
+  looks like, another key's only when it is a string; the UUIDs, the token
+  expiry and the generated flag never); the HPDS key file; and in
+  pic-sure.yaml the secret fields of `stack.Fields`, the admin email (the
+  run logs redact it as personal data) and any other secret-named key
+  (`log.IsSecretName`) with a string value, all shown as `[REDACTED]` in
+  `stack/pic-sure.yaml`. Values of `log.MinSecret` (4) bytes or more go
   through a `log.Redactor` (escaped forms, plus encoding/json's
   HTML-escaped one, and URL userinfo); a shorter one, which only an
   operator can supply, is replaced only where no ASCII letter or digit
-  touches it, and `ShortSecrets` counts them for a warning. Without a
-  readable secrets.yaml the compose logs are left out, since the
-  redactor wouldn't know what they may quote.
+  touches it, and `ShortSecrets` counts them for a warning. JSON (the
+  reports, ps, state, manifest, and each JSON line of a run log) is
+  redacted inside its strings only, so it stays valid; a secret equal to a
+  bare JSON number or literal there stays. Without a secrets.yaml that
+  reads and parses, the compose logs are left out, since the redactor
+  wouldn't know what they may quote; a pic-sure.yaml that doesn't parse
+  is redacted by key name, line by line and in flow mappings.
 
 ## internal/steps
 

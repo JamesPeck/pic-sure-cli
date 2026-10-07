@@ -48,9 +48,10 @@ func Redact(s string) string { return registry.Redact(s) }
 // value is left to secret-named attrs and stack.Secret's own redaction.
 const MinSecret = 4
 
-// Register adds values to r, ignoring those shorter than MinSecret. Each value is also
-// registered as slog's JSON and text handlers escape it, so one containing
-// quotes, backslashes or control characters is caught in their output too.
+// Register adds values to r, ignoring those shorter than MinSecret. Each
+// value is also registered as slog's JSON and text handlers escape it, so
+// one containing quotes, backslashes or control characters is caught in
+// their output too.
 func (r *Redactor) Register(values ...string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

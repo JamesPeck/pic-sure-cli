@@ -12,6 +12,7 @@ import (
 	"io"
 	"io/fs"
 	"path"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -42,7 +43,6 @@ type SupportBundleOptions struct {
 	Stack *stack.Stack
 	// Status is passed to Status, which runs only with a Stack.
 	Status StatusOptions
-	// Doctor is passed to Doctor.
 	Doctor DoctorOptions
 	// Prefix is the directory every file in the archive is under.
 	Prefix string
@@ -68,8 +68,8 @@ type SupportBundleReport struct {
 // (spec §9.9). Every file passes through a redactor of every value in
 // secrets.yaml and the HPDS key file, and pic-sure.yaml's secret-named
 // keys are blanked too. It reads only; a part it can't collect is a
-// problem in the report and README.txt. Only failing to write w is an
-// error.
+// problem in the report and README.txt. Only failing to write w, or ctx
+// ending, is an error.
 func SupportBundle(ctx context.Context, d *Deps, w io.Writer, opts SupportBundleOptions) (*SupportBundleReport, error) {
 	b := &bundle{report: &SupportBundleReport{Files: []string{}, Problems: []string{}}}
 	st := opts.Stack
@@ -87,16 +87,19 @@ func SupportBundle(ctx context.Context, d *Deps, w io.Writer, opts SupportBundle
 	b.json("doctor.json", Doctor(ctx, d, opts.Doctor))
 	if st != nil {
 		b.runLogs(st)
-		b.compose(ctx, d.Compose)
-		b.stackFile(st, stack.ConfigFile, "stack/pic-sure.yaml", redactConfigKeys)
-		b.stackFile(st, stack.StateFile, "stack/state.json", nil)
-		b.stackFile(st, stack.ManifestFile, "stack/manifest.json", nil)
+		b.compose(ctx, d.Compose, opts.Doctor.ComposeErr)
+		b.stackFile(st, stack.ConfigFile, "stack/pic-sure.yaml", false, redactConfigKeys)
+		b.stackFile(st, stack.StateFile, "stack/state.json", true, nil)
+		b.stackFile(st, stack.ManifestFile, "stack/manifest.json", true, nil)
+	}
+	if ctx.Err() != nil {
+		return nil, context.Cause(ctx)
 	}
 	// A compose error can quote a secret.
 	for i, p := range b.report.Problems {
 		b.report.Problems[i] = b.red.Redact(p)
 	}
-	b.add("README.txt", b.readme())
+	b.add("README.txt", b.readme(), false)
 
 	if err := b.write(w, opts.Prefix, d.Clock.Now()); err != nil {
 		return nil, err
@@ -120,9 +123,28 @@ func (b *bundle) problem(format string, args ...any) {
 	b.report.Problems = append(b.report.Problems, fmt.Sprintf(format, args...))
 }
 
-// add redacts data and adds it as name.
-func (b *bundle) add(name string, data []byte) {
-	b.files = append(b.files, bundleFile{name, []byte(b.red.Redact(string(data)))})
+// add redacts data and adds it as name. A JSON file, or each JSON line of
+// one that isn't valid JSON as a whole (a run log), is redacted inside its
+// strings only (redactJSONStrings), so it stays valid JSON; any other text
+// is redacted throughout.
+func (b *bundle) add(name string, data []byte, isJSON bool) {
+	switch {
+	case isJSON && json.Valid(data):
+		data = redactJSONStrings(data, b.red.Redact)
+	case isJSON:
+		var out bytes.Buffer
+		for line := range bytes.Lines(data) {
+			if json.Valid(line) {
+				out.Write(redactJSONStrings(line, b.red.Redact))
+			} else {
+				out.WriteString(b.red.Redact(string(line)))
+			}
+		}
+		data = out.Bytes()
+	default:
+		data = []byte(b.red.Redact(string(data)))
+	}
+	b.files = append(b.files, bundleFile{name, data})
 	b.report.Files = append(b.report.Files, name)
 }
 
@@ -133,10 +155,10 @@ func (b *bundle) json(name string, report any) {
 		b.problem("%s: %v", name, err)
 		return
 	}
-	b.add(name, buf.Bytes())
+	b.add(name, buf.Bytes(), true)
 }
 
-func (b *bundle) stackFile(st *stack.Stack, rel, name string, scrub func([]byte) []byte) {
+func (b *bundle) stackFile(st *stack.Stack, rel, name string, isJSON bool, scrub func([]byte) []byte) {
 	data, err := st.ReadFile(rel)
 	if err != nil {
 		b.problem("%s: %v", rel, err)
@@ -145,7 +167,7 @@ func (b *bundle) stackFile(st *stack.Stack, rel, name string, scrub func([]byte)
 	if scrub != nil {
 		data = scrub(data)
 	}
-	b.add(name, data)
+	b.add(name, data, isJSON)
 }
 
 // runLogs adds the newest BundleRunLogs run logs, by their names'
@@ -171,15 +193,17 @@ func (b *bundle) runLogs(st *stack.Stack) {
 		return strings.Compare(strings.TrimSuffix(a, ".log"), strings.TrimSuffix(b, ".log"))
 	})
 	for _, n := range names[max(0, len(names)-BundleRunLogs):] {
-		b.stackFile(st, log.Dir+"/"+n, "logs/"+n, nil)
+		// Run logs are JSON lines.
+		b.stackFile(st, log.Dir+"/"+n, "logs/"+n, true, nil)
 	}
 }
 
 // compose adds `compose ps` and each service's last BundleLogTail log
 // lines.
-func (b *bundle) compose(ctx context.Context, c docker.Composer) {
+// composeErr is why c is nil.
+func (b *bundle) compose(ctx context.Context, c docker.Composer, composeErr error) {
 	if c == nil {
-		b.problem("compose: the stack has not been rendered, or compose is unavailable")
+		b.problem("compose: %v", cmp.Or[error](composeErr, errors.New("unavailable")))
 		return
 	}
 	ps, err := c.Ps(ctx)
@@ -192,9 +216,9 @@ func (b *bundle) compose(ctx context.Context, c docker.Composer) {
 		b.problem("compose ps: %v", err)
 		return
 	}
-	b.add("compose/ps.json", append(data, '\n'))
+	b.add("compose/ps.json", append(data, '\n'), true)
 	if !b.secretsKnown {
-		b.problem("compose logs: left out, since without secrets.yaml the secrets they may quote can't be redacted")
+		b.problem("compose logs: left out, since without a readable secrets.yaml the secrets they may quote can't be redacted")
 		return
 	}
 	var services []string
@@ -213,7 +237,7 @@ func (b *bundle) compose(ctx context.Context, c docker.Composer) {
 			b.problem("compose logs %s: %v", svc, err)
 		}
 		if out.Len() > 0 || err == nil {
-			b.add("compose/logs/"+svc+".log", out.Bytes())
+			b.add("compose/logs/"+svc+".log", out.Bytes(), false)
 		}
 	}
 }
@@ -236,7 +260,7 @@ them all the same.
 `)
 	if n := b.report.ShortSecrets; n > 0 {
 		fmt.Fprintf(&s, `
-%d secret(s) are shorter than %d characters. They are redacted only where
+%d secret(s) are shorter than %d bytes. They are redacted only where
 they stand alone, not inside longer words, so look for them before sharing,
 or rotate them to longer values.
 `, n, log.MinSecret)
@@ -358,36 +382,31 @@ var bundleNotSecret = map[string]bool{
 }
 
 // bundleSecrets returns a redactor of every value in secrets.yaml and the
-// HPDS key file, and of every secret-named key's value in pic-sure.yaml.
-// secrets.yaml is read as plain YAML, not as Secrets, so a key a newer
-// pic-sure added is redacted too; one that isn't valid YAML has every
-// line's value taken as a secret. known is false when secrets.yaml can't
-// be read: containers an earlier secrets.yaml configured may still log
-// secrets the redactor doesn't know.
+// HPDS key file, and of the values redactConfigKeys blanks in
+// pic-sure.yaml. secrets.yaml is read as plain YAML, not as Secrets, so a
+// key a newer pic-sure added is redacted too. known is false when
+// secrets.yaml can't be read or parsed: containers configured from it may
+// still log secrets the redactor doesn't know.
 func bundleSecrets(st *stack.Stack, problem func(string, ...any)) (r *bundleRedactor, known bool) {
 	r = &bundleRedactor{}
 	data, err := st.ReadFile(stack.SecretsFile)
-	known = err == nil
+	var doc yaml.Node
 	switch {
 	case err != nil:
 		problem("%s: %v", stack.SecretsFile, err)
-	default:
-		var doc yaml.Node
-		if yaml.Unmarshal(data, &doc) == nil {
-			registerYAMLSecrets(r, &doc, "")
-		} else {
-			problem("%s: not valid YAML; every line's value is redacted", stack.SecretsFile)
-			for line := range strings.Lines(string(data)) {
-				var m map[string]string
-				if yaml.Unmarshal([]byte(line), &m) == nil {
-					for _, v := range m {
-						r.register(v)
-					}
-				} else if _, v, ok := strings.Cut(line, ":"); ok {
-					r.register(strings.Trim(strings.TrimSpace(v), `"'`))
-				}
+	case yaml.Unmarshal(data, &doc) != nil:
+		// Not yaml's message, which can quote the file. Each line that
+		// parses on its own still counts.
+		problem("%s: not valid YAML", stack.SecretsFile)
+		for line := range strings.Lines(string(data)) {
+			var n yaml.Node
+			if yaml.Unmarshal([]byte(line), &n) == nil {
+				registerYAMLSecrets(r, &n, "")
 			}
 		}
+	default:
+		known = true
+		registerYAMLSecrets(r, &doc, "")
 	}
 	if cfg, err := st.ReadFile(stack.ConfigFile); err == nil {
 		for _, v := range configSecretValues(cfg) {
@@ -405,8 +424,24 @@ func bundleSecrets(st *stack.Stack, problem func(string, ...any)) (r *bundleReda
 	return r, known
 }
 
-// registerYAMLSecrets registers every scalar under n except the values of
-// bundleNotSecret keys at the top level, booleans and nulls.
+// secretsKeys are secrets.yaml's keys for stack.Secret fields.
+var secretsKeys = func() map[string]bool {
+	m := map[string]bool{}
+	t := reflect.TypeFor[stack.Secrets]()
+	for i := range t.NumField() {
+		if f := t.Field(i); f.Type == reflect.TypeFor[stack.Secret]() {
+			name, _, _ := strings.Cut(f.Tag.Get("yaml"), ",")
+			m[name] = true
+		}
+	}
+	return m
+}()
+
+// registerYAMLSecrets registers the scalars under n, whose top-level key in
+// secrets.yaml is key. A stack.Secret key's value counts whatever it looks
+// like (an unquoted false is still the password "false"); under any other
+// key only strings do, which a newer pic-sure's secrets are, and
+// bundleNotSecret's values don't.
 func registerYAMLSecrets(r *bundleRedactor, n *yaml.Node, key string) {
 	switch n.Kind {
 	case yaml.DocumentNode, yaml.SequenceNode:
@@ -415,25 +450,62 @@ func registerYAMLSecrets(r *bundleRedactor, n *yaml.Node, key string) {
 		}
 	case yaml.MappingNode:
 		for i := 0; i+1 < len(n.Content); i += 2 {
-			k := n.Content[i].Value
-			if key == "" && bundleNotSecret[k] {
-				continue
+			k := key
+			if k == "" {
+				k = n.Content[i].Value
 			}
-			registerYAMLSecrets(r, n.Content[i+1], k)
+			if !bundleNotSecret[k] {
+				registerYAMLSecrets(r, n.Content[i+1], k)
+			}
 		}
 	case yaml.ScalarNode:
-		if n.Tag != "!!bool" && n.Tag != "!!null" {
+		if secretsKeys[key] && n.ShortTag() != "!!null" || n.ShortTag() == "!!str" {
 			r.register(n.Value)
 		}
 	}
 }
 
-// secretKeyLine is a YAML line holding a block-style key and its value.
-var secretKeyLine = regexp.MustCompile(`(?m)^(\s*(?:-\s+)?["']?([A-Za-z0-9_.-]+)["']?\s*:[ \t]+)([^\s#].*)$`)
+// redactJSONStrings applies redact inside each string of the JSON text
+// data, keys included, and leaves the rest alone, so the result is valid
+// JSON wherever data was. redact sees a string's escaped form, which
+// log.Redactor matches too. An unterminated string runs to the end.
+func redactJSONStrings(data []byte, redact func(string) string) []byte {
+	var out bytes.Buffer
+	for {
+		i := bytes.IndexByte(data, '"')
+		if i < 0 {
+			out.Write(data)
+			return out.Bytes()
+		}
+		out.Write(data[:i+1])
+		data = data[i+1:]
+		end := 0
+		for end < len(data) && data[end] != '"' {
+			if data[end] == '\\' {
+				end++
+			}
+			end++
+		}
+		end = min(end, len(data))
+		out.WriteString(redact(string(data[:end])))
+		data = data[end:]
+		if len(data) > 0 {
+			out.WriteByte('"')
+			data = data[1:]
+		}
+	}
+}
 
-// redactConfigKeys blanks every secret-flagged field (stack.Fields) and
-// every other secret-named key (log.IsSecretName) with a string value in
-// pic-sure.yaml. A valid config has none, since its secrets live in
+// secretKeyLine is a YAML line holding a block-style key and its value,
+// and secretFlowKey a key and its value in a flow mapping. Each has the
+// text before the value, the key, and the value as groups.
+var (
+	secretKeyLine = regexp.MustCompile(`(?m)^(\s*(?:-\s+)?["']?([A-Za-z0-9_.-]+)["']?\s*:[ \t]+)([^\s#].*)$`)
+	secretFlowKey = regexp.MustCompile(`([{,]\s*["']?([A-Za-z0-9_.-]+)["']?\s*:\s*)("(?:[^"\\\n]|\\.)*"|'[^'\n]*'|[^\s,{}\[\]][^,}\]\n]*)`)
+)
+
+// redactConfigKeys blanks every configSecretFields key and every other
+// secret-named key (log.IsSecretName) with a string value in pic-sure.yaml. A valid config has none, since its secrets live in
 // secrets.yaml, but an operator may have pasted one in. A changed file is
 // re-encoded, which normalizes its layout.
 func redactConfigKeys(data []byte) []byte {
@@ -456,11 +528,12 @@ func redactConfigKeys(data []byte) []byte {
 	return out
 }
 
-// configSecretFields are the dotted keys of stack.Fields' secrets.
+// configSecretFields are the dotted keys of stack.Fields' secrets, and of
+// the admin email, which the run logs redact as personal data.
 var configSecretFields = func() map[string]bool {
 	m := map[string]bool{}
 	for _, f := range stack.Fields {
-		if f.Secret {
+		if f.Secret || f.Flag == "admin-email" {
 			m[f.Key] = true
 		}
 	}
@@ -500,9 +573,11 @@ func configSecretValues(data []byte) []string {
 	var values []string
 	var doc yaml.Node
 	if yaml.Unmarshal(data, &doc) != nil {
-		for _, m := range secretKeyLine.FindAllSubmatch(data, -1) {
-			if v, ok := secretLineValue(m); ok {
-				values = append(values, v)
+		for _, re := range []*regexp.Regexp{secretKeyLine, secretFlowKey} {
+			for _, m := range re.FindAllSubmatch(data, -1) {
+				if v, ok := secretLineValue(m); ok {
+					values = append(values, v)
+				}
 			}
 		}
 		return values
@@ -523,19 +598,22 @@ func configSecretValues(data []byte) []string {
 }
 
 // redactSecretKeyLines is redactConfigKeys for a file that isn't valid
-// YAML: line by line, block style only, by key name alone.
+// YAML, by key name alone.
 func redactSecretKeyLines(data []byte) []byte {
-	return secretKeyLine.ReplaceAllFunc(data, func(line []byte) []byte {
-		m := secretKeyLine.FindSubmatch(line)
-		if _, ok := secretLineValue(m); !ok {
-			return line
-		}
-		return append(m[1][:len(m[1]):len(m[1])], log.Redacted...)
-	})
+	for _, re := range []*regexp.Regexp{secretKeyLine, secretFlowKey} {
+		data = re.ReplaceAllFunc(data, func(match []byte) []byte {
+			m := re.FindSubmatch(match)
+			if _, ok := secretLineValue(m); !ok {
+				return match
+			}
+			return append(m[1][:len(m[1]):len(m[1])], log.Redacted...)
+		})
+	}
+	return data
 }
 
-// secretLineValue returns the value of a secretKeyLine match whose key is
-// secret-named and whose value reads as a string.
+// secretLineValue returns the value of a secretKeyLine or secretFlowKey
+// match whose key is secret-named and whose value reads as a string.
 func secretLineValue(m [][]byte) (string, bool) {
 	if !log.IsSecretName(string(m[2])) {
 		return "", false

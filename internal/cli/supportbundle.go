@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -79,13 +80,17 @@ func (a *App) supportBundle(cmd *cobra.Command, output string) error {
 	if err != nil {
 		return exitcode.Failed("%w", err)
 	}
-	prefix := strings.TrimSuffix(strings.TrimSuffix(filepath.Base(path), ".gz"), ".tar")
-	prefix = strings.TrimSuffix(prefix, ".tgz")
+	opts.Prefix = strings.TrimSuffix(strings.TrimSuffix(filepath.Base(path), ".tar.gz"), ".tgz")
+	if strings.Trim(opts.Prefix, ".") == "" {
+		opts.Prefix = "pic-sure-support"
+	}
 
 	report, err := writeBundle(path, func(w io.Writer) (*ops.SupportBundleReport, error) {
-		opts.Prefix = prefix
 		return ops.SupportBundle(cmd.Context(), d, w, opts)
 	})
+	if cause := context.Cause(cmd.Context()); cause != nil {
+		return cause
+	}
 	if err != nil {
 		return exitcode.Failed("writing the support bundle: %w", err)
 	}
@@ -94,12 +99,14 @@ func (a *App) supportBundle(cmd *cobra.Command, output string) error {
 }
 
 // writeBundle writes the archive next to path under a temporary name, mode
-// 0600, and renames it into place once it is complete.
+// 0600, and renames it into place once it is complete. The temporary file
+// is removed whatever happens, a panic included.
 func writeBundle(path string, write func(io.Writer) (*ops.SupportBundleReport, error)) (*ops.SupportBundleReport, error) {
 	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = os.Remove(f.Name()) }()
 	report, err := write(f)
 	if cerr := f.Close(); err == nil {
 		err = cerr
@@ -108,7 +115,6 @@ func writeBundle(path string, write func(io.Writer) (*ops.SupportBundleReport, e
 		err = os.Rename(f.Name(), path)
 	}
 	if err != nil {
-		_ = os.Remove(f.Name())
 		return nil, err
 	}
 	return report, nil
@@ -118,7 +124,7 @@ func writeSupportBundle(w io.Writer, r *ops.SupportBundleReport) error {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Wrote %s (%d files)\n", r.Path, len(r.Files))
 	if r.ShortSecrets > 0 {
-		fmt.Fprintf(&b, "%d secret(s) are shorter than %d characters and are redacted only where they stand alone; check the archive before sharing it\n", r.ShortSecrets, log.MinSecret)
+		fmt.Fprintf(&b, "%d secret(s) are shorter than %d bytes and are redacted only where they stand alone; check the archive before sharing it\n", r.ShortSecrets, log.MinSecret)
 	}
 	if len(r.Problems) > 0 {
 		b.WriteString("Not collected:\n")
