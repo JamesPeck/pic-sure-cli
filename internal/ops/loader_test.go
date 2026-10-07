@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -30,7 +31,7 @@ const loaderCSV = "PATIENT_NUM,CONCEPT_PATH,NUMERIC_VALUE,TEXT_VALUE\n1,\\demo\\
 type envSpy struct {
 	docker.Runner
 	mu   sync.Mutex
-	envs map[string][]string // by the --name prefix's last part
+	envs map[string][]string // by container name
 }
 
 func (s *envSpy) record(c docker.Cmd) {
@@ -67,13 +68,14 @@ func (s *envSpy) env(prefix string) []string {
 
 type loaderFixture struct {
 	*hpdsKeyFixture
-	state *stack.State
-	csv   string
-	spy   *envSpy
-	rec   *events.Recorder
-	// what the fakes answer
+	state        *stack.State
+	csv          string
+	spy          *envSpy
+	rec          *events.Recorder
 	imageMissing bool
 	hidden       string // the daemon sees no file under this host dir
+	denied       bool   // and refuses the mount, as Docker Desktop does
+	probeFails   bool   // docker can't run the probe at all
 	probed       []string
 	loaderExit   int
 	health       string
@@ -102,11 +104,18 @@ func newLoaderFixture(t *testing.T) *loaderFixture {
 			}
 		}
 		fx.probed = append(fx.probed, src)
+		if fx.probeFails {
+			return docker.Result{Stderr: []byte("docker: Error response from daemon: pull access denied for alpine\n"), ExitCode: 125}, nil
+		}
 		if fx.hidden != "" && strings.HasPrefix(src, fx.hidden+string(filepath.Separator)) {
+			if fx.denied {
+				return docker.Result{Stderr: []byte("docker: Error response from daemon: Mounts denied: \nThe path " + src + " is not shared from the host and is not known to Docker.\n"), ExitCode: 125}, nil
+			}
 			return docker.Result{ExitCode: 1}, nil
 		}
 		return docker.Result{Stdout: []byte(strconv.Itoa(len(loaderCSV)) + "\n")}, nil
 	})
+	f.On(fakerunner.Glob("docker rm -v -f demo-hpds-input-*"))
 	f.On(fakerunner.Glob("docker compose * stop hpds"))
 	f.On(fakerunner.Glob("docker run --rm --name demo-hpds-wipe-* --network none * -v demo_hpds-data:/data alpine:* sh -c *"))
 	f.On(fakerunner.Glob("docker run --rm --name demo-hpds-etl-* --user 0:0 --network none *")).Do(func(context.Context, fakerunner.Call) (docker.Result, error) {
@@ -228,8 +237,14 @@ func TestLoadPhenotypeRefusesBeforeTouchingHPDS(t *testing.T) {
 }
 
 func TestLoadPhenotypeCopiesACSVTheDaemonCantSee(t *testing.T) {
+	for _, denied := range []bool{false, true} {
+		t.Run(fmt.Sprintf("denied=%v", denied), func(t *testing.T) { testLoadCopies(t, denied) })
+	}
+}
+
+func testLoadCopies(t *testing.T, denied bool) {
 	fx := newLoaderFixture(t)
-	fx.hidden = filepath.Dir(fx.csv)
+	fx.hidden, fx.denied = filepath.Dir(fx.csv), denied
 	cacheTmp := t.TempDir()
 	var copyDir string
 	_, err := fx.load(ops.PhenotypeLoadOptions{MkdirTemp: func(pattern string) (string, error) {
@@ -273,4 +288,29 @@ func TestLoadPhenotypeFailsWhenTheDaemonSeesNoCopy(t *testing.T) {
 			fx.f.AssertNotCalled(fakerunner.Glob("docker compose * stop hpds"))
 		})
 	}
+}
+
+func TestLoadPhenotypeProbeFailureIsAnError(t *testing.T) {
+	fx := newLoaderFixture(t)
+	fx.probeFails = true
+	_, err := fx.load(ops.PhenotypeLoadOptions{MkdirTemp: func(string) (string, error) {
+		t.Fatal("copied the CSV after a docker failure")
+		return "", nil
+	}})
+	if err == nil || !strings.Contains(err.Error(), "pull access denied") {
+		t.Fatalf("err = %v", err)
+	}
+	fx.f.AssertNotCalled(fakerunner.Glob("docker compose * stop hpds"))
+}
+
+func TestLoadPhenotypeMissingKeyFailsBeforeStopping(t *testing.T) {
+	fx := newLoaderFixture(t)
+	if err := os.Remove(fx.st.Path(stack.HPDSKeyFile)); err != nil {
+		t.Fatal(err)
+	}
+	_, err := fx.load(ops.PhenotypeLoadOptions{})
+	if err == nil || !strings.Contains(err.Error(), "HPDS key") {
+		t.Fatalf("err = %v", err)
+	}
+	fx.f.AssertNotCalled(fakerunner.Glob("docker compose * stop hpds"))
 }

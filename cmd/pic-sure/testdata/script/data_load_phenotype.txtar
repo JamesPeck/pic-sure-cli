@@ -17,9 +17,9 @@ stderr '--heap must be a positive number of MB, not 0'
 exitcode 2 pic-sure --stack stack data load-phenotype --file pheno.csv --heap 4g
 stderr 'invalid argument "4g" for "--heap"'
 
-# A --skip-step the loader doesn't have is exit 2, listing the ones it has.
-exitcode 2 pic-sure --stack stack data load-phenotype --file pheno.csv --skip-step seed
-stderr '--skip-step seed: load-phenotype has no such step; it can skip hpds-input, hpds-stop, hpds-wipe, hpds-key, hpds-load, hpds-start$'
+# The loader's steps can't be skipped.
+exitcode 2 pic-sure --stack stack data load-phenotype --file pheno.csv --skip-step hpds-input
+stderr 'load-phenotype''s steps depend on each other, so none can be skipped'
 
 # No stack: exit 3.
 exitcode 3 pic-sure data load-phenotype --file pheno.csv

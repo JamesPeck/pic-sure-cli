@@ -22,7 +22,8 @@ import (
 	"github.com/JamesPeck/pic-sure-cli/internal/steps"
 )
 
-// The phenotype loader's step IDs, for --skip-step.
+// The phenotype loader's step IDs. Its steps depend on each other, so none
+// can be skipped.
 const (
 	LoaderInputStepID = "hpds-input"
 	LoaderStopStepID  = "hpds-stop"
@@ -50,8 +51,8 @@ const (
 	hpdsDir         = "/opt/local/hpds"
 	loaderCSVTarget = hpdsDir + "/allConcepts.csv"
 	loaderName      = "CSVLoaderNewSearch"
-	// DatasetMarker is the provenance marker a load writes in hpds-data.
-	DatasetMarker = ".picsure-dataset"
+	// datasetMarker is the provenance marker a load writes in hpds-data.
+	datasetMarker = ".picsure-dataset"
 )
 
 // loaderStaleFiles are what a previous load left in hpds-data that this one
@@ -64,7 +65,7 @@ var loaderStaleFiles = []string{
 	"columnMeta.javabin",
 	"columnMeta.csv",
 	"columnMetaErrors.csv",
-	DatasetMarker,
+	datasetMarker,
 }
 
 // PhenotypeLoadOptions configures LoadPhenotype.
@@ -83,13 +84,6 @@ type PhenotypeLoadOptions struct {
 	// CSV it can't (a file outside $HOME under Colima or Lima): the cache's
 	// TempDir.
 	MkdirTemp func(pattern string) (string, error)
-	// Skip lists the step IDs to skip (--skip-step).
-	Skip []string
-}
-
-// LoaderStepIDs lists the loader's step IDs, in order.
-func LoaderStepIDs() []string {
-	return []string{LoaderInputStepID, LoaderStopStepID, LoaderWipeStepID, HPDSKeyStepID, LoaderRunStepID, LoaderStartStepID}
 }
 
 // RefuseSharedHPDS returns the error a loader that writes HPDS data gives on
@@ -129,22 +123,27 @@ func LoadPhenotype(ctx context.Context, d *Deps, st *stack.Stack, cfg *stack.Con
 		{ID: LoaderRunStepID, Title: "Load the phenotype data", Apply: l.load},
 		{ID: LoaderStartStepID, Title: "Start HPDS", Apply: l.start},
 	}
-	err := steps.Run(ctx, d.Sink, plan, steps.Options{Skip: opts.Skip})
+	err := steps.Run(ctx, d.Sink, plan, steps.Options{})
 	if err == nil {
 		return l.opts.Dataset, nil
 	}
+	// steps.Error's own advice, that a re-run skips the steps already done,
+	// doesn't hold here: a re-run loads again from the start.
 	var se *steps.Error
-	if !errors.As(err, &se) {
+	if !errors.As(err, &se) || se.Interrupted {
 		return "", err
 	}
+	failed := fmt.Errorf("step %s failed: %w", se.Step, se.Err)
 	switch se.Step {
 	case LoaderInputStepID, LoaderStopStepID:
-		return "", err
+		return "", failed
+	case LoaderWipeStepID:
+		return "", fmt.Errorf("%w. HPDS is stopped: fix the problem and run the load again, or `pic-sure up` to start HPDS", failed)
 	case LoaderStartStepID:
-		return l.opts.Dataset, fmt.Errorf("%w. The data is loaded; see `pic-sure logs hpds`, then start it with `pic-sure up`", err)
+		return l.opts.Dataset, fmt.Errorf("%w. The data is loaded; see `pic-sure logs hpds`, then start HPDS with `pic-sure up`", failed)
 	default:
 		return "", fmt.Errorf("%w. HPDS is stopped and its phenotype data was removed: fix the problem and run the load again, "+
-			"or `pic-sure up` to start HPDS with no data", err)
+			"or `pic-sure up` to start HPDS with no data", failed)
 	}
 }
 
@@ -175,6 +174,10 @@ func (l *loader) input(ctx context.Context, sink events.Sink) error {
 		return exitcode.Precondition("state.json records no %s image; run `pic-sure up` to build the stack's images", img.Name)
 	}
 	l.image = img.Repository() + ":" + tag
+	// The hpds-key step would find a missing key only after the wipe.
+	if _, err := l.st.LoadHPDSKey(); err != nil {
+		return fmt.Errorf("the stack's HPDS key (%s): %w", l.st.Path(stack.HPDSKeyFile), err)
+	}
 	ok, err := l.d.Docker.ImageExists(ctx, l.image)
 	if err != nil {
 		return err
@@ -196,8 +199,8 @@ func (l *loader) input(ctx context.Context, sink events.Sink) error {
 	if err != nil {
 		return err
 	}
-	if l.visible(ctx, l.opts.CSV, size) {
-		return nil
+	if ok, err := l.visible(ctx, l.opts.CSV, size); ok || err != nil {
+		return err
 	}
 	// A daemon in a VM sees only the host directories shared with it
 	// (Colima and Lima share $HOME), and a bind mount of any other file
@@ -213,7 +216,10 @@ func (l *loader) input(ctx context.Context, sink events.Sink) error {
 	if err := copyCSV(ctx, l.opts.CSV, l.csv); err != nil {
 		return err
 	}
-	if !l.visible(ctx, l.csv, size) {
+	if ok, err := l.visible(ctx, l.csv, size); err != nil || !ok {
+		if err != nil {
+			return err
+		}
 		return exitcode.Precondition("the Docker daemon can't read %s or its copy in the cache (%s); "+
 			"move it under a directory the daemon shares", l.opts.CSV, l.csv)
 	}
@@ -221,12 +227,14 @@ func (l *loader) input(ctx context.Context, sink events.Sink) error {
 }
 
 // visible reports whether a container that bind-mounts path sees a regular
-// file of the given size there.
-func (l *loader) visible(ctx context.Context, path string, size int64) bool {
+// file of the given size there. A daemon that refuses to mount it (Docker
+// Desktop's "Mounts denied: The path … is not shared from the host") counts
+// as not seeing it; any other docker failure is an error.
+func (l *loader) visible(ctx context.Context, path string, size int64) (bool, error) {
 	alpine, _ := catalog.LookupImage("alpine")
 	name, err := docker.UniqueName(l.cfg.Name+"-hpds-input", l.d.Rand)
 	if err != nil {
-		return false
+		return false, err
 	}
 	var out bytes.Buffer
 	code, err := l.d.Docker.Run(ctx, docker.RunOpts{
@@ -241,10 +249,13 @@ func (l *loader) visible(ctx context.Context, path string, size int64) bool {
 	})
 	if err != nil {
 		_ = l.d.Docker.Rm(context.WithoutCancel(ctx), name, true)
-		return false
+		if msg := strings.ToLower(err.Error()); strings.Contains(msg, "mounts denied") || strings.Contains(msg, "not shared from the host") {
+			return false, nil
+		}
+		return false, fmt.Errorf("checking that the Docker daemon can read %s: %w", path, err)
 	}
 	got, perr := strconv.ParseInt(strings.TrimSpace(out.String()), 10, 64)
-	return code == 0 && perr == nil && got == size
+	return code == 0 && perr == nil && got == size, nil
 }
 
 func (l *loader) removeCopy() {
@@ -284,7 +295,7 @@ func (l *loader) load(ctx context.Context, sink events.Sink) error {
 	code, err := l.d.Docker.Run(ctx, docker.RunOpts{
 		Image: l.image,
 		Name:  name,
-		// The image's files and the volume's are root's.
+		// The volume's files are root's, whatever USER the image sets.
 		User:    "0:0",
 		Remove:  true,
 		Network: "none",
@@ -315,9 +326,9 @@ func (l *loader) load(ctx context.Context, sink events.Sink) error {
 	// it isn't HPDS data. The marker comes last, so it always describes a
 	// complete load.
 	marker := strings.NewReader(l.opts.Dataset + "\n")
-	script := "rm -f /data/allConcepts.csv; cat > /data/" + DatasetMarker
+	script := "rm -f /data/allConcepts.csv; cat > /data/" + datasetMarker
 	if err := l.helper(ctx, l.volume(), "hpds-marker", script, marker); err != nil {
-		return fmt.Errorf("writing %s in volume %s: %w", DatasetMarker, l.volume(), err)
+		return fmt.Errorf("writing %s in volume %s: %w", datasetMarker, l.volume(), err)
 	}
 	return nil
 }

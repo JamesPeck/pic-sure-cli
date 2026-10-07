@@ -285,8 +285,8 @@ it.
 
 - `data_phenotype.go` (042): `data load-phenotype --file F [--entry E]
   [--heap MB]`, the load step only (045 adds the dictionary steps, 043
-  `--input-dir`). Usage checks first (`--heap` must be positive, a
-  `--skip-step` outside `ops.LoaderStepIDs`); under the stack lock, shared
+  `--input-dir`). Usage checks first (`--heap` must be positive, and
+  no `--skip-step`, since the loader's steps depend on each other); under the stack lock, shared
   HPDS data is exit 1 and an uninitialised stack exit 3; then
   `phenoinput.Resolve` with the cache's `TempDir` (a missing file or an
   `*EntryError` is exit 2), and `ops.LoadPhenotype`, recording the `data
@@ -305,7 +305,7 @@ it.
 | `migrate.go` | `migrate` | 032 |
 | `config.go` | `config show/get/set/edit` | 006 |
 | `secrets.go` | `secrets rotate` | 058 |
-| `data.go` | `data demo`, `load-phenotype`, `load-genomic` | 046, 042/043/045, 049 |
+| `data.go`, `data_phenotype.go` | `data demo`, `load-phenotype`, `load-genomic` | 046, 042/043/045, 049 |
 | `dictionary.go` | `dictionary hydrate/load-csv/load-facets/weights` | 044 |
 | `shareddata.go` | `shared-data publish/list/remove` | 050 |
 | `dev.go` | `dev list/on/off` | 052 |
@@ -1021,18 +1021,19 @@ run that fails before then leaves them pending for the next. `bindMounts`
 
 **Phenotype loader (042, `loader.go`).** §9.6's one loader, for `data
 demo` (046) and `data load-phenotype`. `LoadPhenotype(ctx, d, st, cfg,
-state, PhenotypeLoadOptions{CSV, Dataset, HeapMB, LoaderArgs, MkdirTemp,
-Skip})` returns the provenance it wrote. The caller holds the stack lock and
+state, PhenotypeLoadOptions{CSV, Dataset, HeapMB, LoaderArgs,
+MkdirTemp})` returns the provenance it wrote. The caller holds the stack lock and
 sets `d.Compose`. `RefuseSharedHPDS(cfg)` is its shared-mode refusal (a
-plain error, exit 1), for a command to call before any slow work. Steps
-(`LoaderStepIDs`):
+plain error, exit 1), for a command to call before any slow work. The
+steps depend on each other, so the command refuses `--skip-step`:
 
 - `hpds-input`: the loader image from state.json's `images`
-  (`pic-sure-hpds-etl`; exit 3 if unrecorded or missing), the provenance
+  (`pic-sure-hpds-etl`; exit 3 if unrecorded or missing), the stack's HPDS
+  key file (checked here so a missing key fails before the wipe), the provenance
   (`Dataset`, or `phenotype:<sha256 of the CSV>` when empty), and whether
   the daemon sees the CSV: an alpine probe bind-mounts it and compares the
   size. If it doesn't (a file outside `$HOME` under Colima or Lima shows
-  up as an empty directory), the CSV is copied into a `MkdirTemp` dir (the
+  up as an empty directory; Docker Desktop answers "mounts denied"), the CSV is copied into a `MkdirTemp` dir (the
   cache's `TempDir`) and probed again; the copy is removed when the load
   ends. Nothing has changed if this step fails.
 - `hpds-stop`: `compose stop hpds`.

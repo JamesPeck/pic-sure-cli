@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"slices"
-	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -35,11 +33,8 @@ func (a *App) loadPhenotype(cmd *cobra.Command, args []string) error {
 	if heap < 0 || f.Changed("heap") && heap == 0 {
 		return exitcode.Usage("--heap must be a positive number of MB, not %d", heap)
 	}
-	ids := ops.LoaderStepIDs()
-	for _, id := range a.Global.SkipSteps {
-		if !slices.Contains(ids, id) {
-			return exitcode.Usage("--skip-step %s: load-phenotype has no such step; it can skip %s", id, strings.Join(ids, ", "))
-		}
+	if len(a.Global.SkipSteps) > 0 {
+		return exitcode.Usage("--skip-step: load-phenotype's steps depend on each other, so none can be skipped")
 	}
 
 	ctx := cmd.Context()
@@ -102,7 +97,6 @@ func (a *App) loadPhenotype(cmd *cobra.Command, args []string) error {
 		CSV:       in.CSV,
 		HeapMB:    heap,
 		MkdirTemp: c.TempDir,
-		Skip:      a.Global.SkipSteps,
 	})
 	if ferr := finishUp(d, st, err); err == nil {
 		err = ferr
