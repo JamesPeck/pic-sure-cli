@@ -723,7 +723,7 @@ preconditions (034) can call it with no `Stack` and `Building: true`.
   the cli layer's `systemHost` is the real one.
 
 **Build and the image step (031, `build.go`).** `ImagesStep(d, st, cfg,
-state, ImagesOptions{Cache, Components, Force})`, ID `images`, is §7.2's
+state, ImagesOptions{Cache, Components, Force, Refresh})`, ID `images`, is §7.2's
 image step for init, up and update. For each selected component (all by
 default; an unknown name is exit 2) it builds, or pulls, the images at
 the release commit `state.Components` records (exit 3 if none, or if it
@@ -731,8 +731,8 @@ was recorded from a source the config no longer sets), through 029's
 `BuildReactor` and 030's `BuildFrontend`/`BuildDictionaryETL`, which skip
 what is up to date. It also makes sure the cache has the pic-sure and
 migrations trees, which render bind-mounts. It records each part's commit
-and tags in `state` and saves it as soon as that part is done. Build logs go to
-`BuildLogDir` (`.pic-sure/logs/build/<part>.log`, made through the stack
+and tags in `state` and saves it as soon as that part is done. Build logs
+go to `BuildLogDir` (`.pic-sure/logs/build/<part>.log`, made through the stack
 so they are in the manifest; each holds that part's last build). `Check`
 is done when every image is present with its labels and recorded and
 those trees exist, which is what `up` needs.
@@ -750,15 +750,15 @@ those trees exist, which is what `up` needs.
   since it bakes in config) is pulled as
   `<images.registry or DefaultRegistry>/<image>:<ref>`, the ref being the
   component's build-spec or config ref, and tagged `hms-dbmi/<image>:<ref>`
-  for the rendered compose. Apply pulls every time, since a ref can be a
-  branch; `Check` only needs the images present. A failed pull says the
-  images may not be published yet. Migrations' ref needn't be a tag.
+  for the rendered compose. An image already present is kept unless
+  `Force` or `Refresh` (set by `build` and update, since a ref can be a
+  branch). A failed pull says the images may not be published yet.
+  Migrations' ref needn't be a tag.
 - `Build(ctx, d, st, cfg, state, BuildOptions)` is the `build` command: a
   `resolve` step, done when state records a release commit for every
   component without a source. Otherwise it fetches release-control at
   state's release commit (the `release.branch` head for a stack with none,
-  which it then records), resolves, and fills in only the missing
-  components, so `build` never moves a recorded commit (that is
+  which it then records) and resolves only the missing components, so `build` never moves a recorded commit (that is
   `update`'s job) and runs no CLI gate. Then the image step without its
   `Check`, so the `BuildReport` lists every selected
   image as `built`, `pulled` or `up-to-date`. The command holds the stack
@@ -1115,7 +1115,8 @@ stack mutation:
   equal with a warning, and so is a `PSCLI` that isn't a version.
 - `rel.ResolveComponents(ctx, cache, sink, step, cfg.Components)` resolves
   each component's ref to a commit with `cache.ResolveRef` (see
-  internal/cache), leaving out a component with a local `source` (031):
+  internal/cache), leaving out a component with a local `source`, and
+  any not named in its optional `only` list (031):
   `components.<name>.ref` from pic-sure.yaml if set, else the build-spec's
   key, else `main` with a warning. An unknown ref is exit 3. The commits are
   then in the cache's clones, so `EnsureSource` doesn't fetch again.

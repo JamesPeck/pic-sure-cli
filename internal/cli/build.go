@@ -20,8 +20,8 @@ func newBuildCmd(a *App) *cobra.Command {
 		Short: "Build the stack's images (default: every component)",
 		Long: `Build, or in images.mode pull pull, the images of the components
 (pic-sure, frontend, migrations, dictionary-etl) at the commits the stack
-records, and record their tags. Images that are already up to date are
-kept. A component with components.<name>.source set is built from that
+records, and record their tags. Built images that are already up to date
+are kept; pull mode pulls each time, since a ref can be a branch. A component with components.<name>.source set is built from that
 checkout, tagged dev-<stack>-<sha12>, and rebuilt every time while the
 checkout has uncommitted changes. Build logs go to .pic-sure/logs/build/.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -82,7 +82,7 @@ func (a *App) build(cmd *cobra.Command, components []string, force bool) (err er
 		return err
 	}
 	report, err := ops.Build(ctx, d, st, cfg, state, ops.BuildOptions{
-		ImagesOptions: ops.ImagesOptions{Cache: c, Components: components, Force: force},
+		ImagesOptions: ops.ImagesOptions{Cache: c, Components: components, Force: force, Refresh: true},
 		SkipSteps:     a.Global.SkipSteps,
 	})
 	state.FinishOperation(err, d.Clock.Now())

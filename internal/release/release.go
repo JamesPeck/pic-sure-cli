@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/cache"
@@ -179,9 +180,9 @@ func readFile(ctx context.Context, g git.Client, dir, sha, name string) ([]byte,
 // the build-spec's. A component the build-spec doesn't name falls back to
 // main, with a warning. A component with a local source
 // (components.<name>.source) is left out: its commit is the checkout's
-// (§7.3). The result is keyed by component name, as state.json's
-// components are.
-func (r *Release) ResolveComponents(ctx context.Context, c *cache.Cache, sink events.Sink, step string, cfg stack.Components) (map[string]stack.Component, error) {
+// (§7.3). Naming components in only resolves just those. The result is
+// keyed by component name, as state.json's components are.
+func (r *Release) ResolveComponents(ctx context.Context, c *cache.Cache, sink events.Sink, step string, cfg stack.Components, only ...string) (map[string]stack.Component, error) {
 	overrides := map[string]stack.ComponentSource{
 		catalog.PicSure:       cfg.PicSure,
 		catalog.Frontend:      cfg.Frontend,
@@ -190,7 +191,7 @@ func (r *Release) ResolveComponents(ctx context.Context, c *cache.Cache, sink ev
 	}
 	out := map[string]stack.Component{}
 	for _, comp := range catalog.Components() {
-		if overrides[comp.Name].Source != "" {
+		if overrides[comp.Name].Source != "" || (len(only) > 0 && !slices.Contains(only, comp.Name)) {
 			continue
 		}
 		ref := overrides[comp.Name].Ref

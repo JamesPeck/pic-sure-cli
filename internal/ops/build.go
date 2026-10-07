@@ -51,9 +51,12 @@ type ImagesOptions struct {
 	// Components limits the step to these components (catalog names).
 	// Empty means all of them.
 	Components []string
-	// Force rebuilds every image even if it is up to date. Pull mode pulls
-	// every time anyway.
+	// Force rebuilds every image even if it is up to date.
 	Force bool
+	// Refresh pulls each image in pull mode even when it is present, since
+	// a ref such as a branch name can move. The build command and update
+	// set it; up only needs the images present.
+	Refresh bool
 }
 
 // BuildOptions configures Build, the build command.
@@ -119,14 +122,18 @@ func resolveStep(d *Deps, st *stack.Stack, cfg *stack.Config, state *stack.State
 		},
 		Apply: func(ctx context.Context, sink events.Sink) error {
 			opts := release.Options{Repo: cfg.Release.Repo, Branch: cfg.Release.Branch, Commit: state.Release.Commit}
+			if state.Release.Commit != "" && !fullCommit.MatchString(state.Release.Commit) {
+				return fmt.Errorf("state.json's release commit %q is not a commit sha", state.Release.Commit)
+			}
 			if state.Release.Commit != "" && state.Release.Repo != "" {
 				opts.Repo = state.Release.Repo
 			}
+			missing := unresolved(cfg, state)
 			rel, err := release.Fetch(ctx, c, d.Git, sink, ResolveStepID, opts)
 			if err != nil {
 				return err
 			}
-			comps, err := rel.ResolveComponents(ctx, c.WithEvents(sink, ResolveStepID), sink, ResolveStepID, cfg.Components)
+			comps, err := rel.ResolveComponents(ctx, c.WithEvents(sink, ResolveStepID), sink, ResolveStepID, cfg.Components, missing...)
 			if err != nil {
 				return err
 			}
@@ -136,7 +143,7 @@ func resolveStep(d *Deps, st *stack.Stack, cfg *stack.Config, state *stack.State
 			if state.Components == nil {
 				state.Components = map[string]stack.Component{}
 			}
-			for _, name := range unresolved(cfg, state) {
+			for _, name := range missing {
 				state.Components[name] = comps[name]
 			}
 			return st.SaveState(state)
@@ -222,8 +229,9 @@ func planImages(ctx context.Context, d *Deps, st *stack.Stack, cfg *stack.Config
 			}
 			p.comp = stack.Component{Commit: wt.Head, Source: src, Dirty: wt.Dirty}
 			p.tag = DevTag(cfg.Name, wt.Head, wt.Dirty)
-			if !imageTag.MatchString(p.tag) {
-				return nil, fmt.Errorf("the dev image tag %q is longer than docker allows; use a shorter stack name", p.tag)
+			// Checked as if dirty, so a name doesn't fail only once the tree is.
+			if long := DevTag(cfg.Name, wt.Head, true); !imageTag.MatchString(long) {
+				return nil, exitcode.Usage("the stack name %q is too long for a dev image tag (%s); local sources need a shorter name", cfg.Name, long)
 			}
 		} else {
 			rec := state.Components[name]
@@ -398,7 +406,7 @@ func buildImages(ctx context.Context, d *Deps, st *stack.Stack, cfg *stack.Confi
 		case len(p.images) == 0:
 			// migrations has no image; only its commit is recorded.
 		case p.pull:
-			tag, built, err = p.pullImages(ctx, d)
+			tag, built, err = p.pullImages(ctx, d, opts.Force || opts.Refresh)
 		case p.component == catalog.PicSure:
 			var res ReactorResult
 			res, err = BuildReactor(ctx, d, ReactorOptions{
@@ -469,13 +477,23 @@ func (p imagePart) record(state *stack.State, cfg *stack.Config, tag string) {
 	}
 }
 
-// pullImages pulls each image of p from the registry, every time, since a
-// ref such as a branch name can move, and tags it with the local name the
-// rendered compose file uses.
-func (p imagePart) pullImages(ctx context.Context, d *Deps) (string, []string, error) {
+// pullImages pulls each image of p from the registry and tags it with the
+// local name the rendered compose file uses. An image already present is
+// kept unless refresh is set.
+func (p imagePart) pullImages(ctx context.Context, d *Deps, refresh bool) (string, []string, error) {
 	var pulled []string
 	for _, img := range p.images {
 		local := img.Repository() + ":" + p.tag
+		if !refresh {
+			ok, err := d.Docker.ImageExists(ctx, local)
+			if err != nil {
+				return "", nil, err
+			}
+			if ok {
+				progressf(d.Sink, ImagesStepID, "%s is present", local)
+				continue
+			}
+		}
 		remote := p.registry + "/" + img.Name + ":" + p.tag
 		progressf(d.Sink, ImagesStepID, "Pulling %s", remote)
 		if err := d.Docker.Pull(ctx, remote, nil); err != nil {

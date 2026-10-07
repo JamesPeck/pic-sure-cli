@@ -334,6 +334,16 @@ func TestResolveComponents(t *testing.T) {
 	if n := w.fetches(); n != 3 {
 		t.Errorf("ran %d fetches, want 3 (none for the frontend)", n)
 	}
+	only, err := rel.ResolveComponents(context.Background(), w.cache, nil, "release", stack.Components{}, catalog.Migrations)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(only) != 1 || only[catalog.Migrations].Commit != migTagged {
+		t.Errorf("resolving migrations only gave %v", only)
+	}
+	if n := w.fetches(); n != 1 {
+		t.Errorf("resolving migrations only ran %d fetches, want 1", n)
+	}
 
 	// The resolved commits are in the cache's clones, so EnsureSource
 	// needs no fetch.

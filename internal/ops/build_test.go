@@ -254,6 +254,7 @@ func TestBuildPullModePullsAllButTheFrontend(t *testing.T) {
 	x.state.Components[catalog.DictionaryETL] = stack.Component{Ref: "v4.0.0", Commit: etlSHA}
 	// Migrations has no image, so its ref needn't be a tag.
 	x.state.Components[catalog.Migrations] = stack.Component{Ref: "feature/schema", Commit: migSHA}
+	x.image("hms-dbmi/pic-sure-hpds:v1", nil) // already pulled
 	x.frontendFresh()
 	x.missing()
 	x.f.On(fakerunner.Glob("docker pull *"))
@@ -265,11 +266,12 @@ func TestBuildPullModePullsAllButTheFrontend(t *testing.T) {
 	}
 	x.f.AssertNotCalled(fakerunner.Glob("docker build *"))
 	x.f.AssertNotCalled(fakerunner.Glob("docker pull *pic-sure-httpd*"))
+	x.f.AssertNotCalled(fakerunner.Glob("docker pull *pic-sure-hpds:*"))
 	x.f.AssertCalled(fakerunner.Exact("docker", "pull", "registry.example.com/mirror/pic-sure-psama:v1"))
 	x.f.AssertCalled(fakerunner.Exact("docker", "tag", "registry.example.com/mirror/pic-sure-psama:v1", "hms-dbmi/pic-sure-psama:v1"))
 	x.f.AssertCalled(fakerunner.Exact("docker", "pull", "registry.example.com/mirror/dictionary-etl:v4.0.0"))
 	got := actions(r)
-	if got["hms-dbmi/pic-sure-psama:v1"] != ops.ImagePulled || got["hms-dbmi/dictionary-etl:v4.0.0"] != ops.ImagePulled ||
+	if got["hms-dbmi/pic-sure-psama:v1"] != ops.ImagePulled || got["hms-dbmi/pic-sure-hpds:v1"] != ops.ImageUpToDate ||
 		got["hms-dbmi/pic-sure-httpd:"+x.feTag()] != ops.ImageUpToDate {
 		t.Errorf("actions = %v", got)
 	}
@@ -527,5 +529,66 @@ func TestBuildResolvesAFreshStackAtTheBranchHead(t *testing.T) {
 	saved, err := x.st.LoadState()
 	if err != nil || saved.Release.Commit != rel {
 		t.Errorf("saved state %+v, %v", saved, err)
+	}
+}
+
+func TestBuildRefreshPullsImagesThatArePresent(t *testing.T) {
+	x := newBuildFixture(t)
+	x.cfg.Images.Mode = stack.ImagesPull
+	x.image("hms-dbmi/dictionary-etl:v4", nil)
+	x.f.On(fakerunner.Glob("docker pull *"))
+	x.f.On(fakerunner.Glob("docker tag *"))
+
+	r, err := x.build(ops.ImagesOptions{Components: []string{catalog.DictionaryETL}, Refresh: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	x.f.AssertCalled(fakerunner.Exact("docker", "pull", "ghcr.io/hms-dbmi/dictionary-etl:v4"))
+	if a := actions(r)["hms-dbmi/dictionary-etl:v4"]; a != ops.ImagePulled {
+		t.Errorf("dictionary-etl: %q, want pulled", a)
+	}
+}
+
+func TestBuildMakesTheSourceTreesRenderNeeds(t *testing.T) {
+	x := newBuildFixture(t)
+	tree := filepath.Join(x.root, "src", "PIC-SURE-Migrations", migSHA)
+	if err := os.RemoveAll(tree); err != nil {
+		t.Fatal(err)
+	}
+	var archive bytes.Buffer
+	tw := tar.NewWriter(&archive)
+	body := []byte("select 1;\n")
+	if err := tw.WriteHeader(&tar.Header{Name: "V1__init.sql", Mode: 0o644, Size: int64(len(body)), Typeflag: tar.TypeReg}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(body); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	bare := filepath.Join(x.root, "git", "PIC-SURE-Migrations.git")
+	if err := os.MkdirAll(bare, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	x.f.On(fakerunner.Glob("git --git-dir=" + bare + " config *"))
+	x.f.On(fakerunner.Glob("git --git-dir=" + bare + " rev-parse *")).Stdout(migSHA + "\n")
+	x.f.On(fakerunner.Glob("git * --git-dir=" + bare + " archive --format=tar " + migSHA)).Stdout(archive.String())
+
+	if _, err := x.build(ops.ImagesOptions{Components: []string{catalog.Migrations}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(tree, "V1__init.sql")); err != nil {
+		t.Errorf("migrations tree not made: %v", err)
+	}
+}
+
+func TestBuildRefusesAStackNameTooLongForADevTag(t *testing.T) {
+	x := newBuildFixture(t)
+	x.cfg.Name = strings.Repeat("n", 110) // fits clean (127), not dirty (133)
+	x.cfg.Components.DictionaryETL.Source = x.checkout(false)
+	_, err := x.build(ops.ImagesOptions{Components: []string{catalog.DictionaryETL}})
+	if exitcode.FromError(err) != exitcode.CodeUsage || !strings.Contains(err.Error(), "too long for a dev image tag") {
+		t.Errorf("err = %v, want a usage error about the name", err)
 	}
 }
