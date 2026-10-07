@@ -176,7 +176,7 @@ var Fields = []Field{
 	{Key: "proxy.http", Kind: KindString, Flag: "http-proxy",
 		Help: "Proxy URL for outbound HTTP, such as http://proxy.example.com:3128. Empty for none."},
 	{Key: "proxy.https", Kind: KindString, Flag: "https-proxy",
-		Help: "Proxy URL for outbound HTTPS. Empty for none."},
+		Help: "Proxy URL for outbound HTTPS, also http://, since the proxy is spoken to in plain HTTP. Empty for none."},
 	{Key: "proxy.no_proxy", Kind: KindString, Flag: "no-proxy",
 		Help: "Comma-separated hosts to reach without the proxy. The stack's services, localhost and 127.0.0.1 are always added."},
 

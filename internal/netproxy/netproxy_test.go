@@ -36,17 +36,17 @@ func TestParseURL(t *testing.T) {
 		{in: "http://proxy.example.org:3128", want: "http://proxy.example.org:3128"},
 		{in: "http://proxy.example.org:3128/", want: "http://proxy.example.org:3128"},
 		{in: "http://proxy.example.org", want: "http://proxy.example.org:80"},
-		{in: "https://proxy.example.org", want: "https://proxy.example.org:443"},
+		{in: "https://proxy.example.org", wantErr: `want an http:// URL, got "https://proxy.example.org": the JVM and Maven can only speak plain HTTP to a proxy, so write http://`},
 		{in: "HTTP://Proxy.Example.org:08080", want: "http://Proxy.Example.org:8080"},
 		{in: "http://user:p%40ss@proxy:3128", want: "http://user:p%40ss@proxy:3128"},
 		{in: "http://user@proxy", want: "http://user@proxy:80"},
 		{in: "http://[2001:db8::1]:3128", want: "http://[2001:db8::1]:3128"},
-		{in: "https://[2001:db8::1]", want: "https://[2001:db8::1]:443"},
+		{in: "https://user:hunter2@[2001:db8::1]", wantErr: `got "https://user:xxxxx@[2001:db8::1]"`},
 		{in: "http://10.0.0.5", want: "http://10.0.0.5:80"},
 		{in: "http://proxy.example.org.:3128", want: "http://proxy.example.org.:3128"},
 
-		{in: "proxy:3128", wantErr: "want an http:// or https:// URL"},
-		{in: "socks5://user:hunter2@proxy:1080", wantErr: `want an http:// or https:// URL, got "socks5://user:xxxxx@proxy:1080"`},
+		{in: "proxy:3128", wantErr: "want an http:// URL"},
+		{in: "socks5://user:hunter2@proxy:1080", wantErr: `want an http:// URL, got "socks5://user:xxxxx@proxy:1080"`},
 		{in: "http://user:hunter2@:3128", wantErr: `has no host: "http://user:xxxxx@:3128"`},
 		{in: "http://proxy/path", wantErr: "want only a scheme, host and port"},
 		{in: "http://proxy?x=1", wantErr: "want only a scheme, host and port"},
@@ -216,8 +216,8 @@ func TestEnv(t *testing.T) {
 			"HTTP_PROXY=http://proxy.example.org:3128", "http_proxy=http://proxy.example.org:3128",
 			"NO_PROXY=localhost,127.0.0.1", "no_proxy=localhost,127.0.0.1",
 		}},
-		{"https only, missing port", netproxy.Config{HTTPS: "https://proxy.example.org"}, []string{
-			"HTTPS_PROXY=https://proxy.example.org:443", "https_proxy=https://proxy.example.org:443",
+		{"https only, missing port", netproxy.Config{HTTPS: "http://proxy.example.org"}, []string{
+			"HTTPS_PROXY=http://proxy.example.org:80", "https_proxy=http://proxy.example.org:80",
 			"NO_PROXY=localhost,127.0.0.1", "no_proxy=localhost,127.0.0.1",
 		}},
 		{"both, credentials, IPv6, user entries", netproxy.Config{
@@ -266,10 +266,10 @@ func TestJVMOpts(t *testing.T) {
 			"-Dhttp.nonProxyHosts=" + fixedJava,
 		}},
 		{"both, credentials dropped, missing ports", netproxy.Config{
-			HTTP: "http://user:hunter2@proxy.example.org", HTTPS: "https://user:hunter2@proxy.example.org",
+			HTTP: "http://user:hunter2@proxy.example.org", HTTPS: "http://user:hunter2@proxy.example.org",
 		}, []string{
 			"-Dhttp.proxyHost=proxy.example.org", "-Dhttp.proxyPort=80",
-			"-Dhttps.proxyHost=proxy.example.org", "-Dhttps.proxyPort=443",
+			"-Dhttps.proxyHost=proxy.example.org", "-Dhttps.proxyPort=80",
 			"-Dhttp.nonProxyHosts=" + fixedJava,
 		}},
 		{"IPv6 proxy", netproxy.Config{HTTPS: "http://[2001:db8::1]:3128"}, []string{
@@ -366,7 +366,7 @@ func TestMavenSettings(t *testing.T) {
 `},
 		{"both, credentials escaped, IPv6, missing port", netproxy.Config{
 			HTTP:  "http://us%3Cer:p%26ss%3C%22@[2001:db8::1]",
-			HTTPS: "https://other@proxy.example.org",
+			HTTPS: "http://other@proxy.example.org",
 		}, `<?xml version="1.0" encoding="UTF-8"?>
 <settings xmlns="http://maven.apache.org/SETTINGS/1.0.0">
   <proxies>
@@ -385,7 +385,7 @@ func TestMavenSettings(t *testing.T) {
       <active>true</active>
       <protocol>https</protocol>
       <host>proxy.example.org</host>
-      <port>443</port>
+      <port>80</port>
       <username>other</username>
       <nonProxyHosts>psama|*.psama|localhost|*.localhost|127.0.0.1|127.*</nonProxyHosts>
     </proxy>

@@ -106,14 +106,15 @@ func TestValidate(t *testing.T) {
 		}, []string{"services.hpds.env.X: must not contain control characters"}},
 
 		{"proxies", func(c *Config) {
-			c.Proxy = Proxy{HTTP: "http://proxy.example.org:3128", HTTPS: "https://user:pw@[2001:db8::1]:8443/", NoProxy: ".internal,10.0.0.0/8"}
+			c.Proxy = Proxy{HTTP: "http://proxy.example.org:3128", HTTPS: "http://user:pw@[2001:db8::1]:8443/", NoProxy: ".internal,10.0.0.0/8"}
 		}, nil},
-		{"proxy without scheme", func(c *Config) { c.Proxy.HTTP = "proxy.example.org:3128" }, []string{"proxy.http: want an http:// or https:// URL"}},
-		{"proxy socks", func(c *Config) { c.Proxy.HTTPS = "socks5://proxy:1080" }, []string{`proxy.https: want an http:// or https:// URL, got "socks5://proxy:1080"`}},
+		{"https proxy", func(c *Config) { c.Proxy.HTTPS = "https://proxy.example.org:3128" }, []string{`proxy.https: want an http:// URL, got "https://proxy.example.org:3128": the JVM and Maven can only speak plain HTTP to a proxy, so write http://`}},
+		{"proxy without scheme", func(c *Config) { c.Proxy.HTTP = "proxy.example.org:3128" }, []string{"proxy.http: want an http:// URL"}},
+		{"proxy socks", func(c *Config) { c.Proxy.HTTPS = "socks5://proxy:1080" }, []string{`proxy.https: want an http:// URL, got "socks5://proxy:1080"`}},
 		{"proxy without host", func(c *Config) { c.Proxy.HTTP = "http://:3128" }, []string{"proxy.http: has no host"}},
 		{"proxy with a path", func(c *Config) { c.Proxy.HTTP = "http://proxy/x" }, []string{"proxy.http: want only a scheme, host and port"}},
 		{"proxy bad port", func(c *Config) { c.Proxy.HTTP = "http://user:hunter2@proxy:port" }, []string{"proxy.http: is not a valid URL"}},
-		{"proxy password redacted", func(c *Config) { c.Proxy.HTTP = "ftp://user:hunter2@proxy:21" }, []string{`proxy.http: want an http:// or https:// URL, got "ftp://user:xxxxx@proxy:21"`}},
+		{"proxy password redacted", func(c *Config) { c.Proxy.HTTP = "ftp://user:hunter2@proxy:21" }, []string{`proxy.http: want an http:// URL, got "ftp://user:xxxxx@proxy:21"`}},
 		{"proxy port out of range", func(c *Config) { c.Proxy.HTTPS = "http://user:hunter2@proxy:65536" }, []string{`proxy.https: has a port outside 1-65535: "http://user:xxxxx@proxy:65536"`}},
 		{"proxy host typo", func(c *Config) { c.Proxy.HTTP = "http://user:hunter2@proxy.example.org;3128" }, []string{`proxy.http: has an invalid host: "http://user:xxxxx@proxy.example.org;3128"`}},
 		{"no_proxy bad entry", func(c *Config) { c.Proxy.NoProxy = "ok.example.org, bad host" }, []string{`proxy.no_proxy: has an entry that isn't a host, domain, IP address or CIDR range: "bad host"`}},

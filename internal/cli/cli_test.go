@@ -43,7 +43,7 @@ func testApp(t *testing.T) (*App, *bytes.Buffer, *bytes.Buffer) {
 var specCommands = map[string]string{
 	"init": "034", "up": "035",
 	"down": "026", "restart": "026", "ps": "026", "logs": "026", "compose": "026",
-	"status": "", "doctor": "025", "update": "036", "build": "031", "migrate": "032",
+	"status": "", "doctor": "", "update": "036", "build": "031", "migrate": "032",
 	"config show": "", "config get": "", "config set": "", "config edit": "",
 	"secrets rotate":      "058",
 	"data demo":           "046",

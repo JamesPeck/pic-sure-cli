@@ -78,10 +78,11 @@ func CatalogServices() []string {
 	return names
 }
 
-// ParseURL parses a proxy URL from the config: http:// or https://, a host,
-// an optional port and optional user info, with nothing after the host but
-// "/". The result has only those parts, and the port filled in (80 or 443
-// by scheme when missing). An empty s means no proxy: nil and no error.
+// ParseURL parses a proxy URL from the config: http://, a host, an optional
+// port and optional user info, with nothing after the host but "/". The
+// result has only those parts, and the port filled in (80 when missing).
+// An https:// URL is refused, because the JVM and Maven can only speak
+// plain HTTP to a proxy, and it is usually a misspelling of http://. An empty s means no proxy: nil and no error.
 // Errors show the URL with its password redacted, and are phrased to
 // follow the config key.
 func ParseURL(s string) (*url.URL, error) {
@@ -93,8 +94,10 @@ func ParseURL(s string) (*url.URL, error) {
 	case err != nil:
 		// url's error quotes the whole URL, password and all.
 		return nil, errors.New("is not a valid URL")
-	case u.Scheme != "http" && u.Scheme != "https":
-		return nil, fmt.Errorf("want an http:// or https:// URL, got %q", u.Redacted())
+	case u.Scheme == "https":
+		return nil, fmt.Errorf("want an http:// URL, got %q: the JVM and Maven can only speak plain HTTP to a proxy, so write http://", u.Redacted())
+	case u.Scheme != "http":
+		return nil, fmt.Errorf("want an http:// URL, got %q", u.Redacted())
 	case u.Hostname() == "":
 		return nil, fmt.Errorf("has no host: %q", u.Redacted())
 	case (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "":

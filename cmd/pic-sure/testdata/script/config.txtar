@@ -57,7 +57,7 @@ stderr 'auth.mode: must be one of required, open, explore; got "sideways"'
 exitcode 2 pic-sure --stack stack config set db.mode remote
 stderr 'db.remote.host: required when db.mode is remote'
 exitcode 2 pic-sure --stack stack config set proxy.http proxy:3128
-stderr 'proxy.http: want an http:// or https:// URL'
+stderr 'proxy.http: want an http:// URL'
 exitcode 2 pic-sure --stack stack config set tls.mode provided
 stderr 'tls.cert_file: .*certs/tls/server.crt does not exist'
 exitcode 2 pic-sure --stack stack config set name other

@@ -678,6 +678,40 @@ unless `Source` is set (`Tag` and `Force` serve §7.3 builds), and write
 failure. They return `ImageBuildResult{Tag, Ref, Built}`; 031 records the
 tags in state.json.
 
+**Doctor (025, `doctor.go`).** `Doctor(ctx, d, DoctorOptions)` returns a
+`*DoctorReport`: a list of `Check{Name, Status, Message, Detail}` with
+status `ok`, `warn` or `fail`. Names are stable. A failing check is in the
+report, not an error; the command exits 1 when `report.Failed()`. Init's
+preconditions (034) can call it with no `Stack` and `Building: true`.
+
+- Host and Docker: `docker-cli`, `docker-daemon`, `compose-version`
+  (`MinComposeVersion`, 2.29.0, the first with `--progress json`),
+  `buildx-version` (`MinBuildxVersion` 0.17.0; a warning unless `Building`
+  or the stack builds its images), `docker-runtime` (Docker Desktop,
+  Colima, OrbStack, Podman with a warning, or Docker Engine), `git`,
+  `disk-cache`, `disk-docker`, `memory` and `arm64-images`. Versions come
+  from `docker info`'s plugin list. `disk-docker` runs `df` in a
+  throwaway, uniquely named `--rm --network none` alpine container, whose
+  root file system is on Docker's data root wherever the daemon runs, and
+  removes it again. `memory` sums the last `-Xmx` of every running
+  stack's HPDS (`docker ps` by the stack label and compose service) plus
+  this stack's when it isn't running, against `docker info`'s `MemTotal`.
+  `arm64-images` inspects only the pinned images already pulled.
+- With a `Stack`: `config`, `compose-config` (`d.Compose.Config(quiet)`;
+  a warning before the first render, from `ComposeErr`), `overrides`
+  (`overrides/*.yml`, which the adapter ignores), `ports` (free, or
+  published by this stack per `compose ps`; the dev ports too when dev
+  services are on), `auth0` (tenant, client ID and the client secret
+  unless open mode) and `proxy` (warns on an http-only proxy and on
+  credentials psama can't use, §9.10).
+- `Network`: `network-github`, `-maven-central`, `-npm-registry`,
+  `-alpine-cdn` (an HTTP HEAD through the stack's proxy; any status but 407
+  counts) and `-release-control` (`git ls-remote` with the proxy env).
+  With a proxy, `network-docker-pull` pulls alpine and on failure puts the
+  runtime's daemon proxy instructions in `Detail` (D36).
+- `Host` is the seam for PATH lookups, free disk, port binding and HTTP;
+  the cli layer's `systemHost` is the real one.
+
 ## internal/steps
 
 Ticket 011, on the `Step` type and `Run` signature from 001.
@@ -1170,7 +1204,8 @@ just `proxy.http` set, https traffic goes direct.
 - `JVMOpts()`: `-Dhttp.proxyHost/Port`, `-Dhttps.proxyHost/Port` and
   `-Dhttp.nonProxyHosts` for `JAVA_OPTS`, without white space or
   credentials (the JVM has no property for them). The JVM and Maven speak
-  plain HTTP to the proxy, even for an `https://` proxy URL.
+  plain HTTP to the proxy, so `ParseURL` refuses an `https://` proxy URL
+  (025): validation fails with a hint to write `http://`.
 - `MavenSettings()`: a `settings.xml` with a `<proxy>` per scheme, for the
   reactor container's `/root/.m2`. It holds the credentials: write it 0600.
   Maven sends https through an http proxy when it has no https one, so with

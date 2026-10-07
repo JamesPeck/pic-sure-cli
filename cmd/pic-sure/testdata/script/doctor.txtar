@@ -1,7 +1,68 @@
-# Not implemented yet: exit 1, naming ticket 025.
+# doctor checks the host and Docker through the fake docker and git. The
+# cache root must be outside TMPDIR, so point it at a directory that doesn't
+# exist: its nearest existing parent is measured.
+env XDG_CACHE_HOME=/nonexistent-pic-sure-doctor/cache
+
+# Without a stack only the host and Docker are checked, and all pass.
+exec pic-sure doctor
+stdout '^\[ OK \] docker-daemon +the daemon answers: server 28.5.1 on linux/x86_64$'
+stdout '^\[ OK \] compose-version +docker compose v2.29.7 \(need 2.29.0 or later\)$'
+stdout '^\[ OK \] disk-docker +100.0 GiB free on /var/lib/docker$'
+stdout '^\[ OK \] memory +Docker has 16.0 GiB; no stack''s HPDS is running$'
+stdout ' 0 failed$'
+! stdout 'Stack:|config|network-'
+grep '^docker run --rm --name pic-sure-doctor-[0-9a-f]+ --network none alpine:\S+ df -Pk /$' docker.log
+grep '^docker rm -v -f pic-sure-doctor-' docker.log
+
+# --json prints one report object.
+exec pic-sure doctor --json
+stdout -count=1 '^\{'
+stdout '^\{"schema_version":2,"checks":\[\{"name":"docker-cli","status":"ok","message":"docker is on PATH"\},'
+! stdout '"type":"result"'
+
+# A failing check exits 1. With --json the report is still the only object
+# on stdout.
+cp info-old-compose.json info.json
 exitcode 1 pic-sure doctor
-stderr '^pic-sure: not implemented \(ticket 025\)$'
-! stdout .
-exitcode 1 pic-sure doctor --network
-stderr '^pic-sure: not implemented \(ticket 025\)$'
-! stdout .
+stdout '^\[FAIL\] compose-version +docker compose v2.20.3 is older than 2.29.0; upgrade Docker$'
+stderr '^pic-sure: doctor: 1 check\(s\) failed$'
+exitcode 1 pic-sure --json doctor
+stdout -count=1 '^\{'
+stdout '"name":"compose-version","status":"fail"'
+! stdout '"type":"result"'
+stderr '^pic-sure: doctor: 1 check\(s\) failed$'
+cp info-ok.json info.json
+
+# With a stack its checks follow: here an invalid config.
+exitcode 1 pic-sure --stack stack doctor
+stdout '^Stack: .*stack$'
+stdout '^\[FAIL\] config +invalid pic-sure.yaml: .*bogus'
+stdout '^\[WARN\] compose-config +the stack hasn''t been rendered yet; run `pic-sure up`$'
+
+# --stack naming no stack is exit 3.
+exitcode 3 pic-sure --stack nowhere doctor
+stderr 'no pic-sure stack found'
+
+-- docker.scenario --
+docker info --format json => 0 stdout=info.json
+docker version --format json => 0 stdout=version.json
+docker run * df -Pk / => 0 stdout=df.txt
+docker rm -v -f pic-sure-doctor-* => 0
+docker ps * => 0
+docker image inspect * => 1
+-- info-ok.json --
+{"ServerVersion":"28.5.1","OperatingSystem":"Docker Desktop","OSType":"linux","Architecture":"x86_64","MemTotal":17179869184,"DockerRootDir":"/var/lib/docker","ClientInfo":{"Context":"desktop-linux","Plugins":[{"Name":"compose","Version":"v2.29.7"},{"Name":"buildx","Version":"v0.17.1"}]}}
+-- info.json --
+{"ServerVersion":"28.5.1","OperatingSystem":"Docker Desktop","OSType":"linux","Architecture":"x86_64","MemTotal":17179869184,"DockerRootDir":"/var/lib/docker","ClientInfo":{"Context":"desktop-linux","Plugins":[{"Name":"compose","Version":"v2.29.7"},{"Name":"buildx","Version":"v0.17.1"}]}}
+-- info-old-compose.json --
+{"ServerVersion":"28.5.1","OperatingSystem":"Docker Desktop","OSType":"linux","Architecture":"x86_64","MemTotal":17179869184,"DockerRootDir":"/var/lib/docker","ClientInfo":{"Context":"desktop-linux","Plugins":[{"Name":"compose","Version":"v2.20.3"},{"Name":"buildx","Version":"v0.17.1"}]}}
+-- version.json --
+{"Client":{"Version":"28.5.1"},"Server":{"Platform":{"Name":"Docker Desktop 4.48.0"},"Version":"28.5.1"}}
+-- df.txt --
+Filesystem 1024-blocks Used Available Capacity Mounted on
+overlay 200000000 1000 104857600 1% /
+-- stack/pic-sure.yaml --
+schema: 1
+name: demo
+bogus: 1
+-- stack/.pic-sure/.keep --
