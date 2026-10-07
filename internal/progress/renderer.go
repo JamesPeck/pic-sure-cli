@@ -102,14 +102,30 @@ func (r *Renderer) Write(b []byte) (int, error) {
 	r.lineMu.Unlock()
 
 	for _, l := range lines {
-		if !r.send(printMsg{text: l}) {
-			r.waitEnded()
-			if _, err := io.WriteString(r.opts.Output, l+"\n"); err != nil {
-				return 0, err
-			}
+		if err := r.writeLine(l); err != nil {
+			return 0, err
 		}
 	}
 	return len(b), nil
+}
+
+// writeLine prints l above a running program, or writes it to Output,
+// after the final frame of a program that is ending.
+func (r *Renderer) writeLine(l string) error {
+	r.mu.RLock()
+	state, done := r.state, r.done
+	if state == running {
+		r.p.Send(printMsg{text: l})
+	}
+	r.mu.RUnlock()
+	switch state {
+	case running:
+		return nil
+	case ending:
+		<-done
+	}
+	_, err := io.WriteString(r.opts.Output, l+"\n")
+	return err
 }
 
 // start runs the program. The caller holds mu.
@@ -143,17 +159,6 @@ func (r *Renderer) start() {
 			r.opts.Force()
 		}
 	}()
-}
-
-// waitEnded waits for a program that is drawing its final frame, so output
-// written straight to the terminal lands below it.
-func (r *Renderer) waitEnded() {
-	r.mu.RLock()
-	done := r.done
-	r.mu.RUnlock()
-	if done != nil {
-		<-done
-	}
 }
 
 // send delivers msg if the program is running, and reports whether it did.
