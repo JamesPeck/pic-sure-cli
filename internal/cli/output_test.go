@@ -90,7 +90,7 @@ func TestJSONFailureIsAResultLine(t *testing.T) {
 		code    int
 		message string
 	}{
-		{[]string{"up", "--json"}, 1, "not implemented (ticket 035)"},
+		{[]string{"--stack", "/nowhere", "up", "--json"}, 3, "no pic-sure stack found in /nowhere: it has no pic-sure.yaml; create one with pic-sure init"},
 		{[]string{"--json", "up", "extra-arg"}, 2, `unknown command "extra-arg" for "pic-sure up"`},
 		{[]string{"--json", "--plain", "up"}, 2, "if any flags in the group [json plain] are set none of the others can be; [json plain] were all set"},
 		{[]string{"up", "--bogus", "--json"}, 2, "unknown flag: --bogus"},
@@ -125,10 +125,10 @@ func jsonEqual(a, b any) bool {
 
 func TestPlainFailureLeavesStdoutAlone(t *testing.T) {
 	a, stdout, stderr := testApp(t)
-	if code := a.Run(context.Background(), []string{"up", "--plain"}); code != exitcode.CodeFailed {
+	if code := a.Run(context.Background(), []string{"--stack", "/nowhere", "up", "--plain"}); code != exitcode.CodePrecondition {
 		t.Errorf("exit = %d", code)
 	}
-	if stdout.Len() != 0 || stderr.String() != "pic-sure: not implemented (ticket 035)\n" {
+	if stdout.Len() != 0 || stderr.String() != "pic-sure: no pic-sure stack found in /nowhere: it has no pic-sure.yaml; create one with pic-sure init\n" {
 		t.Errorf("stdout %q, stderr %q", stdout, stderr)
 	}
 
@@ -293,11 +293,11 @@ func TestJSONSignalResult(t *testing.T) {
 
 func TestOutputIsPerRun(t *testing.T) {
 	a, stdout, _ := testApp(t)
-	if code := a.Run(context.Background(), []string{"up", "--json"}); code != exitcode.CodeFailed || stdout.Len() == 0 {
+	if code := a.Run(context.Background(), []string{"--stack", "/nowhere", "up", "--json"}); code != exitcode.CodePrecondition || stdout.Len() == 0 {
 		t.Fatalf("the --json run: exit = %d, stdout %q", code, stdout)
 	}
 	stdout.Reset()
-	if code := a.Run(context.Background(), []string{"up"}); code != exitcode.CodeFailed {
+	if code := a.Run(context.Background(), []string{"--stack", "/nowhere", "up"}); code != exitcode.CodePrecondition {
 		t.Errorf("exit = %d", code)
 	}
 	if stdout.Len() != 0 {

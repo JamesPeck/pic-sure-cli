@@ -41,7 +41,7 @@ func testApp(t *testing.T) (*App, *bytes.Buffer, *bytes.Buffer) {
 // specCommands is every command path in spec §5, with the ticket that
 // implements it ("" for commands that already work).
 var specCommands = map[string]string{
-	"init": "", "up": "035",
+	"init": "", "up": "",
 	"down": "", "restart": "", "ps": "", "logs": "", "compose": "",
 	"status": "", "doctor": "", "update": "036", "build": "", "migrate": "",
 	"config show": "", "config get": "", "config set": "", "config edit": "",
@@ -144,8 +144,8 @@ func TestGlobalFlags(t *testing.T) {
 		"--stack", "/srv/demo", "--yes", "--non-interactive", "--no-animations",
 		"--log-level", "debug", "--skip-step", "db", "up", "--skip-step", "seed", "--json",
 	})
-	if code != exitcode.CodeFailed {
-		t.Errorf("exit = %d, want %d", code, exitcode.CodeFailed)
+	if code != exitcode.CodePrecondition {
+		t.Errorf("exit = %d, want %d", code, exitcode.CodePrecondition)
 	}
 	want := GlobalOptions{
 		Stack: "/srv/demo", JSON: true, Yes: true, NonInteractive: true, NoAnimations: true,
@@ -181,7 +181,7 @@ func TestRunExitCodesAndErrors(t *testing.T) {
 		wantStdout string
 	}{
 		{args: []string{"version"}, code: 0, wantStdout: "pic-sure v2 (native)\nversion v2.0.0-test, commit abc1234, built 2026-10-06\n"},
-		{args: []string{"up"}, code: 1, stderr: "pic-sure: not implemented (ticket 035)\n"},
+		{args: []string{"--stack", "/nowhere", "up"}, code: 3, stderr: "pic-sure: no pic-sure stack found in /nowhere: it has no pic-sure.yaml; create one with pic-sure init\n"},
 		{args: []string{"frobnicate"}, code: 2, usageHint: "pic-sure"},
 		{args: []string{"up", "--frobnicate"}, code: 2, usageHint: "pic-sure up"},
 		{args: []string{"config"}, code: 2, usageHint: "pic-sure config"},
@@ -288,7 +288,7 @@ func TestSignalKeepsTheStepToResumeFrom(t *testing.T) {
 
 func TestRunIsRepeatable(t *testing.T) {
 	a, _, _ := testApp(t)
-	if code := a.Run(context.Background(), []string{"up"}); code != exitcode.CodeFailed {
+	if code := a.Run(context.Background(), []string{"--stack", "/nowhere", "up"}); code != exitcode.CodePrecondition {
 		t.Fatalf("up: exit = %d", code)
 	}
 	// The first run reached RunE; the second must still classify cobra's

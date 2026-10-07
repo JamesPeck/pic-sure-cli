@@ -269,6 +269,19 @@ it.
   with a lazy env over init's `*Secrets`, so `compose up` sees the token
   seed issued; `up` (035) can copy it. `startRunLog` registers
   `--admin-email` with the redactor before it logs the flags.
+- `up.go` (035): `up`. Usage problems first: a `--skip-step` not in
+  `ops.UpStepIDs(cfg)` is exit 2. Under the stack lock: the config with
+  `CheckFiles`; a stack without `initialized_at` or without secrets.yaml is
+  exit 3 pointing at `init DIR`; outside open mode a client secret that is
+  generated (`auth0_client_secret_generated`) or missing is exit 3 pointing
+  at `secrets rotate auth0-client-secret` (§9.11); then `EnsureSecrets`
+  with `OpenAuth` (fills a generated secret a newer pic-sure added, never
+  replaces one). `ops.StackNameInUse` refuses a name another project uses,
+  and a stack port that is busy but not published by the stack's own
+  containers is exit 3. Then `ops.UpSteps` with the cache and a lazy-env
+  Composer like init's, recording the `up` operation in state.json. The
+  version gate is openStack's: pending config migrations are exit 5 ("run
+  `pic-sure update`"); §6.2's up prompt isn't implemented.
 
 | File | Commands | Ticket |
 |---|---|---|
@@ -977,6 +990,21 @@ init, and the parts `up` and `update` reuse.
   that name is taken for it).
 - `Summary` is init's report (URL, Auth0 URLs, token expiry, next steps);
   `PeekState(dir)` reads state.json without opening the stack.
+
+**Up (035, `up.go`).** §9.2. `UpSteps(d, st, cfg, sec, state,
+ConvergeOptions)` is init's plan without `resolve` (the commits are
+recorded): `images`, `tls`, `truststore`, `render`, `ConvergeSteps`, then
+`restart`; `UpStepIDs(cfg)` lists the IDs. On a running, current stack
+every step but `render` and `start` is skipped and `compose up` recreates
+nothing. `restart` covers for the steps that don't restart their readers:
+when `tls` applies httpd, and when `truststore` applies psama, is restarted
+if it was running before up (one `compose ps`, taken before the first of
+those steps or render applies; a failed ps counts as running). Render's
+files under `render/files` are compared before and after; a service that
+was running and bind-mounts a changed file (or a directory holding one),
+per `compose config`, is restarted too. The step is done when nothing is
+marked, and a failed restart is a warning naming `pic-sure restart`,
+since a re-run would skip it.
 
 **Cache list and prune (057, `cache.go`).** §7.1's in-use rules.
 `CacheInventory(ctx, d, c, CacheOptions{Stacks})` returns a `CacheReport`:

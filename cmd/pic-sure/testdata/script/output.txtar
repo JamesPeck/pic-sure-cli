@@ -3,11 +3,11 @@
 
 # --json: stdout is only JSON lines, and a failure's last line is a result
 # carrying the exit code and the message. stderr still tells a human.
-exitcode 1 pic-sure up --json
+exitcode 3 pic-sure --stack /nowhere up --json
 jsonlines stdout
 stdout -count=1 '^\{'
-stdout '^\{"type":"result","ok":false,"error":\{"exit_code":1,"message":"not implemented \(ticket 035\)"\}\}$'
-stderr '^pic-sure: not implemented \(ticket 035\)$'
+stdout '^\{"type":"result","ok":false,"error":\{"exit_code":3,"message":"no pic-sure stack found in /nowhere: it has no pic-sure.yaml; create one with pic-sure init"\}\}$'
+stderr '^pic-sure: no pic-sure stack found in /nowhere: it has no pic-sure.yaml; create one with pic-sure init$'
 
 # A usage error gets a result too, even when cobra stops at a bad flag
 # before it reaches --json.
@@ -27,13 +27,13 @@ stdout '^\{"schema_version":2,"version":"[^"]+","commit":"[^"]+","date":"[^"]+"\
 ! stderr .
 
 # Plain (no terminal, or --plain): nothing on stdout for a failure.
-exitcode 1 pic-sure up
+exitcode 3 pic-sure --stack /nowhere up
 ! stdout .
-stderr '^pic-sure: not implemented \(ticket 035\)$'
-exitcode 1 pic-sure up --plain
+stderr '^pic-sure: no pic-sure stack found in /nowhere'
+exitcode 3 pic-sure --stack /nowhere up --plain
 ! stdout .
 
 # --json wins over CI, which only rules out the TUI.
 env CI=true
-exitcode 1 pic-sure up --json
+exitcode 3 pic-sure up --json
 jsonlines stdout

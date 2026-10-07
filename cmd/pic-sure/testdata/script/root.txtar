@@ -45,10 +45,10 @@ exec pic-sure help config set
 stdout 'pic-sure config set KEY VALUE'
 
 # The global flags parse anywhere on the command line.
-exitcode 1 pic-sure --stack /nowhere --yes --non-interactive --no-animations --log-level debug --skip-step db up --skip-step seed
-stderr 'not implemented \(ticket 035\)'
-exitcode 1 pic-sure up --json
-exitcode 1 pic-sure up --plain
+exitcode 3 pic-sure --stack /nowhere --yes --non-interactive --no-animations --log-level debug --skip-step db up --skip-step seed
+stderr 'no pic-sure stack found in /nowhere'
+exitcode 3 pic-sure up --json
+exitcode 3 pic-sure up --plain
 
 # --json and --plain are mutually exclusive.
 exitcode 2 pic-sure --json --plain up
