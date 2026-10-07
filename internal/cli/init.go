@@ -148,7 +148,8 @@ func (a *App) initStack(cmd *cobra.Command, args []string) (err error) {
 		// Another init finished the stack while this one waited for it.
 		return a.alreadyInitialized(cmd, dir)
 	}
-	if err := r.cache.RegisterStack(ctx, r.st.Dir, r.cfg.Name); err != nil {
+	if err := registerStack(ctx, r.cache, r.d.Sink, r.st, r.cfg.Name); err != nil {
+		_ = r.finishOperation(err)
 		return err
 	}
 
@@ -196,6 +197,11 @@ func (a *App) alreadyInitialized(cmd *cobra.Command, dir string) error {
 	sec, err := st.LoadSecrets()
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
+	}
+	// Register though nothing else runs: the stack may have been moved here.
+	sink := a.newDeps().Sink
+	if err := registerStackInDefaultCache(cmd, sink, st, cfg.Name); err != nil {
+		sink.Emit(events.Warning{Text: "couldn't register the stack in the cache, so a cache prune run elsewhere may remove its images: " + err.Error()})
 	}
 	summary := ops.Summary(st, cfg, sec)
 	summary.AlreadyInitialized = true

@@ -2,6 +2,7 @@ package cache_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/cache"
+	"github.com/JamesPeck/pic-sure-cli/internal/events"
 )
 
 func TestStackRegistry(t *testing.T) {
@@ -31,19 +33,16 @@ func TestStackRegistry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Unchanged: not rewritten.
 	if err := c.RegisterStack(ctx, dir, "demo"); err != nil {
 		t.Fatal(err)
 	}
 	if again, _ := os.Stat(path); !os.SameFile(info, again) {
 		t.Error("an unchanged entry was rewritten")
 	}
-	// Renamed: rewritten in place.
 	if err := c.RegisterStack(ctx, dir, "renamed"); err != nil {
 		t.Fatal(err)
 	}
 
-	// A broken entry and a dead write's temporary file.
 	if err := os.WriteFile(filepath.Join(c.Root(), "stacks", "broken"), []byte("{"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -84,5 +83,31 @@ func TestStackRegistry(t *testing.T) {
 	}
 	if got, _ := c.RegisteredStacks(); len(got) != 0 {
 		t.Errorf("registry %+v, want empty", got)
+	}
+}
+
+// Outside a step, a wait for a prune's lock is a warning.
+func TestRegisterStackWaitsForPrune(t *testing.T) {
+	ctx := context.Background()
+	pruner, c := twoCaches(t)
+	lock, err := pruner.LockPrune(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = lock.Unlock() }()
+	var rec events.Recorder
+	err = c.WithEvents(&rec, "").RegisterStack(ctx, filepath.Join(t.TempDir(), "stack"), "demo")
+	if !errors.Is(err, cache.ErrLockTimeout) {
+		t.Fatalf("RegisterStack under a prune: %v, want a lock timeout", err)
+	}
+	evs := rec.Events()
+	if len(evs) == 0 {
+		t.Fatal("no event while waiting")
+	}
+	if w, ok := evs[0].(events.Warning); !ok || !strings.Contains(w.Text, "waiting for the cache use lock") {
+		t.Errorf("event %#v, want a warning about the wait", evs[0])
+	}
+	if got, _ := c.RegisteredStacks(); len(got) != 0 {
+		t.Errorf("registered %+v while a prune held the cache", got)
 	}
 }

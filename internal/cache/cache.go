@@ -124,7 +124,7 @@ func Open(root string, opts Options) (*Cache, error) {
 
 // WithEvents returns a Cache that reports to sink as step: its progress
 // while fetching and unpacking, and its waits for locks other commands
-// hold.
+// hold. With an empty step, outside any step, they are warnings.
 func (c *Cache) WithEvents(sink events.Sink, step string) *Cache {
 	cc := *c
 	cc.sink, cc.step = sink, step
@@ -132,7 +132,11 @@ func (c *Cache) WithEvents(sink events.Sink, step string) *Cache {
 }
 
 func (c *Cache) progress(format string, args ...any) {
-	if c.sink != nil {
+	switch {
+	case c.sink == nil:
+	case c.step == "":
+		c.sink.Emit(events.Warning{Text: fmt.Sprintf(format, args...)})
+	default:
 		c.sink.Emit(events.Progress{ID: c.step, Text: fmt.Sprintf(format, args...)})
 	}
 }

@@ -72,6 +72,7 @@ type CacheStack struct {
 	state    *stack.State
 	labelled bool
 	key      string // its registry entry
+	broken   bool   // its registry entry can't be read
 }
 
 // CacheItem is one image or cache entry.
@@ -213,11 +214,12 @@ func readStacks(labels []map[string]string, registry []cache.RegisteredStack, ex
 		}
 	}
 	for _, dir := range extra {
-		add("", dir).labelled = true // the stack the command runs in
+		add("", dir)
 	}
 	for _, r := range registry {
-		if r.Dir == "" { // an unreadable entry
-			stacks = append(stacks, CacheStack{Registered: true, Gone: true, key: r.Key, Error: "unreadable registry entry " + r.Key})
+		if r.Dir == "" {
+			stacks = append(stacks, CacheStack{Registered: true, key: r.Key, broken: true,
+				Error: "can't read its registry entry " + registryEntry(r.Key)})
 			continue
 		}
 		s := add(r.Name, r.Dir)
@@ -225,13 +227,17 @@ func readStacks(labels []map[string]string, registry []cache.RegisteredStack, ex
 	}
 	for i := range stacks {
 		s := &stacks[i]
-		if s.Gone {
+		if s.broken {
 			continue
 		}
 		state, err := loadStackState(s.Dir)
-		if err != nil {
+		switch {
+		case err == nil:
+		case s.Registered && !s.labelled && errors.Is(err, stack.ErrNotFound):
+			s.Gone, s.Error = true, "no longer a stack"
+			continue
+		default:
 			s.Error = err.Error()
-			s.Gone = s.Registered && !s.labelled && errors.Is(err, stack.ErrNotFound)
 			continue
 		}
 		s.Readable, s.state = true, state
@@ -376,8 +382,9 @@ type PruneOptions struct {
 	CacheOptions
 	// DryRun reports what would go without removing anything.
 	DryRun bool
-	// Force also removes items an unreadable stack might use. In-use and
-	// recent items are never removed.
+	// Force also removes items an unreadable stack might use, and forgets
+	// registry entries that can't be read. In-use and recent items are
+	// never removed.
 	Force bool
 }
 
@@ -447,6 +454,9 @@ func prune(ctx context.Context, d *Deps, c *cache.Cache, sink events.Sink, opts 
 		if label == "" {
 			label = "a stack"
 		}
+		if s.broken {
+			label = "a registered stack"
+		}
 		action := "keeping every shared image and source tree it might use; --force removes them"
 		if opts.Force {
 			action = "--force: removing what it might use anyway"
@@ -493,18 +503,18 @@ func prune(ctx context.Context, d *Deps, c *cache.Cache, sink events.Sink, opts 
 		}
 	}
 	for _, s := range report.Stacks {
-		if !s.Gone {
+		if forget := s.Gone || s.broken && opts.Force; !forget {
 			continue
 		}
 		verb := "forgot"
 		if opts.DryRun {
 			verb = "would forget"
 		} else if err := c.ForgetStack(s.key); err != nil {
-			failed = append(failed, "the registry entry of "+orKey(s))
-			sink.Emit(events.Warning{ID: StepPrune, Text: "couldn't forget " + orKey(s) + ": " + err.Error()})
+			failed = append(failed, registryEntry(s.key))
+			sink.Emit(events.Warning{ID: StepPrune, Text: "couldn't remove " + registryEntry(s.key) + ": " + err.Error()})
 			continue
 		}
-		sink.Emit(events.Progress{ID: StepPrune, Text: fmt.Sprintf("%s the stack at %s: it is gone", verb, orKey(s))})
+		sink.Emit(events.Progress{ID: StepPrune, Text: verb + " " + ForgottenStack(s)})
 		report.Forgotten = append(report.Forgotten, s)
 	}
 
@@ -524,14 +534,19 @@ func prune(ctx context.Context, d *Deps, c *cache.Cache, sink events.Sink, opts 
 	return nil
 }
 
-// orKey names a gone stack by its directory, or by its registry entry when
-// that couldn't be read.
-func orKey(s CacheStack) string {
-	if s.Dir != "" {
-		return s.Dir
+// ForgottenStack describes a stack prune forgets: a gone one, or with
+// --force one whose registry entry can't be read.
+func ForgottenStack(s CacheStack) string {
+	if s.broken {
+		return "the unreadable " + registryEntry(s.key)
 	}
-	return "stacks/" + s.key
+	if s.Name == "" {
+		return "the gone stack at " + s.Dir
+	}
+	return fmt.Sprintf("the gone stack %s (%s)", s.Name, s.Dir)
 }
+
+func registryEntry(key string) string { return "registry entry stacks/" + key }
 
 func removeCacheItem(ctx context.Context, d *Deps, c *cache.Cache, it CacheItem) error {
 	if it.entry != nil {

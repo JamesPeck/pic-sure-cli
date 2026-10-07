@@ -76,7 +76,7 @@ func (a *App) build(cmd *cobra.Command, components []string, force bool) (err er
 	if err != nil {
 		return err
 	}
-	if err := c.RegisterStack(ctx, st.Dir, cfg.Name); err != nil {
+	if err := registerStack(ctx, c, d.Sink, st, cfg.Name); err != nil {
 		return err
 	}
 

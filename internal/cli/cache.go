@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/cache"
+	"github.com/JamesPeck/pic-sure-cli/internal/events"
 	"github.com/JamesPeck/pic-sure-cli/internal/ops"
 	"github.com/JamesPeck/pic-sure-cli/internal/stack"
 )
@@ -29,10 +31,13 @@ func newCacheCmd(a *App) *cobra.Command {
 contexts, downloads and temporary directories that nothing uses.
 
 An item is in use, and kept, if any container (running or stopped)
-references it, or if the state.json of a stack labelled on a container,
-volume or network, or of the stack you run this in, names it. If a labelled stack's
-directory can't be read (it was moved or deleted), prune keeps every shared
-image and source tree that stack might use, unless --force is given. Items
+references it, or if the state.json of a stack names it: one labelled on a
+container, volume or network, one registered in the cache (init, up and
+build register their stack), or the stack you run this in. If such a
+stack's directory can't be read (it was moved, or deleted while its
+containers or volumes remain), prune keeps every shared image and source
+tree that stack might use, unless --force is given. A registered stack
+whose directory is gone and that has nothing labelled left is forgotten. Items
 made or changed in the last hour are always kept, as a running command may
 not have recorded them yet. Images tagged by other tools, git clones and
 lock files are never removed. prune waits up to 5 s for a running build to
@@ -55,6 +60,26 @@ finish with the cache, and otherwise fails, removing nothing.`,
 		},
 		prune,
 	)
+}
+
+// registerStack records st in the cache's stack registry, so a prune run
+// elsewhere counts it while it has no container, volume or network.
+func registerStack(ctx context.Context, c *cache.Cache, sink events.Sink, st *stack.Stack, name string) error {
+	return c.WithEvents(sink, "").RegisterStack(ctx, st.Dir, name)
+}
+
+// registerStackInDefaultCache is registerStack for a command that hasn't
+// opened the cache.
+func registerStackInDefaultCache(cmd *cobra.Command, sink events.Sink, st *stack.Stack, name string) error {
+	root, err := cache.DefaultRoot()
+	if err != nil {
+		return err
+	}
+	c, err := cache.Open(root, cache.Options{Holder: cmd.CommandPath()})
+	if err != nil {
+		return err
+	}
+	return registerStack(cmd.Context(), c, sink, st, name)
 }
 
 // openCache opens the default cache and finds the stack the command runs
@@ -119,7 +144,7 @@ func writeCacheList(w io.Writer, r *ops.CacheReport) error {
 			case !s.Readable:
 				note = "UNREADABLE: " + s.Error
 			}
-			_, _ = fmt.Fprintf(tw, "  %s\t%s\t%s\n", orDash(s.Name), s.Dir, note)
+			_, _ = fmt.Fprintf(tw, "  %s\t%s\t%s\n", orDash(s.Name), orDash(s.Dir), note)
 		}
 		_ = tw.Flush()
 	}
@@ -152,11 +177,7 @@ func writePruneSummary(w io.Writer, r *ops.PruneReport) error {
 		fmt.Fprintf(&b, "%s %s %s (%s)\n", strings.ToLower(verb), it.Kind, it.Name, ops.FormatBytes(it.Size))
 	}
 	for _, s := range r.Forgotten {
-		where := s.Dir
-		if where == "" {
-			where = s.Error
-		}
-		fmt.Fprintf(&b, "%s the gone stack %s (%s)\n", forget, orDash(s.Name), where)
+		fmt.Fprintf(&b, "%s %s\n", forget, ops.ForgottenStack(s))
 	}
 	gone := map[string]bool{}
 	for _, it := range r.Removed {

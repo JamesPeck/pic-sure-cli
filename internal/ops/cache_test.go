@@ -617,3 +617,37 @@ func TestPruneCacheKeepsAMovedRegisteredStack(t *testing.T) {
 		t.Errorf("registry after prune: %+v, want the moved stack", reg)
 	}
 }
+
+// A registry entry that can't be read blocks what any stack might use, like
+// an unreadable stack, and only --force forgets it.
+func TestPruneCacheKeepsAnUnreadableRegistryEntry(t *testing.T) {
+	fx := newCacheFixture(t)
+	fx.daemon.containers = nil
+	entry := filepath.Join(fx.cache.Root(), "stacks", "broken")
+	if err := os.WriteFile(entry, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	d, _ := fx.deps(t, nil)
+	r, err := ops.PruneCache(context.Background(), d, fx.cache, ops.PruneOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := statuses(r.Items)["hms-dbmi/pic-sure-psama:cccccccccccc"]; st != ops.CacheUnknownStack {
+		t.Errorf("an image is %s, want unknown-stack", st)
+	}
+	if len(r.Forgotten) != 0 {
+		t.Errorf("forgot %+v without --force", r.Forgotten)
+	}
+	if _, err := os.Stat(entry); err != nil {
+		t.Fatalf("entry removed without --force: %v", err)
+	}
+	if r, err = ops.PruneCache(context.Background(), d, fx.cache, ops.PruneOptions{Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Forgotten) != 1 || ops.ForgottenStack(r.Forgotten[0]) != "the unreadable registry entry stacks/broken" {
+		t.Errorf("forgot %+v, want the broken entry", r.Forgotten)
+	}
+	if _, err := os.Stat(entry); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("entry still there with --force: %v", err)
+	}
+}

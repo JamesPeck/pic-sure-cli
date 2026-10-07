@@ -64,6 +64,9 @@ func (c *Cache) RegisterStack(ctx context.Context, dir, name string) error {
 	}
 	tmp := f.Name()
 	_, err = f.Write(data)
+	if err == nil {
+		err = f.Sync()
+	}
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
@@ -100,8 +103,7 @@ func (c *Cache) ForgetStack(key string) error {
 }
 
 // RegisteredStacks lists the registry, sorted by key. An entry that can't
-// be parsed, or names a relative directory, is returned with only its Key,
-// so the caller can forget it. Temporary files of a write in progress, or
+// be parsed, or names a relative directory, is returned with only its Key. Temporary files of a write in progress, or
 // of one that died, are skipped; Entries lists them.
 func (c *Cache) RegisteredStacks() ([]RegisteredStack, error) {
 	files, err := readDir(filepath.Join(c.root, stacksDir))

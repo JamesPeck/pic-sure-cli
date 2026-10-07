@@ -108,9 +108,17 @@ stderr 'port 443 is the other port''s default'
 ! exec pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --http-port 443 --auto-ports
 stderr 'step release failed|is in use'
 
-# On a stack init finished, it does nothing and exits 0.
+# On a stack init finished, it does nothing and exits 0. It still registers
+# the stack in the cache, which may have been moved here; when it can't, it
+# warns.
 exec pic-sure init done
 stdout 'Stack demo in .*done is already initialised; use `pic-sure up` or `pic-sure update`.'
+stderr 'couldn''t register the stack in the cache'
+env XDG_CACHE_HOME=$WORK/cache
+exec pic-sure init done
+! stderr 'register'
+exec grep -r '"name":"demo"' cache/pic-sure/stacks
+env XDG_CACHE_HOME=/nonexistent-pic-sure-init/cache
 exec pic-sure --json init done
 stdout '"already_initialized":true'
 stdout '"url":"https://localhost:8443/"'
