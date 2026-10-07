@@ -60,16 +60,16 @@ func (g *gzipReader) nextMember() (bool, error) {
 	case len(b) > 0 && b[0] == 0:
 		return false, skipZeroPadding(g.br)
 	case bytes.Equal(b, gzipMagic):
+		if err := g.z.Reset(g.br); err != nil {
+			return false, err
+		}
+		g.z.Multistream(false)
+		return true, nil
 	case err != nil && err != io.EOF:
 		return false, err
 	default:
 		return false, errTrailingData
 	}
-	if err := g.z.Reset(g.br); err != nil {
-		return false, err
-	}
-	g.z.Multistream(false)
-	return true, nil
 }
 
 func skipZeroPadding(br *bufio.Reader) error {

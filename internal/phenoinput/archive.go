@@ -43,10 +43,12 @@ func walk(ctx context.Context, file string, format Format, fn func(name string, 
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
-			// Read on to the end of the gzip stream, which verifies its
-			// checksum; the tar's end marker comes before it.
-			if _, err := io.Copy(io.Discard, r); err != nil {
-				return fmt.Errorf("reading %s: %w", file, err)
+			if format == TarGz {
+				// Read on to the end of the gzip stream, which verifies
+				// its checksum; the tar's end marker comes before it.
+				if _, err := io.Copy(io.Discard, r); err != nil {
+					return fmt.Errorf("reading %s: %w", file, err)
+				}
 			}
 			return nil
 		}
@@ -150,6 +152,10 @@ func writeCSV(dir string, r io.Reader) error {
 	w, err := os.OpenFile(filepath.Join(dir, csvName), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		return err
+	}
+	// Chmod, unlike the mode given to OpenFile, isn't narrowed by the umask.
+	if err := w.Chmod(0o644); err != nil {
+		return errors.Join(err, w.Close())
 	}
 	_, err = io.Copy(w, r)
 	return errors.Join(err, w.Close())

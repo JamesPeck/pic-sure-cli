@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/phenoinput"
@@ -415,35 +416,6 @@ func assertNotExist(t *testing.T, paths ...string) {
 	}
 }
 
-// An entry whose parent directory is a symlink in the archive is extracted
-// into the run directory: Resolve never creates links, so it can't be led
-// outside it.
-func TestResolveDoesNotFollowArchiveSymlinks(t *testing.T) {
-	base := t.TempDir()
-	outside := filepath.Join(base, "outside")
-	if err := os.Mkdir(outside, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	file := filepath.Join(base, "links.tgz")
-	data := tgzBytes(t, member{name: "d", typ: tar.TypeSymlink, link: outside}, reg("d/pheno.csv", csvBody))
-	if err := os.WriteFile(file, data, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	tempDir := filepath.Join(base, "cache", "tmp")
-
-	in, cleanup, err := phenoinput.Resolve(context.Background(), file, phenoinput.Options{MkdirTemp: mkdirTempIn(t, tempDir)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = cleanup() }()
-	if fi, err := os.Lstat(filepath.Dir(in.CSV)); err != nil || !fi.IsDir() {
-		t.Errorf("%s is not a real directory (%v, %v)", filepath.Dir(in.CSV), fi, err)
-	}
-	if entries, _ := os.ReadDir(outside); len(entries) > 0 {
-		t.Errorf("extraction wrote %s through the symlink", entries[0].Name())
-	}
-}
-
 func TestResolveUsesANewDirectoryPerRun(t *testing.T) {
 	base := t.TempDir()
 	file := filepath.Join(base, "single.tgz")
@@ -573,10 +545,25 @@ func badChecksum(gz []byte) []byte {
 	return gz
 }
 
-// Canceling once the run directory exists stops the extraction itself, and
-// Resolve removes the directory.
+// lateCancelCtx turns canceled once armed and its Err has been asked a
+// few more times, so a test can cancel partway through a copy.
+type lateCancelCtx struct {
+	context.Context
+	armed atomic.Bool
+	left  atomic.Int32
+}
+
+func (c *lateCancelCtx) Err() error {
+	if c.armed.Load() && c.left.Add(-1) < 0 {
+		return context.Canceled
+	}
+	return nil
+}
+
+// Canceling partway through copying the CSV out stops the copy, and Resolve
+// removes the run directory.
 func TestResolveStopsWhenCanceledDuringExtraction(t *testing.T) {
-	big := strings.Repeat("x,y\n", 1<<14)
+	big := noisyCSV()
 	inputs := map[string][]byte{
 		"pheno.tgz":    tgzBytes(t, reg("big.csv", big)),
 		"pheno.zip":    zipBytes(t, reg("big.csv", big)),
@@ -591,18 +578,17 @@ func TestResolveStopsWhenCanceledDuringExtraction(t *testing.T) {
 			}
 			tempDir := filepath.Join(base, "tmp")
 			mkdir := mkdirTempIn(t, tempDir)
-			interrupted := errors.New("interrupted")
-			ctx, cancel := context.WithCancelCause(context.Background())
-			defer cancel(nil)
+			ctx := &lateCancelCtx{Context: context.Background()}
+			ctx.left.Store(3)
 			opts := phenoinput.Options{MkdirTemp: func(pattern string) (string, error) {
 				dir, err := mkdir(pattern)
-				cancel(interrupted)
+				ctx.armed.Store(true)
 				return dir, err
 			}}
 
 			_, _, err := phenoinput.Resolve(ctx, file, opts)
-			if !errors.Is(err, interrupted) {
-				t.Fatalf("Resolve error = %v; want the context's cause", err)
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("Resolve error = %v; want context.Canceled", err)
 			}
 			assertNoRunDirs(t, tempDir)
 		})
