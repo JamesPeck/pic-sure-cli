@@ -335,8 +335,8 @@ the manifest.
   for a new stack, and saves if anything changed. It never replaces a
   secret: a supplied value that differs from the stored one is exit 2
   (`secrets rotate` changes secrets). With `RemoteDB` and no remote root
-  password it is exit 3. A key file that is malformed, or missing once
-  secrets.yaml exists, is an error, never replaced. Formats follow the
+  password it is exit 3, as is a missing key file once secrets.yaml
+  exists. A malformed key file is an error too. Neither is ever replaced. Formats follow the
   bash: 24 `[A-Za-z0-9]` characters for DB passwords, 32-byte hex for the
   query, application and logging tokens, 16-byte hex for the obfuscation
   salt, lowercase v4 UUIDs, and 32 lowercase hex characters for the HPDS
@@ -344,7 +344,8 @@ the manifest.
   `jwt.Introspection` and saves it with `SaveSecrets`.
 - `LoadSecrets`/`SaveSecrets` read and write secrets.yaml (`LoadSecrets`
   wraps `fs.ErrNotExist` before there is one, ignores unknown keys, and
-  never quotes a value in its errors). `LoadHPDSKey` reads the key and
+  reports a malformed file by line only, since yaml's messages can quote
+  secrets). `LoadHPDSKey` reads the key and
   checks it is 32 hex characters.
 - **User-supplied secrets** (Auth0 client secret, remote DB root password,
   email password) come from stdin or a file, never a flag value.

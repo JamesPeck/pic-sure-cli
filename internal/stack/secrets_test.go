@@ -231,7 +231,7 @@ func TestEnsureSecretsNeverReplacesTheKey(t *testing.T) {
 	if err := os.Remove(s.Path(HPDSKeyFile)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.EnsureSecrets(seeded(3), EnsureOptions{}); err == nil || !strings.Contains(err.Error(), "is missing") {
+	if _, err := s.EnsureSecrets(seeded(3), EnsureOptions{}); exitcode.FromError(err) != exitcode.CodePrecondition || !strings.Contains(err.Error(), "is missing") {
 		t.Errorf("lost key file: err = %v", err)
 	}
 	wantNotExist(t, s.Path(HPDSKeyFile))
@@ -280,19 +280,20 @@ func TestLoadSecrets(t *testing.T) {
 		t.Errorf("with an unknown key: %v", err)
 	}
 
-	// Errors name the file but never quote a value.
-	for _, bad := range []string{
-		"db_root_password: [a, b]\n",
-		"auth0_client_secret: !!int synthetic-client-secret\n",
-		"introspection_token_expiry: synthetic-client-secret\n",
-		"auth0_client_secret: synthetic-client-secret\n  bad: [\n",
+	// Errors name the file and the line, but never quote the file's text.
+	for _, c := range []struct{ bad, line string }{
+		{"db_root_password: [a, b]\n", "(line 1)"},
+		{"x: 1\nauth0_client_secret: !!int synthetic-client-secret\n", ""},
+		{"introspection_token_expiry: synthetic-client-secret\n", ""},
+		{"auth0_client_secret: synthetic-client-secret\n  bad: [\n", "(line 2)"},
+		{"email_password: *synthetic-client-secret\n", ""},
 	} {
-		if err := s.WriteFile(SecretsFile, []byte(bad), 0o600); err != nil {
+		if err := s.WriteFile(SecretsFile, []byte(c.bad), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		_, err := s.LoadSecrets()
-		if err == nil || !strings.Contains(err.Error(), s.Path(SecretsFile)) || strings.Contains(err.Error(), "synthetic") {
-			t.Errorf("malformed %q: err = %v", bad, err)
+		if err == nil || !strings.Contains(err.Error(), s.Path(SecretsFile)) || !strings.Contains(err.Error(), c.line) || strings.Contains(err.Error(), "synthetic") {
+			t.Errorf("malformed %q: err = %v", c.bad, err)
 		}
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"regexp"
 	"strings"
 	"time"
 
@@ -94,18 +95,24 @@ func (s *Stack) LoadSecrets() (*Secrets, error) {
 	if err != nil {
 		return nil, err
 	}
-	// yaml's syntax errors carry only a position, but its decode errors
-	// quote the value, which here is a secret.
-	var doc yaml.Node
-	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return nil, fmt.Errorf("reading %s: %w", s.Path(SecretsFile), err)
-	}
 	var sec Secrets
-	if err := doc.Decode(&sec); err != nil {
-		return nil, fmt.Errorf("reading %s: a value isn't a string, or the token expiry isn't a timestamp", s.Path(SecretsFile))
+	if err := yaml.Unmarshal(data, &sec); err != nil {
+		return nil, fmt.Errorf("reading %s: not a valid secrets file%s", s.Path(SecretsFile), yamlErrorLine(err))
 	}
 	registerSecrets(sec.values()...)
 	return &sec, nil
+}
+
+var yamlErrorLineRE = regexp.MustCompile(`^yaml: (?:unmarshal errors:\n\s*)?(line \d+):`)
+
+// yamlErrorLine returns " (line N)" for a yaml error that starts with a
+// line number, or "". The rest of yaml's message isn't used: it can quote
+// the file's text, which here is secrets.
+func yamlErrorLine(err error) string {
+	if m := yamlErrorLineRE.FindStringSubmatch(err.Error()); m != nil {
+		return " (" + m[1] + ")"
+	}
+	return ""
 }
 
 // SaveSecrets registers sec's secrets with the log redactor, then
@@ -253,7 +260,7 @@ func (s *Stack) ensureHPDSKey(rnd io.Reader, mustExist bool) error {
 	case !errors.Is(err, fs.ErrNotExist):
 		return err
 	case mustExist:
-		return fmt.Errorf("%s is missing, but the stack's secrets were made with it; restore it from a backup, or replace it with pic-sure secrets rotate hpds-key", s.Path(HPDSKeyFile))
+		return exitcode.Precondition("%s is missing, but the stack's secrets were made with it; restore it from a backup, or replace it with pic-sure secrets rotate hpds-key", s.Path(HPDSKeyFile))
 	}
 	key, err := hpdsKey(rnd)
 	if err != nil {
