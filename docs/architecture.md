@@ -1490,8 +1490,8 @@ and its `Force` exits 130 at once: while the TUI runs, the terminal is in raw mo
 not SIGINT, and the run still exits 130 with the step to resume named.
 SIGTERM still cancels through `main`. The renderer draws on stderr, so
 stdout keeps only the command's summary; `finish` and `printReport` end it
-before writing that, and so does `config edit` before starting the editor
-(a `--wait-lock` wait can start it). The run log's stderr records go through `Write`
+before writing that, and so do `config edit` and `compose` before handing
+the terminal to the editor or compose (a `--wait-lock` wait can start it). The run log's stderr records go through `Write`
 (`logStderr`), and `openRunLog` keeps the file's path for the failure
 line. The hidden `smoke-steps` command (`smokesteps.go`, build tag
 `smoketest`, registered through `extraCommands`) emits steps without

@@ -217,6 +217,9 @@ compose's own, so --json is refused.`,
 			if err != nil {
 				return err
 			}
+			// Waiting for the lock may have started the TUI; compose needs
+			// the terminal.
+			a.output().endTUI()
 			code, err := c.Passthrough(cmd.Context(), args, a.Stdin, a.Stdout, a.Stderr)
 			if cause := context.Cause(cmd.Context()); cause != nil {
 				// The signal decides the exit code; compose got it too.
