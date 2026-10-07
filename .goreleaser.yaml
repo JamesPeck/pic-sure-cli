@@ -41,15 +41,18 @@ sboms:
     disable: "{{ .IsSnapshot }}"
 
 # Keyless signature over checksums.txt, as a Sigstore bundle
-# (checksums.txt.sigstore.json). The certificate names the release workflow
-# and tag, which is what install.sh checks.
+# (checksums.txt.sigstore.json). install.sh and self-update pin the
+# certificate to .github/workflows/release.yml on the release's tag, so
+# renaming the workflow breaks verification of new releases.
 signs:
   - cmd: sh
     artifacts: checksum
     signature: "${artifact}.sigstore.json"
     # A snapshot (a local dry run) must never sign: keyless signing opens a
     # browser login and publishes to the public Rekor log. GoReleaser can't
-    # skip one sign config by template, so the command itself does.
+    # skip one sign config by template, so the command itself does. The
+    # snapshot then writes no bundle, which GoReleaser v2 only warns about
+    # (v3 makes it an error).
     # GoReleaser expands ${artifact} and ${signature} (and any other $NAME)
     # inside the script before sh sees it.
     args:

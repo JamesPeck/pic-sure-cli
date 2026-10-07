@@ -46,14 +46,9 @@ chmod +x "$WORK/cosign/cosign"
 WWW="$WORK/www"
 REL="$WWW/gh/$REPO/releases/download"
 mkdir -p "$WWW/api/repos/$REPO"
+# Compact, like the API, with nested objects; v2.11.0 is marked prerelease.
 cat >"$WWW/api/repos/$REPO/releases" <<'EOF'
-[
-  {"tag_name": "v3.0.0"},
-  {"tag_name": "v2.10.0-rc.1"},
-  {"tag_name": "v2.9.1"},
-  {"tag_name": "v2.10.0"},
-  {"tag_name": "v1.4.0"}
-]
+[{"author":{"login":"x"},"tag_name":"v3.0.0","draft":false,"prerelease":false,"assets":[{"uploader":{"login":"x"}}]},{"tag_name":"v2.11.0","prerelease":true,"assets":[]},{"tag_name":"v2.10.0-rc.1","prerelease":true},{"tag_name":"v2.9.1","prerelease":false},{"tag_name":"v2.10.0","prerelease":false},{"tag_name":"v1.4.0","prerelease":false}]
 EOF
 
 # release TAG: a release holding the snapshot's archive, checksums and a
@@ -65,6 +60,7 @@ release() {
 }
 release "$TAG"
 release v2.10.0
+release v2.11.0
 
 port="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
 python3 -m http.server "$port" --bind 127.0.0.1 --directory "$WWW" >"$WORK/server.log" 2>&1 &
@@ -104,12 +100,14 @@ installed() { [ -x "$BIN/pic-sure" ] && "$BIN/pic-sure" version >/dev/null; }
 said() { grep -qF -- "$1" "$WORK/out"; }
 
 identity="https://github.com/$REPO/.github/workflows/release.yml@refs/tags/$TAG"
+# cosign's arguments, with absolute paths cut to their base names.
+want_cosign="verify-blob --bundle checksums.txt.sigstore.json --certificate-identity $identity --certificate-oidc-issuer https://token.actions.githubusercontent.com checksums.txt "
 
 run verified --cosign --version "$TAG"
 if [ "$status" -ne 0 ] || ! installed; then
   flunk verified "exit $status, or no working binary"
-elif ! grep -qxF "$identity" "$COSIGN_LOG" || ! grep -qxF https://token.actions.githubusercontent.com "$COSIGN_LOG"; then
-  flunk verified "cosign wasn't asked for the release workflow's identity: $(tr '\n' ' ' <"$COSIGN_LOG")"
+elif [ "$(awk '/^\// { n = split($0, p, "/"); $0 = p[n] } { printf "%s ", $0 }' "$COSIGN_LOG")" != "$want_cosign" ]; then
+  flunk verified "cosign wasn't asked to verify checksums.txt as the release workflow: $(tr '\n' ' ' <"$COSIGN_LOG")"
 elif ! said "cosign verify-blob --bundle checksums.txt.sigstore.json"; then
   flunk verified "no manual verification commands"
 else
@@ -144,7 +142,7 @@ fi
 release v2.0.1
 rm "$REL/v2.0.1/checksums.txt.sigstore.json"
 run unsigned --version v2.0.1
-if [ "$status" -eq 0 ] || [ -e "$BIN/pic-sure" ] || ! said "has no checksums.txt.sigstore.json"; then
+if [ "$status" -eq 0 ] || [ -e "$BIN/pic-sure" ] || ! said "could not download checksums.txt.sigstore.json"; then
   flunk unsigned "exit $status; a v2 release without a bundle must be refused, cosign or not"
 else
   pass unsigned

@@ -79,7 +79,6 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-# Tags carry a leading v; accept "2.0.0" as well.
 case "$VERSION" in
   [0-9]*) VERSION="v$VERSION" ;;
 esac
@@ -120,12 +119,19 @@ trap 'rm -rf "$TMP"' EXIT
 # --- choose the release ------------------------------------------------------
 # Without --version, install the newest stable v2.x.y. GitHub's "latest"
 # release could belong to another major line, so pick from the list.
+# tag_name precedes prerelease in each release object, and nested objects
+# (author, assets) have neither.
 if [ -z "$VERSION" ]; then
   say "Finding the newest v2 release of $REPO..."
-  fetch "$API_URL/repos/$REPO/releases?per_page=100" "$TMP/releases.json" \
-    || fail "could not list releases of $REPO; pass --version vX.Y.Z to choose one"
-  VERSION="$(grep -o '"tag_name": *"[^"]*"' "$TMP/releases.json" \
-    | sed 's/.*"\([^"]*\)"$/\1/' \
+  : >"$TMP/releases.json"
+  for page in 1 2 3 4 5 6 7 8 9 10; do
+    fetch "$API_URL/repos/$REPO/releases?per_page=100&page=$page" "$TMP/page.json" \
+      || fail "could not list releases of $REPO; pass --version vX.Y.Z to choose one"
+    cat "$TMP/page.json" >>"$TMP/releases.json"
+    [ "$(grep -o '"tag_name":' "$TMP/page.json" | wc -l)" -ge 100 ] || break
+  done
+  VERSION="$(grep -oE '"(tag_name|prerelease)": *("[^"]*"|true|false)' "$TMP/releases.json" \
+    | awk -F'"' '$2 == "tag_name" { tag = $4 } $2 == "prerelease" && $3 ~ /false/ { print tag }' \
     | grep -E '^v2\.[0-9]+\.[0-9]+$' \
     | sort -t. -k2,2n -k3,3n \
     | tail -n 1 || true)"
@@ -144,7 +150,7 @@ fetch "$BASE_URL/$ASSET" "$TMP/$ASSET" \
 fetch "$BASE_URL/$CHECKSUMS" "$TMP/$CHECKSUMS" \
   || fail "download failed: $BASE_URL/$CHECKSUMS"
 have_bundle=false
-if fetch "$BASE_URL/$BUNDLE" "$TMP/$BUNDLE" 2>/dev/null; then
+if fetch "$BASE_URL/$BUNDLE" "$TMP/$BUNDLE" 2>"$TMP/bundle.err"; then
   have_bundle=true
 fi
 
@@ -153,7 +159,10 @@ fi
 # even when cosign isn't here to check it (self-update does the same).
 if [ "$have_bundle" = false ]; then
   case "$VERSION" in
-    v2.*) fail "release $VERSION has no $BUNDLE, but every v2 release is signed — aborting" ;;
+    v2.*)
+      cat "$TMP/bundle.err" >&2
+      fail "could not download $BUNDLE for $VERSION, and every v2 release is signed — aborting"
+      ;;
     *) say "Release $VERSION has no $BUNDLE; verifying the checksum only." ;;
   esac
 elif command -v cosign >/dev/null 2>&1; then

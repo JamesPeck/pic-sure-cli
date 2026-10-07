@@ -34,14 +34,18 @@ command reference applies to both.
 **From a release** (assets are named `pic-sure_<os>_<arch>.tar.gz`):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/JamesPeck/pic-sure-cli/main/install.sh | bash
-# or choose the destination:
+curl -fsSL https://raw.githubusercontent.com/JamesPeck/pic-sure-cli/v2/install.sh | bash
+# or choose the destination or version:
 #   install.sh --bin-dir /usr/local/bin     (default: ~/.local/bin)
+#   install.sh --version v2.0.0             (default: the newest v2.x.y)
 ```
 
-The installer detects `uname -s`/`-m`, downloads the latest release plus
+The installer detects `uname -s`/`-m`, downloads the release plus
 `checksums.txt`, and verifies the SHA-256 by explicit comparison
-(`sha256sum`, falling back to `shasum -a 256`).
+(`sha256sum`, falling back to `shasum -a 256`). It refuses a v2 release
+without `checksums.txt.sigstore.json`, checks that cosign bundle against the
+release workflow's identity when cosign is installed (and warns when it
+isn't), and prints the commands to verify the release by hand.
 
 **From source** (Go 1.26+; `GOTOOLCHAIN=auto` fetches it if needed):
 
