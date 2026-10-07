@@ -177,30 +177,7 @@ func RenderStep(d *Deps, st *stack.Stack, cfg *stack.Config, state *stack.State,
 			if err != nil {
 				return err
 			}
-			sources := map[string]string{}
-			for _, comp := range []string{catalog.PicSure, catalog.Migrations} {
-				if componentSource(cfg, comp) != "" {
-					continue
-				}
-				commit := fresh.Components[comp].Commit
-				if commit == "" {
-					return exitcode.Precondition("state.json records no commit of %s; run pic-sure build", comp)
-				}
-				if sources[comp], err = opts.Cache.SourceDir(comp, commit); err != nil {
-					return err
-				}
-			}
-			certs, err := CustomCerts(st, cfg)
-			if err != nil {
-				return err
-			}
-			files, err := render.Render(render.Input{
-				StackDir:    st.Dir,
-				Config:      cfg,
-				State:       fresh,
-				Sources:     sources,
-				CustomTrust: len(certs) > 0,
-			})
+			files, err := renderStack(st, cfg, fresh, opts.Cache)
 			if err != nil {
 				return err
 			}
@@ -216,6 +193,36 @@ func RenderStep(d *Deps, st *stack.Stack, cfg *stack.Config, state *stack.State,
 			return nil
 		},
 	}
+}
+
+// renderStack renders the stack from cfg and the commits and tags state
+// records, without writing anything.
+func renderStack(st *stack.Stack, cfg *stack.Config, state *stack.State, c *cache.Cache) ([]render.File, error) {
+	sources := map[string]string{}
+	for _, comp := range []string{catalog.PicSure, catalog.Migrations} {
+		if componentSource(cfg, comp) != "" {
+			continue
+		}
+		commit := state.Components[comp].Commit
+		if commit == "" {
+			return nil, exitcode.Precondition("state.json records no commit of %s; run pic-sure build", comp)
+		}
+		var err error
+		if sources[comp], err = c.SourceDir(comp, commit); err != nil {
+			return nil, err
+		}
+	}
+	certs, err := CustomCerts(st, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return render.Render(render.Input{
+		StackDir:    st.Dir,
+		Config:      cfg,
+		State:       state,
+		Sources:     sources,
+		CustomTrust: len(certs) > 0,
+	})
 }
 
 // StartStep is §9.1 step 12, ID "start": `compose up -d --wait` for the

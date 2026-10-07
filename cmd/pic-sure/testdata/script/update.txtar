@@ -1,7 +1,75 @@
-# Not implemented yet: exit 1, naming ticket 036.
-exitcode 1 pic-sure update
-stderr '^pic-sure: not implemented \(ticket 036\)$'
-! stdout .
-exitcode 1 pic-sure update --dry-run --release-commit 0123abc --no-build --self-update --ignore-cli-version
-stderr '^pic-sure: not implemented \(ticket 036\)$'
-! stdout .
+# update's refusals, before it changes anything. The plan and the
+# converge are covered by the ops tests and the real runs.
+env XDG_CACHE_HOME=$WORK/cache
+
+# No stack here or above: exit 3.
+exitcode 3 pic-sure update
+stderr 'no pic-sure stack found'
+
+# Flags that contradict each other are exit 2, before docker or git runs.
+exitcode 2 pic-sure --stack stack update --no-build --release-commit 0123abc
+stderr '--release-commit can''t be used with --no-build'
+exitcode 2 pic-sure --stack stack update --dry-run --skip-step seed
+stderr '--skip-step can''t be used with --dry-run'
+
+# A --skip-step update doesn't have is exit 2, listing the ones it has.
+exitcode 2 pic-sure --stack stack update --skip-step plan
+stderr '--skip-step plan: update has no such step; it can skip config, resolve, images, tls, truststore, render, db, migrate, seed, hpds-key, restart, start$'
+! exists docker.log
+
+# Shared HPDS data needs ticket 051.
+exitcode 2 pic-sure --stack shared update
+stderr 'update doesn''t support shared HPDS data yet; set hpds.data to local'
+
+# A stack init hasn't finished is exit 3, pointing at init, even for a
+# dry run.
+exitcode 3 pic-sure --stack partial update
+stderr 'isn''t initialised; run `pic-sure init .*partial` to finish it'
+exitcode 3 pic-sure --stack nosecrets update --dry-run
+stderr 'has no .pic-sure/secrets.yaml; run `pic-sure init .*nosecrets` to finish it'
+
+# A stack that left open mode can't keep the client secret generated for
+# it: update points at secrets rotate, and changes nothing.
+cp left-open/.pic-sure/secrets.yaml secrets-before.yaml
+exitcode 3 pic-sure --stack left-open update
+stderr 'auth.mode is required, but the stack''s Auth0 client secret is a random one made for open mode; pipe the Auth0 application''s client secret to `pic-sure secrets rotate auth0-client-secret`'
+exitcode 3 pic-sure --stack left-open update --dry-run
+stderr 'random one made for open mode'
+cmp left-open/.pic-sure/secrets.yaml secrets-before.yaml
+! exists docker.log
+
+-- stack/pic-sure.yaml --
+schema: 1
+name: demo
+auth: {mode: open, admin_email: admin@example.com}
+-- stack/.pic-sure/state.json --
+{"cli_version": "dev", "schema_version": 1, "initialized_at": "2026-10-07T12:00:00Z"}
+-- partial/pic-sure.yaml --
+schema: 1
+name: partial
+auth: {mode: open, admin_email: admin@example.com}
+-- partial/.pic-sure/state.json --
+{"cli_version": "dev", "schema_version": 1}
+-- nosecrets/pic-sure.yaml --
+schema: 1
+name: nosecrets
+auth: {mode: open, admin_email: admin@example.com}
+-- nosecrets/.pic-sure/state.json --
+{"cli_version": "dev", "schema_version": 1, "initialized_at": "2026-10-07T12:00:00Z"}
+-- left-open/pic-sure.yaml --
+schema: 1
+name: left-open
+auth: {mode: required, admin_email: admin@example.com, auth0: {tenant: example, client_id: abc}}
+-- left-open/.pic-sure/state.json --
+{"cli_version": "dev", "schema_version": 1, "initialized_at": "2026-10-07T12:00:00Z"}
+-- left-open/.pic-sure/secrets.yaml --
+db_root_password: rootpw
+auth0_client_secret: generated-0123456789abcdef0123456789abcdef
+auth0_client_secret_generated: true
+-- shared/pic-sure.yaml --
+schema: 1
+name: shared
+auth: {mode: open, admin_email: admin@example.com}
+hpds: {data: shared, shared_name: demo-set}
+-- shared/.pic-sure/state.json --
+{"cli_version": "dev", "schema_version": 1, "initialized_at": "2026-10-07T12:00:00Z"}

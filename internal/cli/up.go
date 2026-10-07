@@ -152,26 +152,38 @@ func upSecrets(d *ops.Deps, st *stack.Stack, cfg *stack.Config) (*stack.Secrets,
 	if err != nil {
 		return nil, err
 	}
-	open := cfg.Auth.Mode == stack.AuthOpen
-	rotate := "pipe the Auth0 application's client secret to `pic-sure secrets rotate auth0-client-secret`"
-	switch {
-	case !open && sec.Auth0ClientSecretGenerated:
-		return nil, exitcode.Precondition("auth.mode is %s, but the stack's Auth0 client secret is a random one made for open mode; %s", cfg.Auth.Mode, rotate)
-	case !open && sec.Auth0ClientSecret == "":
-		return nil, exitcode.Precondition("auth.mode is %s, but the stack has no Auth0 client secret; %s", cfg.Auth.Mode, rotate)
+	if err := refuseClientSecret(cfg, sec); err != nil {
+		return nil, err
 	}
 	sec, err = st.EnsureSecrets(d.Rand, stack.EnsureOptions{
 		RemoteDB: cfg.DB.Mode == stack.DBRemote,
-		OpenAuth: open,
+		OpenAuth: cfg.Auth.Mode == stack.AuthOpen,
 	})
 	if err != nil {
 		return nil, err
 	}
 	if len(sec.Auth0ClientSecret) < jwt.MinSecretLen {
 		return nil, exitcode.Precondition("the stack's Auth0 client secret is shorter than the %d bytes PSAMA needs; %s",
-			jwt.MinSecretLen, rotate)
+			jwt.MinSecretLen, rotateClientSecret)
 	}
 	return sec, nil
+}
+
+const rotateClientSecret = "pipe the Auth0 application's client secret to `pic-sure secrets rotate auth0-client-secret`"
+
+// refuseClientSecret refuses, outside open mode, a client secret that is
+// missing or was generated for open mode.
+func refuseClientSecret(cfg *stack.Config, sec *stack.Secrets) error {
+	if cfg.Auth.Mode == stack.AuthOpen {
+		return nil
+	}
+	switch {
+	case sec.Auth0ClientSecretGenerated:
+		return exitcode.Precondition("auth.mode is %s, but the stack's Auth0 client secret is a random one made for open mode; %s", cfg.Auth.Mode, rotateClientSecret)
+	case sec.Auth0ClientSecret == "":
+		return exitcode.Precondition("auth.mode is %s, but the stack has no Auth0 client secret; %s", cfg.Auth.Mode, rotateClientSecret)
+	}
+	return nil
 }
 
 // checkUpPorts makes sure the stack's HTTP and HTTPS ports are free, or

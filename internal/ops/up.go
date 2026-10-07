@@ -46,11 +46,17 @@ func UpStepIDs(cfg *stack.Config) []string {
 // recorded in state.json's PendingRestarts, and the restart step restarts
 // those that are running before start waits for the stack to be healthy.
 func UpSteps(d *Deps, st *stack.Stack, cfg *stack.Config, sec *stack.Secrets, state *stack.State, opts ConvergeOptions) []steps.Step {
+	return upSteps(d, st, cfg, sec, state, opts, ImagesStep(d, st, cfg, state, ImagesOptions{Cache: opts.Cache}))
+}
+
+// upSteps are UpSteps with images as the image step, which update
+// configures differently.
+func upSteps(d *Deps, st *stack.Stack, cfg *stack.Config, sec *stack.Secrets, state *stack.State, opts ConvergeOptions, images steps.Step) []steps.Step {
 	r := &upRestarts{d: d, st: st, cfg: cfg, opts: opts}
 	converge := ConvergeSteps(d, st, cfg, sec, opts)
 	last := len(converge) - 1
 	list := []steps.Step{
-		ImagesStep(d, st, cfg, state, ImagesOptions{Cache: opts.Cache}),
+		images,
 		r.restartAfter(TLSStep(d, st, cfg), httpd),
 		r.restartAfter(StackTruststoreStep(d, st, cfg, state), psama),
 		r.watchRender(RenderStep(d, st, cfg, state, opts)),
