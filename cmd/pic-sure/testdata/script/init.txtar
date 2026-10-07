@@ -194,6 +194,11 @@ exitcode 2 pic-sure init staged --set 'hpds.java_opts=-Xms1g -Xmx2g'
 stderr 'config set hpds.java_opts ''-Xms1g -Xmx2g'''
 exitcode 2 pic-sure init staged --source frontend=src
 stderr '--source frontend=src: .*already has components.frontend.source "", .*config set components.frontend.source .*src'
+exitcode 2 pic-sure init staged --admin-email new@example.com
+stderr 'already has auth.admin_email \[REDACTED\]'
+! stderr 'admin@example.com'
+exitcode 2 pic-sure init staged --hpds-data shared:demo
+stderr 'init doesn''t support shared HPDS data yet'
 exitcode 2 pic-sure init staged --name other
 stderr '--name other: .*staged.pic-sure.yaml already has name demo, and a stack''s name can''t change'
 exitcode 2 pic-sure init staged --http-port 8083 --set network.http_port=9000

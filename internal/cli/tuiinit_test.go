@@ -89,6 +89,25 @@ func TestInitFromTUIOnAFinishedStack(t *testing.T) {
 	}
 }
 
+// "Resume setup" runs init on an unfinished stack's own config, which
+// isn't a conflict: it gets as far as the preconditions.
+func TestInitFromTUIResumesAnUnfinishedStack(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	dir := t.TempDir()
+	data, err := wizardDoc(t).Bytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, stack.ConfigFile), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a, _, _ := testApp(t)
+	_, err = a.initFromTUI(context.Background(), tui.InitRequest{Dir: dir, Sink: &events.Recorder{}})
+	if err == nil || !strings.Contains(err.Error(), "the host isn't ready") {
+		t.Fatalf("err = %v, want the preconditions' refusal", err)
+	}
+}
+
 func TestLogRecordsBecomeLogEvents(t *testing.T) {
 	var rec events.Recorder
 	a, _, stderr := testApp(t)

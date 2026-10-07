@@ -57,8 +57,9 @@ given are 80 and 443, which must be free; --auto-ports takes the first free
 pair from 8080/8443 instead.
 
 A DIR that already has a pic-sure.yaml is resumed: its config is used as it
-is, a config flag, --source or --set that would change it is an error (use
-pic-sure config set), and the steps already done are skipped. On a stack init has finished it only registers the stack in
+is, a config flag, --source or --set that would change it is an error
+(change it with pic-sure config set), and the steps already done are
+skipped. On a stack init has finished it only registers the stack in
 the cache (see cache prune).`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: a.initStack,
@@ -269,6 +270,8 @@ func (r *initRun) readConfig() error {
 		if r.cfg, err = r.doc.Config(); err != nil {
 			return configError(err)
 		}
+		// A conflict's message quotes the stored value.
+		log.RegisterSecrets(r.cfg.Auth.AdminEmail)
 		if err := r.checkResumed(data, given); err != nil {
 			return err
 		}
@@ -440,8 +443,13 @@ func (r *initRun) checkResumed(data []byte, given []configFlag) error {
 	if err := applyFlags(probe, given); err != nil {
 		return err
 	}
-	// Apply each alone, so that one invalid with another's change is
-	// reported as the change it is.
+	if cfg, err := probe.Config(); err == nil {
+		if err := refuseShared(cfg); err != nil {
+			return err
+		}
+	}
+	// Apply each alone: together, one change can make the config invalid
+	// and hide which value differs.
 	for _, c := range given {
 		probe, err := stack.ParseConfigDoc(data)
 		if err != nil {
@@ -699,7 +707,7 @@ func (r *initRun) portFlag(name, key string) (int, error) {
 		if _, given := r.setValue(key); !given {
 			return 0, nil
 		}
-		// applySets has parsed it into the config.
+		// applyFlags has parsed it into the config.
 		v, _ := r.doc.Raw(key)
 		if p, _ := v.(int); p >= 1 && p <= 65535 {
 			return p, nil
