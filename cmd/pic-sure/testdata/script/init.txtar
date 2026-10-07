@@ -179,9 +179,35 @@ stderr '--set hpds.java_opts=-Xmx2g: .*resume.pic-sure.yaml already has hpds.jav
 ! stderr 'already has'
 stderr 'step release failed|is in use'
 exitcode 2 pic-sure init resume --set hpds.java_opts=-Xmx2g --set hpds.java_opts=-Xmx4g
-stderr 'already has hpds.java_opts -Xmx4g'
+stderr 'set hpds.java_opts to different values'
 exitcode 2 pic-sure init resume --set name=other
 stderr '--set name=other: name: is read-only'
+
+# So does a config flag or --source, naming config set when the stack dir
+# exists. The same values, --auto-ports, and a client secret over the
+# generated open-mode one all resume.
+exitcode 2 pic-sure init resume --https-port 9443
+stderr '--https-port 9443: .*resume.pic-sure.yaml already has network.https_port 8443, and init resumes with it as it is; edit it there first'
+exitcode 2 pic-sure init staged --http-port 9000
+stderr '--http-port 9000: .*staged.pic-sure.yaml already has network.http_port 8083, .*; change it with `pic-sure --stack .*staged config set network.http_port 9000` first'
+exitcode 2 pic-sure init staged --set 'hpds.java_opts=-Xms1g -Xmx2g'
+stderr 'config set hpds.java_opts ''-Xms1g -Xmx2g'''
+exitcode 2 pic-sure init staged --source frontend=src
+stderr '--source frontend=src: .*already has components.frontend.source "", .*config set components.frontend.source .*src'
+exitcode 2 pic-sure init staged --name other
+stderr '--name other: .*staged.pic-sure.yaml already has name demo, and a stack''s name can''t change'
+exitcode 2 pic-sure init staged --http-port 8083 --set network.http_port=9000
+stderr '--set network.http_port=9000 and --http-port set network.http_port to different values'
+! exec pic-sure init staged --name demo --auth-mode open --admin-email admin@example.com --http-port 8083 --https-port 8443 --hpds-data local --set hpds.java_opts=-Xmx4g
+! stderr 'already has'
+stderr 'step release failed|is in use'
+! exec pic-sure init staged --auto-ports
+! stderr 'already has'
+stderr 'step release failed|is in use'
+stdin one-line.txt
+! exec pic-sure init staged --auth0-client-secret-stdin
+! stderr 'already has'
+stderr 'step release failed|is in use'
 
 -- short.txt --
 short
@@ -227,6 +253,17 @@ network: {http_port: 8083, https_port: 8443}
 auth: {mode: open, admin_email: admin@example.com}
 -- done/.pic-sure/state.json --
 {"cli_version": "dev", "schema_version": 1, "initialized_at": "2026-10-07T12:00:00Z"}
+-- staged/pic-sure.yaml --
+schema: 1
+name: demo
+network: {http_port: 8083, https_port: 8443}
+auth: {mode: open, admin_email: admin@example.com}
+hpds: {java_opts: -Xmx4g}
+-- staged/.pic-sure/state.json --
+{"cli_version": "dev", "schema_version": 1}
+-- staged/.pic-sure/secrets.yaml --
+auth0_client_secret: generated-open-mode-secret-0123456789abcdef0123456789abcdef
+auth0_client_secret_generated: true
 -- resume/pic-sure.yaml --
 schema: 1
 name: demo

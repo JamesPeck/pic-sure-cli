@@ -57,8 +57,8 @@ given are 80 and 443, which must be free; --auto-ports takes the first free
 pair from 8080/8443 instead.
 
 A DIR that already has a pic-sure.yaml is resumed: its config is used as it
-is, a --set that would change it is an error, and the steps already done
-are skipped. On a stack init has finished it only registers the stack in
+is, a config flag, --source or --set that would change it is an error (use
+pic-sure config set), and the steps already done are skipped. On a stack init has finished it only registers the stack in
 the cache (see cache prune).`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: a.initStack,
@@ -255,6 +255,10 @@ func (r *initRun) readConfig() error {
 	if r.sets, err = parseSets(flags); err != nil {
 		return err
 	}
+	given, err := r.configFlags()
+	if err != nil {
+		return err
+	}
 	data, err := os.ReadFile(filepath.Join(r.dir, stack.ConfigFile))
 	switch {
 	case err == nil:
@@ -265,60 +269,26 @@ func (r *initRun) readConfig() error {
 		if r.cfg, err = r.doc.Config(); err != nil {
 			return configError(err)
 		}
-		if err := r.checkResumedSets(data); err != nil {
+		if err := r.checkResumed(data, given); err != nil {
 			return err
-		}
-		var ignored []string
-		flags.Visit(func(f *pflag.Flag) {
-			if isConfigFlag(f.Name) {
-				ignored = append(ignored, "--"+f.Name)
-			}
-		})
-		if len(ignored) > 0 {
-			r.a.warnStderr("%s already has %s, which init uses as it is; ignoring %s",
-				r.dir, stack.ConfigFile, strings.Join(ignored, " "))
 		}
 		return refuseShared(r.cfg)
 	case !errors.Is(err, fs.ErrNotExist):
 		return err
 	}
 
+	for _, s := range r.sets {
+		if s.key == "name" {
+			return exitcode.Usage("--set %s: use --name", s.arg)
+		}
+	}
 	// name is read-only, so Set refuses it.
 	def := stack.DefaultConfig()
 	def.Name, _ = flags.GetString("name")
 	if r.doc, err = stack.NewConfigDoc(&def); err != nil {
 		return err
 	}
-	flagKeys := map[string]string{} // the keys flags set, to their flag
-	for _, f := range stack.Fields {
-		if f.Flag == "" || f.Flag == "name" || f.Secret || !flags.Changed(f.Flag) {
-			continue
-		}
-		v, _ := flags.GetString(f.Flag)
-		if err := r.setFlag(f, v); err != nil {
-			return err
-		}
-		flagKeys[f.Key] = "--" + f.Flag
-		if f.Flag == "hpds-data" && strings.HasPrefix(v, string(stack.HPDSShared)+":") {
-			flagKeys["hpds.shared_name"] = "--" + f.Flag
-		}
-	}
-	sources, _ := flags.GetStringArray("source")
-	for _, s := range sources {
-		comp, path, ok := strings.Cut(s, "=")
-		if _, known := catalog.LookupComponent(comp); !ok || !known || path == "" {
-			return exitcode.Usage("--source %s: want COMPONENT=PATH, COMPONENT one of %s", s, strings.Join(componentNames(), ", "))
-		}
-		abs, err := filepath.Abs(path)
-		if err != nil {
-			return err
-		}
-		if err := r.doc.SetValue("components."+comp+".source", abs); err != nil {
-			return exitcode.Usage("--source %s: %v", s, err)
-		}
-		flagKeys["components."+comp+".source"] = "--source " + s
-	}
-	if err := r.applySets(flagKeys); err != nil {
+	if err := applyFlags(r.doc, given); err != nil {
 		return err
 	}
 	// Validation refuses clashing ports, but preconditions chooses the
@@ -368,49 +338,147 @@ func parseSets(flags *pflag.FlagSet) ([]initSet, error) {
 	return sets, nil
 }
 
-// applySets sets each --set in a new config, after the flags. A key a flag
-// or an earlier --set also sets must get the same value from each.
-func (r *initRun) applySets(flagKeys map[string]string) error {
+// configFlag is one config value given on init's command line: a config
+// flag other than --name, a --source or a --set.
+type configFlag struct {
+	// label names it in a conflict between two of them, and arg, with its
+	// value, in a conflict with a resumed stack's pic-sure.yaml.
+	label, arg string
+	// keys are the keys it sets, and values what config set takes for each.
+	keys, values []string
+	apply        func(*stack.ConfigDoc) error
+}
+
+// configFlags lists the config values given on the command line, in the
+// order they apply: the config flags, the --sources, then the --sets.
+func (r *initRun) configFlags() ([]configFlag, error) {
+	flags := r.cmd.Flags()
+	var out []configFlag
+	for _, f := range stack.Fields {
+		if f.Flag == "" || f.Flag == "name" || f.Secret || !flags.Changed(f.Flag) {
+			continue
+		}
+		v, _ := flags.GetString(f.Flag)
+		c := configFlag{label: "--" + f.Flag, arg: "--" + f.Flag + " " + v,
+			keys: []string{f.Key}, values: []string{v},
+			apply: func(d *stack.ConfigDoc) error { return setFlag(d, f, v) }}
+		if mode, name, _ := strings.Cut(v, ":"); f.Flag == "hpds-data" && mode == string(stack.HPDSShared) {
+			c.keys, c.values = append(c.keys, "hpds.shared_name"), []string{mode, name}
+		}
+		out = append(out, c)
+	}
+	sources, _ := flags.GetStringArray("source")
+	for _, s := range sources {
+		comp, path, ok := strings.Cut(s, "=")
+		if _, known := catalog.LookupComponent(comp); !ok || !known || path == "" {
+			return nil, exitcode.Usage("--source %s: want COMPONENT=PATH, COMPONENT one of %s", s, strings.Join(componentNames(), ", "))
+		}
+		abs, err := filepath.Abs(path)
+		if err != nil {
+			return nil, err
+		}
+		key := "components." + comp + ".source"
+		out = append(out, configFlag{label: "--source " + s, arg: "--source " + s,
+			keys: []string{key}, values: []string{abs},
+			apply: func(d *stack.ConfigDoc) error {
+				if err := d.SetValue(key, abs); err != nil {
+					return exitcode.Usage("--source %s: %v", s, err)
+				}
+				return nil
+			}})
+	}
 	for _, s := range r.sets {
-		if s.key == "name" {
-			return exitcode.Usage("--set %s: use --name", s.arg)
+		out = append(out, configFlag{label: "--set " + s.arg, arg: "--set " + s.arg,
+			keys: []string{s.key}, values: []string{s.value},
+			apply: func(d *stack.ConfigDoc) error {
+				if err := d.Set(s.key, s.value); err != nil {
+					return exitcode.Usage("--set %s: %v", s.arg, err)
+				}
+				return nil
+			}})
+	}
+	return out, nil
+}
+
+// applyFlags applies the given config values to doc. Two that set the same
+// key must give it the same value.
+func applyFlags(doc *stack.ConfigDoc, given []configFlag) error {
+	setBy := map[string]string{} // the keys set so far, to the label that set them
+	for _, c := range given {
+		var before []any
+		for _, k := range c.keys {
+			v, _ := doc.Raw(k)
+			before = append(before, v)
 		}
-		before, _ := r.doc.Raw(s.key)
-		if err := r.doc.Set(s.key, s.value); err != nil {
-			return exitcode.Usage("--set %s: %v", s.arg, err)
+		if err := c.apply(doc); err != nil {
+			return err
 		}
-		if flag, ok := flagKeys[s.key]; ok {
-			if after, _ := r.doc.Raw(s.key); !reflect.DeepEqual(before, after) {
-				return exitcode.Usage("--set %s and %s set %s to different values", s.arg, flag, s.key)
+		for i, k := range c.keys {
+			if by, ok := setBy[k]; ok {
+				if after, _ := doc.Raw(k); !reflect.DeepEqual(before[i], after) {
+					return exitcode.Usage("%s and %s set %s to different values", c.label, by, k)
+				}
 			}
+			setBy[k] = c.label
 		}
-		flagKeys[s.key] = "--set " + s.arg
 	}
 	return nil
 }
 
-// checkResumedSets refuses a --set that would change the config a resumed
-// init uses as it is.
-func (r *initRun) checkResumedSets(data []byte) error {
-	for _, s := range r.sets {
+// checkResumed refuses a config value given on the command line that
+// differs from the pic-sure.yaml (data) a resumed init uses as it is. The
+// same value is accepted, so the same command resumes.
+func (r *initRun) checkResumed(data []byte, given []configFlag) error {
+	file := filepath.Join(r.dir, stack.ConfigFile)
+	if name, _ := r.cmd.Flags().GetString("name"); r.cmd.Flags().Changed("name") && name != r.cfg.Name {
+		return exitcode.Usage("--name %s: %s already has name %s, and a stack's name can't change", name, file, r.cfg.Name)
+	}
+	probe, err := stack.ParseConfigDoc(data)
+	if err != nil {
+		return configError(err)
+	}
+	if err := applyFlags(probe, given); err != nil {
+		return err
+	}
+	// Apply each alone, so that one invalid with another's change is
+	// reported as the change it is.
+	for _, c := range given {
 		probe, err := stack.ParseConfigDoc(data)
 		if err != nil {
 			return configError(err)
 		}
-		if err := probe.Set(s.key, s.value); err != nil {
-			return exitcode.Usage("--set %s: %v", s.arg, err)
+		if err := c.apply(probe); err != nil {
+			return err
 		}
-		cfg, err := probe.Config()
-		if err != nil {
-			return exitcode.Usage("--set %s: %v", s.arg, err)
-		}
-		was, _ := r.cfg.Get(s.key)
-		if now, _ := cfg.Get(s.key); !reflect.DeepEqual(was, now) {
-			return exitcode.Usage("--set %s: %s already has %s %v, and init resumes with it as it is; change it there first",
-				s.arg, filepath.Join(r.dir, stack.ConfigFile), s.key, was)
+		cfg, cerr := probe.Config()
+		for i, k := range c.keys {
+			was, _ := r.cfg.Get(k)
+			if cerr == nil {
+				if now, _ := cfg.Get(k); reflect.DeepEqual(was, now) {
+					continue
+				}
+			}
+			change := "edit it there first"
+			if _, err := os.Stat(filepath.Join(r.dir, stack.CLIDir)); err == nil {
+				change = fmt.Sprintf("change it with `pic-sure --stack %s config set %s %s` first", shellQuote(r.dir), k, shellQuote(c.values[i]))
+			}
+			stored := fmt.Sprint(was)
+			if stored == "" {
+				stored = `""`
+			}
+			return exitcode.Usage("%s: %s already has %s %s, and init resumes with it as it is; %s",
+				c.arg, file, k, stored, change)
 		}
 	}
 	return nil
+}
+
+// shellQuote quotes s for a POSIX shell, if it needs it.
+func shellQuote(s string) string {
+	if s != "" && strings.Trim(s, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_./:=,+@%") == "" {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // setValue is the last --set value for key.
@@ -437,36 +505,24 @@ type anyPortFree struct{ systemHost }
 
 func (anyPortFree) PortFree(int) bool { return true }
 
-func (r *initRun) setFlag(f stack.Field, v string) error {
+func setFlag(doc *stack.ConfigDoc, f stack.Field, v string) error {
 	if f.Flag == "hpds-data" {
 		mode, name, _ := strings.Cut(v, ":")
 		switch {
 		case v == string(stack.HPDSLocal):
-			return r.doc.SetValue(f.Key, v)
+			return doc.SetValue(f.Key, v)
 		case mode == string(stack.HPDSShared) && name != "":
-			if err := r.doc.SetValue(f.Key, mode); err != nil {
+			if err := doc.SetValue(f.Key, mode); err != nil {
 				return err
 			}
-			return r.doc.SetValue("hpds.shared_name", name)
+			return doc.SetValue("hpds.shared_name", name)
 		}
 		return exitcode.Usage("--hpds-data %s: want local or shared:NAME", v)
 	}
-	if err := r.doc.Set(f.Key, v); err != nil {
+	if err := doc.Set(f.Key, v); err != nil {
 		return exitcode.Usage("--%s: %v", f.Flag, err)
 	}
 	return nil
-}
-
-func isConfigFlag(name string) bool {
-	if name == "source" || name == "auto-ports" {
-		return true
-	}
-	for _, f := range stack.Fields {
-		if f.Flag == name && !f.Secret {
-			return true
-		}
-	}
-	return false
 }
 
 func componentNames() []string {

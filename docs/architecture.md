@@ -254,8 +254,9 @@ it.
   `--skip-step` that isn't in `ops.InitStepIDs(cfg)`, shared HPDS data
   (until 051), `--self-update` with a stdin flag. A DIR whose state.json
   has `initialized_at` gets "already initialised" and exit 0; a DIR with a
-  `pic-sure.yaml` is resumed with that config as it is (config flags are
-  ignored with a warning; a `--set` that would change it is exit 2). Then
+  `pic-sure.yaml` is resumed with that config as it is: a config flag,
+  `--source` or `--set` that would change it is exit 2 naming `config set`,
+  the same value is accepted, and `--auto-ports` is ignored. Then
   three unskippable steps run:
   `preconditions` (doctor's host checks with the new config, `memory` only
   a warning; `ops.StackNameInUse`; on a new stack `ops.ChoosePorts` and

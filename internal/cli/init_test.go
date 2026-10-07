@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/docker"
+	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
 	"github.com/JamesPeck/pic-sure-cli/internal/ops"
 	"github.com/JamesPeck/pic-sure-cli/internal/release"
 	"github.com/JamesPeck/pic-sure-cli/internal/stack"
@@ -141,7 +142,13 @@ func TestInitWritesTheConfigSecretsAndState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r2, err := newInitRun(t, r.dir, "", "--name", "other")
+	if _, err := newInitRun(t, r.dir, "", "--name", "other"); exitcode.FromError(err) != exitcode.CodeUsage {
+		t.Errorf("resume with another --name: %v, want a usage error", err)
+	}
+	// The same flags resume, and a client secret given now replaces the
+	// generated one.
+	r2, err := newInitRun(t, r.dir, "synthetic-client-secret-0123456789abcdef\n", "--name", "demo", "--auth-mode", "open",
+		"--http-port", "8083", "--auto-ports", "--auth0-client-secret-stdin")
 	if err != nil || !r2.resumed || r2.cfg.Name != "demo" {
 		t.Fatalf("resume: err %v, resumed %v, name %s", err, r2.resumed, r2.cfg.Name)
 	}
@@ -160,6 +167,9 @@ func TestInitWritesTheConfigSecretsAndState(t *testing.T) {
 	after, err := os.ReadFile(r.st.Path(stack.ConfigFile))
 	if err != nil || string(after) != string(data) {
 		t.Errorf("resume rewrote pic-sure.yaml (err %v)", err)
+	}
+	if r2.sec.Auth0ClientSecretGenerated || r2.sec.Auth0ClientSecret != "synthetic-client-secret-0123456789abcdef" {
+		t.Error("resume didn't replace the generated client secret with the one given")
 	}
 	if r2.state.Release.Commit != r.rel.Commit {
 		t.Errorf("resume replaced the recorded release with %s", r2.state.Release.Commit)
