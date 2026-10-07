@@ -1,9 +1,10 @@
 package dashboard
 
 import (
+	"image/color"
 	"testing"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/styles"
 )
@@ -16,14 +17,13 @@ func TestDashboardUsesSharedPalette(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		got  lipgloss.Style
-		want lipgloss.AdaptiveColor
+		want color.Color
 	}{
 		{"okStyle", okStyle, styles.StatusOK},
 		{"warnStyle", warnStyle, styles.StatusWarn},
 		{"badStyle", badStyle, styles.StatusBad},
 	} {
-		fg, ok := tc.got.GetForeground().(lipgloss.AdaptiveColor)
-		if !ok || fg != tc.want {
+		if fg := tc.got.GetForeground(); fg != tc.want {
 			t.Errorf("%s foreground = %v, want shared %+v", tc.name, tc.got.GetForeground(), tc.want)
 		}
 	}
@@ -36,8 +36,7 @@ func TestDashboardUsesSharedPalette(t *testing.T) {
 		{"titleStyle", titleStyle},
 		{"paneTitle", paneTitle},
 	} {
-		fg, ok := tc.got.GetForeground().(lipgloss.AdaptiveColor)
-		if !ok || fg != styles.Brand {
+		if fg := tc.got.GetForeground(); fg != color.Color(styles.Brand) {
 			t.Errorf("%s foreground = %v, want Brand %+v", tc.name, tc.got.GetForeground(), styles.Brand)
 		}
 	}

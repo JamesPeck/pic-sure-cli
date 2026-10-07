@@ -5,9 +5,9 @@ import (
 	"os"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/huh"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/huh/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/actions"
 	"github.com/JamesPeck/pic-sure-cli/internal/dialog"
@@ -203,13 +203,13 @@ func (l *landing) update(msg tea.Msg) (*landing, tea.Cmd) {
 		return l.updateForm(msg)
 	}
 
-	if key, ok := msg.(tea.KeyMsg); ok {
+	if key, ok := msg.(tea.KeyPressMsg); ok {
 		return l.handleKey(key)
 	}
 	return l, nil
 }
 
-func (l *landing) handleKey(msg tea.KeyMsg) (*landing, tea.Cmd) {
+func (l *landing) handleKey(msg tea.KeyPressMsg) (*landing, tea.Cmd) {
 	switch msg.String() {
 	case "q", "ctrl+c":
 		return l, tea.Quit
@@ -317,23 +317,16 @@ func (l *landing) choose(id string) (*landing, tea.Cmd) {
 	return l, nil
 }
 
-// sizeForm feeds a landing dialog form the synthetic resize huh expects.
-// As with the wizard screen: huh recomputes group viewport heights only in
-// its WindowSizeMsg handler and only while no explicit WithWidth was set —
-// WithWidth freezes the viewport at the construction-time width-80
-// measurement, clipping options/fields whose content wraps taller at the
-// real width (the dev picker opened showing only its Cancel row).
+// sizeForm fits a landing dialog form to the landing's centre column (see
+// dialog.Fit: WithWidth would freeze the layout, and once froze the dev
+// picker showing only its Cancel row).
 func (l *landing) sizeForm(f *huh.Form) *huh.Form {
 	width := max(min(l.width-4, 76), 40) // floor: l.width is 0 pre-resize
 	height := 40
 	if l.height > 0 {
 		height = max(l.height-4, 8)
 	}
-	m, _ := f.Update(tea.WindowSizeMsg{Width: width, Height: height})
-	if ff, ok := m.(*huh.Form); ok {
-		return ff
-	}
-	return f
+	return dialog.Fit(f, width, height)
 }
 
 // startSelectPicker opens a single-select dialog; the selection is the
@@ -541,7 +534,7 @@ func (l *landing) updateForm(msg tea.Msg) (*landing, tea.Cmd) {
 	// huh ships its esc binding disabled (only ctrl+c aborts a form), but
 	// every dialog here advertises "esc cancels" — intercept it, exactly as
 	// the wizard screen does. One chokepoint covers all four dialog kinds.
-	if key, ok := msg.(tea.KeyMsg); ok && key.String() == "esc" {
+	if key, ok := msg.(tea.KeyPressMsg); ok && key.String() == "esc" {
 		l.form, l.pending, l.pickerMake, l.inputMake = nil, nil, nil, nil
 		l.resetting, l.resetScope, l.resetRepos = false, "", false
 		return l, nil
@@ -626,7 +619,6 @@ func (l *landing) contentLines(withLogo bool) []string {
 		// minimum): styled with the brand hue + bold so the identity survives
 		// the narrow-terminal fallback. Plain-font brackets (▌/▐) provide a
 		// touch of visual structure without requiring Nerd Font glyphs.
-		// Respects NO_COLOR automatically (lipgloss strips color on request).
 		content = append(content, lipgloss.NewStyle().Bold(true).Foreground(styles.Brand).Render("▌ PIC-SURE ▐"), "")
 	}
 

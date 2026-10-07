@@ -1337,9 +1337,18 @@ wizard. `tui.Run` takes the command's context and turns off Bubble Tea's
 signal handler, so SIGINT and SIGTERM end the TUI through the context and
 the CLI exits 128+N. Ticket 001 removed its script layer: every action fails
 to start with "not implemented in v2 yet (ticket NNN)", the release-branch
-and dev-overlay lookups return nothing, and the archive lister fails. Ticket
-002 moves it to Bubble Tea v2, and tickets 038, 039 and 047 rewire it onto
-in-process operations.
+and dev-overlay lookups return nothing, and the archive lister fails. Tickets
+038, 039 and 047 rewire it onto in-process operations.
+
+It runs on the Charm v2 modules (`charm.land/bubbletea/v2`, `bubbles/v2`,
+`huh/v2`, `lipgloss/v2`; ticket 002). The root model's `View` returns a
+`tea.View` with `AltScreen` set; embedded models (the dashboard) leave
+terminal modes to it. `Init` sends `tea.RequestBackgroundColor`, and the
+reply is passed to `styles.SetDarkBackground`. Any non-empty `NO_COLOR`
+forces `colorprofile.Ascii`, because Bubble Tea itself honours only values
+that parse as true. Every embedded huh form is sized with `dialog.Fit`, never
+`WithWidth`. huh v2 still freezes group viewports once a width is set, and
+still ships esc disabled, so the screens handle esc themselves.
 
 ## internal/dashboard
 
@@ -1355,12 +1364,24 @@ The v1 setup form over `.env` keys. It no longer writes anything; ticket
 
 ## internal/filebrowser
 
-The file picker used by the load wizard. Ticket 002 ports it to Bubble Tea
-v2.
+The file picker used by the load wizard, on Bubble Tea v2.
 
 ## internal/styles
 
-The shared palette and styles. Ticket 002 ports it to lipgloss v2.
+The shared palette and styles, on lipgloss v2. Lip Gloss v2 has no adaptive
+colors, so `styles.AdaptiveColor` picks its light or dark variant at render
+time from the flag `SetDarkBackground` sets (dark until the terminal
+answers). Use it only for hex colors. The status colors are plain ANSI 1–3,
+so terminal themes can remap them. Lip Gloss v2 always renders full color and
+Bubble Tea downsamples it, so tests that check NO_COLOR output downsample with
+`styles/stylestest.Downsample`. Lip Gloss v2 also counts the border in
+`Width`/`Height`.
+
+## internal/dialog
+
+The huh dialogs shared by `tui` and `dashboard` (the reset form), and `Fit`,
+which sizes an embedded form with a synthetic `WindowSizeMsg` and passes it
+the terminal background.
 
 ## internal/exitcode
 

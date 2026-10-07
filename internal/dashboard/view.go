@@ -4,7 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/styles"
@@ -26,18 +27,30 @@ var (
 	resultStyle = lipgloss.NewStyle().Bold(true).Padding(0, 1)
 )
 
+// paneBox sizes paneStyle by the box inside its border (padding included),
+// the measure all of this file's geometry is written in; Lip Gloss v2 counts
+// the border in Width and Height. A zero height leaves the pane sized to its
+// content.
+func paneBox(w, h int) lipgloss.Style {
+	st := paneStyle.Width(w + paneStyle.GetHorizontalBorderSize())
+	if h > 0 {
+		st = st.Height(h + paneStyle.GetVerticalBorderSize())
+	}
+	return st
+}
+
 // layout recomputes viewport dimensions after a resize.
 func (m *model) layout() {
 	rightWidth := max(m.width-m.leftWidth()-6, 20)
 	logHeight := max(m.height-summaryHeight-7, 3)
 
 	// Viewport content width = styled pane width minus its 2 padding cols.
-	m.logView.Width = rightWidth - 2
-	m.logView.Height = logHeight
+	m.logView.SetWidth(rightWidth - 2)
+	m.logView.SetHeight(logHeight)
 
 	rows, cols := m.actionPaneSize()
-	m.actionView.Width = cols
-	m.actionView.Height = rows
+	m.actionView.SetWidth(cols)
+	m.actionView.SetHeight(rows)
 	m.refreshActionPane() // re-wrap at the new width
 	m.refreshLogPane()
 }
@@ -47,8 +60,8 @@ func (m *model) layout() {
 func (m *model) refreshLogPane() {
 	atBottom := m.logView.AtBottom()
 	content := strings.Join(m.logLines, "\n")
-	if m.logView.Width > 0 {
-		content = ansi.Hardwrap(content, m.logView.Width, true)
+	if m.logView.Width() > 0 {
+		content = ansi.Hardwrap(content, m.logView.Width(), true)
 	}
 	m.logView.SetContent(content)
 	if atBottom {
@@ -68,8 +81,8 @@ func (m *model) refreshActionPane() {
 	// advertises this). Same pattern as refreshLogPane and the activity screen.
 	atBottom := m.actionView.AtBottom()
 	content := m.actionOut.String()
-	if m.actionView.Width > 0 {
-		content = ansi.Hardwrap(content, m.actionView.Width, true)
+	if m.actionView.Width() > 0 {
+		content = ansi.Hardwrap(content, m.actionView.Width(), true)
 	}
 	m.actionView.SetContent(content)
 	if atBottom {
@@ -87,7 +100,11 @@ func (m *model) actionPaneSize() (rows, cols int) {
 	return rows, cols
 }
 
-func (m *model) View() string {
+// View renders the dashboard frame. Terminal modes such as the alt screen
+// belong to the program that embeds it.
+func (m *model) View() tea.View { return tea.NewView(m.frame()) }
+
+func (m *model) frame() string {
 	if m.width == 0 {
 		return "loading..."
 	}
@@ -173,7 +190,7 @@ func (m *model) servicesPane() string {
 		b.WriteString(line + "\n")
 	}
 
-	return paneStyle.Width(lw).Height(max(m.height-5, 8)).Render(b.String())
+	return paneBox(lw, max(m.height-5, 8)).Render(b.String())
 }
 
 // servicesEmptyState returns a cause-specific, actionable message for the
@@ -234,7 +251,7 @@ func (m *model) summaryPane() string {
 		b.WriteString(m.summaryBody())
 	}
 
-	return paneStyle.Width(width).Height(summaryHeight - 2).Render(b.String())
+	return paneBox(width, summaryHeight-2).Render(b.String())
 }
 
 // summaryBody assembles the severity-ordered sections from the loaded status.
@@ -335,7 +352,7 @@ func (m *model) logPane() string {
 	if m.logSvc != "" {
 		title = paneTitle.Render("Logs — " + m.logSvc)
 	}
-	return paneStyle.Width(width).Render(title + "\n" + m.logView.View())
+	return paneBox(width, 0).Render(title + "\n" + m.logView.View())
 }
 
 func (m *model) actionPane() string {
@@ -363,7 +380,7 @@ func (m *model) actionPane() string {
 	default:
 		footer = helpStyle.Render("ctrl+c interrupt")
 	}
-	return paneStyle.Width(width).Render(title + "\n" + m.actionView.View() + "\n" + footer)
+	return paneBox(width, 0).Render(title + "\n" + m.actionView.View() + "\n" + footer)
 }
 
 func (m *model) formPane() string {
@@ -372,7 +389,7 @@ func (m *model) formPane() string {
 	// these in lockstep or the form re-wraps inside the pane and shears the
 	// frame (TestDialogFitsNarrowPane guards this).
 	width := max(m.width-m.leftWidth()-6, 20)
-	return paneStyle.Width(width).Render(m.form.View())
+	return paneBox(width, 0).Render(m.form.View())
 }
 
 func (m *model) helpLine() string {

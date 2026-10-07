@@ -7,10 +7,11 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/huh"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/huh/v2"
+	"charm.land/lipgloss/v2"
 
+	"github.com/JamesPeck/pic-sure-cli/internal/dialog"
 	"github.com/JamesPeck/pic-sure-cli/internal/styles"
 	"github.com/JamesPeck/pic-sure-cli/internal/wizard"
 )
@@ -127,19 +128,11 @@ func (s *wizardScreen) setSize(width, height int) {
 	}
 }
 
-// applySize feeds the form the synthetic resize huh expects — the same code
-// path its standalone host exercises. huh recomputes group viewport heights
-// ONLY in its WindowSizeMsg handler, and only while no explicit WithWidth
-// was ever set: WithWidth freezes group viewports at their construction-time
-// width-80 measurement, so any field whose description wraps taller at the
-// real width gets its input line clipped below the viewport fold (typed
-// text recorded but invisible). Never call WithWidth on these forms.
+// applySize fits the form to the screen (dialog.Fit). A form sized with
+// WithWidth instead clipped the input line of any field whose description
+// wraps taller at the real width: typed text recorded but invisible.
 func (s *wizardScreen) applySize(f *huh.Form) *huh.Form {
-	m, _ := f.Update(tea.WindowSizeMsg{Width: s.formWidth(), Height: s.formHeight()})
-	if ff, ok := m.(*huh.Form); ok {
-		return ff
-	}
-	return f
+	return dialog.Fit(f, s.formWidth(), s.formHeight())
 }
 
 func (s *wizardScreen) formWidth() int {
@@ -159,7 +152,7 @@ func (s *wizardScreen) update(msg tea.Msg) (*wizardScreen, tea.Cmd) {
 	// A discard confirm is up: it owns the keyboard until answered. Swallow
 	// every non-key message (huh blink ticks) so the prompt stays put.
 	if s.discarding {
-		key, ok := msg.(tea.KeyMsg)
+		key, ok := msg.(tea.KeyPressMsg)
 		if !ok {
 			return s, nil
 		}
@@ -178,7 +171,7 @@ func (s *wizardScreen) update(msg tea.Msg) (*wizardScreen, tea.Cmd) {
 	// wizardWriting: writes in flight are not cancellable. A modified form
 	// asks to confirm first (esc otherwise silently discards every entered
 	// value); a pristine form closes immediately.
-	if key, ok := msg.(tea.KeyMsg); ok && key.String() == "esc" && s.phase != wizardWriting {
+	if key, ok := msg.(tea.KeyPressMsg); ok && key.String() == "esc" && s.phase != wizardWriting {
 		if s.wf.Dirty() {
 			s.discarding = true
 			return s, nil

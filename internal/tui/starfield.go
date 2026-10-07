@@ -5,12 +5,14 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+
+	"github.com/JamesPeck/pic-sure-cli/internal/styles"
 )
 
 // Braille sub-pixel starfield (technique from Basecamp ONCE's installer, MIT;
-// reimplemented for bubbletea v1). Each terminal cell is a U+2800-block
+// reimplemented for Bubble Tea). Each terminal cell is a U+2800-block
 // braille character giving a 2×4 sub-pixel grid; stars fly toward the viewer
 // via perspective projection (x/z, y/z) and brighten as they approach.
 const (
@@ -27,10 +29,21 @@ var (
 	rightDots = [4]rune{0x08, 0x10, 0x20, 0x80}
 )
 
+// Near stars are ANSI bright white on dark terminals and ANSI black on light
+// ones. They stay palette colors so terminal themes remap them, which is why
+// they are two styles picked per render rather than one styles.AdaptiveColor.
 var (
-	starBrightStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "0", Dark: "15"})
-	starDimStyle    = lipgloss.NewStyle().Faint(true)
+	starBrightOnDark  = lipgloss.NewStyle().Foreground(lipgloss.BrightWhite)
+	starBrightOnLight = lipgloss.NewStyle().Foreground(lipgloss.Black)
+	starDimStyle      = lipgloss.NewStyle().Faint(true)
 )
+
+func starBrightStyle() lipgloss.Style {
+	if styles.HasDarkBackground() {
+		return starBrightOnDark
+	}
+	return starBrightOnLight
+}
 
 type starTickMsg struct{ seq int }
 
@@ -167,7 +180,7 @@ func (s *starfield) cellView(row, col int) string {
 		return ""
 	}
 	if cell.bright {
-		return starBrightStyle.Render(string(cell.ch))
+		return starBrightStyle().Render(string(cell.ch))
 	}
 	return starDimStyle.Render(string(cell.ch))
 }

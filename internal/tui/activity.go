@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/actions"
@@ -107,7 +107,8 @@ func (a *activity) tickElapsed() tea.Cmd {
 func (a *activity) setSize(width, height int) {
 	a.width, a.height = width, height
 	rows, cols := a.paneSize()
-	a.vp.Width, a.vp.Height = cols, rows
+	a.vp.SetWidth(cols)
+	a.vp.SetHeight(rows)
 	a.refreshContent() // re-wrap at the new width
 	if a.runner != nil {
 		a.runner.Resize(rows, cols)
@@ -120,8 +121,8 @@ func (a *activity) setSize(width, height int) {
 // tailing, so users can scroll back during a long run.
 func (a *activity) refreshContent() {
 	content := a.out.String()
-	if a.vp.Width > 0 {
-		content = ansi.Hardwrap(content, a.vp.Width, true)
+	if a.vp.Width() > 0 {
+		content = ansi.Hardwrap(content, a.vp.Width(), true)
 	}
 	atBottom := a.vp.AtBottom()
 	a.vp.SetContent(content)
@@ -174,13 +175,13 @@ func (a *activity) update(msg tea.Msg) (*activity, tea.Cmd) {
 		a.elapsed = time.Since(a.started).Round(time.Second)
 		return a, a.tickElapsed()
 
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		return a.handleKey(msg)
 	}
 	return a, nil
 }
 
-func (a *activity) handleKey(msg tea.KeyMsg) (*activity, tea.Cmd) {
+func (a *activity) handleKey(msg tea.KeyPressMsg) (*activity, tea.Cmd) {
 	key := msg.String()
 
 	if a.confirmingAbort {
@@ -252,7 +253,9 @@ func (a *activity) killGrace() tea.Cmd {
 
 func (a *activity) view() string {
 	title := activityTitleStyle.Render(a.headerLine())
-	pane := activityPaneStyle.Width(max(a.width-4, 22)).Render(a.vp.View())
+	// Lip Gloss v2 counts the border in Width; the pane is a.width-4 inside it.
+	inner := max(a.width-4, 22)
+	pane := activityPaneStyle.Width(inner + activityPaneStyle.GetHorizontalBorderSize()).Render(a.vp.View())
 	return lipgloss.JoinVertical(lipgloss.Left, title, pane, a.footerLine())
 }
 

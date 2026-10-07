@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/huh"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/huh/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/actions"
@@ -42,22 +42,22 @@ func actingModel(t *testing.T) (*model, *fakeRunner) {
 	return m, fr
 }
 
-func keyMsg(s string) tea.KeyMsg {
+func keyMsg(s string) tea.KeyPressMsg {
 	switch s {
 	case "esc":
-		return tea.KeyMsg(tea.Key{Type: tea.KeyEsc})
+		return tea.KeyPressMsg{Code: tea.KeyEscape}
 	case "ctrl+c":
-		return tea.KeyMsg(tea.Key{Type: tea.KeyCtrlC})
+		return tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}
 	case "up":
-		return tea.KeyMsg(tea.Key{Type: tea.KeyUp})
+		return tea.KeyPressMsg{Code: tea.KeyUp}
 	case "down":
-		return tea.KeyMsg(tea.Key{Type: tea.KeyDown})
+		return tea.KeyPressMsg{Code: tea.KeyDown}
 	case "home":
-		return tea.KeyMsg(tea.Key{Type: tea.KeyHome})
+		return tea.KeyPressMsg{Code: tea.KeyHome}
 	case "pgup":
-		return tea.KeyMsg(tea.Key{Type: tea.KeyPgUp})
+		return tea.KeyPressMsg{Code: tea.KeyPgUp}
 	default:
-		return tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune(s)})
+		return tea.KeyPressMsg{Code: []rune(s)[0], Text: s}
 	}
 }
 
@@ -237,7 +237,7 @@ func TestDashboardResetDialogRendersAllParts(t *testing.T) {
 	if m.form == nil || m.mode != modeReset {
 		t.Fatal("R did not open the combined reset dialog")
 	}
-	view := ansi.Strip(m.View())
+	view := ansi.Strip(m.View().Content)
 	for _, want := range []string{"Keep the database", "Full wipe", "reset sibling repos to release refs", `Type "reset"`} {
 		if !strings.Contains(view, want) {
 			t.Errorf("reset dialog missing %q", want)
@@ -394,8 +394,8 @@ func TestDashboardAbortConfirmThenInterrupt(t *testing.T) {
 	if fr.interrupted {
 		t.Fatal("ctrl+c interrupted immediately; must confirm first")
 	}
-	if !strings.Contains(ansi.Strip(m.View()), "abort it? (y/n)") {
-		t.Errorf("pane footer missing the abort confirm prompt:\n%s", ansi.Strip(m.View()))
+	if !strings.Contains(ansi.Strip(m.View().Content), "abort it? (y/n)") {
+		t.Errorf("pane footer missing the abort confirm prompt:\n%s", ansi.Strip(m.View().Content))
 	}
 
 	m, cmd := update(t, m, keyMsg("y"))
@@ -405,8 +405,8 @@ func TestDashboardAbortConfirmThenInterrupt(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("confirmed abort did not start the grace timer")
 	}
-	if !strings.Contains(ansi.Strip(m.View()), "aborting") {
-		t.Errorf("pane footer does not report the aborting state:\n%s", ansi.Strip(m.View()))
+	if !strings.Contains(ansi.Strip(m.View().Content), "aborting") {
+		t.Errorf("pane footer does not report the aborting state:\n%s", ansi.Strip(m.View().Content))
 	}
 }
 
@@ -438,7 +438,7 @@ func TestDashboardAbortShowsNote(t *testing.T) {
 
 	// Child exits after the interrupt.
 	m, _ = update(t, m, actions.DoneMsg{Code: 130})
-	view := ansi.Strip(m.View())
+	view := ansi.Strip(m.View().Content)
 	if !strings.Contains(view, m.actionAbortNote) {
 		t.Errorf("post-abort pane missing AbortNote %q:\n%s", m.actionAbortNote, view)
 	}
@@ -465,8 +465,8 @@ func TestDashboardKillEscalation(t *testing.T) {
 	if !m.killOffered {
 		t.Fatal("grace elapsing with a live child did not offer the force-kill")
 	}
-	if !strings.Contains(ansi.Strip(m.View()), "force kill") {
-		t.Errorf("pane footer missing the force-kill offer:\n%s", ansi.Strip(m.View()))
+	if !strings.Contains(ansi.Strip(m.View().Content), "force kill") {
+		t.Errorf("pane footer missing the force-kill offer:\n%s", ansi.Strip(m.View().Content))
 	}
 
 	_, _ = update(t, m, keyMsg("K"))
@@ -593,7 +593,7 @@ func TestSelectionMovesAndClamps(t *testing.T) {
 
 func TestEscInNormalModeEmitsBackMsg(t *testing.T) {
 	m := newModel(t.TempDir())
-	_, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	_, cmd := m.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if cmd == nil {
 		t.Fatal("esc in normal mode returned no command")
 	}
@@ -849,7 +849,7 @@ func TestActionPaneFloodKeepsFrameInBox(t *testing.T) {
 	mm, _ = m.Update(actions.OutputMsg{Data: []byte(b.String())})
 	m = mm.(*model)
 
-	frameFits(t, m.View(), 100, 30)
+	frameFits(t, m.View().Content, 100, 30)
 }
 
 // TestActionPanePreservesManualScroll asserts that scrolling back during a
@@ -884,15 +884,15 @@ func TestActionPanePreservesManualScroll(t *testing.T) {
 	if m.actionView.AtBottom() {
 		t.Fatal("pgup should have scrolled away from the bottom")
 	}
-	offsetBefore := m.actionView.YOffset
+	offsetBefore := m.actionView.YOffset()
 
 	// A new output chunk arrives mid-scroll. It must NOT yank to bottom.
 	m, _ = update(t, m, actions.OutputMsg{Data: []byte("line 200\r\nline 201\r\n")})
 	if m.actionView.AtBottom() {
 		t.Error("output batch yanked the pane to the bottom, defeating scroll-back")
 	}
-	if m.actionView.YOffset != offsetBefore {
-		t.Errorf("scroll position moved: YOffset %d → %d", offsetBefore, m.actionView.YOffset)
+	if m.actionView.YOffset() != offsetBefore {
+		t.Errorf("scroll position moved: YOffset %d → %d", offsetBefore, m.actionView.YOffset())
 	}
 }
 
@@ -912,7 +912,7 @@ func TestLogPaneFloodKeepsFrameInBox(t *testing.T) {
 	}
 	m.refreshLogPane()
 
-	frameFits(t, m.View(), 100, 30)
+	frameFits(t, m.View().Content, 100, 30)
 }
 
 // TestLeftWidthResponsive pins the responsive services-pane width (U5):
@@ -1198,7 +1198,7 @@ func TestSummaryWorstCaseFitsFrame(t *testing.T) {
 			Migrations:     contract.Migrations{Checked: true, Ready: boolPtr(false)},
 			ReleaseControl: contract.ReleaseControl{Branch: "main"},
 		}
-		frameFits(t, m.View(), dim.w, dim.h)
+		frameFits(t, m.View().Content, dim.w, dim.h)
 	}
 }
 
@@ -1273,7 +1273,7 @@ func TestDialogFitsNarrowPane(t *testing.T) {
 				t.Errorf("form view width %d exceeds pane content width %d (will re-wrap)", fw, paneContent)
 			}
 			// And the whole rendered frame must stay inside the terminal box.
-			frameFits(t, m.View(), w, h)
+			frameFits(t, m.View().Content, w, h)
 		})
 	}
 }

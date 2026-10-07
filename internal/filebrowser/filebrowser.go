@@ -11,9 +11,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/filepicker"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/filepicker"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/styles"
@@ -117,8 +117,7 @@ func New(opts Options) Model {
 	}
 
 	// Brand the selection cursor/row so the picker reads as part of the PIC-SURE
-	// palette; everything else keeps the filepicker defaults (which already
-	// degrade under NO_COLOR via lipgloss).
+	// palette; everything else keeps the filepicker defaults.
 	fp.Styles.Cursor = fp.Styles.Cursor.Foreground(styles.Brand)
 	fp.Styles.Selected = lipgloss.NewStyle().Foreground(styles.Brand).Bold(true)
 
@@ -287,8 +286,7 @@ func (m Model) statusLine() string {
 	return ""
 }
 
-// hintStyle dims the navigation key-hint so it reads as chrome. Faint degrades
-// to plain text under NO_COLOR via lipgloss, same as the rest of the palette.
+// hintStyle dims the navigation key-hint so it reads as chrome.
 var hintStyle = lipgloss.NewStyle().Faint(true)
 
 // elideLeft truncates path from the left to fit width w, prefixing "…" so the

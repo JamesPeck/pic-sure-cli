@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/actions"
 )
@@ -32,7 +32,7 @@ func runningActivity(t *testing.T) (*activity, *fakeRunner) {
 
 func TestActivityEscWhileRunningAsksForConfirmation(t *testing.T) {
 	a, fr := runningActivity(t)
-	_, _ = a.update(tea.KeyMsg{Type: tea.KeyEsc})
+	_, _ = a.update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if !a.confirmingAbort {
 		t.Fatal("esc while running did not enter abort confirmation")
 	}
@@ -40,7 +40,7 @@ func TestActivityEscWhileRunningAsksForConfirmation(t *testing.T) {
 		t.Fatal("esc interrupted immediately; must confirm first")
 	}
 	// n dismisses
-	_, _ = a.update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	_, _ = a.update(tea.KeyPressMsg{Code: 'n', Text: "n"})
 	if a.confirmingAbort {
 		t.Fatal("'n' did not dismiss the abort confirmation")
 	}
@@ -48,8 +48,8 @@ func TestActivityEscWhileRunningAsksForConfirmation(t *testing.T) {
 
 func TestActivityConfirmedAbortInterruptsAndShowsNote(t *testing.T) {
 	a, fr := runningActivity(t)
-	_, _ = a.update(tea.KeyMsg{Type: tea.KeyCtrlC})
-	_, _ = a.update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	_, _ = a.update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	_, _ = a.update(tea.KeyPressMsg{Code: 'y', Text: "y"})
 	if !fr.interrupted {
 		t.Fatal("'y' did not interrupt the runner")
 	}
@@ -66,12 +66,12 @@ func TestActivityConfirmedAbortInterruptsAndShowsNote(t *testing.T) {
 
 func TestActivityAbortRaceWithCompletion(t *testing.T) {
 	a, fr := runningActivity(t)
-	_, _ = a.update(tea.KeyMsg{Type: tea.KeyEsc}) // user is being asked "abort?"
-	_, _ = a.update(actions.DoneMsg{Code: 0})     // ...and the run completes meanwhile
+	_, _ = a.update(tea.KeyPressMsg{Code: tea.KeyEscape}) // user is being asked "abort?"
+	_, _ = a.update(actions.DoneMsg{Code: 0})             // ...and the run completes meanwhile
 	if a.confirmingAbort {
 		t.Fatal("DoneMsg did not dismiss the pending abort confirmation")
 	}
-	_, _ = a.update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	_, _ = a.update(tea.KeyPressMsg{Code: 'y', Text: "y"})
 	if a.aborted || fr.interrupted {
 		t.Fatal("'y' after completion must not abort the finished run")
 	}
@@ -101,7 +101,7 @@ func TestActivitySuccessEnterOpensDashboard(t *testing.T) {
 	if !strings.Contains(a.view(), "enter: dashboard") {
 		t.Error("success footer missing dashboard hint")
 	}
-	_, cmd := a.update(tea.KeyMsg{Type: tea.KeyEnter})
+	_, cmd := a.update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("enter after success returned no command")
 	}
@@ -117,7 +117,7 @@ func TestActivityFailureEscReturnsToMenu(t *testing.T) {
 	if !strings.Contains(a.view(), "exited 3") {
 		t.Error("failure footer missing exit code")
 	}
-	_, cmd := a.update(tea.KeyMsg{Type: tea.KeyEsc})
+	_, cmd := a.update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if cmd == nil {
 		t.Fatal("esc after failure returned no command")
 	}
@@ -127,15 +127,15 @@ func TestActivityFailureEscReturnsToMenu(t *testing.T) {
 	// enter after failure must NOT open the dashboard
 	a2, _ := runningActivity(t)
 	_, _ = a2.update(actions.DoneMsg{Code: 3})
-	if _, cmd := a2.update(tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
+	if _, cmd := a2.update(tea.KeyPressMsg{Code: tea.KeyEnter}); cmd != nil {
 		t.Error("enter after failure should be inert")
 	}
 }
 
 func TestActivityDoubleCtrlCAborts(t *testing.T) {
 	a, fr := runningActivity(t)
-	_, _ = a.update(tea.KeyMsg{Type: tea.KeyCtrlC}) // ask
-	_, _ = a.update(tea.KeyMsg{Type: tea.KeyCtrlC}) // reflexive second press = yes
+	_, _ = a.update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}) // ask
+	_, _ = a.update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}) // reflexive second press = yes
 	if !fr.interrupted || !a.aborted {
 		t.Fatal("second ctrl+c did not confirm the abort")
 	}
@@ -146,8 +146,8 @@ func TestActivityDoubleCtrlCAborts(t *testing.T) {
 // exited — the force-kill offer is NOT shown until the grace elapses.
 func TestActivityAbortStartsGraceTimer(t *testing.T) {
 	a, fr := runningActivity(t)
-	_, _ = a.update(tea.KeyMsg{Type: tea.KeyEsc})
-	_, cmd := a.update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	_, _ = a.update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	_, cmd := a.update(tea.KeyPressMsg{Code: 'y', Text: "y"})
 	if !fr.interrupted {
 		t.Fatal("confirmed abort did not interrupt")
 	}
@@ -165,7 +165,7 @@ func TestActivityAbortStartsGraceTimer(t *testing.T) {
 		t.Error("force-kill offer shown before the grace period elapsed")
 	}
 	// K is inert before the offer is live.
-	_, _ = a.update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'K'}})
+	_, _ = a.update(tea.KeyPressMsg{Code: 'K', Text: "K"})
 	if fr.killed {
 		t.Error("K killed the child before the grace period elapsed")
 	}
@@ -176,8 +176,8 @@ func TestActivityAbortStartsGraceTimer(t *testing.T) {
 // from a previous activity screen (wrong seq) is discarded.
 func TestActivityKillOfferAppearsAfterGrace(t *testing.T) {
 	a, fr := runningActivity(t)
-	_, _ = a.update(tea.KeyMsg{Type: tea.KeyCtrlC})
-	_, _ = a.update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	_, _ = a.update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	_, _ = a.update(tea.KeyPressMsg{Code: 'y', Text: "y"})
 
 	// A leftover tick from an earlier screen must not escalate this run.
 	_, _ = a.update(activityKillGraceMsg{seq: a.seq - 1})
@@ -195,7 +195,7 @@ func TestActivityKillOfferAppearsAfterGrace(t *testing.T) {
 	}
 
 	// K force-kills.
-	_, _ = a.update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'K'}})
+	_, _ = a.update(tea.KeyPressMsg{Code: 'K', Text: "K"})
 	if !fr.killed {
 		t.Fatal("K did not force-kill the child")
 	}
@@ -205,8 +205,8 @@ func TestActivityKillOfferAppearsAfterGrace(t *testing.T) {
 // that arrives afterward must not offer the kill, and any prior offer clears.
 func TestActivityDoneCancelsKillOffer(t *testing.T) {
 	a, _ := runningActivity(t)
-	_, _ = a.update(tea.KeyMsg{Type: tea.KeyCtrlC})
-	_, _ = a.update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	_, _ = a.update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	_, _ = a.update(tea.KeyPressMsg{Code: 'y', Text: "y"})
 
 	// Child exits before the grace fires.
 	_, _ = a.update(actions.DoneMsg{Code: 130})
@@ -233,7 +233,7 @@ func TestActivityDoneCancelsKillOffer(t *testing.T) {
 func TestActivityCtrlCOnFinishedScreenQuits(t *testing.T) {
 	a, _ := runningActivity(t)
 	_, _ = a.update(actions.DoneMsg{Code: 0})
-	_, cmd := a.update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	_, cmd := a.update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	if cmd == nil {
 		t.Fatal("ctrl+c on the finished screen returned no command")
 	}

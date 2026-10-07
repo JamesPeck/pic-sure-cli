@@ -43,7 +43,7 @@ The installer detects `uname -s`/`-m`, downloads the latest release plus
 `checksums.txt`, and verifies the SHA-256 by explicit comparison
 (`sha256sum`, falling back to `shasum -a 256`).
 
-**From source** (Go 1.24+; `GOTOOLCHAIN=auto` fetches it if needed):
+**From source** (Go 1.26+; `GOTOOLCHAIN=auto` fetches it if needed):
 
 ```sh
 git clone https://github.com/JamesPeck/pic-sure-cli.git

@@ -6,25 +6,20 @@ package dashboard
 //   - At ≥100 cols: the full legend is shown.
 //   - In both cases: the view stays within the terminal box.
 //
-// Color emission is pinned around EXPLICIT lipgloss color profiles (see
-// TestDashboardColorProfileSGR): in a test binary stdout is not a TTY, so
-// lipgloss auto-detects the Ascii profile and emits zero SGR regardless of
-// NO_COLOR — an env-var-based NO_COLOR assertion would be vacuous.
+// Color emission is pinned per color profile in TestDashboardColorProfileSGR.
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/colorprofile"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/muesli/termenv"
-)
 
-// dashAnsiSGR matches any ANSI SGR escape sequence.
-var dashAnsiSGR = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+	"github.com/JamesPeck/pic-sure-cli/internal/styles/stylestest"
+)
 
 // dashMatrixSizes are the three canonical terminal sizes for U13.
 var dashMatrixSizes = [][2]int{
@@ -73,7 +68,7 @@ func TestDashboardHelpLineMatrix(t *testing.T) {
 			}
 
 			// Frame must fit inside the terminal box.
-			view := m.View()
+			view := m.View().Content
 			if fh := lipgloss.Height(view); fh > h {
 				t.Errorf("%dx%d: frame height %d > terminal height %d", w, h, fh, h)
 			}
@@ -86,44 +81,26 @@ func TestDashboardHelpLineMatrix(t *testing.T) {
 	}
 }
 
-// TestDashboardColorProfileSGR pins both sides of color emission around
-// EXPLICIT lipgloss color profiles. A t.Setenv("NO_COLOR")-based test would be
-// vacuous here: the test binary's stdout is not a TTY, so lipgloss's
-// auto-detected profile is already Ascii (zero SGR no matter what), and the
-// default renderer caches its detected profile via sync.Once anyway. Instead,
-// lipgloss.SetColorProfile — the documented testing hook for exactly this —
-// forces the default renderer (which the dashboard's package-level styles
-// render through) to:
-//   - termenv.TrueColor: the styled dashboard MUST emit SGR (proves the
-//     styling is real, so the Ascii side below cannot pass trivially);
-//   - termenv.Ascii (what lipgloss resolves NO_COLOR to): zero SGR, and
-//     rendering must not panic.
-//
-// No test in this package uses t.Parallel, so mutating the default renderer's
-// profile with a Cleanup restore is safe.
+// TestDashboardColorProfileSGR pins both sides of color emission. Lip Gloss
+// v2 renders full color whatever the environment, and Bubble Tea downsamples
+// each frame to the terminal's color profile on output, so the test
+// downsamples the frame itself:
+//   - TrueColor: the styled dashboard MUST set colors (proves the styling is
+//     real, so the Ascii side below cannot pass trivially);
+//   - Ascii (the profile NO_COLOR selects): no colors at all.
 func TestDashboardColorProfileSGR(t *testing.T) {
-	restore := lipgloss.ColorProfile()
-	t.Cleanup(func() { lipgloss.SetColorProfile(restore) })
-
 	for _, sz := range [][2]int{{80, 24}, {200, 50}} {
 		w, h := sz[0], sz[1]
-
-		// Color profile: styling must actually emit SGR.
-		lipgloss.SetColorProfile(termenv.TrueColor)
 		m := testModel(t)
 		mm, _ := m.Update(tea.WindowSizeMsg{Width: w, Height: h})
 		m = mm.(*model)
-		if view := m.View(); !dashAnsiSGR.MatchString(view) {
-			t.Errorf("%dx%d TrueColor: styled dashboard emitted no SGR (styling lost?)", w, h)
-		}
+		view := m.View().Content
 
-		// Ascii profile (the NO_COLOR resolution): zero SGR.
-		lipgloss.SetColorProfile(termenv.Ascii)
-		m = testModel(t)
-		mm, _ = m.Update(tea.WindowSizeMsg{Width: w, Height: h})
-		m = mm.(*model)
-		if view := m.View(); dashAnsiSGR.MatchString(view) {
-			t.Errorf("%dx%d Ascii (NO_COLOR): raw ANSI SGR sequences present in output", w, h)
+		if !stylestest.HasColor(stylestest.Downsample(view, colorprofile.TrueColor)) {
+			t.Errorf("%dx%d TrueColor: styled dashboard set no colors (styling lost?)", w, h)
+		}
+		if stylestest.HasColor(stylestest.Downsample(view, colorprofile.Ascii)) {
+			t.Errorf("%dx%d Ascii (NO_COLOR): colors present in output", w, h)
 		}
 	}
 }

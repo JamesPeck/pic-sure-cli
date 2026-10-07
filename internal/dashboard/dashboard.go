@@ -7,7 +7,7 @@
 package dashboard
 
 import (
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // BackMsg asks the embedding program to leave the dashboard (esc in normal

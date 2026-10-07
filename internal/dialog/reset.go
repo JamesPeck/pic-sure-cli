@@ -1,17 +1,17 @@
-// Package dialog holds huh dialog builders shared by the TUI surfaces (the
-// landing screen in internal/tui and the dashboard in internal/dashboard).
-// It is its own package because both callers need the form construction but
-// neither may import the other (internal/tui already imports
-// internal/dashboard, so the dashboard cannot reach back into tui), and the
-// actions package may not depend on huh. The builder returns the *huh.Form
-// unsized: each screen feeds it the synthetic WindowSizeMsg through its own
-// sizeForm, since the two render the form into differently sized regions.
+// Package dialog holds the huh dialog helpers shared by the TUI surfaces (the
+// screens in internal/tui and the dashboard in internal/dashboard): the reset
+// form, and Fit, which sizes and styles any embedded form. It is its own
+// package because both callers need them but neither may import the other
+// (internal/tui already imports internal/dashboard, so the dashboard cannot
+// reach back into tui), and the actions package may not depend on huh. The
+// builder returns the *huh.Form unfitted: each screen calls Fit with its own
+// region, since they render forms into differently sized regions.
 package dialog
 
 import (
 	"fmt"
 
-	"github.com/charmbracelet/huh"
+	"charm.land/huh/v2"
 )
 
 // ResetForm builds the combined reset dialog: ONE screen carrying the scope
@@ -19,8 +19,8 @@ import (
 // and the typed-word confirm — so the two reset variants share a single
 // dialog instead of two menu items. The caller owns the bound state: scope is
 // set to "keep" or "all", repos toggles the --repos flag, and confirmText must
-// equal word to authorize dispatch. The form is returned UNSIZED; the caller
-// sizes it (landing.sizeForm / dashboard.sizeForm) to the region it renders in.
+// equal word to authorize dispatch. The form is returned unfitted; the caller
+// fits it (landing.sizeForm / dashboard.sizeForm) to the region it renders in.
 //
 // Both selects bind Value BEFORE Options (huh gotcha: the option viewport's
 // scroll offset is computed from the accessor's current value when Options()

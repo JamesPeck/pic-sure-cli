@@ -3,7 +3,7 @@ package dashboard
 import (
 	"context"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // logSession follows one service's logs. Lines

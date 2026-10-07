@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // drainInit runs the cmd returned by Init (the filepicker's readDir) and feeds
@@ -154,7 +154,7 @@ func TestSelectFileReturnsAbsPath(t *testing.T) {
 
 	// Enter both navigates/opens and selects in the filepicker; on a plain file
 	// it sets Path, which DidSelectFile then reports. Feed it through our Update.
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 
 	path, ok := m.Selected()
 	if !ok {
@@ -182,7 +182,7 @@ func TestSelectDisabledFileSetsErr(t *testing.T) {
 	m.SetSize(80, 20)
 	m = drainInit(t, m)
 
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 
 	if _, ok := m.Selected(); ok {
 		t.Error("Selected() ok = true for a disabled file, want false")
@@ -255,18 +255,6 @@ func TestViewNoPanicAtVariousSizes(t *testing.T) {
 	}
 }
 
-func TestViewNoPanicUnderNoColor(t *testing.T) {
-	t.Setenv("NO_COLOR", "1")
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "data.csv"), []byte("x"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	m := New(Options{StartDir: dir, Title: "Pick", AllowedExts: []string{".csv"}})
-	m.SetSize(80, 24)
-	m = drainInit(t, m)
-	_ = m.View()
-}
-
 func TestViewBeforeInitNoPanic(t *testing.T) {
 	// Exercises the un-warmed-cache fallback path in dirHasSelectable: View runs
 	// before any Update has scanned the directory.
@@ -307,7 +295,7 @@ func TestViewHeaderReflectsNavigation(t *testing.T) {
 
 	// Simulate descending into the subdir the way the filepicker does on open.
 	m.fp.CurrentDirectory = sub
-	m, _ = m.Update(tea.KeyMsg{}) // re-warm caches against the new dir
+	m, _ = m.Update(tea.KeyPressMsg{}) // re-warm caches against the new dir
 
 	if !strings.Contains(m.View(), "demo-data") {
 		t.Errorf("View() header should reflect navigation into %q; got:\n%s", sub, m.View())
@@ -371,7 +359,7 @@ func TestPathHeaderLeftElidedToWidth(t *testing.T) {
 	m.SetSize(boxW, 20)
 	m = drainInit(t, m)
 	m.fp.CurrentDirectory = deep
-	m, _ = m.Update(tea.KeyMsg{})
+	m, _ = m.Update(tea.KeyPressMsg{})
 
 	header := strings.SplitN(m.View(), "\n", 2)[0]
 	if w := lipgloss.Width(header); w > boxW {

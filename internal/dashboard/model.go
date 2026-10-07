@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/huh"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/huh/v2"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/actions"
 	"github.com/JamesPeck/pic-sure-cli/internal/contract"
@@ -294,7 +294,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	}
 
@@ -305,7 +305,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch m.mode {
 	case modeConfirm, modePick, modeReset:
 		// huh ships its esc binding disabled; the help line advertises
@@ -369,7 +369,7 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // abort sends ctrl-c and, if the child ignores it past the grace period, the
 // footer offers a force-kill (K). On a finished pane esc/q close it and ctrl+c
 // quits (matching q), since the child has already exited.
-func (m *model) handleActingKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *model) handleActingKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// Inline confirm (no huh — the activity screen doesn't use one either).
 	if m.confirmingAbort {
 		switch msg.String() {

@@ -1,6 +1,7 @@
 // End-to-end PTY tests: the built binary must start the TUI on a terminal,
-// render the landing and the dashboard, and quit cleanly on 'q' without
-// corrupting the terminal (a clean exit implies Bubble Tea's teardown ran).
+// render the landing, the setup wizard and the dashboard, and quit cleanly on
+// 'q' without corrupting the terminal (a clean exit implies Bubble Tea's
+// teardown ran).
 package smoke
 
 import (
@@ -17,6 +18,8 @@ import (
 	"time"
 
 	"github.com/creack/pty"
+
+	"github.com/JamesPeck/pic-sure-cli/internal/styles/stylestest"
 )
 
 // bin is the pic-sure binary TestMain builds for every test.
@@ -46,8 +49,8 @@ func skipUnlessPTYAllowed(t *testing.T) {
 	}
 }
 
-// ptySession runs the binary in dir on a 120x40 pseudo-terminal and collects
-// its output.
+// ptySession runs the binary on a 120x40 pseudo-terminal and collects its
+// output.
 type ptySession struct {
 	t      *testing.T
 	cmd    *exec.Cmd
@@ -56,10 +59,20 @@ type ptySession struct {
 	output bytes.Buffer
 }
 
+// startPTY runs the binary in dir with the test's environment.
 func startPTY(t *testing.T, dir string, args ...string) *ptySession {
+	t.Helper()
+	return startPTYEnv(t, dir, nil, args...)
+}
+
+// startPTYEnv is startPTY with extra NAME=value entries in the environment.
+func startPTYEnv(t *testing.T, dir string, env []string, args ...string) *ptySession {
 	t.Helper()
 	cmd := exec.Command(bin, args...)
 	cmd.Dir = dir
+	if env != nil {
+		cmd.Env = append(os.Environ(), env...)
+	}
 	master, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 40, Cols: 120})
 	if err != nil {
 		t.Fatal(err)
@@ -150,6 +163,64 @@ func TestDashboardStartsAndQuitsUnderPTY(t *testing.T) {
 	s.waitFor("PIC-SURE", "Services")
 	s.send("q")
 	s.waitExit0()
+}
+
+func TestWizardOpensAndClosesUnderPTY(t *testing.T) {
+	skipUnlessPTYAllowed(t)
+	// The setup wizard still seeds itself from the v1 .env.example.
+	dir := t.TempDir()
+	example := "DB_MODE=local\nAUTH_MODE=open\n"
+	if err := os.WriteFile(filepath.Join(dir, ".env.example"), []byte(example), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := startPTY(t, dir, "--no-animations")
+	s.waitFor("Set up PIC-SURE")
+	s.send("\r")
+	s.waitFor("Identity provider", "esc cancel")
+	s.send("\x1b") // a pristine form closes without asking
+	s.waitFor("setup cancelled")
+	s.send("q")
+	s.waitExit0()
+}
+
+// The TUI asks the terminal for its background color and picks the palette
+// to match: on a light background the dashboard header is the exact logo blue
+// (#224D96) rather than the lifted dark-background variant.
+func TestTUIFollowsTerminalBackground(t *testing.T) {
+	skipUnlessPTYAllowed(t)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".env"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := startPTYEnv(t, dir, []string{"TERM=xterm-256color", "COLORTERM=truecolor", "NO_COLOR="}, "--no-animations")
+	s.waitFor("\x1b]11;?") // the background color query (OSC 11)
+	s.send("\x1b]11;rgb:ffff/ffff/ffff\x07")
+	s.waitFor("Dashboard")
+	s.send("\r")
+	s.waitFor("Services", "38;2;34;77;150")
+	s.send("q")
+	s.waitExit0()
+}
+
+// Any non-empty NO_COLOR turns colors off (text decoration stays), even on a
+// truecolor terminal and even for values that don't parse as true.
+func TestTUIHonoursNoColor(t *testing.T) {
+	skipUnlessPTYAllowed(t)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".env"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := startPTYEnv(t, dir, []string{"TERM=xterm-256color", "COLORTERM=truecolor", "NO_COLOR=yes"}, "--no-animations")
+	s.waitFor("Dashboard")
+	s.send("\r")
+	s.waitFor("Services", "not implemented")
+	s.send("q")
+	s.waitExit0()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if stylestest.HasColor(s.output.String()) {
+		t.Errorf("NO_COLOR=yes: the TUI still set colors:\n%q", s.output.String())
+	}
 }
 
 // SIGTERM ends the TUI through the CLI's context: the terminal is restored

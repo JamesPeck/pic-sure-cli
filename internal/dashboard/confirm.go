@@ -3,8 +3,8 @@ package dashboard
 import (
 	"fmt"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/huh"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/huh/v2"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/actions"
 	"github.com/JamesPeck/pic-sure-cli/internal/dialog"
@@ -44,23 +44,17 @@ func (m *model) startConfirm(act actions.Action) (tea.Model, tea.Cmd) {
 	return m, m.form.Init()
 }
 
-// sizeForm feeds a dialog form the synthetic resize huh expects, sized to the
-// FORM PANE it renders in (m.width-leftWidth()-8), not the whole terminal. Using
-// WithWidth, or sizing to the terminal, lays the form out wider than the pane
-// so lipgloss re-wraps every line inside it, mangling titles/descriptions
-// below 120 cols. As with landing.sizeForm: no WithWidth, so huh recomputes
-// group viewport heights on every WindowSizeMsg (WithWidth would freeze them).
+// sizeForm fits a dialog form (dialog.Fit) to the FORM PANE it renders in
+// (m.width-leftWidth()-8), not the whole terminal. Using WithWidth, or sizing
+// to the terminal, lays the form out wider than the pane so lipgloss re-wraps
+// every line inside it, mangling titles/descriptions below 120 cols.
 func (m *model) sizeForm(f *huh.Form) *huh.Form {
 	_, cols := m.actionPaneSize() // form-pane content width = m.width-leftWidth()-8
 	// -5 = the frame's chrome rows around the form pane content: header (1) +
 	// pane border top/bottom (2) + footer help line (1), plus 1 row of slack
 	// so the composed frame can never exceed the terminal box.
 	height := max(m.height-5, 8)
-	mm, _ := f.Update(tea.WindowSizeMsg{Width: cols, Height: height})
-	if ff, ok := mm.(*huh.Form); ok {
-		return ff
-	}
-	return f
+	return dialog.Fit(f, cols, height)
 }
 
 // startPicker opens the demo-data dataset picker (the only parameterless ETL

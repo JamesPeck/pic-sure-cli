@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/huh"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/huh/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // summaryDimStyle renders the "(default)" marker faintly so it reads as a quiet
-// annotation, not a value. NO_COLOR-safe via lipgloss.
+// annotation, not a value.
 var summaryDimStyle = lipgloss.NewStyle().Faint(true)
 
 // Form is the wizard's single definition (spec amendment 1): one constructor
@@ -76,11 +76,11 @@ func NewForm(initial map[string]string, skipAuth bool) *Form {
 	// Each group carries a one-sentence intro (huh renders the group Title +
 	// Description as a header above its fields) so the form reads as a guided
 	// flow with narrative per section rather than a flat wall of 13 inputs. A
-	// dynamic "Step N of M" indicator is intentionally NOT added: huh v1.0.0
-	// has no built-in group progress, and two groups here are conditionally
-	// hidden (Auth0 when skipped, the remote-DB details when DB_MODE!=remote),
-	// so any static count would mislead the moment a group is hidden — computing
-	// the visible index would mean reimagining huh's group selector. See report.
+	// dynamic "Step N of M" indicator is intentionally NOT added: huh has no
+	// built-in group progress, and two groups here are conditionally hidden
+	// (Auth0 when skipped, the remote-DB details when DB_MODE!=remote), so any
+	// static count would mislead the moment a group is hidden — computing the
+	// visible index would mean reimagining huh's group selector.
 	groups := []*huh.Group{
 		huh.NewGroup(idp).
 			Title("Identity provider").

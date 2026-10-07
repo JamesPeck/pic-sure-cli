@@ -7,17 +7,17 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/huh"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/huh/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/actions"
 )
 
-func keyEnter() tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyEnter} }
+func keyEnter() tea.KeyPressMsg { return tea.KeyPressMsg{Code: tea.KeyEnter} }
 func keyDownN(l *landing, n int) {
 	for i := 0; i < n; i++ {
-		l.update(tea.KeyMsg{Type: tea.KeyDown})
+		l.update(tea.KeyPressMsg{Code: tea.KeyDown})
 	}
 }
 
@@ -109,7 +109,7 @@ func TestLandingDevSubmenu(t *testing.T) {
 		t.Errorf("dev submenu labels = %v, want one to be %q", labels, "Maintenance / adv. ETL…")
 	}
 	// esc returns to the main menu
-	l.update(tea.KeyMsg{Type: tea.KeyEsc})
+	l.update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if got := menuIDs(l.menu); len(got) != 6 {
 		t.Fatalf("esc did not return to main menu: %v", got)
 	}
@@ -243,7 +243,7 @@ func TestLandingAnimationTicksSurviveConfirmDialog(t *testing.T) {
 
 func TestLandingQuitKeys(t *testing.T) {
 	l := newLanding("/tmp/x", true, false)
-	_, cmd := l.update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	_, cmd := l.update(tea.KeyPressMsg{Code: 'q', Text: "q"})
 	if cmd == nil {
 		t.Fatal("q returned no command")
 	}
@@ -1033,7 +1033,7 @@ func TestLandingFooterSwitchesWhenDialogIsOpen(t *testing.T) {
 		t.Errorf("dialog-open footer missing 'esc': %q", got)
 	}
 	// After esc closes the dialog the footer reverts.
-	l.update(tea.KeyMsg{Type: tea.KeyEsc})
+	l.update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if got := l.footer(); got != "↑/↓ select · enter · q quit" {
 		t.Errorf("after-close footer = %q, want hint with q quit", got)
 	}
@@ -1067,7 +1067,7 @@ func TestLandingEscCancelsEveryDialogKind(t *testing.T) {
 		if l.form == nil {
 			t.Fatalf("%s: dialog did not open", tc.name)
 		}
-		_, cmd := l.update(tea.KeyMsg{Type: tea.KeyEsc})
+		_, cmd := l.update(tea.KeyPressMsg{Code: tea.KeyEscape})
 		if l.form != nil {
 			t.Errorf("%s: esc did not close the dialog", tc.name)
 		}

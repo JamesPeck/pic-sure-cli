@@ -5,10 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/huh"
-	"github.com/charmbracelet/lipgloss"
-	"github.com/muesli/termenv"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/huh/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/actions"
 )
@@ -317,7 +316,7 @@ func TestLoadWizardGenomicRoutesToFile(t *testing.T) {
 func TestLoadWizardEscPristineCloses(t *testing.T) {
 	s := newLoadScreen("/tmp/x")
 	s.setSize(100, 35)
-	s2, cmd := s.update(tea.KeyMsg{Type: tea.KeyEsc})
+	s2, cmd := s.update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if s2.discarding {
 		t.Fatal("pristine esc raised the discard prompt")
 	}
@@ -347,7 +346,7 @@ func TestLoadWizardEscDirtyGuard(t *testing.T) {
 
 	// esc on a dirty screen raises the prompt (no close yet).
 	s := dirty(t)
-	s, cmd := s.update(tea.KeyMsg{Type: tea.KeyEsc})
+	s, cmd := s.update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if !s.discarding {
 		t.Fatal("esc on a dirty screen did not raise the discard prompt")
 	}
@@ -360,16 +359,16 @@ func TestLoadWizardEscDirtyGuard(t *testing.T) {
 
 	// y discards (closes aborted).
 	s = dirty(t)
-	s, _ = s.update(tea.KeyMsg{Type: tea.KeyEsc})
-	_, cmd = s.update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	s, _ = s.update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	_, cmd = s.update(tea.KeyPressMsg{Code: 'y', Text: "y"})
 	if msg, ok := cmd().(loadDataClosedMsg); !ok || !msg.aborted {
 		t.Fatalf("y at discard prompt = %#v, want loadDataClosedMsg{aborted:true}", cmd())
 	}
 
 	// n keeps the screen (prompt dismissed, collected file intact).
 	s = dirty(t)
-	s, _ = s.update(tea.KeyMsg{Type: tea.KeyEsc})
-	s, cmd = s.update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	s, _ = s.update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	s, cmd = s.update(tea.KeyPressMsg{Code: 'n', Text: "n"})
 	if cmd != nil {
 		t.Fatal("n at discard prompt should not close the screen")
 	}
@@ -402,52 +401,46 @@ func TestLoadWizardConfirmSummaryLeadsWithWarning(t *testing.T) {
 	}
 }
 
-// TestLoadWizardFrameStaysInBox: across the size matrix and both color profiles
-// (TrueColor and the Ascii profile lipgloss resolves NO_COLOR to — the
-// package's idiom; see TestLandingColorProfileSGR) the screen renders without
-// panicking and never overflows the terminal box.
+// TestLoadWizardFrameStaysInBox: across the size matrix the screen renders
+// without panicking and never overflows the terminal box. (The color profile
+// no longer matters here: Lip Gloss v2 renders the same cells for every
+// profile and downsampling happens on output.)
 func TestLoadWizardFrameStaysInBox(t *testing.T) {
-	restore := lipgloss.ColorProfile()
-	t.Cleanup(func() { lipgloss.SetColorProfile(restore) })
-
-	for _, profile := range []termenv.Profile{termenv.TrueColor, termenv.Ascii} {
-		lipgloss.SetColorProfile(profile)
-		for _, w := range []int{80, 120, 200} {
-			h := 30
-			// Exercise a representative step from each kind: the kind select
-			// (form), a phenotype file step (filebrowser), the phenotype confirm
-			// summary, and the genomic confirm summary (the longest/wrappiest one).
-			for _, step := range []loadStep{loadKind, loadPhenoFile, loadConfirm, loadGenomicConfirm} {
-				s := newLoadScreen("/tmp/x")
-				s.setSize(w, h)
-				switch step {
-				case loadPhenoFile:
-					s.kind = "phenotype"
-					s, _ = completeForm(s)
-				case loadConfirm:
-					s.kind = "phenotype"
-					s, _ = completeForm(s)
-					s, _ = s.consumeFile("/data/pheno.csv")
-					s, _ = completeForm(s)
-					s.dictMode = "auto"
-					s, _ = completeForm(s)
-				case loadGenomicConfirm:
-					s = driveGenomicToConfirm(t, s, genomicInputs{
-						vcfIndex:      "/data/idx.tsv",
-						partition:     "chr22",
-						promote:       false,
-						enableProfile: true, // exercise the long conditional warning
-					})
-				}
-				s.setSize(w, h) // re-size after entering the step
-				view := s.view()
-				if lipgloss.Height(view) > h {
-					t.Errorf("profile=%v %dx%d step=%v frame height %d exceeds %d", profile, w, h, step, lipgloss.Height(view), h)
-				}
-				for n, line := range strings.Split(view, "\n") {
-					if lw := lipgloss.Width(line); lw > w {
-						t.Errorf("profile=%v %dx%d step=%v line %d width %d exceeds %d", profile, w, h, step, n, lw, w)
-					}
+	for _, w := range []int{80, 120, 200} {
+		h := 30
+		// Exercise a representative step from each kind: the kind select
+		// (form), a phenotype file step (filebrowser), the phenotype confirm
+		// summary, and the genomic confirm summary (the longest/wrappiest one).
+		for _, step := range []loadStep{loadKind, loadPhenoFile, loadConfirm, loadGenomicConfirm} {
+			s := newLoadScreen("/tmp/x")
+			s.setSize(w, h)
+			switch step {
+			case loadPhenoFile:
+				s.kind = "phenotype"
+				s, _ = completeForm(s)
+			case loadConfirm:
+				s.kind = "phenotype"
+				s, _ = completeForm(s)
+				s, _ = s.consumeFile("/data/pheno.csv")
+				s, _ = completeForm(s)
+				s.dictMode = "auto"
+				s, _ = completeForm(s)
+			case loadGenomicConfirm:
+				s = driveGenomicToConfirm(t, s, genomicInputs{
+					vcfIndex:      "/data/idx.tsv",
+					partition:     "chr22",
+					promote:       false,
+					enableProfile: true, // exercise the long conditional warning
+				})
+			}
+			s.setSize(w, h) // re-size after entering the step
+			view := s.view()
+			if lipgloss.Height(view) > h {
+				t.Errorf("%dx%d step=%v frame height %d exceeds %d", w, h, step, lipgloss.Height(view), h)
+			}
+			for n, line := range strings.Split(view, "\n") {
+				if lw := lipgloss.Width(line); lw > w {
+					t.Errorf("%dx%d step=%v line %d width %d exceeds %d", w, h, step, n, lw, w)
 				}
 			}
 		}
@@ -633,7 +626,7 @@ func TestLoadWizardGenomicEscDirtyGuard(t *testing.T) {
 	s, _ = completeForm(s)
 
 	// Pristine genomic file step (no index yet) closes immediately on esc.
-	s2, cmd := s.update(tea.KeyMsg{Type: tea.KeyEsc})
+	s2, cmd := s.update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if s2.discarding {
 		t.Fatal("esc before any genomic input raised the discard prompt")
 	}
@@ -650,7 +643,7 @@ func TestLoadWizardGenomicEscDirtyGuard(t *testing.T) {
 	if !s.dirty() {
 		t.Fatal("screen should be dirty after the VCF index selection")
 	}
-	s, cmd = s.update(tea.KeyMsg{Type: tea.KeyEsc})
+	s, cmd = s.update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if !s.discarding {
 		t.Fatal("esc after vcf-index did not raise the discard prompt")
 	}
@@ -1021,7 +1014,7 @@ func TestLoadWizardArchiveEntryEscDiscards(t *testing.T) {
 	}
 
 	// esc raises the discard prompt (file is collected → dirty).
-	s, cmd = s.update(tea.KeyMsg{Type: tea.KeyEsc})
+	s, cmd = s.update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if !s.discarding {
 		t.Fatal("esc on the entry picker did not raise the discard prompt")
 	}
@@ -1029,7 +1022,7 @@ func TestLoadWizardArchiveEntryEscDiscards(t *testing.T) {
 		t.Fatal("esc on a dirty entry picker must not close yet")
 	}
 	// y discards (closes aborted).
-	_, cmd = s.update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	_, cmd = s.update(tea.KeyPressMsg{Code: 'y', Text: "y"})
 	if msg, ok := cmd().(loadDataClosedMsg); !ok || !msg.aborted {
 		t.Fatalf("y at discard prompt = %#v, want loadDataClosedMsg{aborted:true}", cmd())
 	}
@@ -1047,7 +1040,7 @@ func TestLoadWizardInspectingEscDiscards(t *testing.T) {
 	if !s.inspecting {
 		t.Fatal("setup: screen should be inspecting")
 	}
-	s, cmd := s.update(tea.KeyMsg{Type: tea.KeyEsc})
+	s, cmd := s.update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if !s.discarding {
 		t.Fatal("esc while inspecting did not raise the discard prompt")
 	}

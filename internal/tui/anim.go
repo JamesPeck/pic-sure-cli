@@ -7,7 +7,7 @@ package tui
 import (
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 )
 
 // defaultStarGlyph is the universally renderable sparkle for near stars.
@@ -39,7 +39,7 @@ func starGlyphs(getenv func(string) string) []rune {
 // Precedence: --no-animations flag > PIC_SURE_NO_ANIMATIONS env
 // (1/true/yes disable; 0/false/no force-enable) > SSH_CONNECTION
 // auto-disable > default on. NO_COLOR governs palette only and is handled by
-// lipgloss, not here.
+// Run's color profile, not here.
 func AnimationsEnabled(noAnimFlag bool, getenv func(string) string) bool {
 	if noAnimFlag {
 		return false

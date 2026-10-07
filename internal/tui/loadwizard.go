@@ -6,11 +6,12 @@ import (
 	"regexp"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/huh"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/huh/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/actions"
+	"github.com/JamesPeck/pic-sure-cli/internal/dialog"
 	"github.com/JamesPeck/pic-sure-cli/internal/filebrowser"
 	"github.com/JamesPeck/pic-sure-cli/internal/styles"
 )
@@ -197,16 +198,10 @@ func (s *loadScreen) setSize(width, height int) {
 	}
 }
 
-// sizeForm feeds the active form the synthetic resize huh expects (same idiom
-// as wizardScreen.applySize / landing.sizeForm: never call WithWidth, or huh
-// freezes group viewports at the construction-time width-80 measurement and
-// clips fields whose description wraps taller at the real width).
+// sizeForm fits the active form to the screen (dialog.Fit), as
+// wizardScreen.applySize and landing.sizeForm do.
 func (s *loadScreen) sizeForm(f *huh.Form) *huh.Form {
-	m, _ := f.Update(tea.WindowSizeMsg{Width: s.formWidth(), Height: s.formHeight()})
-	if ff, ok := m.(*huh.Form); ok {
-		return ff
-	}
-	return f
+	return dialog.Fit(f, s.formWidth(), s.formHeight())
 }
 
 func (s *loadScreen) formWidth() int { return max(min(s.width-4, 76), 40) }
@@ -249,7 +244,7 @@ func (s *loadScreen) update(msg tea.Msg) (*loadScreen, tea.Cmd) {
 	// A discard confirm owns the keyboard until answered. Swallow every
 	// non-key message (huh/filepicker ticks) so the prompt stays put.
 	if s.discarding {
-		key, ok := msg.(tea.KeyMsg)
+		key, ok := msg.(tea.KeyPressMsg)
 		if !ok {
 			return s, nil
 		}
@@ -265,7 +260,7 @@ func (s *loadScreen) update(msg tea.Msg) (*loadScreen, tea.Cmd) {
 	// huh and the filepicker both ship esc disabled, but the footer advertises
 	// "esc cancel" — intercept it here (as wizardScreen does). A screen with
 	// collected input asks to confirm first; a pristine one closes immediately.
-	if key, ok := msg.(tea.KeyMsg); ok && key.String() == "esc" {
+	if key, ok := msg.(tea.KeyPressMsg); ok && key.String() == "esc" {
 		if s.dirty() {
 			s.discarding = true
 			return s, nil

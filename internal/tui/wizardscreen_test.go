@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/huh"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/huh/v2"
 )
 
 // wizardRoot is a fixture checkout with a minimal .env.example (and
@@ -95,7 +95,7 @@ func TestWizardScreenAbortInMainCloses(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.wf.Main.State = huh.StateAborted
-	_, cmd := s.update(tea.KeyMsg{Type: tea.KeyEsc})
+	_, cmd := s.update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if cmd == nil {
 		t.Fatal("abort produced no command")
 	}
@@ -147,8 +147,8 @@ func TestWizardScreenConfirmYesWritesThenRunsInit(t *testing.T) {
 	// enter. huh emits nextFieldMsg/nextGroupMsg as intermediate commands
 	// before StateCompleted; drain the cmd chain until we receive a
 	// wizardWritesDoneMsg or exhaust the pump.
-	_, _ = s.update(tea.KeyMsg{Type: tea.KeyLeft})
-	_, cmd := s.update(tea.KeyMsg{Type: tea.KeyEnter})
+	_, _ = s.update(tea.KeyPressMsg{Code: tea.KeyLeft})
+	_, cmd := s.update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	done := drainForWritesDone(t, s, cmd)
 	if done == nil {
 		t.Fatal("confirm completion did not produce wizardWritesDoneMsg within 10 pumps")
@@ -223,7 +223,7 @@ func TestWizardScreenConfirmNoCloses(t *testing.T) {
 	_, _ = s.update(struct{}{})
 	// Abort at the confirm (esc) — must close as aborted, not write.
 	s.wf.Confirm.State = huh.StateAborted
-	_, cmd := s.update(tea.KeyMsg{Type: tea.KeyEsc})
+	_, cmd := s.update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if cmd == nil {
 		t.Fatal("no command")
 	}
@@ -250,7 +250,7 @@ func TestWizardScreenEscCancelsDirectly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, cmd := s.update(tea.KeyMsg{Type: tea.KeyEsc}) // no form-state fiddling
+	_, cmd := s.update(tea.KeyPressMsg{Code: tea.KeyEscape}) // no form-state fiddling
 	if cmd == nil {
 		t.Fatal("esc produced no command")
 	}
@@ -271,10 +271,10 @@ func dirtyWizard(t *testing.T) *wizardScreen {
 	s = wizardPump(s, s.init(), 0)
 	// IdP selector: choose "Skip" so the next visible group is admin email,
 	// then type into it. Either edit makes the form dirty.
-	s = wizardKey(s, tea.KeyMsg{Type: tea.KeyDown})
-	s = wizardKey(s, tea.KeyMsg{Type: tea.KeyEnter})
+	s = wizardKey(s, tea.KeyPressMsg{Code: tea.KeyDown})
+	s = wizardKey(s, tea.KeyPressMsg{Code: tea.KeyEnter})
 	for _, r := range "James" {
-		s = wizardKey(s, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		s = wizardKey(s, tea.KeyPressMsg{Code: r, Text: string(r)})
 	}
 	if !s.wf.Dirty() {
 		t.Fatal("setup: form should be dirty after typing into a field")
@@ -292,7 +292,7 @@ func TestWizardEscPristineClosesImmediately(t *testing.T) {
 	s.setSize(100, 35)
 	s = wizardPump(s, s.init(), 0)
 
-	s2, cmd := s.update(tea.KeyMsg{Type: tea.KeyEsc})
+	s2, cmd := s.update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if s2.discarding {
 		t.Fatal("pristine esc should not raise the discard confirm")
 	}
@@ -309,7 +309,7 @@ func TestWizardEscPristineClosesImmediately(t *testing.T) {
 func TestWizardEscDirtyAsksBeforeDiscarding(t *testing.T) {
 	s := dirtyWizard(t)
 
-	s, cmd := s.update(tea.KeyMsg{Type: tea.KeyEsc})
+	s, cmd := s.update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if !s.discarding {
 		t.Fatal("esc on a dirty form did not raise the discard confirm")
 	}
@@ -324,9 +324,9 @@ func TestWizardEscDirtyAsksBeforeDiscarding(t *testing.T) {
 // TestWizardDiscardConfirmYesCloses: y at the discard prompt closes as aborted.
 func TestWizardDiscardConfirmYesCloses(t *testing.T) {
 	s := dirtyWizard(t)
-	s, _ = s.update(tea.KeyMsg{Type: tea.KeyEsc}) // raise the prompt
+	s, _ = s.update(tea.KeyPressMsg{Code: tea.KeyEscape}) // raise the prompt
 
-	_, cmd := s.update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	_, cmd := s.update(tea.KeyPressMsg{Code: 'y', Text: "y"})
 	if cmd == nil {
 		t.Fatal("y at the discard prompt produced no command")
 	}
@@ -339,9 +339,9 @@ func TestWizardDiscardConfirmYesCloses(t *testing.T) {
 // the form, entered values intact.
 func TestWizardDiscardConfirmNoStays(t *testing.T) {
 	s := dirtyWizard(t)
-	s, _ = s.update(tea.KeyMsg{Type: tea.KeyEsc}) // raise the prompt
+	s, _ = s.update(tea.KeyPressMsg{Code: tea.KeyEscape}) // raise the prompt
 
-	s, cmd := s.update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	s, cmd := s.update(tea.KeyPressMsg{Code: 'n', Text: "n"})
 	if cmd != nil {
 		t.Fatal("n at the discard prompt should not close the wizard")
 	}
@@ -356,11 +356,11 @@ func TestWizardDiscardConfirmNoStays(t *testing.T) {
 	}
 
 	// esc also dismisses the prompt (a second esc must not close).
-	s, _ = s.update(tea.KeyMsg{Type: tea.KeyEsc}) // re-raise
+	s, _ = s.update(tea.KeyPressMsg{Code: tea.KeyEscape}) // re-raise
 	if !s.discarding {
 		t.Fatal("esc did not re-raise the discard prompt")
 	}
-	s, cmd = s.update(tea.KeyMsg{Type: tea.KeyEsc})
+	s, cmd = s.update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if s.discarding || cmd != nil {
 		t.Error("esc at the discard prompt should dismiss it, not close")
 	}
@@ -399,7 +399,7 @@ func wizardPump(s *wizardScreen, cmd tea.Cmd, depth int) *wizardScreen {
 	}
 }
 
-func wizardKey(s *wizardScreen, k tea.KeyMsg) *wizardScreen {
+func wizardKey(s *wizardScreen, k tea.KeyPressMsg) *wizardScreen {
 	s, cmd := s.update(k)
 	return wizardPump(s, cmd, 0)
 }
@@ -419,11 +419,11 @@ func TestWizardScreenTypedTextIsVisible(t *testing.T) {
 	s = wizardPump(s, s.init(), 0)
 
 	// IdP selector: choose "Skip" so the next visible group is admin email.
-	s = wizardKey(s, tea.KeyMsg{Type: tea.KeyDown})
-	s = wizardKey(s, tea.KeyMsg{Type: tea.KeyEnter})
+	s = wizardKey(s, tea.KeyPressMsg{Code: tea.KeyDown})
+	s = wizardKey(s, tea.KeyPressMsg{Code: tea.KeyEnter})
 
 	for _, r := range "James" {
-		s = wizardKey(s, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		s = wizardKey(s, tea.KeyPressMsg{Code: r, Text: string(r)})
 	}
 
 	view := wizardANSI.ReplaceAllString(s.view(), "")

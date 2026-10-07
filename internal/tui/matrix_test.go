@@ -3,10 +3,7 @@ package tui
 // U13 size/color verification matrix for landing and activity surfaces.
 // Each matrix sub-test renders at the canonical sizes and asserts the
 // view-specific properties described by the audit. Color emission is pinned
-// around EXPLICIT lipgloss color profiles (see TestLandingColorProfileSGR):
-// in a test binary stdout is not a TTY, so lipgloss auto-detects the Ascii
-// profile and emits zero SGR regardless of NO_COLOR — an env-var-based
-// NO_COLOR assertion would be vacuous (it could never fail).
+// per color profile in TestLandingColorProfileSGR.
 
 import (
 	"fmt"
@@ -14,11 +11,12 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
-	"github.com/muesli/termenv"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/colorprofile"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/actions"
+	"github.com/JamesPeck/pic-sure-cli/internal/styles/stylestest"
 )
 
 // ansiSGR matches any ANSI Select Graphic Rendition sequence (ESC [ … m).
@@ -166,42 +164,25 @@ func TestActivityFooterMatrix(t *testing.T) {
 	}
 }
 
-// TestLandingColorProfileSGR pins both sides of color emission around
-// EXPLICIT lipgloss color profiles. A t.Setenv("NO_COLOR")-based test would
-// be vacuous here: the test binary's stdout is not a TTY, so lipgloss's
-// auto-detected profile is already Ascii (zero SGR no matter what), and the
-// default renderer caches its detected profile via sync.Once anyway. Instead,
-// lipgloss.SetColorProfile — the documented testing hook for exactly this —
-// forces the default renderer (which all the views' package-level styles
-// render through) to:
-//   - termenv.TrueColor: the styled landing MUST emit SGR (proves the
-//     styling is real, so the Ascii side below cannot pass trivially);
-//   - termenv.Ascii (what lipgloss resolves NO_COLOR to): zero SGR, and
-//     rendering must not panic.
-//
-// No test in this package uses t.Parallel, so mutating the default renderer's
-// profile with a Cleanup restore is safe.
+// TestLandingColorProfileSGR pins both sides of color emission. Lip Gloss v2
+// renders full color whatever the environment, and Bubble Tea downsamples each
+// frame to the terminal's color profile on output, so the test downsamples the
+// frame itself:
+//   - TrueColor: the styled landing MUST set colors (proves the styling is
+//     real, so the Ascii side below cannot pass trivially);
+//   - Ascii (the profile NO_COLOR selects): no colors at all.
 func TestLandingColorProfileSGR(t *testing.T) {
-	restore := lipgloss.ColorProfile()
-	t.Cleanup(func() { lipgloss.SetColorProfile(restore) })
-
 	for _, sz := range [][2]int{{60, 16}, {80, 24}, {200, 50}} {
 		w, h := sz[0], sz[1]
-
-		// Color profile: styling must actually emit SGR.
-		lipgloss.SetColorProfile(termenv.TrueColor)
 		l := newLanding("/tmp/x", true, false)
 		l.setSize(w, h)
-		if view := l.view(); !ansiSGR.MatchString(view) {
-			t.Errorf("%dx%d TrueColor: styled landing emitted no SGR (styling lost?)", w, h)
-		}
+		view := l.view()
 
-		// Ascii profile (the NO_COLOR resolution): zero SGR.
-		lipgloss.SetColorProfile(termenv.Ascii)
-		l = newLanding("/tmp/x", true, false)
-		l.setSize(w, h)
-		if view := l.view(); ansiSGR.MatchString(view) {
-			t.Errorf("%dx%d Ascii (NO_COLOR): raw ANSI SGR sequences present in output", w, h)
+		if !stylestest.HasColor(stylestest.Downsample(view, colorprofile.TrueColor)) {
+			t.Errorf("%dx%d TrueColor: styled landing set no colors (styling lost?)", w, h)
+		}
+		if stylestest.HasColor(stylestest.Downsample(view, colorprofile.Ascii)) {
+			t.Errorf("%dx%d Ascii (NO_COLOR): colors present in output", w, h)
 		}
 	}
 }
@@ -225,8 +206,8 @@ func TestActivitySuccessFooterContents(t *testing.T) {
 // <AbortNote>  esc/q: menu".
 func TestActivityAbortFooterContents(t *testing.T) {
 	a, fr := runningActivity(t)
-	a.update(tea.KeyMsg{Type: tea.KeyCtrlC})
-	a.update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	a.update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	a.update(tea.KeyPressMsg{Code: 'y', Text: "y"})
 	if !fr.interrupted {
 		t.Fatal("abort confirmation did not interrupt the runner")
 	}

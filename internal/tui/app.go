@@ -5,10 +5,12 @@ import (
 	"os"
 	"path/filepath"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/colorprofile"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/actions"
 	"github.com/JamesPeck/pic-sure-cli/internal/dashboard"
+	"github.com/JamesPeck/pic-sure-cli/internal/styles"
 )
 
 // Screen identifies the active top-level screen.
@@ -37,8 +39,13 @@ type openWizardMsg struct{ reconfigure bool }
 // handler is off so that a signal always ends the program through ctx, with
 // an error, and the CLI can exit 128+N.
 func Run(ctx context.Context, o Options) error {
-	program := tea.NewProgram(newApp(o), tea.WithAltScreen(), tea.WithContext(ctx), tea.WithoutSignalHandler())
-	_, err := program.Run()
+	opts := []tea.ProgramOption{tea.WithContext(ctx), tea.WithoutSignalHandler()}
+	if os.Getenv("NO_COLOR") != "" {
+		// Bubble Tea's profile detection only honours NO_COLOR values that
+		// parse as true; no-color.org counts any non-empty value.
+		opts = append(opts, tea.WithColorProfile(colorprofile.Ascii))
+	}
+	_, err := tea.NewProgram(newApp(o), opts...).Run()
 	return err
 }
 
@@ -69,15 +76,22 @@ func envExists(root string) bool {
 	return err == nil
 }
 
+// Init asks the terminal for its background color alongside the first
+// screen's startup, so the palette and the dialogs can match it.
 func (a *app) Init() tea.Cmd {
 	if a.screen == ScreenDashboard {
-		return a.dash.Init()
+		return tea.Batch(tea.RequestBackgroundColor, a.dash.Init())
 	}
-	return a.landing.startAnimations()
+	return tea.Batch(tea.RequestBackgroundColor, a.landing.startAnimations())
 }
 
 func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.BackgroundColorMsg:
+		// Record it for the shared palette and for dialogs opened later, then
+		// fall through to the active screen so an open dialog restyles too.
+		styles.SetDarkBackground(msg.IsDark())
+
 	case tea.WindowSizeMsg:
 		a.width, a.height = msg.Width, msg.Height
 		a.landing.setSize(msg.Width, msg.Height)
@@ -224,11 +238,18 @@ func (a *app) openLanding() (tea.Model, tea.Cmd) {
 	return a, a.openLandingCmd()
 }
 
-func (a *app) View() string {
+// View draws the active screen. The whole TUI runs on the alt screen.
+func (a *app) View() tea.View {
+	v := tea.NewView(a.content())
+	v.AltScreen = true
+	return v
+}
+
+func (a *app) content() string {
 	switch a.screen {
 	case ScreenDashboard:
 		if a.dash != nil {
-			return a.dash.View()
+			return a.dash.View().Content
 		}
 	case ScreenActivity:
 		if a.activity != nil {
