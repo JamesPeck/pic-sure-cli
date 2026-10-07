@@ -496,6 +496,7 @@ operation: [docs/architecture.md](docs/architecture.md).
 | `make install-test` | `make snapshot`, then `install.sh` against it from a local server (`smoke/install_test.sh`) |
 | `scripts/e2e-core.sh` | the nightly e2e sequence against this host's Docker: init, `data demo nhanes`, `status --deep`, a no-op `update`, `reset`, `up`, `destroy` (heavy: builds any missing images; needs `jq`) |
 | `scripts/e2e-two-stacks.sh` | two `--auto-ports` stacks side by side, loaded at once, one destroyed while the other keeps running |
+| `scripts/e2e-genomic.sh` | the synthetic genomic fixture loaded into one stack, published with `shared-data publish` and mounted by a second; both must answer the fixture's `expected.json` queries |
 
 Conventions enforced by tests: every wizard key must exist in the checked-in
 AIO `.env.example` contract fixture; every action must carry an `AbortNote`;

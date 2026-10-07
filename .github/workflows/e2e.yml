@@ -2,7 +2,8 @@ name: e2e
 
 # Real installs (spec §11) on amd64 and arm64: scripts/e2e-core.sh runs the
 # core sequence, then scripts/e2e-two-stacks.sh runs two stacks side by
-# side. No images are published for the release's commits yet, so the
+# side and scripts/e2e-genomic.sh loads genomic data and shares it between
+# two stacks. No images are published for the release's commits yet, so the
 # stacks build from source; the images and the Maven repository are cached
 # per architecture (scripts/e2e-cache.sh).
 
@@ -173,8 +174,8 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-  two-stacks:
-    name: two stacks (${{ matrix.runner }})
+  stacks:
+    name: ${{ matrix.suite }} (${{ matrix.runner }})
     # After core, so it finds the images core cached; it still runs (and
     # builds what it lacks) when core fails.
     needs: core
@@ -186,6 +187,8 @@ jobs:
       fail-fast: false
       matrix:
         runner: [ubuntu-latest, ubuntu-24.04-arm]
+        # scripts/e2e-<suite>.sh
+        suite: [two-stacks, genomic]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     steps:
@@ -229,13 +232,14 @@ jobs:
           scripts/e2e-cache.sh load-maven "$CACHE_DIR/maven"
           rm -rf "$CACHE_DIR"
 
-      - name: e2e two stacks
-        # Leaves the job time to collect logs and save the caches.
+      - name: e2e ${{ matrix.suite }}
+        # Leaves the job time to collect logs.
         timeout-minutes: 100
         env:
-          E2E_NAME: e2e-two
+          E2E_NAME: e2e-${{ matrix.suite }}
+          E2E_SHARED_SET: ci-genomic-${{ github.run_id }}-${{ github.run_attempt }}
           E2E_ARTIFACTS: ${{ runner.temp }}/e2e-artifacts
-        run: scripts/e2e-two-stacks.sh
+        run: scripts/e2e-${{ matrix.suite }}.sh
 
       # The scripts collect each stack's logs when they fail, but a step
       # that times out is killed first.
@@ -252,7 +256,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: e2e-two-stacks-${{ matrix.runner }}
+          name: e2e-${{ matrix.suite }}-${{ matrix.runner }}
           path: ${{ runner.temp }}/e2e-artifacts
           if-no-files-found: warn
           retention-days: 14

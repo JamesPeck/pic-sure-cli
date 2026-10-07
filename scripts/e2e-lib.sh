@@ -40,6 +40,8 @@ fi
 # Stack names, and their directories, that cleanup collects from and destroys.
 e2e_stacks=()
 e2e_dirs=()
+# Shared data sets that cleanup removes, after the stacks.
+e2e_sets=()
 
 say() { printf '\n==> %s\n' "$*" >&2; }
 fail() {
@@ -49,15 +51,16 @@ fail() {
 
 pic() { "$PIC_SURE" --non-interactive "$@" < /dev/null; }
 
-# init_stack NAME DIR creates an open-mode stack with auto ports and no
-# client secret, so init generates one.
+# init_stack NAME DIR [INIT FLAGS...] creates an open-mode stack with auto
+# ports and no client secret, so init generates one.
 init_stack() {
 	local name="$1" dir="$2"
+	shift 2
 	e2e_stacks+=("$name")
 	e2e_dirs+=("$dir")
 	say "init $name"
 	pic init "$dir" --name "$name" --auth-mode open --admin-email admin@example.com \
-		--auto-ports --release-branch "$E2E_RELEASE_BRANCH" --set "hpds.java_opts=$E2E_JAVA_OPTS"
+		--auto-ports --release-branch "$E2E_RELEASE_BRANCH" --set "hpds.java_opts=$E2E_JAVA_OPTS" "$@"
 	grep -q '^auth0_client_secret_generated: true$' "$dir/.pic-sure/secrets.yaml" ||
 		fail "$name: init didn't generate the open-mode client secret"
 	if [ -n "${E2E_IMAGES_FILE:-}" ]; then
@@ -128,6 +131,7 @@ e2e_cleanup() {
 				docker compose -p "${e2e_stacks[$i]}" down -v --remove-orphans > /dev/null 2>&1
 		fi
 	done
+	for i in "${!e2e_sets[@]}"; do pic shared-data remove "${e2e_sets[$i]}" > /dev/null 2>&1; done
 	if [ "$rc" -eq 0 ] && [ -n "$e2e_made_work" ]; then rm -rf "$E2E_WORK"; fi
 	exit "$rc"
 }

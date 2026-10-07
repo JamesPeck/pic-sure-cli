@@ -2639,10 +2639,10 @@ and commit are dispatch inputs.
 
 ## scripts (e2e)
 
-Ticket 062, spec §11. `.github/workflows/e2e.yml` runs `e2e-core.sh` and
-then `e2e-two-stacks.sh` on `ubuntu-latest` and `ubuntu-24.04-arm` (nightly,
-on pushes to `v2`/`main`, and on PRs labelled `e2e`); both run locally as
-they are. `e2e-lib.sh` holds what they share and documents the settings
+Tickets 062 and 063, spec §11. `.github/workflows/e2e.yml` runs
+`e2e-core.sh`, then `e2e-two-stacks.sh` and `e2e-genomic.sh` (one matrix
+job, `stacks`) on `ubuntu-latest` and `ubuntu-24.04-arm` (nightly, on pushes
+to `v2`/`main`, and on PRs labelled `e2e`); all run locally as they are. `e2e-lib.sh` holds what they share and documents the settings
 (`E2E_*` variables): open mode with no client secret (init generates one),
 `--auto-ports`, `--set hpds.java_opts`, and an EXIT trap that, on failure,
 saves each stack's compose logs, `status --json`, run logs and support
@@ -2650,6 +2650,15 @@ bundle to `E2E_ARTIFACTS`, then destroys every stack it made. The
 assertions read `status --deep --json` and `update --json`'s plan
 (`docs/json-schemas.md`, `ops.UpdatePlan`), so changing those fields means
 changing the scripts.
+
+`e2e-genomic.sh` loads the 048 fixture (`genomic-fixture -abs`) into stack
+A, publishes it as a shared set, destroys A, and mounts the set in stack B.
+On each stack it runs every `testdata/genomic/expected.json` query against
+HPDS from an `alpine` container on the stack's `query` network: the patient
+list through the asynchronous `/v3/query` (HPDS answers DATAFRAME only
+there) and the count through `/v3/query/sync`. The query JSON it builds
+handles at most one phenotype filter per query; a fixture query with more
+fails the run until the script learns the clause format.
 
 No images are published for the release's commits, so CI builds from
 source. `e2e-cache.sh` moves the images init recorded (`E2E_IMAGES_FILE`)
