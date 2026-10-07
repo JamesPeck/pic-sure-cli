@@ -44,6 +44,7 @@ func (execRunner) Stream(ctx context.Context, c docker.Cmd, stdout, stderr io.Wr
 // PICSURE_REACTOR_SHA, in the user's real cache, and then checks that a
 // second build does nothing. It takes many minutes, so it runs only when
 // asked: PICSURE_REACTOR_SHA=<sha> go test -run ForReal -timeout 2h ./internal/ops
+// PICSURE_REACTOR_FORCE=1 rebuilds images that are already up to date.
 func TestReactorBuildForReal(t *testing.T) {
 	sha := os.Getenv("PICSURE_REACTOR_SHA")
 	if sha == "" {
@@ -65,8 +66,10 @@ func TestReactorBuildForReal(t *testing.T) {
 	d := &Deps{Runner: r, Docker: docker.NewEngine(r), Sink: events.NewPlain(os.Stderr, events.PlainOptions{Now: time.Now})}
 	opts := ReactorOptions{Cache: c, SHA: sha, LogDir: logDir, Step: "build-pic-sure"}
 
+	first := opts
+	first.Force = os.Getenv("PICSURE_REACTOR_FORCE") == "1"
 	start := time.Now()
-	res, err := BuildReactor(context.Background(), d, opts)
+	res, err := BuildReactor(context.Background(), d, first)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -602,6 +602,37 @@ records a hash of the certs, the script and the image ID, plus the volume's
 record before the helper runs. A running psama needs a restart to read a
 new truststore.
 
+**Reactor build** (029, `reactor.go`). `BuildReactor(ctx, d,
+ReactorOptions{Cache, SHA, ...})` builds the 11 pic-sure images as
+`hms-dbmi/<image>:<sha12>` (§7.2), labelled `ReactorSrcLabel=<sha>`, and
+does nothing when all of them already carry that label;
+`ReactorUpToDate` is the same check for a step's `Check`. Only stale
+images are built unless `Force` is set, so a build from local, dirty
+sources (§7.3) must pass `Force`. It takes the source tree from the cache
+unless `Source` is given, holds `LockReactor` from the Maven run to the
+last image and `LockImage` per image, and refuses a commit without the
+monorepo's contexts before running Maven.
+
+- **Container.** Maven runs through `docker exec` in a container named
+  `ReactorContainer` (`pic-sure-reactor`), started with `docker run -d`
+  on a `sleep`, so the container is running from creation until it has
+  been copied from and removed. Another build that finds it running
+  waits (a Progress event; ctx ends the wait); a stopped one is a dead
+  build's and is removed. The proxy's `settings.xml` is bind-mounted at
+  `/pic-sure/settings.xml` (not in `/root/.m2`, which is the shared
+  `pic-sure-m2` volume) and passed with `-s`.
+- **Contexts** are copied with `docker cp` into `cache.BuildDir(sha)`,
+  each once (a context inside another comes with it), and the directory
+  is removed after a success. A failed build leaves it for inspection;
+  the next build clears it.
+- **Logs.** With `LogDir` set, Maven's output goes to
+  `pic-sure-reactor.log` and each image's to `<image>.log`. A failure
+  emits the last 30 lines as `Log` events and puts the log path in the
+  error, plus the bash's Alpine-pin hint for hpds-etl. Maven's module
+  lines become `Progress` events. The unexported `partOutput` (log file,
+  tail, per-line callback) and `ensureImage` (pull with progress) are
+  there for the other image builds (030) to reuse.
+
 ## internal/steps
 
 Ticket 011, on the `Step` type and `Run` signature from 001.

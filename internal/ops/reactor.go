@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -69,6 +70,11 @@ type ReactorResult struct {
 // reactorPoll is how often BuildReactor checks whether another build's
 // reactor container has finished.
 var reactorPoll = 2 * time.Second
+
+// reactorKeepalive bounds, in seconds, how long a reactor container whose
+// build died without removing it (the CLI was killed) holds the name and
+// keeps other builds waiting. It must outlast any Maven run.
+const reactorKeepalive = "21600"
 
 // tailLines is how many lines of a failed part's output are shown.
 const tailLines = 30
@@ -152,6 +158,18 @@ func BuildReactor(ctx context.Context, d *Deps, opts ReactorOptions) (ReactorRes
 		}
 	}
 
+	// The bash refused a pre-monorepo commit up front; without this, Maven
+	// would run and only docker cp would fail.
+	for _, img := range toBuild {
+		_, err := os.Stat(filepath.Join(src, filepath.FromSlash(img.Context)))
+		if errors.Is(err, fs.ErrNotExist) {
+			return res, fmt.Errorf("pic-sure %s has no %s: it predates the monorepo layout this build needs", opts.SHA[:12], img.Context)
+		}
+		if err != nil {
+			return res, err
+		}
+	}
+
 	lock, err := c.LockReactor(ctx)
 	if err != nil {
 		return res, err
@@ -216,8 +234,13 @@ func runReactor(ctx context.Context, d *Deps, c *cache.Cache, opts ReactorOption
 
 	mvn := "mvn -B install -T1C -DskipTests"
 	run := docker.RunOpts{
-		Image:   mavenImg.Ref,
-		Name:    ReactorContainer,
+		Image:  mavenImg.Ref,
+		Name:   ReactorContainer,
+		Detach: true,
+		// The container idles while Maven runs in it through docker exec,
+		// so it is running from birth until it is removed, contexts copied.
+		// A waiting build therefore never mistakes it for a dead build's.
+		Args:    []string{"sleep", reactorKeepalive},
 		Workdir: "/build",
 		Labels:  map[string]string{ReactorSrcLabel: opts.SHA},
 		Mounts: []docker.Mount{
@@ -225,7 +248,11 @@ func runReactor(ctx context.Context, d *Deps, c *cache.Cache, opts ReactorOption
 			{Source: cache.MavenVolume, Target: "/root/.m2"},
 		},
 	}
-	if settings := mavenSettings(opts.Proxy); settings != nil {
+	var settings []byte
+	if opts.Proxy != nil {
+		settings = opts.Proxy.MavenSettings()
+	}
+	if settings != nil {
 		// Outside /root/.m2, so neither the file nor its mount point ends
 		// up in the shared volume.
 		dir, err := c.TempDir("maven-settings-")
@@ -240,9 +267,8 @@ func runReactor(ctx context.Context, d *Deps, c *cache.Cache, opts ReactorOption
 		run.Mounts = append(run.Mounts, docker.Mount{Source: file, Target: "/pic-sure/settings.xml", ReadOnly: true})
 		mvn += " -s /pic-sure/settings.xml"
 	}
-	run.Args = []string{"sh", "-c", "cp -r /src/. /build && exec " + mvn}
 
-	id, err := createReactorContainer(ctx, d, opts.Step, run)
+	id, err := startReactorContainer(ctx, d, opts.Step, run)
 	if err != nil {
 		return err
 	}
@@ -252,7 +278,7 @@ func runReactor(ctx context.Context, d *Deps, c *cache.Cache, opts ReactorOption
 			return
 		}
 		// The context may be cancelled; the container must still go, and
-		// `docker start -a` stopping doesn't stop it.
+		// `docker exec` stopping doesn't stop Maven.
 		rmCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
 		defer cancel()
 		if rmErr := d.Docker.Rm(rmCtx, id, true); rmErr != nil && err == nil {
@@ -261,7 +287,13 @@ func runReactor(ctx context.Context, d *Deps, c *cache.Cache, opts ReactorOption
 	}()
 
 	progress("Running the Maven reactor build for pic-sure %s", opts.SHA[:12])
-	code, err := d.Docker.Start(ctx, id, out, out)
+	code, err := d.Docker.Exec(ctx, docker.ExecOpts{
+		Container: id,
+		Workdir:   "/build",
+		Args:      []string{"sh", "-c", "cp -r /src/. /build && exec " + mvn},
+		Stdout:    out,
+		Stderr:    out,
+	})
 	if err != nil {
 		return fmt.Errorf("running the Maven reactor build: %w", err)
 	}
@@ -291,14 +323,6 @@ func progressf(sink events.Sink, step, format string, args ...any) {
 	sink.Emit(events.Progress{ID: step, Text: fmt.Sprintf(format, args...)})
 }
 
-// mavenSettings returns the proxy's settings.xml for Maven, or nil.
-func mavenSettings(p *netproxy.Proxy) []byte {
-	if p == nil {
-		return nil
-	}
-	return p.MavenSettings()
-}
-
 // ensureImage pulls ref if it isn't present, so the pull's progress is
 // visible instead of hidden inside docker create.
 func ensureImage(ctx context.Context, d *Deps, step, ref string, out *partOutput) error {
@@ -313,11 +337,11 @@ func ensureImage(ctx context.Context, d *Deps, step, ref string, out *partOutput
 	return nil
 }
 
-// createReactorContainer creates the reactor container under its fixed
-// name. A running container with the name is another build's, so it waits
-// for that to finish; a stopped one is left over from a build that died, so
-// it removes it.
-func createReactorContainer(ctx context.Context, d *Deps, step string, run docker.RunOpts) (string, error) {
+// startReactorContainer starts the reactor container under its fixed name
+// and returns its ID. A running container with the name is another build's,
+// so it waits for that to finish; a stopped one is left over from a build
+// that died, so it removes it.
+func startReactorContainer(ctx context.Context, d *Deps, step string, run docker.RunOpts) (string, error) {
 	timeout := time.NewTimer(cache.ReactorLockTimeout)
 	defer timeout.Stop()
 	waiting := false
@@ -325,12 +349,14 @@ func createReactorContainer(ctx context.Context, d *Deps, step string, run docke
 		info, err := d.Docker.ContainerInspect(ctx, ReactorContainer)
 		switch {
 		case errors.Is(err, docker.ErrNotFound):
-			id, err := d.Docker.Create(ctx, run)
+			var stdout bytes.Buffer
+			run.Stdout = &stdout
+			_, err := d.Docker.Run(ctx, run)
 			if err == nil {
-				return id, nil
+				return strings.TrimSpace(stdout.String()), nil
 			}
 			if !nameInUse(err) {
-				return "", fmt.Errorf("creating the reactor container: %w", err)
+				return "", fmt.Errorf("starting the reactor container: %w", err)
 			}
 			// Another build took the name first.
 			continue
@@ -350,8 +376,8 @@ func createReactorContainer(ctx context.Context, d *Deps, step string, run docke
 		case <-ctx.Done():
 			return "", fmt.Errorf("waiting for the reactor container %s: %w", ReactorContainer, context.Cause(ctx))
 		case <-timeout.C:
-			return "", fmt.Errorf("container %s has been running for over %s; if no build is using it, remove it with `docker rm -f %[1]s`",
-				ReactorContainer, cache.ReactorLockTimeout)
+			return "", fmt.Errorf("waited %s for container %s to go; if no build is using it, remove it with `docker rm -f %[2]s`",
+				cache.ReactorLockTimeout, ReactorContainer)
 		case <-time.After(reactorPoll):
 		}
 	}
@@ -421,7 +447,7 @@ func buildReactorImage(ctx context.Context, d *Deps, c *cache.Cache, opts Reacto
 		if ctx.Err() == nil {
 			out.emitTail(d.Sink, opts.Step)
 		}
-		return false, fmt.Errorf("building %s: %w%s%s", ref, err, alpineHint(img, out), out.logHint())
+		return false, fmt.Errorf("building %s: %w%s%s", ref, err, out.logHint(), alpineHint(img, out))
 	}
 	return true, nil
 }
@@ -432,7 +458,7 @@ func alpineHint(img catalog.Image, out *partOutput) string {
 	if img.Name != "pic-sure-hpds-etl" || !out.sawAPKUnavailable() {
 		return ""
 	}
-	return fmt.Sprintf("\nIts Dockerfile (%s) asks for Alpine packages the index no longer has. "+
+	return fmt.Sprintf("\nIts Dockerfile (%s in the pic-sure source) asks for Alpine packages the index no longer has. "+
 		"Use a pic-sure commit with corrected package pins, or fix the pins upstream; pic-sure doesn't rewrite the Dockerfile.", img.Dockerfile)
 }
 

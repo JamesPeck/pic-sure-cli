@@ -35,13 +35,19 @@ func newReactorFixture(t *testing.T) *reactorFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
+	src := t.TempDir()
+	for _, img := range catalog.ImagesBuiltFrom(catalog.PicSure) {
+		if err := os.MkdirAll(filepath.Join(src, img.Context), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
 	f := fakerunner.New(t)
 	rec := &events.Recorder{}
 	return &reactorFixture{
 		f:    f,
 		rec:  rec,
 		d:    &Deps{Runner: f, Docker: docker.NewEngine(f), Sink: rec},
-		opts: ReactorOptions{Cache: c, SHA: testSHA, Source: t.TempDir(), Step: "build"},
+		opts: ReactorOptions{Cache: c, SHA: testSHA, Source: src, Step: "build"},
 		root: root,
 	}
 }
@@ -73,8 +79,8 @@ func (x *reactorFixture) reactorOK() {
 	x.f.On(fakerunner.Exact("docker", "volume", "create", cache.MavenVolume))
 	x.f.On(fakerunner.Exact("docker", "container", "inspect", ReactorContainer)).
 		Exit(1).Stderr("Error: No such container: " + ReactorContainer)
-	x.f.On(fakerunner.Glob("docker create *")).Stdout("ctr123\n")
-	x.f.On(fakerunner.Exact("docker", "start", "-a", "ctr123"))
+	x.f.On(fakerunner.Glob("docker run -d *")).Stdout("ctr123\n")
+	x.f.On(fakerunner.Glob("docker exec -w /build ctr123 *"))
 	x.f.On(fakerunner.Glob("docker cp ctr123:*"))
 	x.f.On(fakerunner.Exact("docker", "rm", "-v", "-f", "ctr123"))
 	x.f.On(fakerunner.Glob("docker build *"))
@@ -121,23 +127,25 @@ func TestReactorBuildRunsMavenThenBuildsEveryImage(t *testing.T) {
 		t.Errorf("built %s\nwant  %s", got, want)
 	}
 
-	create := x.f.CallsMatching(fakerunner.Glob("docker create *"))[0].String()
+	run := x.f.CallsMatching(fakerunner.Glob("docker run -d *"))[0].String()
 	for _, want := range []string{
 		"--name " + ReactorContainer,
 		"-v " + x.opts.Source + ":/src:ro",
 		"-v pic-sure-m2:/root/.m2",
-		"maven:3-amazoncorretto-25 sh -c \"cp -r /src/. /build && exec mvn -B install -T1C -DskipTests\"",
+		"maven:3-amazoncorretto-25 sleep " + reactorKeepalive,
 	} {
-		if !strings.Contains(create, want) {
-			t.Errorf("create %s\nlacks %q", create, want)
+		if !strings.Contains(run, want) {
+			t.Errorf("run %s\nlacks %q", run, want)
 		}
 	}
+	x.f.AssertCalled(fakerunner.Exact("docker", "exec", "-w", "/build", "ctr123",
+		"sh", "-c", "cp -r /src/. /build && exec mvn -B install -T1C -DskipTests"))
 
 	buildDir := filepath.Join(x.root, "build", "0123456789ab")
 	order := []fakerunner.Matcher{
 		fakerunner.Exact("docker", "volume", "create", cache.MavenVolume),
-		fakerunner.Glob("docker create *"),
-		fakerunner.Exact("docker", "start", "-a", "ctr123"),
+		fakerunner.Glob("docker run -d *"),
+		fakerunner.Glob("docker exec * ctr123 *"),
 	}
 	// Overlapping contexts are copied once.
 	for _, c := range []string{
@@ -218,7 +226,7 @@ func TestReactorBuildForceRebuildsFreshImages(t *testing.T) {
 func TestReactorBuildFailureShowsTheTailAndRemovesTheContainer(t *testing.T) {
 	x := newReactorFixture(t)
 	x.missing()
-	x.f.On(fakerunner.Exact("docker", "start", "-a", "ctr123")).
+	x.f.On(fakerunner.Glob("docker exec -w /build ctr123 *")).
 		Stdout("[INFO] Building pic-sure-gateway 1.0-SNAPSHOT    [3/40]\n[ERROR] compilation failed\n").Exit(1)
 	x.reactorOK()
 	x.opts.LogDir = t.TempDir()
@@ -261,7 +269,7 @@ func TestReactorBuildRemovesAStoppedReactorContainer(t *testing.T) {
 	if _, err := BuildReactor(context.Background(), x.d, x.opts); err != nil {
 		t.Fatal(err)
 	}
-	x.f.AssertOrder(fakerunner.Exact("docker", "rm", "-v", "old"), fakerunner.Glob("docker create *"))
+	x.f.AssertOrder(fakerunner.Exact("docker", "rm", "-v", "old"), fakerunner.Glob("docker run -d *"))
 }
 
 func TestReactorBuildWaitsForARunningReactorContainer(t *testing.T) {
@@ -304,7 +312,7 @@ func TestReactorBuildStopsWaitingWhenCancelled(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}
-	x.f.AssertNotCalled(fakerunner.Glob("docker create *"))
+	x.f.AssertNotCalled(fakerunner.Glob("docker run -d *"))
 }
 
 func TestReactorBuildPassesTheProxy(t *testing.T) {
@@ -320,9 +328,10 @@ func TestReactorBuildPassesTheProxy(t *testing.T) {
 	if _, err := BuildReactor(context.Background(), x.d, x.opts); err != nil {
 		t.Fatal(err)
 	}
-	create := x.f.CallsMatching(fakerunner.Glob("docker create *"))[0].String()
-	if !strings.Contains(create, ":/pic-sure/settings.xml:ro") || !strings.Contains(create, "-s /pic-sure/settings.xml") {
-		t.Errorf("create %s\nlacks the Maven settings", create)
+	run := x.f.CallsMatching(fakerunner.Glob("docker run -d *"))[0].String()
+	exec := x.f.CallsMatching(fakerunner.Glob("docker exec *"))[0].String()
+	if !strings.Contains(run, ":/pic-sure/settings.xml:ro") || !strings.Contains(exec, "-s /pic-sure/settings.xml") {
+		t.Errorf("run %s\nexec %s\nlack the Maven settings", run, exec)
 	}
 	build := x.f.CallsMatching(fakerunner.Glob("docker build *"))[0]
 	if !strings.Contains(build.String(), "--build-arg HTTPS_PROXY") || !build.HasEnv("HTTPS_PROXY") {
@@ -351,5 +360,73 @@ func TestReactorBuildExplainsHPDSETLAlpinePins(t *testing.T) {
 	_, err := BuildReactor(context.Background(), x.d, x.opts)
 	if err == nil || !strings.Contains(err.Error(), "Alpine packages the index no longer has") {
 		t.Fatalf("err = %v, want the Alpine hint", err)
+	}
+}
+
+func TestReactorBuildRechecksTheImagesOnceItHasTheLock(t *testing.T) {
+	x := newReactorFixture(t)
+	// Missing on the first look, then built by the command that held the
+	// lock.
+	x.f.On(fakerunner.Glob("docker image inspect hms-dbmi/*")).Times(11).Exit(1).Stderr("Error: No such image: x")
+	x.fresh(allImageNames()...)
+
+	res, err := BuildReactor(context.Background(), x.d, x.opts)
+	if err != nil || len(res.Built) != 0 {
+		t.Fatalf("BuildReactor = %+v, %v; want nothing built", res, err)
+	}
+	x.f.AssertNotCalled(fakerunner.Glob("docker run *"))
+}
+
+func TestReactorBuildRefusesAPreMonorepoCommit(t *testing.T) {
+	x := newReactorFixture(t)
+	x.missing()
+	if err := os.RemoveAll(filepath.Join(x.opts.Source, "services", "pic-sure-gateway")); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := BuildReactor(context.Background(), x.d, x.opts)
+	if err == nil || !strings.Contains(err.Error(), "predates the monorepo") {
+		t.Fatalf("err = %v, want the monorepo message", err)
+	}
+	x.f.AssertNotCalled(fakerunner.Glob("docker run *"))
+}
+
+func TestReactorBuildRemovesTheContainerWhenACopyFails(t *testing.T) {
+	x := newReactorFixture(t)
+	x.missing()
+	x.f.On(fakerunner.Glob("docker cp *")).Exit(1).Stderr("Error: no space left on device")
+	x.reactorOK()
+
+	_, err := BuildReactor(context.Background(), x.d, x.opts)
+	if err == nil || !strings.Contains(err.Error(), "copying") {
+		t.Fatalf("err = %v, want a copy failure", err)
+	}
+	x.f.AssertCalled(fakerunner.Exact("docker", "rm", "-v", "-f", "ctr123"))
+	x.f.AssertNotCalled(fakerunner.Glob("docker build *"))
+}
+
+func TestReactorBuildFailureOfAnImageShowsTheTailAndLog(t *testing.T) {
+	x := newReactorFixture(t)
+	x.missing()
+	x.f.On(fakerunner.Glob("docker build * -t hms-dbmi/pic-sure-gateway:*")).Stderr("step 3: boom\n").Exit(1)
+	x.reactorOK()
+	x.opts.LogDir = t.TempDir()
+
+	_, err := BuildReactor(context.Background(), x.d, x.opts)
+	if err == nil || !strings.Contains(err.Error(), filepath.Join(x.opts.LogDir, "pic-sure-gateway.log")) ||
+		strings.Contains(err.Error(), "Alpine") {
+		t.Fatalf("err = %v, want the log path and no Alpine hint", err)
+	}
+	tail := false
+	for _, e := range x.rec.Events() {
+		if l, ok := e.(events.Log); ok && l.Line == "step 3: boom" {
+			tail = true
+		}
+	}
+	if !tail {
+		t.Error("the build's output tail wasn't shown")
+	}
+	if _, err := os.Stat(filepath.Join(x.root, "build", "0123456789ab")); err != nil {
+		t.Errorf("a failed build's contexts should stay: %v", err)
 	}
 }
