@@ -28,20 +28,32 @@ exec pic-sure --stack stack --json down
 grep '--progress json down' docker.log
 
 # Without secrets.yaml the read-only commands say why and carry on, with
-# the variables set but empty; a mutating one fails.
+# the secrets set but empty and the config's proxy kept; a mutating one
+# fails.
 exec pic-sure --stack nosecrets status
-stderr '^pic-sure: warning: docker compose runs with the stack''s secrets empty: .*secrets.yaml'
-grep '^compose DB_ROOT_PASSWORD= AUTH0_CLIENT_SECRET= HTTP_PROXY=<unset>$' compose-env.log
+stderr '^pic-sure: warning: docker compose runs without the stack''s secrets: .*secrets.yaml'
+grep '^compose DB_ROOT_PASSWORD= AUTH0_CLIENT_SECRET= HTTP_PROXY=http://proxy.example.com:3128$' compose-env.log
 exec sh -c 'pic-sure --stack nosecrets doctor >doctor.out 2>doctor.err || true'
-grep 'warning: docker compose runs with the stack''s secrets empty' doctor.err
+grep 'warning: docker compose runs without the stack''s secrets' doctor.err
 grep '^\[ OK \] compose-config ' doctor.out
 exec pic-sure --stack nosecrets ps
-stderr 'warning: docker compose runs with the stack''s secrets empty'
+stderr 'warning: docker compose runs without the stack''s secrets'
 ! exec pic-sure --stack nosecrets down
 stderr 'secrets.yaml'
 
-# No secret reaches stderr or the run log, even when compose's error
-# quotes one.
+# A config this CLI can't read: the defaults, and no secrets.
+exec pic-sure --stack badconfig ps
+stderr 'warning: docker compose runs without the stack''s config or secrets: .*bogus'
+
+# No secret reaches stdout, stderr or the run log, even when compose's
+# error quotes one.
+exec pic-sure --stack leaky status
+stdout 'password \[REDACTED\] rejected'
+! stdout 'rootpw-0123456789'
+exec sh -c 'pic-sure --stack leaky --json doctor >doctor.out 2>doctor.err || true'
+grep '"name":"compose-config","status":"fail","message":"[^"]*password \[REDACTED\] rejected' doctor.out
+! grep 'rootpw-0123456789' doctor.out
+! grep 'rootpw-0123456789' doctor.err
 exitcode 1 pic-sure --stack leaky --log-level debug ps
 ! stderr 'rootpw-0123456789'
 stderr 'password \[REDACTED\] rejected'
@@ -61,7 +73,7 @@ docker version --format json => 0 stdout=version.json
 docker image inspect alpine:* => 0 stdout=image.json
 docker run * df -Pk / => 0 stdout=df.txt
 docker rm -v -f pic-sure-doctor-* => 0
-re:^docker compose .*/leaky .* ps => 1 stderr=leak.txt
+re:^docker compose .*/leaky .* (ps|config) => 1 stderr=leak.txt
 docker compose * => 0
 docker * => 1
 -- leak.txt --
@@ -91,6 +103,7 @@ services: {}
 schema: 1
 name: nosecrets
 auth: {mode: open, admin_email: admin@example.com}
+proxy: {http: "http://proxy.example.com:3128"}
 -- nosecrets/.pic-sure/state.json --
 {"cli_version": "dev", "schema_version": 1}
 -- nosecrets/.pic-sure/render/compose.yaml --
@@ -104,4 +117,12 @@ auth: {mode: open, admin_email: admin@example.com}
 -- leaky/.pic-sure/secrets.yaml --
 db_root_password: rootpw-0123456789
 -- leaky/.pic-sure/render/compose.yaml --
+services: {}
+-- badconfig/pic-sure.yaml --
+schema: 1
+name: badconfig
+bogus: 1
+-- badconfig/.pic-sure/state.json --
+{"cli_version": "dev", "schema_version": 1}
+-- badconfig/.pic-sure/render/compose.yaml --
 services: {}

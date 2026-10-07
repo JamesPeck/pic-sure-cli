@@ -17,6 +17,7 @@ import (
 
 	"github.com/JamesPeck/pic-sure-cli/internal/cache"
 	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
+	"github.com/JamesPeck/pic-sure-cli/internal/log"
 	"github.com/JamesPeck/pic-sure-cli/internal/ops"
 	"github.com/JamesPeck/pic-sure-cli/internal/stack"
 	"github.com/spf13/cobra"
@@ -62,6 +63,11 @@ func (a *App) doctor(cmd *cobra.Command, network bool) error {
 	}
 
 	report := ops.Doctor(cmd.Context(), d, opts)
+	// Compose had the secrets, and its error can quote one.
+	for i := range report.Checks {
+		report.Checks[i].Message = log.Redact(report.Checks[i].Message)
+		report.Checks[i].Detail = log.Redact(report.Checks[i].Detail)
+	}
 	if err := a.printReport(report, func(w io.Writer) error { return writeDoctorText(w, report) }); err != nil {
 		return err
 	}

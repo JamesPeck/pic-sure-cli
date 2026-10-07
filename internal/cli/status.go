@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/docker"
+	"github.com/JamesPeck/pic-sure-cli/internal/log"
 	"github.com/JamesPeck/pic-sure-cli/internal/ops"
 )
 
@@ -48,6 +49,8 @@ func (a *App) status(cmd *cobra.Command) error {
 		opts.ComposeErr = err
 	}
 	report := ops.Status(cmd.Context(), d, st, opts)
+	// Compose had the secrets, and its error can quote one.
+	report.ServicesError = log.Redact(report.ServicesError)
 	return a.printReport(report, func(w io.Writer) error { return writeStatus(w, report) })
 }
 

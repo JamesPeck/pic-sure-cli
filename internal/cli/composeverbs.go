@@ -258,29 +258,27 @@ func (a *App) stackCompose(cmd *cobra.Command, r docker.Runner, st *stack.Stack)
 }
 
 func (a *App) stackComposeEnv(cmd *cobra.Command, st *stack.Stack) ([]string, error) {
+	// A read-only command creates no container, so it carries on with the
+	// variables set but empty, which keeps compose from warning that they
+	// are unset. It must work on a stack whose config is invalid or newer
+	// (§10.6), or that has no secrets.yaml yet.
+	readOnly := commandClass(cmd) == stack.ReadOnly
 	cfg, err := st.LoadConfig()
 	if err != nil {
-		err = configError(err)
-	}
-	var env []string
-	if err == nil {
-		var sec *stack.Secrets
-		if sec, err = st.LoadSecrets(); err == nil {
-			env, err = render.ComposeEnv(cfg, sec)
+		if !readOnly {
+			return nil, configError(err)
 		}
+		a.warnStderr("docker compose runs without the stack's config or secrets: %v", err)
+		def := stack.DefaultConfig()
+		return render.ComposeEnv(&def, &stack.Secrets{})
 	}
-	if err == nil || commandClass(cmd) != stack.ReadOnly {
-		return env, err
-	}
-	a.warnStderr("docker compose runs with the stack's secrets empty: %v", err)
-	// The variables are still set, empty, so compose doesn't warn that
-	// they are unset. A read-only command creates no container, and must
-	// work on a stack whose config is invalid or newer (§10.6).
-	if cfg != nil {
-		if env, err = render.ComposeEnv(cfg, &stack.Secrets{}); err == nil {
-			return env, nil
+	sec, err := st.LoadSecrets()
+	if err != nil {
+		if !readOnly {
+			return nil, err
 		}
+		a.warnStderr("docker compose runs without the stack's secrets: %v", err)
+		sec = &stack.Secrets{}
 	}
-	def := stack.DefaultConfig()
-	return render.ComposeEnv(&def, &stack.Secrets{})
+	return render.ComposeEnv(cfg, sec)
 }
