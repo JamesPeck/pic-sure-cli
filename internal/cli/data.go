@@ -71,7 +71,7 @@ load.`,
 	f.String("facets-categories", "", "custom dictionary: the facet categories CSV `FILE`")
 	f.String("facets", "", "custom dictionary: the facets CSV `FILE`")
 	f.String("facet-concepts", "", "custom dictionary: the facet concepts CSV `FILE`")
-	f.Bool("skip-weights", false, "skip recomputing the search weights")
+	f.Bool("skip-weights", false, "skip recomputing the search weights; text search finds no new concepts until `pic-sure dictionary weights` runs")
 	c.MarkFlagsMutuallyExclusive("file", "input-dir")
 	c.MarkFlagsOneRequired("file", "input-dir")
 	return c
