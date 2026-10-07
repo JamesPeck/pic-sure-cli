@@ -123,7 +123,11 @@ func newImageFixture(t *testing.T) *imageFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	src := t.TempDir()
+	// Resolved, as the build resolves its source (/var is a link on macOS).
+	src, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	for name, body := range map[string]string{
 		"Dockerfile":         "FROM scratch\n",
 		"src/routes/page.ts": "export {}\n",
@@ -172,7 +176,7 @@ func TestBuildFrontendCopiesTheSourceAndWritesTheEnv(t *testing.T) {
 	env := render.ViteEnv(&cfg)
 	hash := ops.FrontendConfigHash(env)
 	tag := feSHA[:12] + "-" + hash[:8]
-	ctxDir, err := x.cache.FrontendBuildDir(feSHA, hash[:8])
+	ctxDir, err := x.cache.FrontendBuildDir(tag)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,6 +232,53 @@ func TestBuildFrontendCopiesTheSourceAndWritesTheEnv(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(x.src, ".env")); !os.IsNotExist(err) {
 		t.Errorf("source tree got a .env: %v", err)
+	}
+}
+
+// The generated .env replaces a copied one without writing through it,
+// and a symlinked source root is copied as the tree it points to.
+func TestBuildFrontendLeavesTheSourceAlone(t *testing.T) {
+	x := newImageFixture(t)
+	outside := filepath.Join(t.TempDir(), "developer.env")
+	writeTestFile(t, outside, []byte("VITE_MINE=1\n"))
+	if err := os.Symlink(outside, filepath.Join(x.src, ".env")); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "frontend")
+	if err := os.Symlink(x.src, link); err != nil {
+		t.Fatal(err)
+	}
+	opts := x.opts(feSHA)
+	opts.Source, opts.Tag = link, "dev-a-0123456789ab"
+	ctxDir, err := x.cache.FrontendBuildDir(opts.Tag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := stack.DefaultConfig()
+	wantEnv, _ := ops.FrontendDotEnv(render.ViteEnv(&cfg))
+
+	x.missing()
+	x.f.On(fakerunner.Glob("docker build *")).Do(func(context.Context, fakerunner.Call) (docker.Result, error) {
+		if fi, err := os.Lstat(filepath.Join(ctxDir, ".env")); err != nil || !fi.Mode().IsRegular() {
+			t.Errorf(".env in the context: %v, %v", fi, err)
+		}
+		if got, _ := os.ReadFile(filepath.Join(ctxDir, ".env")); string(got) != string(wantEnv) {
+			t.Errorf(".env in the context: %q", got)
+		}
+		if _, err := os.Stat(filepath.Join(ctxDir, "src", "routes", "page.ts")); err != nil {
+			t.Error(err)
+		}
+		return docker.Result{}, nil
+	})
+	if _, err := ops.BuildFrontend(context.Background(), x.d, &cfg, opts); err != nil {
+		t.Fatal(err)
+	}
+	x.f.AssertCalled(fakerunner.Glob("docker build * -t hms-dbmi/pic-sure-httpd:dev-a-0123456789ab * " + ctxDir))
+	if got, _ := os.ReadFile(outside); string(got) != "VITE_MINE=1\n" {
+		t.Errorf("the developer's .env became %q", got)
+	}
+	if fi, err := os.Lstat(link); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("source link: %v, %v", fi, err)
 	}
 }
 

@@ -19,7 +19,7 @@ const (
 	srcDir            = "src"             // src/<repo>/<sha>/: source trees
 	releaseControlDir = "release-control" // not made by Open: it's cloned into place
 	downloadsDir      = "downloads"       // demo datasets
-	buildDir          = "build"           // build/<sha12>/: image build contexts
+	buildDir          = "build"           // build/<sha12>/, build/frontend-<tag>/: image build contexts
 	tmpDir            = "tmp"             // per-run temporary directories
 	locksDir          = "locks"           // lock files, which are never removed
 )

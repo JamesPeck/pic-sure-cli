@@ -15,12 +15,10 @@ import (
 	"regexp"
 	"slices"
 	"strings"
-	"sync"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/cache"
 	"github.com/JamesPeck/pic-sure-cli/internal/catalog"
 	"github.com/JamesPeck/pic-sure-cli/internal/docker"
-	"github.com/JamesPeck/pic-sure-cli/internal/events"
 	"github.com/JamesPeck/pic-sure-cli/internal/netproxy"
 	"github.com/JamesPeck/pic-sure-cli/internal/render"
 	"github.com/JamesPeck/pic-sure-cli/internal/stack"
@@ -120,17 +118,11 @@ func FrontendDotEnv(env map[string]string) ([]byte, error) {
 	return b.Bytes(), nil
 }
 
-// FrontendTag is pic-sure-httpd's tag for a frontend commit and config
-// hash: <sha12>-<cfghash8> (§7.2 step 4).
-func FrontendTag(sha, cfghash string) string {
-	return sha[:12] + "-" + cfghash[:8]
-}
-
 // BuildFrontend builds hms-dbmi/pic-sure-httpd for cfg from the frontend
 // at opts.SHA (§7.2 step 4). The image bakes in render.ViteEnv(cfg), so it
-// is tagged FrontendTag(SHA, FrontendConfigHash(...)) and shared by every
+// is tagged <sha12>-<cfghash8>, after FrontendConfigHash, and shared by every
 // stack with the same frontend commit and config. The source is copied to
-// the cache's FrontendBuildDir, the generated .env written into the copy,
+// the cache's FrontendBuildDir for the tag, the generated .env written into the copy,
 // and the copy removed after the build. Under the image's lock, the build
 // is skipped when the image exists with matching labels.
 func BuildFrontend(ctx context.Context, d *Deps, cfg *stack.Config, opts ImageBuildOptions) (ImageBuildResult, error) {
@@ -145,23 +137,23 @@ func BuildFrontend(ctx context.Context, d *Deps, cfg *stack.Config, opts ImageBu
 	}
 	tag := opts.Tag
 	if tag == "" {
-		tag = FrontendTag(opts.SHA, hash)
+		tag = opts.SHA[:12] + "-" + hash[:8]
 	}
 	labels := map[string]string{FrontendSrcLabel: opts.SHA, FrontendConfigLabel: hash}
 	return buildSourceImage(ctx, d, catalog.Frontend, opts, tag, labels, func(src string) (string, func(), error) {
-		dir, err := opts.Cache.FrontendBuildDir(opts.SHA, hash[:8])
+		dir, err := opts.Cache.FrontendBuildDir(tag)
 		if err != nil {
 			return "", nil, err
 		}
 		cleanup := func() { _ = os.RemoveAll(dir) }
-		// A killed build may have left its copy behind; the lock makes it
-		// this build's to replace.
+		// A killed build may have left its copy behind; the image lock makes
+		// it this build's to replace.
 		cleanup()
 		if err := copyTree(src, dir); err != nil {
 			cleanup()
 			return "", nil, fmt.Errorf("copying the frontend source: %w", err)
 		}
-		if err := os.WriteFile(filepath.Join(dir, ".env"), dotenv, 0o644); err != nil {
+		if err := writeDotEnv(dir, dotenv); err != nil {
 			cleanup()
 			return "", nil, fmt.Errorf("writing the frontend .env: %w", err)
 		}
@@ -186,6 +178,24 @@ func BuildDictionaryETL(ctx context.Context, d *Deps, opts ImageBuildOptions) (I
 	})
 }
 
+// writeDotEnv replaces the copy's .env. The copied one may be a symlink out
+// of the copy, which writing through would overwrite.
+func writeDotEnv(dir string, dotenv []byte) error {
+	path := filepath.Join(dir, ".env")
+	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(dotenv); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
+}
+
 var fullCommit = regexp.MustCompile(`^([0-9a-f]{40}|[0-9a-f]{64})$`)
 
 func checkImageSHA(sha string) error {
@@ -200,37 +210,46 @@ func checkImageSHA(sha string) error {
 // cleanup for it.
 func buildSourceImage(ctx context.Context, d *Deps, component string, opts ImageBuildOptions, tag string, labels map[string]string,
 	prepare func(src string) (dir string, cleanup func(), err error)) (res ImageBuildResult, err error) {
-	img, err := sourceImage(component)
-	if err != nil {
-		return ImageBuildResult{}, err
+	if opts.Cache == nil {
+		return ImageBuildResult{}, fmt.Errorf("%s build: no cache", component)
 	}
+	img := catalog.ImagesBuiltFrom(component)[0]
 	ref := img.Repository() + ":" + tag
 	res = ImageBuildResult{Tag: tag, Ref: ref}
-	lock, err := opts.Cache.LockImage(ctx, ref)
+	c := opts.Cache.WithEvents(d.Sink, opts.Step)
+	lock, err := c.LockImage(ctx, ref)
 	if err != nil {
 		return res, err
 	}
 	defer func() { _ = lock.Unlock() }()
 	if !opts.Force {
 		if fresh, err := imageHasLabels(ctx, d, ref, labels); err != nil || fresh {
+			if fresh {
+				progressf(d.Sink, opts.Step, "%s is up to date", ref)
+			}
 			return res, err
 		}
 	}
 
 	src := opts.Source
 	if src == "" {
-		if src, err = opts.Cache.EnsureSource(ctx, component, opts.SHA); err != nil {
+		if src, err = c.EnsureSource(ctx, component, opts.SHA); err != nil {
 			return res, err
 		}
 	}
-	d.Sink.Emit(events.Progress{ID: opts.Step, Text: "building " + ref})
+	// WalkDir doesn't descend into a symlinked root, and docker build
+	// should see the tree itself.
+	if src, err = filepath.EvalSymlinks(src); err != nil {
+		return res, err
+	}
+	progressf(d.Sink, opts.Step, "Building %s", ref)
 	dir, cleanup, err := prepare(src)
 	if err != nil {
 		return res, err
 	}
 	defer cleanup()
 
-	out, err := newImageLog(opts.LogDir, img.Name)
+	out, err := newPartOutput(opts.LogDir, img.Name, nil)
 	if err != nil {
 		return res, err
 	}
@@ -240,7 +259,7 @@ func buildSourceImage(ctx context.Context, d *Deps, component string, opts Image
 		}
 	}()
 	build := docker.BuildOpts{
-		Context: dir,
+		Context: filepath.Join(dir, filepath.FromSlash(img.Context)),
 		File:    filepath.Join(dir, filepath.FromSlash(img.Dockerfile)),
 		Tag:     ref,
 		Labels:  labels,
@@ -254,23 +273,10 @@ func buildSourceImage(ctx context.Context, d *Deps, component string, opts Image
 		if ctx.Err() == nil {
 			out.emitTail(d.Sink, opts.Step)
 		}
-		return res, fmt.Errorf("building %s: %w%s", ref, err, out.hint())
+		return res, fmt.Errorf("building %s: %w%s", ref, err, out.logHint())
 	}
 	res.Built = true
 	return res, nil
-}
-
-// sourceImage is the catalog image built from component's own tree.
-func sourceImage(component string) (catalog.Image, error) {
-	for _, img := range catalog.Images() {
-		if img.Component == component {
-			if img.Context != "." {
-				return catalog.Image{}, fmt.Errorf("image %s: context %q isn't the source root", img.Name, img.Context)
-			}
-			return img, nil
-		}
-	}
-	return catalog.Image{}, fmt.Errorf("no image is built from %s", component)
 }
 
 // imageHasLabels reports whether ref exists with every label in want.
@@ -333,92 +339,4 @@ func copyFile(src, dst string, perm fs.FileMode) error {
 		return err
 	}
 	return os.WriteFile(dst, b, perm)
-}
-
-// imageLogTail is how many lines of a failed build's output are shown.
-const imageLogTail = 30
-
-// imageLog takes one docker build's output: it copies it to a log file, if
-// there is one, and keeps the last lines for a failure's message. Writes
-// are serialized, since stdout and stderr share it.
-type imageLog struct {
-	mu      sync.Mutex
-	file    *os.File
-	path    string
-	partial []byte
-	tail    []string
-}
-
-func newImageLog(dir, name string) (*imageLog, error) {
-	o := &imageLog{}
-	if dir == "" {
-		return o, nil
-	}
-	o.path = filepath.Join(dir, name+".log")
-	f, err := os.OpenFile(o.path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
-	if err != nil {
-		return nil, fmt.Errorf("opening the build log: %w", err)
-	}
-	o.file = f
-	return o, nil
-}
-
-func (o *imageLog) Write(p []byte) (int, error) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	if o.file != nil {
-		if _, err := o.file.Write(p); err != nil {
-			return 0, fmt.Errorf("writing the build log: %w", err)
-		}
-	}
-	o.partial = append(o.partial, p...)
-	for {
-		i := bytes.IndexByte(o.partial, '\n')
-		if i < 0 {
-			break
-		}
-		o.line(string(bytes.TrimRight(o.partial[:i], "\r")))
-		o.partial = o.partial[i+1:]
-	}
-	return len(p), nil
-}
-
-func (o *imageLog) line(l string) {
-	if len(o.tail) == imageLogTail {
-		o.tail = o.tail[1:]
-	}
-	o.tail = append(o.tail, l)
-}
-
-// Close closes the log file.
-func (o *imageLog) Close() error {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	if o.file == nil {
-		return nil
-	}
-	err := o.file.Close()
-	o.file = nil
-	return err
-}
-
-// emitTail shows the last lines of output, for a failure.
-func (o *imageLog) emitTail(sink events.Sink, step string) {
-	o.mu.Lock()
-	tail := slices.Clone(o.tail)
-	if len(o.partial) > 0 {
-		tail = append(tail, string(o.partial))
-	}
-	o.mu.Unlock()
-	for _, l := range tail {
-		sink.Emit(events.Log{ID: step, Stream: events.StreamStderr, Line: l})
-	}
-}
-
-// hint points at the full log, if there is one.
-func (o *imageLog) hint() string {
-	if o.path == "" {
-		return ""
-	}
-	return "; full log: " + o.path
 }
