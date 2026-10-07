@@ -93,8 +93,9 @@ func (a *App) publishSharedData(cmd *cobra.Command, args []string) error {
 	}
 	return a.finish(set, func(w io.Writer) error {
 		_, err := fmt.Fprintf(w, "Published data set %s (%s) in volumes %s.\n"+
-			"A stack mounts it with `pic-sure config set hpds.data shared` and `pic-sure config set hpds.shared_name %s`.\n",
-			set.Name, set.Contents, strings.Join(set.Volumes, " and "), set.Name)
+			"A new stack mounts it with `pic-sure init --hpds-data shared:%s`; an existing one with "+
+			"`pic-sure config set hpds.shared_name %s`, then `pic-sure config set hpds.data shared` and `pic-sure up`.\n",
+			set.Name, set.Contents, strings.Join(set.Volumes, " and "), set.Name, set.Name)
 		return err
 	})
 }
