@@ -112,7 +112,9 @@ func CheckDevOn(stackDir string, cfg *stack.Config, v catalog.DevVariant) error 
 // adds the dev fragment (dev image, debug port on 127.0.0.1, JDWP agent);
 // dev-config then saves dev.services, so a failed build or render leaves
 // pic-sure.yaml as it was; up's restart step restarts what reads a changed
-// rendered file; and dev-start recreates what changed.
+// rendered file; and dev-start recreates what changed. httpd-hmr builds
+// nothing: node-image replaces the image step, and hmr-volume runs before
+// dev-start.
 //
 // Off: render, restart and dev-start as above, then dev-config, last so
 // that a failed run can be retried; it also drops the variant's

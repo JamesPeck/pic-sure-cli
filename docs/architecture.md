@@ -1282,10 +1282,12 @@ runs `node-image` (`NodeImageStep`: state.json's `images["node"]` from
 else is exit 3) instead of the image step, and `hmr-volume`
 (`HMRVolumeStep`: an alpine helper creates the `frontend-node-modules`
 volume with `EnsureVolume` and chowns it to `HostUser()`, since the node
-container runs as the host user and Docker creates volumes root-owned)
-before `dev-start`, which recreates only httpd. `up` adds both steps while
-httpd-hmr is in `dev.services`, so a new `.nvmrc` or a removed volume
-converges. The container copies the rendered Vite config into
+container runs as the host user and Docker creates volumes root-owned;
+it also makes `<source>/node_modules`, the volume's mount point, so Docker
+doesn't create it root-owned in the checkout) before `dev-start`, which
+recreates only httpd. `up` adds both steps while httpd-hmr is in
+`dev.services` (and `UpStepIDs` lists them), so a new `.nvmrc` or a removed
+volume converges; `update --no-build` skips `node-image` with the images. The container copies the rendered Vite config into
 `node_modules/.pic-sure/` (a file bind-mounted into the checkout would need
 a mount point runc won't create through the bind mount, and would dirty
 the checkout). `DevList(cfg)`, `DevPort`, `LookupDev`,

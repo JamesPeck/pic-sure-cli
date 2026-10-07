@@ -627,3 +627,20 @@ func TestComposeConfigAccepts(t *testing.T) {
 		}
 	}
 }
+
+func TestHMRWithoutAHostUserRunsAsTheImagesUser(t *testing.T) {
+	m := catalog.Mode{}
+	d := sampleData(m, []string{"httpd-hmr"}, false)
+	d.HostUser = ""
+	out, err := renderCompose(d, composeFragments(m, []string{"httpd-hmr"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var f composeFile
+	if err := yaml.Unmarshal(out, &f); err != nil {
+		t.Fatal(err)
+	}
+	if httpd := f.Services["httpd"]; httpd.User != "" || httpd.Image != "node:24.19.0-alpine3.23" {
+		t.Errorf("httpd-hmr: user %q, image %q", httpd.User, httpd.Image)
+	}
+}

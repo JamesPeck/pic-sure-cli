@@ -402,7 +402,8 @@ func renderFiles(d templateData) ([]File, error) {
 // frontend build bakes them in (§7.2), and httpd-hmr gets them as its
 // environment. VITE_ORIGIN is where the frontend's server-side rendering
 // fetches its configuration, inside the container: httpd's own HTTP listener
-// for the built image, and Vite's port 3000 for httpd-hmr, as in AIO. Ported from AIO's picsure_frontend_env and the VITE_* lines of init.sh.
+// for the built image, and Vite's port 3000 for httpd-hmr, as in AIO.
+// Ported from AIO's picsure_frontend_env and the VITE_* lines of init.sh.
 func ViteEnv(cfg *stack.Config) map[string]string {
 	flags := stack.DeriveAuthFlags(cfg.Auth.Mode)
 	b := strconv.FormatBool

@@ -32,11 +32,19 @@ func UpStepIDs(cfg *stack.Config) []string {
 
 // upStepIDs are the IDs of upSteps.
 func upStepIDs(cfg *stack.Config) []string {
-	ids := []string{ImagesStepID, TLSStepID, TruststoreStepID, RenderStepID, StepDB}
+	ids := []string{ImagesStepID}
+	if hmrOn(cfg) {
+		ids = append(ids, NodeImageStepID)
+	}
+	ids = append(ids, TLSStepID, TruststoreStepID, RenderStepID, StepDB)
 	if cfg.DB.Mode == stack.DBRemote {
 		ids = append(ids, StepDBBootstrap)
 	}
-	return append(ids, StepMigrate, StepSeed, HPDSKeyStepID, RestartStepID, StartStepID)
+	ids = append(ids, StepMigrate, StepSeed, HPDSKeyStepID, RestartStepID)
+	if hmrOn(cfg) && HostUser() != "" {
+		ids = append(ids, HMRVolumeStepID)
+	}
+	return append(ids, StartStepID)
 }
 
 // UpSteps are §9.2 for an initialised stack: resolve the components whose

@@ -142,6 +142,10 @@ func (a *App) update(cmd *cobra.Command, _ []string) (err error) {
 	skips := a.Global.SkipSteps
 	if r.noBuild {
 		skips = append(slices.Clone(skips), ops.ImagesStepID)
+		// The node tag httpd-hmr runs is an image too; keep it.
+		if slices.Contains(ops.UpdateStepIDs(r.cfg), ops.NodeImageStepID) {
+			skips = append(skips, ops.NodeImageStepID)
+		}
 	}
 	plan := ops.UpdateSteps(r.d, r.st, r.plan, r.sec, r.state, r.options())
 	err = steps.Run(ctx, r.d.Sink, plan, steps.Options{Skip: skips})

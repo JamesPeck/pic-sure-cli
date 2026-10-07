@@ -37,7 +37,6 @@ const (
 // and partial versions such as 24 too, since the tag would move.
 var nvmrcVersion = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
 
-// hmrOn reports whether httpd-hmr is in dev.services.
 func hmrOn(cfg *stack.Config) bool { return slices.Contains(cfg.Dev.Services, hmrVariant) }
 
 // NodeTag is the node image tag httpd-hmr runs: the frontend source's
@@ -107,12 +106,21 @@ func HostUser() string {
 const hmrVolumeScript = `[ "$(stat -c %u:%g /v)" = "$1" ] || chown -R "$1" /v`
 
 // HMRVolumeStep makes sure httpd-hmr's node_modules volume exists and
-// belongs to user (HostUser) before the container starts as that user.
+// belongs to user (HostUser) before the container starts as that user. It
+// also makes the volume's mount point in the checkout, which Docker would
+// otherwise create root-owned on Linux.
 func HMRVolumeStep(d *Deps, st *stack.Stack, cfg *stack.Config, user string) steps.Step {
 	return steps.Step{
 		ID:    HMRVolumeStepID,
 		Title: "Give the node_modules volume to " + user,
 		Apply: func(ctx context.Context, sink events.Sink) error {
+			src := componentSource(cfg, catalog.Frontend)
+			if !filepath.IsAbs(src) {
+				src = filepath.Join(st.Dir, src)
+			}
+			if err := os.MkdirAll(filepath.Join(src, "node_modules"), 0o755); err != nil {
+				return err
+			}
 			v, _ := catalog.LookupVolume("frontend-node-modules")
 			vol, err := st.EnsureVolume(ctx, d.Docker, cfg.Name, v.DockerName(cfg.Name), v.Name)
 			if err != nil {

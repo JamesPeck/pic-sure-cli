@@ -188,6 +188,9 @@ func TestDevOnHMRRunsNodeFromTheNvmrcWithoutABuild(t *testing.T) {
 		}
 		x.f.AssertCalled(fakerunner.Glob("docker run * -v demo_frontend-node-modules:/v alpine:3.23 sh -c * sh " + user))
 	}
+	if _, err := os.Stat(filepath.Join(x.cfg.Components.Frontend.Source, "node_modules")); ops.HostUser() != "" && err != nil {
+		t.Errorf("node_modules mount point: %v", err)
+	}
 	x.f.AssertNotCalled(fakerunner.Glob("docker build *"))
 	x.f.AssertNotCalled(fakerunner.Glob("docker buildx *"))
 	// Nothing was built, so only httpd is recreated.
@@ -225,6 +228,9 @@ func TestUpWithHMRRefreshesTheNodeTag(t *testing.T) {
 	}
 	if !slices.Contains(ids, ops.NodeImageStepID) || ops.HostUser() != "" && !slices.Contains(ids, ops.HMRVolumeStepID) {
 		t.Fatalf("up's steps: %v", ids)
+	}
+	if want := ops.UpStepIDs(x.cfg); !slices.Equal(ids, want) {
+		t.Errorf("UpSteps %v, UpStepIDs %v", ids, want)
 	}
 	step := ops.NodeImageStep(x.st, x.cfg, x.state)
 	if done, err := step.Check(context.Background()); done || err != nil {
