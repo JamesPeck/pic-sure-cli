@@ -1,10 +1,81 @@
-# Not implemented yet: exit 1, naming ticket 050.
-exitcode 1 pic-sure shared-data publish demo-v1
-stderr '^pic-sure: not implemented \(ticket 050\)$'
-! stdout .
-exitcode 1 pic-sure shared-data list
-stderr '^pic-sure: not implemented \(ticket 050\)$'
-! stdout .
-exitcode 1 pic-sure shared-data remove demo-v1
-stderr '^pic-sure: not implemented \(ticket 050\)$'
-! stdout .
+# shared-data's CLI paths with a fake docker. Publishing itself is covered
+# by the ops tests and the real runs.
+env XDG_CACHE_HOME=$WORK/cache
+
+# Names are checked before anything else.
+exitcode 2 pic-sure shared-data publish Bad.Name
+stderr 'a data set name must match \^\[a-z0-9\]\[a-z0-9_-\]\*\$, not "Bad.Name"'
+exitcode 2 pic-sure shared-data remove ../x
+stderr 'must match'
+exitcode 2 pic-sure shared-data publish x --skip-step shared-copy
+stderr 'publish''s steps depend on each other'
+
+# Publishing needs a stack, an initialised one with its own data.
+exitcode 3 pic-sure shared-data publish x
+stderr 'no pic-sure stack found'
+exitcode 1 pic-sure --stack shared shared-data publish x
+stderr 'uses the shared data set "demo-set" \(hpds.data: shared\); publish from a stack that loaded its own data'
+exitcode 3 pic-sure --stack partial shared-data publish x
+stderr 'isn''t initialised'
+! exists docker.log
+
+# list reads the labels.
+cp list.scenario docker.scenario
+exec pic-sure shared-data list
+stdout '^NAME +CONTENTS +PROFILE +CREATED +FROM STACK +VOLUMES$'
+stdout '^nhanes +phenotype=demo:nhanes genomic=synth +bch-dev +2026-10-07T12:00:00Z +src +nhanes_hpds-data,nhanes_hpds-genomic$'
+exec pic-sure shared-data list --json
+stdout '"name":"nhanes"'
+stdout '"volumes":\["nhanes_hpds-data","nhanes_hpds-genomic"\]'
+
+# remove refuses while a container, even a stopped one, uses the set.
+exitcode 3 pic-sure shared-data remove nhanes
+stderr 'data set nhanes is in use by b-hpds-1 \(exited\)'
+! grep 'volume rm' docker.log
+
+# Nothing published: an empty list, and remove is exit 3.
+cp empty.scenario docker.scenario
+exec pic-sure shared-data list
+stdout '^No published data sets.$'
+exec pic-sure shared-data list --json
+stdout '"data_sets":\[\]'
+exitcode 3 pic-sure shared-data remove nhanes
+stderr 'there is no data set nhanes'
+
+-- list.scenario --
+docker volume ls -q --filter label=org.hms-dbmi.picsure.shared-hpds-data => 0 stdout=names.txt
+docker volume inspect nhanes_hpds-data nhanes_hpds-genomic => 0 stdout=both.json
+docker volume inspect nhanes_hpds-data => 0 stdout=data.json
+docker volume inspect nhanes_hpds-genomic => 0 stdout=genomic.json
+docker ps -a --no-trunc --filter volume=nhanes_hpds-data * => 0
+docker ps -a --no-trunc --filter volume=nhanes_hpds-genomic * => 0 stdout=ps.txt
+-- empty.scenario --
+docker volume ls * => 0
+docker volume inspect * => 1 stderr=nosuch.txt
+-- nosuch.txt --
+Error response from daemon: get nhanes_hpds-data: no such volume
+-- names.txt --
+nhanes_hpds-data
+nhanes_hpds-genomic
+-- both.json --
+[{"Name":"nhanes_hpds-data","Labels":{"org.hms-dbmi.picsure.shared-hpds-data":"nhanes","org.hms-dbmi.picsure.shared-hpds-data.contents":"phenotype=demo:nhanes genomic=synth","org.hms-dbmi.picsure.shared-hpds-data.hpds-profile":"bch-dev","org.hms-dbmi.picsure.shared-hpds-data.created":"2026-10-07T12:00:00Z","org.hms-dbmi.picsure.shared-hpds-data.source-stack":"src"}},
+ {"Name":"nhanes_hpds-genomic","Labels":{"org.hms-dbmi.picsure.shared-hpds-data":"nhanes"}}]
+-- data.json --
+[{"Name":"nhanes_hpds-data","Labels":{"org.hms-dbmi.picsure.shared-hpds-data":"nhanes"}}]
+-- genomic.json --
+[{"Name":"nhanes_hpds-genomic","Labels":{"org.hms-dbmi.picsure.shared-hpds-data":"nhanes"}}]
+-- ps.txt --
+{"ID":"1","Names":"b-hpds-1","Image":"hms-dbmi/pic-sure-hpds:x","State":"exited"}
+-- partial/pic-sure.yaml --
+schema: 1
+name: partial
+auth: {mode: open, admin_email: admin@example.com}
+-- partial/.pic-sure/state.json --
+{"cli_version": "dev", "schema_version": 1}
+-- shared/pic-sure.yaml --
+schema: 1
+name: shared
+auth: {mode: open, admin_email: admin@example.com}
+hpds: {data: shared, shared_name: demo-set}
+-- shared/.pic-sure/state.json --
+{"cli_version": "dev", "schema_version": 1, "initialized_at": "2026-10-07T12:00:00Z"}

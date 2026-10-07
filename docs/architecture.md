@@ -363,6 +363,15 @@ it.
   load-genomic` operation. `--json`'s data is `{"partition", "promoted":
   [...], "profile"}`.
 
+- `shareddata.go` (050): `shared-data publish NAME` checks the name
+  (`ops.CheckSharedDataName`, exit 2) and refuses `--skip-step`; then,
+  under the stack lock, refuses a shared-mode stack
+  (`ops.RefusePublishFromShared`, exit 1) and an uninitialised or
+  unrendered one (exit 3), records the `shared-data publish` operation and
+  runs `ops.PublishSharedData`. `--json`'s data is the `ops.SharedDataSet`.
+  `list` and `remove NAME` open no stack and take no lock; `list --json` is
+  `{"data_sets": [...]}`, `remove --json` is `{"name", "removed": [...]}`.
+
 | File | Commands | Ticket |
 |---|---|---|
 | `init.go` | `init` | 034 |
@@ -1327,6 +1336,42 @@ DemoOptions{Dataset, HeapMB, Cache, HTTP})` is `data demo` (§9.6).
   `render.DemoFacetConfig()`, `WeightsSteps` and `RefreshStep`.
 - A dictionary failure says HPDS has the data and to re-run `data demo`;
   the downloads are reused.
+
+**Shared data sets (050, `shareddata.go`).** §9.7.
+`PublishSharedData(ctx, d, st, cfg, state, PublishOptions{Name,
+CLIVersion})` returns the `SharedDataSet`; the caller holds the stack lock
+and sets `d.Compose`. Steps, none skippable:
+
+- `shared-check`: the name (exit 2), no shared mode (exit 1), neither
+  `<name>_hpds-data` nor `<name>_hpds-genomic` existing (exit 3: sets are
+  immutable, no `--force`), both source volumes existing. One read-only
+  helper probes both: the phenotype files (`encryption_key`,
+  `allObservationsStore.javabin`, `columnMeta.javabin`, `columnMeta.csv`,
+  non-empty), `.picsure-dataset`, and every top-level directory of
+  `hpds-genomic` except `all-bak` and `.promote-*` as a partition, each of
+  which must hold a `<contig>/` with `variantIndex_fbbis.javabin` and
+  `BucketIndexBySample.javabin`, at most 10 partitions. Any gap is exit 3.
+  It records whether hpds is running, and works out the labels.
+- `hpds-stop` / `hpds-start`: skipped (Check) when hpds wasn't running.
+- `shared-copy`: creates both volumes, then re-inspects each and requires
+  this run's random `publish-id` label, so a volume another publish created
+  meanwhile is never removed. One helper copies only the loader output
+  (`sharedDataFiles`) plus an empty `all/` (HPDS's genomic mount point) and
+  the partitions, then writes `PublishedMarker` (`.picsure-published`,
+  `name=<set> created=<RFC 3339>`) in both. On failure, even an interrupted
+  one, it removes the volumes this run created; a copy failure then starts
+  hpds again if it was running.
+
+Labels are AIO's (`SharedDataLabel` = `org.hms-dbmi.picsure.shared-hpds-data`
+plus `.kind`, `.contents` = `phenotype=<marker|unknown>
+genomic=<partitions|none>`, `.hpds-profile` (`bch-dev` with genomic data,
+else empty: 051 reads it when `hpds.profile` is empty), `.picsure-commit`
+(the hpds-etl image's `ReactorSrcLabel`, else state.json's pic-sure commit),
+`.cli-version`, `.source-stack`, `.created`). Never the stack's own labels:
+056's `destroy` removes volumes carrying them.
+`ListSharedData(ctx, d)` groups the labelled volumes by set.
+`RemoveSharedData(ctx, d, name)` removes only volumes labelled as that set,
+and refuses (exit 3) while any container, stopped ones too, mounts either.
 
 **Cache list and prune (057, `cache.go`).** §7.1's in-use rules.
 `CacheInventory(ctx, d, c, CacheOptions{Stacks})` returns a `CacheReport`:
