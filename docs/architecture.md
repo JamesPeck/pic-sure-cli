@@ -322,7 +322,9 @@ A directory is a stack when it holds `pic-sure.yaml` and `.pic-sure/`.
   and `org.hms-dbmi.picsure.stack-dir=<Dir>` (`LabelStack`,
   `LabelStackDir`). `st.VolumeLabels(name, key)` adds compose's
   `com.docker.compose.project` and `com.docker.compose.volume` for a stack
-  volume a helper creates before compose does (024).
+  volume a helper creates before compose does (024). `st.EnsureVolume(ctx, engine,
+  name, vol, key)` creates such a volume with those labels if it's missing
+  and refuses (exit 3) one not labelled for this stack.
 
 ### Secrets (008)
 
@@ -536,6 +538,25 @@ so a changed file, hostname or re-created volume re-copies. An installed
 provided certificate isn't re-validated, so its expiry doesn't block `up`.
 The step doesn't restart httpd: a command that runs it on a live stack
 must restart httpd when the step applied.
+
+**Truststore (023, `truststore.go`).** `CustomCerts(st, cfg)` reads the
+operator's CA certs from `trust.custom_certs_dir` (relative to the stack;
+`*.crt|*.pem|*.cer|*.der`, PEM bundles split, DER read whole, hidden files
+skipped, a missing directory is none) and names them `custom-<n>-<file>`.
+Every PEM block in a file must decode and be a CERTIFICATE. Render (021)
+should set `catalog.Mode.CustomTrust` when it returns any.
+`TruststoreStep(d, st, cfg, psamaImage)`, ID `truststore`, is the step
+init/up/update (034–036) add once the psama image is present and before
+psama starts: with no certs it does nothing; otherwise it gets
+`<name>_truststore` with `st.EnsureVolume` and runs a helper container from
+the psama image (`--entrypoint sh`, `--network none`, user 0) that copies
+the image's `cacerts` into the volume and imports each cert with the
+image's `keytool`. The certs go in as PEM on stdin, not a bind mount, so
+the daemon needn't see the stack directory. `state.json`'s `truststore`
+records a hash of the certs, the script and the image ID, plus the volume's
+`CreatedAt`; Check is done while all of them match, and Apply forgets the
+record before the helper runs. A running psama needs a restart to read a
+new truststore.
 
 ## internal/steps
 
