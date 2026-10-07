@@ -22,7 +22,7 @@ services:
       - frontend-node-modules:/app/node_modules
       - type: bind
         source: "/stacks/golden/.pic-sure/render/files/httpd/vite.config.dev.ts"
-        target: /app/vite.config.aio.ts
+        target: /opt/pic-sure/vite.config.dev.ts
         bind: {create_host_path: false}
         read_only: true
     environment:
@@ -30,6 +30,8 @@ services:
       LOGGING_API_KEY: ${LOGGING_API_KEY}
       LOGGING_SERVICE_URL: http://pic-sure-logging/
       NODE_ENV: development
+      # The host user has no home directory in the image.
+      HOME: /tmp
       "VITE_API_CONFIG_BRANDING": "ui:branding"
       "VITE_API_CONFIG_FEATURES": "ui:featureFlag"
       "VITE_API_CONFIG_SETTINGS": "ui:setting"
@@ -45,7 +47,7 @@ services:
       "VITE_ENFORCE_TOS_ACCEPT": "false"
       "VITE_OPEN": "true"
       "VITE_OPEN_EXPLORER": "false"
-      "VITE_ORIGIN": "http://localhost:15006"
+      "VITE_ORIGIN": "http://127.0.0.1:3000"
       "VITE_THEME": "picsure"
     networks:
       - public
@@ -55,15 +57,32 @@ services:
         condition: service_started
       psama:
         condition: service_started
-    # The Vite server's own page.
+    # The Vite server's own page, on IPv4: Vite listens on 0.0.0.0, and
+    # localhost is ::1 first. A first install and the first server-side
+    # render can be slow.
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/"]
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3000/"]
       interval: 10s
-      timeout: 5s
+      timeout: 30s
       retries: 3
-      start_period: 30s
+      start_period: 5m
+    # The operator's UID:GID, so what Vite writes into the checkout
+    # (.svelte-kit/, config timestamps) is theirs. pic-sure gives the
+    # node_modules volume to the same user before starting it.
+    user: "1000:1000"
     working_dir: /app
-    command: sh -c "npm install -g pnpm@10.24.0 && pnpm config set store-dir /pnpm-store && pnpm install && pnpm dev --config vite.config.aio.ts"
+    # pnpm goes under /tmp because that user can't write the image's global
+    # prefix, and its store into the node_modules volume, which keeps it
+    # across recreates on the same file system as the packages. The Vite
+    # config is copied into node_modules too: Vite writes its bundled config
+    # beside it, it resolves vite from there, and the checkout stays clean.
+    # (Bind-mounting it into /app would need a mount point in the checkout,
+    # which runc refuses to create through a bind mount.)
+    command:
+      - sh
+      - -c
+      - >-
+        npm install -g --prefix /tmp/npm-global pnpm@10.24.0 && /tmp/npm-global/bin/pnpm install --store-dir /app/node_modules/.pnpm-store --config.confirmModulesPurge=false && mkdir -p node_modules/.pic-sure && cp /opt/pic-sure/vite.config.dev.ts node_modules/.pic-sure/vite.config.aio.ts && exec /tmp/npm-global/bin/pnpm dev --config node_modules/.pic-sure/vite.config.aio.ts
   # Gateway: the PIC-SURE API front door (Spring Cloud Gateway). Routes
   # /logging, /dictionary, /visualization, /hpds and /operations and runs the
   # PSAMA introspection auth chain in front of them. The aio Spring profile

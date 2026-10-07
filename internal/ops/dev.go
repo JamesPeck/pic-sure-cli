@@ -82,16 +82,18 @@ func LookupDev(name string) (catalog.DevVariant, error) {
 }
 
 // CheckDevOn refuses `dev on v` when the variant's component has no local
-// source, when it runs an image state doesn't name (httpd-hmr's node), or
-// when it would run beside the other variant that replaces httpd. All are
-// exit 3.
-func CheckDevOn(cfg *stack.Config, state *stack.State, v catalog.DevVariant) error {
+// source, when it is httpd-hmr and the source has no usable .nvmrc
+// (NodeTag), or when it would run beside the other variant that replaces
+// httpd. All are exit 3.
+func CheckDevOn(stackDir string, cfg *stack.Config, v catalog.DevVariant) error {
 	if componentSource(cfg, v.Component) == "" {
 		return exitcode.Precondition("dev %s builds %s from a local checkout; set it first: pic-sure config set components.%s.source PATH",
 			v.Name, v.Component, v.Component)
 	}
-	if v.Image != "" && state.Images[v.Image] == "" {
-		return exitcode.Precondition("dev %s needs the %s image from the %s source's .nvmrc, which this pic-sure doesn't set up yet", v.Name, v.Image, v.Component)
+	if v.Name == hmrVariant {
+		if _, err := NodeTag(stackDir, cfg); err != nil {
+			return err
+		}
 	}
 	for _, other := range cfg.Dev.Services {
 		o, ok := catalog.LookupDevVariant(other)
@@ -138,14 +140,20 @@ func DevSteps(d *Deps, st *stack.Stack, doc *stack.ConfigDoc, cfg *stack.Config,
 		},
 	}
 	list := []steps.Step{r.watchRender(RenderStep(d, st, cfg, state, opts.ConvergeOptions))}
+	// httpd-hmr runs node on the checkout itself, so nothing is built.
+	built := opts.On && v.Image == ""
 	if opts.On {
-		images := ImagesStep(d, st, cfg, state, ImagesOptions{Cache: opts.Cache, Components: []string{v.Component}})
+		images := NodeImageStep(st, cfg, state)
+		if built {
+			images = ImagesStep(d, st, cfg, state, ImagesOptions{Cache: opts.Cache, Components: []string{v.Component}})
+		}
 		list = append([]steps.Step{images}, append(list, save)...)
 	}
-	list = append(list,
-		withCompose(d, opts.ConvergeOptions, r.step()),
-		withCompose(d, opts.ConvergeOptions, devStartStep(d, cfg, v, opts.On)),
-	)
+	list = append(list, withCompose(d, opts.ConvergeOptions, r.step()))
+	if user := HostUser(); opts.On && v.Name == hmrVariant && user != "" {
+		list = append(list, HMRVolumeStep(d, st, cfg, user))
+	}
+	list = append(list, withCompose(d, opts.ConvergeOptions, devStartStep(d, cfg, v, built)))
 	if !opts.On {
 		list = append(list, save)
 	}

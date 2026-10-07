@@ -17,6 +17,7 @@ import (
 	"github.com/JamesPeck/pic-sure-cli/internal/log"
 	"github.com/JamesPeck/pic-sure-cli/internal/netproxy"
 	"github.com/JamesPeck/pic-sure-cli/internal/ops"
+	"github.com/JamesPeck/pic-sure-cli/internal/render"
 	"github.com/JamesPeck/pic-sure-cli/internal/stack"
 	"github.com/JamesPeck/pic-sure-cli/internal/steps"
 )
@@ -102,6 +103,9 @@ type devReport struct {
 	// Port is the debug (or HMR) port on 127.0.0.1 while on, else 0.
 	Port   int    `json:"port"`
 	Source string `json:"source"`
+	// built says the services run images built from Source, which they
+	// keep after dev off.
+	built bool
 }
 
 // dev is `dev on NAME` and `dev off NAME`.
@@ -150,7 +154,7 @@ func (a *App) dev(cmd *cobra.Command, name string, on bool) (err error) {
 		return err
 	}
 	if on {
-		if err := ops.CheckDevOn(cfg, state, v); err != nil {
+		if err := ops.CheckDevOn(st.Dir, cfg, v); err != nil {
 			return err
 		}
 	}
@@ -207,6 +211,7 @@ func (a *App) dev(cmd *cobra.Command, name string, on bool) (err error) {
 	if on {
 		report.Port = ops.DevPort(cfg, v)
 	}
+	report.built = state.Components[v.Component].Source != ""
 	return a.finish(report, func(w io.Writer) error { return writeDev(w, report, v) })
 }
 
@@ -215,7 +220,7 @@ func writeDev(w io.Writer, r *devReport, v catalog.DevVariant) error {
 		_, err := fmt.Fprintf(w, "dev %s is on: %s %s from %s", r.Service, strings.Join(r.Services, ", "), verb(r.Services, "runs", "run"), r.Source)
 		if err == nil && r.Port != 0 {
 			if v.Image != "" {
-				_, err = fmt.Fprintf(w, "; its dev server listens on 127.0.0.1:%d", r.Port)
+				_, err = fmt.Fprintf(w, "; browse to %s", render.HMROrigin(r.Port))
 			} else {
 				_, err = fmt.Fprintf(w, "; attach a debugger (JDWP) to 127.0.0.1:%d", r.Port)
 			}
@@ -225,8 +230,13 @@ func writeDev(w io.Writer, r *devReport, v catalog.DevVariant) error {
 		}
 		return err
 	}
-	_, err := fmt.Fprintf(w, "dev %s is off: %s %s no debug port.\n", r.Service, strings.Join(r.Services, ", "), verb(r.Services, "has", "have"))
-	if err == nil && r.Source != "" {
+	var err error
+	if v.Image != "" {
+		_, err = fmt.Fprintf(w, "dev %s is off: %s no longer %s the %s dev server.\n", r.Service, strings.Join(r.Services, ", "), verb(r.Services, "runs", "run"), v.Image)
+	} else {
+		_, err = fmt.Fprintf(w, "dev %s is off: %s %s no debug port.\n", r.Service, strings.Join(r.Services, ", "), verb(r.Services, "has", "have"))
+	}
+	if err == nil && r.built {
 		_, err = fmt.Fprintf(w, "%s still %s the build of components.%s.source (%s), which applies to the whole component.\n"+
 			"To return to the release images: pic-sure config set components.%s.source '' && pic-sure up\n",
 			strings.Join(r.Services, ", "), verb(r.Services, "runs", "run"), v.Component, r.Source, v.Component)

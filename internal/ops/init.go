@@ -231,6 +231,7 @@ func renderStack(ctx context.Context, d *Deps, st *stack.Stack, cfg *stack.Confi
 		Sources:       sources,
 		CustomTrust:   len(certs) > 0,
 		SharedProfile: sharedProfile,
+		HostUser:      HostUser(),
 	})
 }
 

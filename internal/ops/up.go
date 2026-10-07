@@ -77,14 +77,21 @@ func upSteps(d *Deps, st *stack.Stack, cfg *stack.Config, sec *stack.Secrets, st
 	r := &upRestarts{d: d, st: st, cfg: cfg, opts: opts}
 	converge := ConvergeSteps(d, st, cfg, sec, opts)
 	last := len(converge) - 1
-	list := []steps.Step{
-		images,
+	list := []steps.Step{images}
+	if hmrOn(cfg) {
+		list = append(list, NodeImageStep(st, cfg, state))
+	}
+	list = append(list,
 		r.restartAfter(TLSStep(d, st, cfg), httpd),
 		r.restartAfter(StackTruststoreStep(d, st, cfg, state), psama),
 		r.watchRender(RenderStep(d, st, cfg, state, opts)),
-	}
+	)
 	list = append(list, converge[:last]...)
-	return append(list, withCompose(d, opts, r.step()), converge[last])
+	list = append(list, withCompose(d, opts, r.step()))
+	if user := HostUser(); hmrOn(cfg) && user != "" {
+		list = append(list, HMRVolumeStep(d, st, cfg, user))
+	}
+	return append(list, converge[last])
 }
 
 // upRestarts records and runs the restarts up's steps call for.

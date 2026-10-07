@@ -44,6 +44,10 @@ type Input struct {
 	// SharedProfile is the HPDS profile recorded with the shared data set,
 	// used with hpds.data: shared when hpds.profile is empty.
 	SharedProfile string
+	// HostUser is the "UID:GID" httpd-hmr's node container runs as, so the
+	// files Vite writes into the frontend checkout are the operator's (§6.4).
+	// Empty runs it as the image's user.
+	HostUser string
 }
 
 // File is one file render produces. Path is relative to the stack dir.
@@ -210,7 +214,7 @@ func addDev(in Input, d *templateData, extra map[string][]string) error {
 			}
 		}
 	}
-	if port, ok := d.DevPorts["httpd-hmr"]; ok {
+	if _, ok := d.DevPorts["httpd-hmr"]; ok {
 		src := cfg.Components.Frontend.Source
 		if src == "" {
 			return errors.New("dev variant httpd-hmr needs components.frontend.source")
@@ -220,12 +224,18 @@ func addDev(in Input, d *templateData, extra map[string][]string) error {
 			return err
 		}
 		d.FrontendEnv = ViteEnv(cfg)
-		d.FrontendEnv["VITE_ORIGIN"] = HMROrigin(port)
+		d.FrontendEnv["VITE_ORIGIN"] = hmrServerOrigin
+		d.HostUser = in.HostUser
 	}
 	return nil
 }
 
-// HMROrigin is the origin httpd-hmr's Vite server serves the frontend on,
+// hmrServerOrigin is httpd-hmr's Vite server as seen from inside its
+// container, where the frontend's server-side rendering runs. It is IPv4
+// because Vite listens on 0.0.0.0 and localhost may resolve to ::1.
+const hmrServerOrigin = "http://127.0.0.1:3000"
+
+// HMROrigin is the origin the browser reaches httpd-hmr's Vite server on,
 // given its host port.
 func HMROrigin(port int) string { return "http://localhost:" + strconv.Itoa(port) }
 
@@ -390,10 +400,9 @@ func renderFiles(d templateData) ([]File, error) {
 
 // ViteEnv returns the frontend's VITE_* settings for the config. The
 // frontend build bakes them in (§7.2), and httpd-hmr gets them as its
-// environment with VITE_ORIGIN replaced by HMROrigin. VITE_ORIGIN is where
-// the frontend's server-side rendering fetches its configuration; for the
-// built image that is httpd's own HTTP listener inside the container, as in
-// AIO. Ported from AIO's picsure_frontend_env and the VITE_* lines of init.sh.
+// environment. VITE_ORIGIN is where the frontend's server-side rendering
+// fetches its configuration, inside the container: httpd's own HTTP listener
+// for the built image, and Vite's port 3000 for httpd-hmr, as in AIO. Ported from AIO's picsure_frontend_env and the VITE_* lines of init.sh.
 func ViteEnv(cfg *stack.Config) map[string]string {
 	flags := stack.DeriveAuthFlags(cfg.Auth.Mode)
 	b := strconv.FormatBool

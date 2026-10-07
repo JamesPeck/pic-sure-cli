@@ -136,6 +136,7 @@ type templateData struct {
 	MigrationsSrc     string
 	MigrationsProject string // components.migrations.project, e.g. Baseline
 	FrontendSrc       string // used by httpd-hmr only
+	HostUser          string // httpd-hmr's "UID:GID", or "" for the image's
 
 	DB          dbTarget
 	Auth        authSettings

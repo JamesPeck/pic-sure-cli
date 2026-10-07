@@ -2,9 +2,12 @@ package ops_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -30,7 +33,6 @@ func devFixture(t *testing.T) (*buildFixture, string) {
 			x.state.Images[img.Name] = "rel"
 		}
 	}
-	x.state.Images["node"] = "22.0.0"
 	if err := x.st.SaveState(x.state); err != nil {
 		t.Fatal(err)
 	}
@@ -144,14 +146,101 @@ func TestDevOnAStoppedStackLeavesTheStartToUp(t *testing.T) {
 	}
 }
 
-func TestDevOnRefusesHMRWithoutTheNodeImage(t *testing.T) {
+// hmrFixture is devFixture with a frontend checkout whose .nvmrc holds
+// nvmrc, and its node_modules volume already the stack's.
+func hmrFixture(t *testing.T, nvmrc string) *buildFixture {
+	t.Helper()
 	x, _ := devFixture(t)
-	x.cfg.Components.Frontend.Source = "/src/fe"
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, ".nvmrc"), []byte(nvmrc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	x.cfg.Components.Frontend.Source = src
 	x.saveConfig()
-	delete(x.state.Images, "node")
-	hmr, _ := catalog.LookupDevVariant("httpd-hmr")
-	if err := ops.CheckDevOn(x.cfg, x.state, hmr); exitcode.FromError(err) != 3 || !strings.Contains(err.Error(), ".nvmrc") {
-		t.Fatalf("err = %v", err)
+	vol, _ := json.Marshal([]map[string]any{{"Name": "demo_frontend-node-modules", "Labels": map[string]string{stack.LabelStack: "demo"}}})
+	x.f.On(fakerunner.Glob("docker volume inspect demo_frontend-node-modules")).Stdout(string(vol))
+	x.f.On(fakerunner.Glob("docker run * alpine:3.23 sh -c *"))
+	return x
+}
+
+func TestDevOnHMRRunsNodeFromTheNvmrcWithoutABuild(t *testing.T) {
+	x := hmrFixture(t, "24.19.0\n")
+	x.running("httpd", "psama", "gateway")
+	if err := x.dev("httpd-hmr", true); err != nil {
+		t.Fatal(err)
+	}
+	state, err := x.st.LoadState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Images["node"] != "24.19.0-alpine3.23" {
+		t.Errorf("node image = %q", state.Images["node"])
+	}
+	c := x.compose()
+	for _, want := range []string{"node:24.19.0-alpine3.23", `"VITE_ORIGIN": "http://127.0.0.1:3000"`, "127.0.0.1:15006:3000"} {
+		if !strings.Contains(c, want) {
+			t.Errorf("compose.yaml lacks %s:\n%s", want, c)
+		}
+	}
+	if user := ops.HostUser(); user != "" {
+		if !strings.Contains(c, "user: "+strconv.Quote(user)) {
+			t.Errorf("compose.yaml doesn't run httpd as %s", user)
+		}
+		x.f.AssertCalled(fakerunner.Glob("docker run * -v demo_frontend-node-modules:/v alpine:3.23 sh -c * sh " + user))
+	}
+	x.f.AssertNotCalled(fakerunner.Glob("docker build *"))
+	x.f.AssertNotCalled(fakerunner.Glob("docker buildx *"))
+	// Nothing was built, so only httpd is recreated.
+	x.f.AssertCalled(fakerunner.Glob("docker compose * up -d --no-deps --wait --wait-timeout 900 httpd"))
+}
+
+func TestNodeTag(t *testing.T) {
+	for _, tc := range []struct{ nvmrc, want string }{
+		{"24.19.0\n", "24.19.0-alpine3.23"},
+		{" 22.1.10 ", "22.1.10-alpine3.23"},
+		{"24\n", ""},
+		{"lts/*", ""},
+		{"v24.19.0", ""},
+	} {
+		x := hmrFixture(t, tc.nvmrc)
+		got, err := ops.NodeTag(x.st.Dir, x.cfg)
+		if got != tc.want || (tc.want == "") != (exitcode.FromError(err) == 3) {
+			t.Errorf("%q: %q, %v", tc.nvmrc, got, err)
+		}
+	}
+	x := hmrFixture(t, "24.19.0")
+	x.cfg.Components.Frontend.Source = "fe"
+	if _, err := ops.NodeTag(x.st.Dir, x.cfg); exitcode.FromError(err) != 3 || !strings.Contains(err.Error(), filepath.Join(x.st.Dir, "fe", ".nvmrc")) {
+		t.Errorf("relative source without .nvmrc: %v", err)
+	}
+}
+
+func TestUpWithHMRRefreshesTheNodeTag(t *testing.T) {
+	x := hmrFixture(t, "24.19.0")
+	x.cfg.Dev.Services = []string{"httpd-hmr"}
+	x.state.Images["node"] = "22.0.0-alpine3.23"
+	var ids []string
+	for _, s := range ops.UpSteps(x.d, x.st, x.cfg, &stack.Secrets{}, x.state, ops.ConvergeOptions{}) {
+		ids = append(ids, s.ID)
+	}
+	if !slices.Contains(ids, ops.NodeImageStepID) || ops.HostUser() != "" && !slices.Contains(ids, ops.HMRVolumeStepID) {
+		t.Fatalf("up's steps: %v", ids)
+	}
+	step := ops.NodeImageStep(x.st, x.cfg, x.state)
+	if done, err := step.Check(context.Background()); done || err != nil {
+		t.Fatalf("check = %v, %v", done, err)
+	}
+	if err := step.Apply(context.Background(), x.d.Sink); err != nil {
+		t.Fatal(err)
+	}
+	if done, err := step.Check(context.Background()); !done || err != nil {
+		t.Errorf("check after apply = %v, %v", done, err)
+	}
+	x.cfg.Dev.Services = nil
+	for _, s := range ops.UpSteps(x.d, x.st, x.cfg, &stack.Secrets{}, x.state, ops.ConvergeOptions{}) {
+		if s.ID == ops.NodeImageStepID || s.ID == ops.HMRVolumeStepID {
+			t.Errorf("up without httpd-hmr runs %s", s.ID)
+		}
 	}
 }
 
@@ -218,13 +307,17 @@ func TestDevOffSavesTheConfigLastSoAFailureCanBeRetried(t *testing.T) {
 func TestDevOnRefusals(t *testing.T) {
 	cfg := stack.DefaultConfig()
 	psama, _ := catalog.LookupDevVariant("psama")
-	if err := ops.CheckDevOn(&cfg, &stack.State{}, psama); exitcode.FromError(err) != 3 || !strings.Contains(err.Error(), "config set components.pic-sure.source PATH") {
+	if err := ops.CheckDevOn("/stack", &cfg, psama); exitcode.FromError(err) != 3 || !strings.Contains(err.Error(), "config set components.pic-sure.source PATH") {
 		t.Errorf("no source: %v", err)
 	}
-	cfg.Components.Frontend.Source = "/src/fe"
+	cfg.Components.Frontend.Source = "/nonexistent/fe"
+	hmr, _ := catalog.LookupDevVariant("httpd-hmr")
+	if err := ops.CheckDevOn("/stack", &cfg, hmr); exitcode.FromError(err) != 3 || !strings.Contains(err.Error(), ".nvmrc") {
+		t.Errorf("httpd-hmr without .nvmrc: %v", err)
+	}
 	cfg.Dev.Services = []string{"httpd-hmr"}
 	httpd, _ := catalog.LookupDevVariant("httpd")
-	if err := ops.CheckDevOn(&cfg, &stack.State{}, httpd); exitcode.FromError(err) != 3 || !strings.Contains(err.Error(), "dev off httpd-hmr") {
+	if err := ops.CheckDevOn("/stack", &cfg, httpd); exitcode.FromError(err) != 3 || !strings.Contains(err.Error(), "dev off httpd-hmr") {
 		t.Errorf("httpd beside httpd-hmr: %v", err)
 	}
 	if _, err := ops.LookupDev("nope"); exitcode.FromError(err) != 2 {

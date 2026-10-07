@@ -432,8 +432,8 @@ it.
   an unknown variant (`ops.LookupDev`, exit 2, listing them) and any
   `--skip-step`. Under the stack lock: `dev off` of a variant that isn't on
   changes nothing. Then an initialised stack, and for `on`
-  `ops.CheckDevOn` (exit 3: the component's source, httpd-hmr's node
-  image, not httpd beside httpd-hmr); `upSecrets`; `StackNameInUse`, and
+  `ops.CheckDevOn` (exit 3: the component's source, httpd-hmr's
+  `.nvmrc`, not httpd beside httpd-hmr); `upSecrets`; `StackNameInUse`, and
   for `on` its port free or the stack's own. It records the `dev on` or
   `dev off` operation and runs `ops.DevSteps` with up's lazy-env Composer. `--json`'s data is
   `{"service", "on", "services", "port", "source"}`. `dev off`'s text says
@@ -732,7 +732,8 @@ each AIO source still exists in the AIO checkout beside this repo (or
 - `Input`: `StackDir`, `Config`, `State` (image tags from `Images`, node's
   being the `.nvmrc` tag httpd-hmr needs; dev builds' tags from
   `DevImages`, keyed by image), `Sources` (the cache tree of each component
-  without a configured `source`; render needs pic-sure and migrations) and
+  without a configured `source`; render needs pic-sure and migrations),
+  `HostUser` (httpd-hmr's `user:`, `ops.HostUser()`'s `UID:GID`) and
   `CustomTrust` (the trust dir holds certs) and `SharedProfile` (the shared
   data set's recorded HPDS profile, used when `hpds.profile` is empty).
   Render does no I/O, so the caller resolves those.
@@ -754,8 +755,9 @@ each AIO source still exists in the AIO checkout beside this repo (or
   the Auth0 login module when `client_id` is set, analytics, the theme and
   `VITE_ORIGIN=http://localhost` (AIO's value: SSR config fetches go to
   httpd inside its own container). The frontend build (030) bakes it in and
-  hashes it for the image tag; httpd-hmr gets it with `VITE_ORIGIN` replaced
-  by `HMROrigin(port)`.
+  hashes it for the image tag; httpd-hmr gets it with `VITE_ORIGIN`
+  `http://127.0.0.1:3000`, Vite inside its own container (IPv4: Vite
+  listens on 0.0.0.0). `HMROrigin(port)` is the browser's URL for it.
 
 **Goldens.** `render_test.go` renders 11 stacks that cover every pair of
 auth mode, dev (none, hpds, httpd-hmr), db mode, HPDS data, proxy and
@@ -1274,9 +1276,20 @@ component's source build while the source is set. `dev-start` runs
 variant's services plus, for `on`, the running services built from its
 component (a dirty checkout rebuilds them under the same tag; compose
 recreates only what changed), and on a stack with nothing running only
-warns, leaving the start to `up`. `CheckDevOn` makes `on` of httpd-hmr exit
-3 while state.json has no `node` image (its `.nvmrc` tag is 053's). `DevList(cfg)`, `DevPort`, `LookupDev`,
-`CheckDevOn` and `ComponentSource` serve the command.
+warns, leaving the start to `up`. httpd-hmr (053) builds nothing: its `on`
+runs `node-image` (`NodeImageStep`: state.json's `images["node"]` from
+`NodeTag`, the frontend source's `.nvmrc` x.y.z plus `-alpine3.23`; anything
+else is exit 3) instead of the image step, and `hmr-volume`
+(`HMRVolumeStep`: an alpine helper creates the `frontend-node-modules`
+volume with `EnsureVolume` and chowns it to `HostUser()`, since the node
+container runs as the host user and Docker creates volumes root-owned)
+before `dev-start`, which recreates only httpd. `up` adds both steps while
+httpd-hmr is in `dev.services`, so a new `.nvmrc` or a removed volume
+converges. The container copies the rendered Vite config into
+`node_modules/.pic-sure/` (a file bind-mounted into the checkout would need
+a mount point runc won't create through the bind mount, and would dirty
+the checkout). `DevList(cfg)`, `DevPort`, `LookupDev`,
+`CheckDevOn(stackDir, cfg, v)` and `ComponentSource` serve the command.
 
 **Phenotype loader (042, `loader.go`).** §9.6's one loader, for `data
 demo` (046) and `data load-phenotype`. `LoadPhenotype(ctx, d, st, cfg,

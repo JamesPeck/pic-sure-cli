@@ -1,7 +1,8 @@
 // Extend the checked-out frontend config instead of replacing its plugins,
-// tests and build policy. Verified against frontend 0b727304 (Node 24.19.0).
+// tests and build policy. httpd-hmr runs it from node_modules/.pic-sure/.
+// Verified against frontend 417a68c1 (Node 24.19.0).
 import { defineConfig, mergeConfig } from 'vite';
-import upstream from './vite.config';
+import upstream from '../../vite.config.ts';
 
 export default defineConfig(async (env) => {
   const base = typeof upstream === 'function' ? await upstream(env) : await upstream;

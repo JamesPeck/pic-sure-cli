@@ -41,7 +41,8 @@ func sampleData(m catalog.Mode, dev []string, proxy bool) templateData {
 		JavaOpts:          map[string]string{"hpds": "-Xmx2g"},
 		JVMExtra:          map[string]string{},
 		Proxy:             proxy,
-		FrontendEnv:       map[string]string{"VITE_ORIGIN": "http://localhost:15006"},
+		HostUser:          "1000:1000",
+		FrontendEnv:       map[string]string{"VITE_ORIGIN": "http://127.0.0.1:3000"},
 		ServiceEnv:        map[string]map[string]string{"hpds": {"ID_BATCH_SIZE": "0"}},
 	}
 	if m.RemoteDB {
@@ -103,6 +104,7 @@ type composeFile struct {
 	Name     string
 	Services map[string]struct {
 		Image       string
+		User        string
 		Labels      map[string]string
 		Profiles    []string
 		Restart     string
@@ -447,8 +449,11 @@ func TestComposeValues(t *testing.T) {
 		t.Errorf("hpds ID_BATCH_SIZE %q: services.hpds.env should override it", hpds["ID_BATCH_SIZE"])
 	}
 
+	if u := f.Services["httpd"].User; u != "1000:1000" {
+		t.Errorf("httpd-hmr user %q", u)
+	}
 	hmr := f.Services["httpd"].Environment
-	if hmr["VITE_ORIGIN"] != "http://localhost:15006" || hmr["HTTP_PROXY"] != "${HTTP_PROXY}" || hmr["GATEWAY_DOCS_ENABLED"] != "true" {
+	if hmr["VITE_ORIGIN"] != "http://127.0.0.1:3000" || hmr["HTTP_PROXY"] != "${HTTP_PROXY}" || hmr["GATEWAY_DOCS_ENABLED"] != "true" {
 		t.Errorf("httpd-hmr env: %v", hmr)
 	}
 

@@ -113,6 +113,7 @@ func goldenInput(c goldenCase) Input {
 			catalog.Migrations: "/home/op/.cache/pic-sure/src/PIC-SURE-Migrations/89abcdef0123456789abcdef0123456789abcdef",
 		},
 		CustomTrust: c.trust,
+		HostUser:    "1000:1000",
 	}
 	if c.sharedHPDS {
 		// hpds.profile is empty, so this is the profile hpds runs with.
@@ -384,7 +385,7 @@ func TestRenderValues(t *testing.T) {
 		t.Errorf("hpds: image %q JAVA_OPTS %q", hpds.Image, hpds.Environment["JAVA_OPTS"])
 	}
 	hmr := f.Services["httpd"]
-	if hmr.Image != "node:24.19.0-alpine3.23" || hmr.Environment["VITE_ORIGIN"] != "http://localhost:15006" ||
+	if hmr.Image != "node:24.19.0-alpine3.23" || hmr.User != "1000:1000" || hmr.Environment["VITE_ORIGIN"] != "http://127.0.0.1:3000" ||
 		hmr.Environment["VITE_AUTH_PROVIDER_MODULE_GOOGLE_CLIENTID"] != "golden-client-id" {
 		t.Errorf("httpd-hmr: image %q env %v", hmr.Image, hmr.Environment)
 	}
