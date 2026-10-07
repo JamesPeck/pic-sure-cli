@@ -34,7 +34,12 @@ running, current stack up only verifies. After a reset it re-migrates,
 re-seeds and re-keys HPDS.
 
 Running services whose certificate, truststore or rendered files changed
-are restarted before the services are started and waited for.`,
+are restarted before the services are started and waited for.
+
+A component whose components.<c>.source was unset goes back to its release
+images: up resolves it at the stack's recorded release, builds or pulls
+the images and recreates its services. It never moves the stack to
+another release; that is pic-sure update.`,
 		Args: cobra.NoArgs,
 		RunE: a.up,
 	}

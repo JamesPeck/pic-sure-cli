@@ -409,8 +409,9 @@ func TestUpdateStepIDsMatchUpdateSteps(t *testing.T) {
 	if want := ops.UpdateStepIDs(x.cfg); !slices.Equal(ids, want) {
 		t.Errorf("UpdateSteps %v, UpdateStepIDs %v", ids, want)
 	}
-	if want := append([]string{ops.UpdateConfigStepID}, ops.UpStepIDs(x.cfg)...); !slices.Equal(ids, want) {
-		t.Errorf("UpdateSteps %v, want config and resolve before up's", ids)
+	// up's own resolve is replaced by update's.
+	if want := append([]string{ops.UpdateConfigStepID, ops.UpdateResolveStepID}, ops.UpStepIDs(x.cfg)[1:]...); !slices.Equal(ids, want) {
+		t.Errorf("UpdateSteps %v, want config and resolve before up's other steps", ids)
 	}
 }
 

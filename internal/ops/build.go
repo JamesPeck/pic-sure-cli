@@ -108,8 +108,8 @@ func Build(ctx context.Context, d *Deps, st *stack.Stack, cfg *stack.Config, sta
 	return report, steps.Run(ctx, d.Sink, plan, steps.Options{Skip: opts.SkipSteps})
 }
 
-// resolveStep resolves the commits of the components that pending lists,
-// such as unresolved's. They are resolved at the release commit state.json
+// resolveStep resolves the commits of the components pending lists:
+// unresolved for build and init, unsetSources for up. They are resolved at the release commit state.json
 // records, if any, and the other components are left as they are, since
 // moving them is update's business.
 func resolveStep(d *Deps, st *stack.Stack, cfg *stack.Config, state *stack.State, c *cache.Cache, pending func(*stack.Config, *stack.State) []string) steps.Step {
