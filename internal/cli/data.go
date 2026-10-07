@@ -75,7 +75,7 @@ the stack and starts HPDS on it.`,
 	f.String("partition", "", "genomic partition `NAME`: letters, digits, _ and -")
 	f.String("vcf-index", "", "vcfIndex.tsv `FILE`")
 	f.String("vcf-dir", "", "`DIR` holding the VCFs the index names (default: the index's directory)")
-	f.Int("heap", 0, "each loader's JVM heap in `MB` (default 4096)")
+	f.Int("heap", 0, "each loader's JVM heap in `MB` (default 16000)")
 	f.Bool("promote", false, "promote the loaded partition into the live HPDS data")
 	f.Bool("all-partitions", false, "with --promote, promote every staged partition")
 	f.Bool("backup", false, "with --promote, first copy the live genomic data into all-bak")

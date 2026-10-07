@@ -23,15 +23,18 @@ import (
 
 type genomicFixture struct {
 	*loaderFixture
-	vcfDir     string
-	index      string
-	exits      map[string]int // loader step ID -> exit code
-	staged     string         // genomic-list output for the staging volume
-	live       string         // and for hpds-genomic
-	hiddenOnce bool           // the first probe sees no VCF
-	probes     [][]string
-	stageIn    []byte
-	promoteFx  []string // the promote helper's partition args
+	vcfDir      string
+	index       string
+	exits       map[string]int // loader step ID -> exit code
+	staged      string         // genomic-list output for the staging volume
+	live        string         // and for hpds-genomic
+	hiddenOnce  bool           // the first probe sees no VCF
+	probes      [][]string
+	stageIn     []byte
+	backupExit  int
+	promoteExit int
+	promotes    [][]string // each promote helper's argv
+	promoteFx   []string   // the promote helper's partition args
 }
 
 func newGenomicFixture(t *testing.T) *genomicFixture {
@@ -90,10 +93,18 @@ func newGenomicFixture(t *testing.T) *genomicFixture {
 		}
 		return docker.Result{Stdout: []byte(fx.live)}, nil
 	})
-	f.On(fakerunner.Glob("docker run --rm --name demo-genomic-backup-* *"))
+	f.On(fakerunner.Glob("docker run --rm --name demo-genomic-backup-* *")).Do(func(context.Context, fakerunner.Call) (docker.Result, error) {
+		return docker.Result{Stderr: []byte("cp: write error: No space left on device\n"), ExitCode: fx.backupExit}, nil
+	})
 	f.On(fakerunner.Glob("docker run --rm --name demo-genomic-promote-* *")).Do(func(_ context.Context, c fakerunner.Call) (docker.Result, error) {
-		fx.promoteFx = c.Argv[slices.Index(c.Argv, "sh")+4:]
-		return docker.Result{}, nil
+		fx.promotes = append(fx.promotes, c.Argv)
+		if len(fx.promotes) > 1 {
+			return docker.Result{}, nil
+		}
+		if i := slices.Index(c.Argv, "sh"); i+4 <= len(c.Argv) {
+			fx.promoteFx = c.Argv[i+4:]
+		}
+		return docker.Result{ExitCode: fx.promoteExit}, nil
 	})
 	return fx
 }
@@ -129,7 +140,7 @@ func TestLoadGenomicStagesWithoutTouchingHPDS(t *testing.T) {
 		fakerunner.Glob("docker run * demo-genomic-move-* -v demo_genomic-staging:/data alpine:* sh -c * sh synth"),
 	)
 	for id, loader := range map[string]string{"demo-genomic-split-": "SplitChromosomeVcfLoader", "demo-genomic-metadata-": "VariantMetadataLoader", "demo-genomic-finalize-": "GenomicDatasetFinalizer"} {
-		if env := fx.spy.env(id); !slices.Contains(env, "LOADER_NAME="+loader) || !slices.Contains(env, "HEAPSIZE=4096") {
+		if env := fx.spy.env(id); !slices.Contains(env, "LOADER_NAME="+loader) || !slices.Contains(env, "HEAPSIZE=16000") {
 			t.Errorf("%s env %q", id, env)
 		}
 	}
@@ -194,13 +205,41 @@ func TestLoadGenomicRefusesMoreThanTenPartitions(t *testing.T) {
 		t.Fatalf("replacing a live partition: %v", err)
 	}
 	fx = newGenomicFixture(t)
-	fx.live = "p1\np2\np3\np4\np5\np6\np7\np8\np9\n"
-	fx.staged = "p10\n"
+	fx.live = "p1\np2\np3\np4\np5\np6\np7\np8\n.hidden\n.promote-p9\n"
+	fx.staged = "p10\n-x y\n"
 	_, err := fx.load(ops.GenomicLoadOptions{Promote: true, AllPartitions: true})
 	if err == nil || exitcode.FromError(err) != exitcode.CodePrecondition || !strings.Contains(err.Error(), "would leave 11 genomic partitions") {
 		t.Fatalf("err = %v", err)
 	}
 	fx.f.AssertNotCalled(fakerunner.Glob("docker run * demo-genomic-stage-*"))
+}
+
+func TestLoadGenomicBackupFailureStopsThePromote(t *testing.T) {
+	fx := newGenomicFixture(t)
+	fx.backupExit = 1
+	_, err := fx.load(ops.GenomicLoadOptions{Promote: true, Backup: true})
+	if err == nil || !strings.Contains(err.Error(), "No space left on device") || !strings.Contains(err.Error(), "previous backup is kept") ||
+		!strings.Contains(err.Error(), "HPDS is stopped") {
+		t.Fatalf("err = %v", err)
+	}
+	fx.f.AssertNotCalled(fakerunner.Glob("docker run * demo-genomic-promote-*"))
+	fx.f.AssertNotCalled(fakerunner.Glob("docker compose * up *"))
+}
+
+func TestLoadGenomicPromoteFailureRemovesThePartialCopy(t *testing.T) {
+	fx := newGenomicFixture(t)
+	fx.promoteExit = 1
+	promoted, err := fx.load(ops.GenomicLoadOptions{Promote: true})
+	if err == nil || !strings.Contains(err.Error(), "copying synth into volume demo_hpds-genomic") || !strings.Contains(err.Error(), "HPDS is stopped") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(fx.promotes) != 2 || fx.promotes[1][len(fx.promotes[1])-1] != "set -eu; cd /live; rm -rf ./.promote-*" {
+		t.Errorf("promote helpers %q", fx.promotes)
+	}
+	if promoted != nil {
+		t.Errorf("promoted %q", promoted)
+	}
+	fx.f.AssertNotCalled(fakerunner.Glob("docker compose * up *"))
 }
 
 func TestLoadGenomicLoaderFailureLeavesHPDSAlone(t *testing.T) {

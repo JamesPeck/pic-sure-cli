@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -122,7 +123,7 @@ func (a *App) loadGenomic(cmd *cobra.Command, _ []string) error {
 	return a.finish(report, func(w io.Writer) error {
 		msg := fmt.Sprintf("Loaded partition %s into the staging volume.\n", opts.Partition)
 		if len(promoted) > 0 {
-			msg += fmt.Sprintf("Promoted %v into HPDS's genomic data.\n", promoted)
+			msg += fmt.Sprintf("Promoted %s into HPDS's genomic data.\n", strings.Join(promoted, ", "))
 		}
 		if opts.Promote || opts.EnableProfile {
 			msg += fmt.Sprintf("HPDS is healthy, with profile %q.\n", cfg.HPDS.Profile)

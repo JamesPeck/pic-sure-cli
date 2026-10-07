@@ -1188,19 +1188,22 @@ skippable:
   SplitChromosomeVcfLoader, VariantMetadataLoader and
   GenomicDatasetFinalizer, each with the staging volume at
   `/opt/local/hpds` (the first two also with the VCFs), `--user 0:0`,
-  `--network none`, `HEAPSIZE`, `LOADER_NAME`; each exit code is checked.
+  `--network none`, `HEAPSIZE` (default `DefaultGenomicHeapMB`, 16000, as
+  AIO's load-vcf), `LOADER_NAME`; each exit code is checked.
   The loaders write the contigs under `all/`; finalize then moves `all/` to
   `genomic/<partition>/`, replacing an earlier load of it. HPDS runs
   throughout, and a failure here leaves it and its data unchanged.
 - With `Promote` or `EnableProfile`, `hpds-stop`.
 - `genomic-promote` (`Promote`): with `Backup`, the live store is first
-  copied into `all-bak/` in the staging volume, not into `hpds-genomic` as
-  AIO does: HPDS's `localPatientDistributed` processor reads every
-  top-level directory of `hpds-genomic` as a partition, so an `all-bak`
-  there gets loaded. Then this run's partition, or with `AllPartitions`
-  every staged one, is copied to `.promote-<p>` and renamed over `<p>`, so
-  a partition is replaced only once its copy is complete; a failed copy is
-  removed. HPDS reads `<genomic dir>/<partition>/<contig>/`.
+  copied into `all-bak/` in the staging volume (via `all-bak.new`, so a
+  failed backup keeps the previous one), not into `hpds-genomic` as AIO
+  does: HPDS's `localPatientDistributed` processor reads every top-level
+  directory of `hpds-genomic`, hidden ones too, as a partition, so an
+  `all-bak` there gets loaded. Then this run's partition, or with
+  `AllPartitions` every staged one, is copied to `.promote-<p>` and renamed
+  over `<p>`, so a partition is replaced only once its copy is complete. A
+  failed or interrupted copy is removed by a second helper run without the
+  cancelled context. HPDS reads `<genomic dir>/<partition>/<contig>/`.
 - `hpds-profile` and `render` (`EnableProfile`): `hpds.profile` is set to
   `GenomicProfile` (`bch-dev`) in pic-sure.yaml and cfg, and up's render
   step, wrapped by `watchRender`, re-renders and marks the services whose
