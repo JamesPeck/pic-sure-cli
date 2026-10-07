@@ -385,8 +385,9 @@ it.
   one is exit 3), builds one `stackCompose` for status and doctor, and
   runs `ops.SupportBundle` into a temporary file beside FILE (default
   `./pic-sure-support-<name>-<UTC ts>.tar.gz`; the archive's top directory
-  is FILE's base name without `.tar.gz`/`.tgz`), renamed into place once
-  complete. It prints the absolute path, or with `--json` the
+  is FILE's base name without `.tar.gz`/`.tgz`, or `pic-sure-support` if
+  that leaves only dots), renamed into place once complete; after Ctrl-C
+  nothing is left. It prints the absolute path, or with `--json` the
   `SupportBundleReport` (docs/json-schemas.md). Exit 0 once written, even
   with problems; 1 when it can't be written.
 
@@ -1573,8 +1574,8 @@ with the caller's options, `Deep` set by the cli) and `doctor.json`, as
 `compose/ps.json` and `compose/logs/<service>.log` (`compose logs --tail
 500` per service compose ps lists, 30 s each); `stack/` with pic-sure.yaml,
 state.json and manifest.json; and `README.txt`. It only reads. Whatever it
-can't collect is a `Problems` line, in the report and README, and only
-failing to write w is an error. With no Stack it holds doctor alone.
+can't collect is a `Problems` line, in the report and README; only
+failing to write w, or ctx ending, is an error. With no Stack it holds doctor alone.
 - **Redaction.** Every file, and every problem, passes through a redactor
   of: each scalar in secrets.yaml, read as plain YAML so a key a newer
   pic-sure added counts too (a `stack.Secret` key's value whatever it
@@ -1589,7 +1590,8 @@ failing to write w is an error. With no Stack it holds doctor alone.
   operator can supply, is replaced only where no ASCII letter or digit
   touches it, and `ShortSecrets` counts them for a warning. JSON (the
   reports, ps, state, manifest, and each JSON line of a run log) is
-  redacted inside its strings only, so it stays valid; a secret equal to a
+  redacted inside its strings only, each decoded first and re-encoded if
+  it changed, so it stays valid; a secret equal to a
   bare JSON number or literal there stays. Without a secrets.yaml that
   reads and parses, the compose logs are left out, since the redactor
   wouldn't know what they may quote; a pic-sure.yaml that doesn't parse

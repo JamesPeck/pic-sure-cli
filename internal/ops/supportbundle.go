@@ -199,8 +199,7 @@ func (b *bundle) runLogs(st *stack.Stack) {
 }
 
 // compose adds `compose ps` and each service's last BundleLogTail log
-// lines.
-// composeErr is why c is nil.
+// lines. composeErr (opts.Doctor.ComposeErr) is why c is nil.
 func (b *bundle) compose(ctx context.Context, c docker.Composer, composeErr error) {
 	if c == nil {
 		b.problem("compose: %v", cmp.Or[error](composeErr, errors.New("unavailable")))
@@ -465,10 +464,10 @@ func registerYAMLSecrets(r *bundleRedactor, n *yaml.Node, key string) {
 	}
 }
 
-// redactJSONStrings applies redact inside each string of the JSON text
+// redactJSONStrings applies redact to each string of the valid JSON text
 // data, keys included, and leaves the rest alone, so the result is valid
-// JSON wherever data was. redact sees a string's escaped form, which
-// log.Redactor matches too. An unterminated string runs to the end.
+// JSON. redact sees a string decoded, so an escape can't hide a secret or
+// be split by a replacement; a string it changes is re-encoded.
 func redactJSONStrings(data []byte, redact func(string) string) []byte {
 	var out bytes.Buffer
 	for {
@@ -487,7 +486,15 @@ func redactJSONStrings(data []byte, redact func(string) string) []byte {
 			end++
 		}
 		end = min(end, len(data))
-		out.WriteString(redact(string(data[:end])))
+		lit := data[:end]
+		var v string
+		if json.Unmarshal([]byte(`"`+string(lit)+`"`), &v) != nil {
+			out.WriteString(redact(string(lit)))
+		} else if r := redact(v); r == v {
+			out.Write(lit)
+		} else {
+			out.WriteString(jsonEscaped(r))
+		}
 		data = data[end:]
 		if len(data) > 0 {
 			out.WriteByte('"')
@@ -501,11 +508,12 @@ func redactJSONStrings(data []byte, redact func(string) string) []byte {
 // text before the value, the key, and the value as groups.
 var (
 	secretKeyLine = regexp.MustCompile(`(?m)^(\s*(?:-\s+)?["']?([A-Za-z0-9_.-]+)["']?\s*:[ \t]+)([^\s#].*)$`)
-	secretFlowKey = regexp.MustCompile(`([{,]\s*["']?([A-Za-z0-9_.-]+)["']?\s*:\s*)("(?:[^"\\\n]|\\.)*"|'[^'\n]*'|[^\s,{}\[\]][^,}\]\n]*)`)
+	secretFlowKey = regexp.MustCompile(`([{,]\s*["']?([A-Za-z0-9_.-]+)["']?\s*:\s*)("(?:[^"\\\n]|\\.)*"|'(?:[^'\n]|'')*'|[^\s,{}\[\]][^,}\]\n]*)`)
 )
 
 // redactConfigKeys blanks every configSecretFields key and every other
-// secret-named key (log.IsSecretName) with a string value in pic-sure.yaml. A valid config has none, since its secrets live in
+// secret-named key (log.IsSecretName) with a string value in pic-sure.yaml.
+// A valid config has none but the admin email, since its secrets live in
 // secrets.yaml, but an operator may have pasted one in. A changed file is
 // re-encoded, which normalizes its layout.
 func redactConfigKeys(data []byte) []byte {
@@ -536,6 +544,16 @@ var configSecretFields = func() map[string]bool {
 		if f.Secret || f.Flag == "admin-email" {
 			m[f.Key] = true
 		}
+	}
+	return m
+}()
+
+// configSecretLeaves are the last parts of configSecretFields' keys, for a
+// pic-sure.yaml that doesn't parse, where only the key itself is known.
+var configSecretLeaves = func() map[string]bool {
+	m := map[string]bool{}
+	for k := range configSecretFields {
+		m[k[strings.LastIndex(k, ".")+1:]] = true
 	}
 	return m
 }()
@@ -613,9 +631,10 @@ func redactSecretKeyLines(data []byte) []byte {
 }
 
 // secretLineValue returns the value of a secretKeyLine or secretFlowKey
-// match whose key is secret-named and whose value reads as a string.
+// match whose key is secret-named, or the last part of a
+// configSecretFields key, and whose value reads as a string.
 func secretLineValue(m [][]byte) (string, bool) {
-	if !log.IsSecretName(string(m[2])) {
+	if k := string(m[2]); !log.IsSecretName(k) && !configSecretLeaves[k] {
 		return "", false
 	}
 	var v any

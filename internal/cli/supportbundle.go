@@ -80,12 +80,9 @@ func (a *App) supportBundle(cmd *cobra.Command, output string) error {
 	if err != nil {
 		return exitcode.Failed("%w", err)
 	}
-	opts.Prefix = strings.TrimSuffix(strings.TrimSuffix(filepath.Base(path), ".tar.gz"), ".tgz")
-	if strings.Trim(opts.Prefix, ".") == "" {
-		opts.Prefix = "pic-sure-support"
-	}
+	opts.Prefix = bundlePrefix(path)
 
-	report, err := writeBundle(path, func(w io.Writer) (*ops.SupportBundleReport, error) {
+	report, err := writeBundle(cmd.Context(), path, func(w io.Writer) (*ops.SupportBundleReport, error) {
 		return ops.SupportBundle(cmd.Context(), d, w, opts)
 	})
 	if cause := context.Cause(cmd.Context()); cause != nil {
@@ -98,10 +95,20 @@ func (a *App) supportBundle(cmd *cobra.Command, output string) error {
 	return a.printReport(report, func(w io.Writer) error { return writeSupportBundle(w, report) })
 }
 
+// bundlePrefix is the archive's top directory: path's base name without
+// .tar.gz or .tgz.
+func bundlePrefix(path string) string {
+	p := strings.TrimSuffix(strings.TrimSuffix(filepath.Base(path), ".tar.gz"), ".tgz")
+	if strings.Trim(p, ".") == "" {
+		return "pic-sure-support"
+	}
+	return p
+}
+
 // writeBundle writes the archive next to path under a temporary name, mode
-// 0600, and renames it into place once it is complete. The temporary file
-// is removed whatever happens, a panic included.
-func writeBundle(path string, write func(io.Writer) (*ops.SupportBundleReport, error)) (*ops.SupportBundleReport, error) {
+// 0600, and renames it into place once it is complete, unless ctx has
+// ended. The temporary file is removed whatever happens, a panic included.
+func writeBundle(ctx context.Context, path string, write func(io.Writer) (*ops.SupportBundleReport, error)) (*ops.SupportBundleReport, error) {
 	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
 	if err != nil {
 		return nil, err
@@ -110,6 +117,9 @@ func writeBundle(path string, write func(io.Writer) (*ops.SupportBundleReport, e
 	report, err := write(f)
 	if cerr := f.Close(); err == nil {
 		err = cerr
+	}
+	if err == nil {
+		err = context.Cause(ctx)
 	}
 	if err == nil {
 		err = os.Rename(f.Name(), path)

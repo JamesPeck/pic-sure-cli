@@ -414,3 +414,63 @@ func TestSupportBundleWithInvalidFlowConfig(t *testing.T) {
 		t.Errorf("pic-sure.yaml:\n%s", cfg)
 	}
 }
+
+// A secret next to an escape, or made of characters JSON escapes, is
+// redacted from a JSON string without breaking it.
+func TestSupportBundleRedactsJSONEscapes(t *testing.T) {
+	st := newBundleStack(t)
+	writeStackFile(t, st, stack.SecretsFile, "email_password: '\"'\ndb_remote_root_password: nightly\ndb_auth_password: t1\n")
+	writeStackFile(t, st, log.Dir+"/cli-20261007T100009.000Z-42.log",
+		`{"pw":"\"","msg":"done\nightly","run":"x\nnightly","cols":"a:\t1 2","c2":"a:\tt1 2","u":"\u006eightly"}`+"\n")
+	_, files := buildBundle(t, st, bundleRunner(t))
+	assertJSONFiles(t, files)
+	got := files["logs/cli-20261007T100009.000Z-42.log"]
+	// "done\nightly" and "a:\t1 2" hold no secret once decoded.
+	if want := `{"pw":"[REDACTED]","msg":"done\nightly","run":"x\n[REDACTED]","cols":"a:\t1 2","c2":"a:\t[REDACTED] 2","u":"[REDACTED]"}` + "\n"; got != want {
+		t.Errorf("run log\n got %s\nwant %s", got, want)
+	}
+}
+
+// A pic-sure.yaml that doesn't parse still loses its admin email, and a
+// single-quoted flow value with an escaped quote whole.
+func TestSupportBundleInvalidConfigFallback(t *testing.T) {
+	st := newBundleStack(t)
+	writeStackFile(t, st, stack.ConfigFile, "schema: 1\nauth: {admin_email: ops@example.org}\nemail: {user: me, password: 'Abc''defghij'}\nbroken: [\n")
+	f := bundleRunner(t)
+	f.On(fakerunner.Glob("docker compose * logs --tail 500 gateway")).Stdout("admin ops@example.org pw Abc'defghij\n")
+	_, files := buildBundle(t, st, f)
+	for name, data := range files {
+		for _, v := range []string{"ops@example.org", "defghij"} {
+			if strings.Contains(data, v) {
+				t.Errorf("%s holds %q", name, v)
+			}
+		}
+	}
+}
+
+// Without compose, the problem says why.
+func TestSupportBundleSaysWhyComposeIsMissing(t *testing.T) {
+	st := newBundleStack(t)
+	f := bundleRunner(t)
+	d := statusDeps(t, f, st)
+	d.Compose = nil
+	opts := ops.SupportBundleOptions{Stack: st, Status: statusOpts(), Doctor: ops.DoctorOptions{Host: &fakeHost{diskFree: 100 * gib}, Stack: st, ComposeErr: errors.New("compose plugin missing")}}
+	r, err := ops.SupportBundle(context.Background(), d, io.Discard, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(r.Problems, "compose: compose plugin missing") {
+		t.Errorf("problems %q", r.Problems)
+	}
+}
+
+func TestSupportBundleCancelled(t *testing.T) {
+	st := newBundleStack(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var buf bytes.Buffer
+	_, err := ops.SupportBundle(ctx, statusDeps(t, bundleRunner(t), st), &buf, ops.SupportBundleOptions{Stack: st, Doctor: ops.DoctorOptions{Host: &fakeHost{}}})
+	if !errors.Is(err, context.Canceled) || buf.Len() != 0 {
+		t.Errorf("err %v, wrote %d bytes", err, buf.Len())
+	}
+}
