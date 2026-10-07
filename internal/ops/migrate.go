@@ -78,8 +78,8 @@ type MigrateOptions struct {
 // the entrypoint's temporary server, which listens only on the socket.
 // Access denied fails at once: the volume was initialised with another
 // root password. Check is done when the container is healthy and the probe
-// succeeds. With a remote database the step only probes it; creating its
-// schemas and users is `db bootstrap` (054).
+// succeeds. With a remote database the step only probes it; BootstrapStep
+// creates its schemas and users.
 func DBStep(d *Deps, cfg *stack.Config, sec *stack.Secrets, opts DBOptions) steps.Step {
 	s := &dbStep{d: d, cfg: cfg, sec: sec, opts: opts}
 	if s.opts.Timeout <= 0 {
@@ -115,7 +115,7 @@ func (s *dbStep) apply(ctx context.Context, sink events.Sink) error {
 	if s.cfg.DB.Mode == stack.DBRemote {
 		host := fmt.Sprintf("%s:%d", s.cfg.DB.Remote.Host, s.cfg.DB.Remote.Port)
 		if err := s.probe(ctx, ""); err != nil {
-			return exitcode.Precondition("the remote database at %s refused SELECT 1: %w", host, err)
+			return exitcode.Precondition("the remote database at %s refused SELECT 1: %w%s", host, err, LoopbackHint(s.cfg.DB.Remote.Host))
 		}
 		return nil
 	}
@@ -336,10 +336,10 @@ func restartCaches(ctx context.Context, d *Deps, sink events.Sink) error {
 	return d.Compose.Restart(ctx, out, restart...)
 }
 
-// Migrate is the `migrate` command: the db step, then the migrate step, so
-// a database that is already migrated is skipped.
+// Migrate is the `migrate` command: the db steps (DBSteps), then the
+// migrate step, so a database that is already migrated is skipped.
 func Migrate(ctx context.Context, d *Deps, cfg *stack.Config, sec *stack.Secrets, opts MigrateOptions, skip []string) error {
-	plan := []steps.Step{DBStep(d, cfg, sec, DBOptions{}), MigrateStep(d, cfg, sec, opts)}
+	plan := append(DBSteps(d, cfg, sec, DBOptions{}), MigrateStep(d, cfg, sec, opts))
 	return steps.Run(ctx, d.Sink, plan, steps.Options{Skip: skip})
 }
 

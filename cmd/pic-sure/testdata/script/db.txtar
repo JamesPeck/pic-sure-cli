@@ -1,7 +1,120 @@
-# Not implemented yet: exit 1, naming ticket 054.
-exitcode 1 pic-sure db bootstrap
-stderr '^pic-sure: not implemented \(ticket 054\)$'
-! stdout .
-exitcode 1 pic-sure db bootstrap --check --sync-passwords
-stderr '^pic-sure: not implemented \(ticket 054\)$'
-! stdout .
+# --check and --sync-passwords are mutually exclusive.
+exitcode 2 pic-sure db bootstrap --check --sync-passwords
+
+# No stack: exit 3.
+exitcode 3 pic-sure db bootstrap
+stderr 'no pic-sure stack found'
+
+# A local database bootstraps itself.
+exitcode 3 pic-sure --stack local db bootstrap
+stderr 'db.mode is local'
+exitcode 3 pic-sure --stack local db bootstrap --check
+
+# A remote stack needs the operator's root password.
+exitcode 3 pic-sure --stack noroot db bootstrap --check
+stderr 'no db_remote_root_password'
+
+# --check on a ready server: one report, exit 0, no change.
+cp ready.scenario docker.scenario
+exec pic-sure --stack remote --json db bootstrap --check
+stdout '^\{"schema_version":2,"ok":true,"server":"db.example.org:3307","version":"8.0.40","checks":\[\{"name":"database picsure","ok":true\},'
+stdout '"name":"login airflow","ok":true'
+! stdout '"type"'
+exec pic-sure --stack remote --plain db bootstrap --check
+stdout '^MySQL 8.0.40 at db.example.org:3307$'
+stdout '^ok   grants airflow on picsure$'
+stdout 'The remote database is ready'
+! grep 'CREATE|ALTER' docker.log
+
+# --check on an empty server lists what's missing and exits 3. Nobody logs
+# in as a user that doesn't exist.
+rm docker.log
+cp empty.scenario docker.scenario
+exitcode 3 pic-sure --stack remote --plain db bootstrap --check
+stdout '^FAIL database picsure \(missing\)$'
+stdout '^FAIL user auth \(missing\)$'
+stderr 'needs `pic-sure db bootstrap`'
+! grep 'user=picsure' docker.log
+
+# Bootstrap probes, finds work to do, bootstraps, then checks again. The
+# passwords stay out of argv.
+rm docker.log
+cp bootstrap.scenario docker.scenario
+exec pic-sure --stack remote --json db bootstrap
+stdout '"type":"step_done","id":"db","status":"skipped"'
+stdout '"type":"step_done","id":"db-bootstrap","status":"ok"'
+stdout '"type":"result","ok":true'
+! grep 'synthetic' docker.log
+
+# A user whose password differs from secrets.yaml fails with exit 3.
+rm docker.counts
+cp mismatch.scenario docker.scenario
+exitcode 3 pic-sure --stack remote db bootstrap
+stderr 'login auth: its password doesn''t match secrets.yaml.*--sync-passwords'
+
+# --skip-step takes the command's step IDs only.
+exitcode 2 pic-sure --stack remote db bootstrap --skip-step migrate
+stderr 'db, db-bootstrap'
+
+-- local/pic-sure.yaml --
+schema: 1
+name: demo
+auth: {mode: open, admin_email: admin@example.com}
+-- local/.pic-sure/state.json --
+{"cli_version": "dev", "schema_version": 1}
+-- noroot/.pic-sure/state.json --
+{"cli_version": "dev", "schema_version": 1}
+-- noroot/pic-sure.yaml --
+schema: 1
+name: demo
+auth: {mode: open, admin_email: admin@example.com}
+db: {mode: remote, remote: {host: db.example.org, port: 3307, root_user: admin}}
+-- noroot/.pic-sure/secrets.yaml --
+db_picsure_password: synthetic-picsure
+-- remote/pic-sure.yaml --
+schema: 1
+name: demo
+auth: {mode: open, admin_email: admin@example.com}
+db: {mode: remote, remote: {host: db.example.org, port: 3307, root_user: admin}}
+-- remote/.pic-sure/state.json --
+{"cli_version": "dev", "schema_version": 1}
+-- remote/.pic-sure/secrets.yaml --
+db_remote_root_password: synthetic-root
+db_picsure_password: synthetic-picsure
+db_auth_password: synthetic-auth
+db_airflow_password: synthetic-airflow
+-- ready.scenario --
+docker run -i --rm -e MYSQL_PWD mysql:8.0 mysql * --user=admin => 0 stdout=full.tsv
+docker run -i --rm -e MYSQL_PWD mysql:8.0 mysql * --user=* => 0
+-- empty.scenario --
+docker run -i --rm -e MYSQL_PWD mysql:8.0 mysql * --user=admin => 0 stdout=empty.tsv
+-- bootstrap.scenario --
+# The db step's probe, the bootstrap Check, the bootstrap, and the check
+# after it.
+docker run -i --rm -e MYSQL_PWD mysql:8.0 mysql * --user=admin => 0 stdout=one.tsv times=1
+docker run -i --rm -e MYSQL_PWD mysql:8.0 mysql * --user=admin => 0 stdout=empty.tsv times=1
+docker run -i --rm -e MYSQL_PWD mysql:8.0 mysql * --user=admin => 0 times=1
+docker run -i --rm -e MYSQL_PWD mysql:8.0 mysql * --user=admin => 0 stdout=full.tsv times=1
+docker run -i --rm -e MYSQL_PWD mysql:8.0 mysql * --user=* => 0
+-- mismatch.scenario --
+docker run -i --rm -e MYSQL_PWD mysql:8.0 mysql * --user=admin => 0 stdout=one.tsv times=1
+docker run -i --rm -e MYSQL_PWD mysql:8.0 mysql * --user=admin => 0 stdout=full.tsv
+docker run -i --rm -e MYSQL_PWD mysql:8.0 mysql * --user=auth => 1 stderr=denied.txt
+docker run -i --rm -e MYSQL_PWD mysql:8.0 mysql * --user=* => 0
+-- one.tsv --
+1
+-- empty.tsv --
+version	8.0.40
+-- full.tsv --
+version	8.0.40
+database	auth
+database	picsure
+user	picsure
+user	auth
+user	airflow
+grant	picsure picsure
+grant	auth auth
+grant	airflow auth
+grant	airflow picsure
+-- denied.txt --
+ERROR 1045 (28000): Access denied for user 'auth'@'172.17.0.3' (using password: YES)

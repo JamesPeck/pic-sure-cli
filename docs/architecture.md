@@ -816,7 +816,7 @@ init, up and update to add, and the `migrate` command.
   start into restarts), or the timeout (5 min, wall time), shows its last
   30 log lines.
   Check is a healthy container plus a passing probe. With a remote DB the
-  step only probes it; 054 adds bootstrap.
+  step only probes it; `BootstrapStep` (054) prepares it.
 - `MigrateStep(d, cfg, sec, MigrateOptions{Action, NoRestart})`, ID
   `migrate`: `compose run --rm flyway-init`, then `flyway-dictionary-init`.
   A non-zero exit fails the step and shows the output's last lines. Repair
@@ -845,7 +845,7 @@ init, up and update to add, and the `migrate` command.
   config --quiet`. It runs nothing but compose config. Legacy Jenkins
   UUID tokens in the project migrations, and a source holding a `${VAR}`,
   are warnings.
-- `Migrate` runs `[db, migrate]` for the command. `migrate` uses the
+- `Migrate` runs `DBSteps` then `migrate` for the command. `migrate` uses the
   existing render; an unrendered stack is exit 3 ("run `pic-sure up`").
 
 **Seed (033, `seed.go`).** `SeedStep(d, st, cfg, sec)`, ID `seed`, is
@@ -866,6 +866,37 @@ it. The step registers the admin email, and any token it issues, with the
 log redactor. A new token changes `render.ComposeEnv(cfg, sec)`
 (gateway's `PICSURE_INTROSPECTION_TOKEN`), so a Composer whose env was
 computed before the step must recompute it.
+
+**Remote database (054, `db.go`).** §9.1 step 8 for `db.mode: remote`, and
+`db bootstrap`.
+
+- `DBSteps(d, cfg, sec, DBOptions)` is step 8 for init, up, update and
+  migrate to put before the migrate step: `[db]` for a local database,
+  `[db, db-bootstrap]` for a remote one.
+- `BootstrapStep(d, cfg, sec, BootstrapOptions{SyncPasswords})`, ID
+  `db-bootstrap`: as `db.remote.root_user`, through 014's remote client
+  (`docker run --rm mysql:8.0`), it runs `sql.Bootstrap`: the auth and
+  picsure databases, the picsure, auth and airflow users from secrets.yaml,
+  and all privileges on their databases (AIO's `bootstrap-remote-db.sh`).
+  An existing user keeps its password unless `SyncPasswords` adds an
+  `ALTER USER`. Afterwards each user must log in with its secrets.yaml
+  password, or the step fails with exit 3 suggesting `--sync-passwords`, so
+  a stack never silently points at a shared server's users with the wrong
+  passwords. Check is `CheckBootstrap` finding nothing missing.
+- `CheckBootstrap` is `db bootstrap --check` (`BootstrapReport`: `ok`,
+  `server`, `version`, `checks[]{name, ok, problem}`). One root query
+  (`sql.BootstrapStateQuery`) reads the databases, the `name@'%'` users and
+  their database-level ALL PRIVILEGES from information_schema, `mysql.user`
+  and `mysql.db`, so the root account needs SELECT on `mysql`; then each
+  existing user logs in with its password and `USE`s its databases. It
+  changes nothing. A root login that fails is an error (exit 3 for access
+  denied).
+- `Bootstrap` is the command: `[db, db-bootstrap]`. It needs no render.
+- The remote client and the stack's services resolve `db.remote.host` from
+  their containers, where `localhost` is the container itself.
+  `LoopbackHint` adds that, and the `host.docker.internal` suggestion, to
+  remote connection errors (here and in the db step). The real run reached
+  a published mysql:8.0 that way on Docker Desktop.
 
 ## internal/steps
 

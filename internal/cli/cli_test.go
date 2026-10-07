@@ -52,7 +52,7 @@ var specCommands = map[string]string{
 	"dictionary hydrate":  "044", "dictionary load-csv": "044", "dictionary load-facets": "044", "dictionary weights": "044",
 	"shared-data publish": "050", "shared-data list": "050", "shared-data remove": "050",
 	"dev list": "052", "dev on": "052", "dev off": "052",
-	"db bootstrap": "054",
+	"db bootstrap": "",
 	"reset":        "056", "destroy": "056",
 	"cache list": "057", "cache prune": "057",
 	"self-update":    "",
