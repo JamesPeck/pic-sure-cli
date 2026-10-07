@@ -11,7 +11,8 @@
 #   E2E_LOAD_HEAP_MB    loader JVM heap for data demo (default 1024)
 #   E2E_ARTIFACTS       on failure, compose logs, run logs and the support
 #                       bundle of every stack go here (default: none kept)
-#   E2E_KEEP=1          leave the stacks running instead of destroying them
+#   E2E_KEEP=1          on failure, leave the stacks running instead of
+#                       destroying them
 #   E2E_IMAGES_FILE     each init appends the images its stack runs here
 #                       (the workflow caches them)
 
@@ -46,7 +47,6 @@ fail() {
 	exit 1
 }
 
-# pic runs pic-sure without a terminal; stdout and stderr pass through.
 pic() { "$PIC_SURE" --non-interactive "$@" < /dev/null; }
 
 # init_stack NAME DIR creates an open-mode stack with auto ports and no
@@ -65,7 +65,7 @@ init_stack() {
 	fi
 }
 
-# deep_status DIR prints `status --deep --json`, retrying until jq FILTER
+# deep_status DIR FILTER prints `status --deep --json`, retrying until FILTER
 # holds (a just-started service may need a moment) or the tries run out.
 deep_status() {
 	local dir="$1" filter="$2" out tries=12
@@ -116,7 +116,7 @@ e2e_cleanup() {
 	if [ "$rc" -ne 0 ] && [ -n "$E2E_ARTIFACTS" ]; then
 		for i in "${!e2e_stacks[@]}"; do collect "${e2e_stacks[$i]}" "${e2e_dirs[$i]}"; done
 	fi
-	if [ -n "$E2E_KEEP" ]; then
+	if [ "$rc" -ne 0 ] && [ -n "$E2E_KEEP" ]; then
 		echo "e2e: E2E_KEEP set; left the stacks in $E2E_WORK" >&2
 		exit "$rc"
 	fi

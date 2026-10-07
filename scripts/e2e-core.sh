@@ -35,8 +35,9 @@ jq -e '
 say "reset, then up"
 pic --stack "$dir" reset --yes
 pic --stack "$dir" up
-# A reset stack comes back up empty: HPDS answers, without data.
-deep_status "$dir" '.deep.gateway.checked and .deep.data.checked and .deep.data.ready != true' > /dev/null ||
+# A reset stack comes back up empty: HPDS answers, without data, so the
+# gateway answers but reports itself degraded.
+deep_status "$dir" '.deep.gateway.status != "" and .deep.data.ready == false and .deep.http.csp == "frontend"' > /dev/null ||
 	fail "status --deep after reset and up: want a running stack without data"
 
 say "destroy"

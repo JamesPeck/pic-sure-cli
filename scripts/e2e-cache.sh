@@ -15,7 +15,7 @@
 set -euo pipefail
 
 volume=pic-sure-m2
-helper=alpine:3.23 # the catalog's alpine, which the stack pulls anyway
+helper=alpine:3.23 # the catalog's alpine (internal/catalog/images.go)
 cmd="${1:-}" dir="${2:-}"
 [ -n "$cmd" ] && [ -n "$dir" ] || {
 	echo "usage: $0 load-images|save-images|load-maven|save-maven DIR [LIST]" >&2
