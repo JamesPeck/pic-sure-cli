@@ -2737,7 +2737,20 @@ new entry is saved only when init built something.
 `e2e-proxy.sh` (055) runs a stack whose proxy is a squid container and
 checks every §9.10 egress path against squid's access log;
 `docs/testing-proxy.md` describes the setup and what each check proves.
-No workflow runs it yet.
+
+The "e2e other" tier (064) adds `e2e-input-dir.sh` (the 043 fixture
+directory, then HPDS counts that need each file's rows), `e2e-dev.sh` (a
+checkout of the stack's pic-sure commit as its source, `dev on psama`, the
+JDWP handshake on the debug port, `dev off psama`), `e2e-remote-db.sh` (a
+`mysql` container published on the host plays the remote server; the stack
+reaches it as `host.docker.internal` on macOS and through the default
+bridge's gateway on Linux) and `e2e-truststore.sh` (`keytool -list` in
+psama shows each custom cert's alias and fingerprint, also after a cert is
+added and `up` restarts psama). The `stacks` job runs them and
+`e2e-proxy.sh` on the nightly, manual and labelled-PR runs, not on pushes.
+They restore the core job's caches and save none; the dev suite always
+restores the Maven volume, since it builds the reactor whatever the images
+cache holds.
 
 ## v1 leftovers
 

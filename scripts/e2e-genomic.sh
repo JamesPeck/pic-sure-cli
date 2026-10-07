@@ -16,15 +16,6 @@ dir_a="$E2E_WORK/$a" dir_b="$E2E_WORK/$b"
 set_name="${E2E_SHARED_SET:-ci-genomic-$(date +%Y%m%d%H%M%S)-$$}"
 fixture="$E2E_WORK/fixture"
 expected="$repo_root/testdata/genomic/expected.json"
-helper=alpine:3.23 # the catalog's alpine (internal/catalog/images.go)
-
-# hpds NAME PATH BODY posts BODY to the stack's HPDS from a container on its
-# query network (HPDS publishes no port) and prints the answer.
-hpds() {
-	docker run --rm --network "$1_query" "$helper" \
-		wget -q -O - --header 'Content-Type: application/json' \
-		--post-data "$3" "http://hpds:8080/PIC-SURE/v3/$2" < /dev/null
-}
 
 # hpds_dataframe NAME BODY runs a DATAFRAME query through the asynchronous
 # API (submit, poll the status, fetch the CSV): this release's /query/sync

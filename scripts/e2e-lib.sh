@@ -24,6 +24,7 @@ E2E_JAVA_OPTS="${E2E_JAVA_OPTS:--Xmx1g}"
 E2E_LOAD_HEAP_MB="${E2E_LOAD_HEAP_MB:-1024}"
 E2E_ARTIFACTS="${E2E_ARTIFACTS:-}"
 E2E_KEEP="${E2E_KEEP:-}"
+helper=alpine:3.23 # the catalog's alpine (internal/catalog/images.go)
 e2e_made_work=
 if [ -z "${E2E_WORK:-}" ]; then
 	E2E_WORK="$(mktemp -d "${TMPDIR:-/tmp}/pic-sure-e2e.XXXXXX")"
@@ -49,7 +50,8 @@ fail() {
 	exit 1
 }
 
-pic() { "$PIC_SURE" --non-interactive "$@" < /dev/null; }
+# pic runs pic-sure with stdin from the file pic_stdin names, else none.
+pic() { "$PIC_SURE" --non-interactive "$@" < "${pic_stdin:-/dev/null}"; }
 
 # init_stack NAME DIR [INIT FLAGS...] creates an open-mode stack with auto
 # ports and no client secret, so init generates one.
@@ -85,6 +87,14 @@ deep_status() {
 		fi
 		sleep 10
 	done
+}
+
+# hpds NAME PATH BODY posts BODY to the stack's HPDS from a container on its
+# query network (HPDS publishes no port) and prints the answer.
+hpds() {
+	docker run --rm --network "$1_query" "$helper" \
+		wget -q -O - --header 'Content-Type: application/json' \
+		--post-data "$3" "http://hpds:8080/PIC-SURE/v3/$2" < /dev/null
 }
 
 # assert_gone NAME fails if any container or volume of the stack is left.

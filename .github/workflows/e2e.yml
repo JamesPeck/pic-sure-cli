@@ -3,9 +3,11 @@ name: e2e
 # Real installs (spec §11) on amd64 and arm64: scripts/e2e-core.sh runs the
 # core sequence, then scripts/e2e-two-stacks.sh runs two stacks side by
 # side and scripts/e2e-genomic.sh loads genomic data and shares it between
-# two stacks. No images are published for the release's commits yet, so the
-# stacks build from source; the images and the Maven repository are cached
-# per architecture (scripts/e2e-cache.sh).
+# two stacks. Nightly, by hand and on labelled PRs (not on pushes), the
+# "e2e other" suites run too: the --input-dir loader, dev on/off, remote
+# MySQL, custom trust certs and the proxy. No images are published for the
+# release's commits yet, so the stacks build from source; the images and the
+# Maven repository are cached per architecture (scripts/e2e-cache.sh).
 
 on:
   schedule:
@@ -187,8 +189,10 @@ jobs:
       fail-fast: false
       matrix:
         runner: [ubuntu-latest, ubuntu-24.04-arm]
-        # scripts/e2e-<suite>.sh
-        suite: [two-stacks, genomic]
+        # scripts/e2e-<suite>.sh; pushes run only the first two.
+        suite: >-
+          ${{ fromJSON(github.event_name == 'push' && '["two-stacks", "genomic"]' ||
+          '["two-stacks", "genomic", "input-dir", "dev", "remote-db", "truststore", "proxy"]') }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     steps:
@@ -218,8 +222,10 @@ jobs:
             ${{ steps.keys.outputs.images }}
             ${{ steps.keys.outputs.images-any }}
 
+      # dev builds the pic-sure reactor from a checkout whatever the images
+      # cache holds.
       - name: Restore the Maven repository
-        if: ${{ !startsWith(steps.images.outputs.cache-matched-key, steps.keys.outputs.images) }}
+        if: ${{ matrix.suite == 'dev' || !startsWith(steps.images.outputs.cache-matched-key, steps.keys.outputs.images) }}
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ env.CACHE_DIR }}/maven
