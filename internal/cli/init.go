@@ -129,8 +129,7 @@ func (a *App) initStack(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	r := &initRun{a: a, cmd: cmd, dir: dir, fromFlags: true, gateCommand: "pic-sure init"}
-	r.selfUpdate, _ = cmd.Flags().GetBool("self-update")
-	r.ignoreCLIVersion, _ = cmd.Flags().GetBool("ignore-cli-version")
+	r.readGateFlags()
 	summary, err := r.run(cmd.Context())
 	if err != nil {
 		return err
@@ -561,10 +560,20 @@ func (r *initRun) flagProblems(err error) error {
 	return exitcode.Usage("%s", strings.Join(msgs, "; "))
 }
 
-// readSecrets reads the --*-stdin secrets, and refuses a missing one the
-// config requires. With both flags, stdin holds the Auth0 client secret on
-// its first line and the remote root password on its second.
-func (r *initRun) readSecrets() error {
+// readGateFlags sets the gate's options from the command line. On a
+// terminal the gate offers the self-update (D12), unless stdin holds the
+// --*-stdin secrets: it can't answer, and the re-exec couldn't read them
+// again.
+func (r *initRun) readGateFlags() {
+	r.selfUpdate, _ = r.cmd.Flags().GetBool("self-update")
+	r.ignoreCLIVersion, _ = r.cmd.Flags().GetBool("ignore-cli-version")
+	if r.a.canPrompt() && len(r.stdinFields()) == 0 {
+		r.confirm = r.a.gateConfirm
+	}
+}
+
+// stdinFields are the secrets whose --*-stdin flag is given.
+func (r *initRun) stdinFields() []stack.Field {
 	var fields []stack.Field
 	for _, f := range stack.Fields {
 		if f.Secret && f.Flag != "" {
@@ -573,6 +582,14 @@ func (r *initRun) readSecrets() error {
 			}
 		}
 	}
+	return fields
+}
+
+// readSecrets reads the --*-stdin secrets, and refuses a missing one the
+// config requires. With both flags, stdin holds the Auth0 client secret on
+// its first line and the remote root password on its second.
+func (r *initRun) readSecrets() error {
+	fields := r.stdinFields()
 	inputs := []io.Reader{r.a.Stdin}
 	if len(fields) > 1 {
 		data, err := io.ReadAll(io.LimitReader(r.a.Stdin, 1<<20))

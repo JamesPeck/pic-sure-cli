@@ -283,7 +283,18 @@ func (r *updateRun) fetchRelease(ctx context.Context, sink events.Sink) error {
 	if r.rel, err = release.Fetch(ctx, r.cache.WithEvents(sink, updateRelease), r.d.Git, sink, updateRelease, opts); err != nil {
 		return err
 	}
-	err = r.rel.Gate(ctx, release.GateOptions{
+	err = r.rel.Gate(ctx, r.gateOptions(sink))
+	if err != nil || r.noBuild {
+		return err
+	}
+	r.comps, err = r.rel.ResolveComponents(ctx, r.cache.WithEvents(sink, updateRelease), sink, updateRelease, r.cfg.Components)
+	return err
+}
+
+// gateOptions are the compatibility gate's options for this run. On a
+// terminal the gate offers the self-update (D12).
+func (r *updateRun) gateOptions(sink events.Sink) release.GateOptions {
+	opts := release.GateOptions{
 		CLIVersion:       r.a.Info.Version,
 		Compat:           r.cfg.Release.CLICompat,
 		SelfUpdate:       r.selfUpdate,
@@ -292,12 +303,11 @@ func (r *updateRun) fetchRelease(ctx context.Context, sink events.Sink) error {
 		Command:          "pic-sure update",
 		Sink:             sink,
 		Step:             updateRelease,
-	})
-	if err != nil || r.noBuild {
-		return err
 	}
-	r.comps, err = r.rel.ResolveComponents(ctx, r.cache.WithEvents(sink, updateRelease), sink, updateRelease, r.cfg.Components)
-	return err
+	if r.a.canPrompt() {
+		opts.Confirm = r.a.gateConfirm
+	}
+	return opts
 }
 
 // makePlan is §9.3 step 2. The stack is registered in the cache first, so

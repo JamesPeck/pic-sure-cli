@@ -584,7 +584,12 @@ func TestSelfUpdateReExecs(t *testing.T) {
 	u.Getenv = func(string) string { return "" }
 	var gotPath string
 	var gotArgv, gotEnv []string
+	handedBack := false
+	u.BeforeExec = func() { handedBack = true }
 	u.Exec = func(path string, argv, env []string) error {
+		if !handedBack {
+			t.Error("Exec ran before BeforeExec")
+		}
 		gotPath, gotArgv, gotEnv = path, argv, env
 		return errors.New("exec format error")
 	}

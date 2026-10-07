@@ -1,11 +1,15 @@
 package cli
 
 import (
+	"bufio"
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"os/exec"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -61,6 +65,43 @@ func (a *App) newSelfUpdater(proxy *netproxy.Proxy, sink events.Sink, step strin
 		VerifyBundle: selfupdate.CosignVerifier(a.newRunner(a.newLogger()), selfupdate.DefaultRepo, exec.LookPath),
 		Sink:         sink,
 		Step:         step,
+		// The new binary starts its own renderer on a terminal this one must
+		// have restored first.
+		BeforeExec: func() { a.output().endTUI() },
+	}
+}
+
+// gateConfirm is the compatibility gate's Confirm for init and update on a
+// terminal (D12). The progress renderer owns the terminal during the
+// release step, so it ends it first and asks [y/N] on stderr; the next
+// event starts the renderer again. A cancelled ctx (Ctrl-C) stops waiting
+// for the answer.
+func (a *App) gateConfirm(ctx context.Context, question string) (bool, error) {
+	a.output().endTUI()
+	_, _ = fmt.Fprintf(a.stderr(), "%s [y/N] ", question)
+	type answer struct {
+		line string
+		err  error
+	}
+	got := make(chan answer, 1)
+	go func() {
+		// On cancellation this read is left blocked; the process is ending.
+		line, err := bufio.NewReader(a.Stdin).ReadString('\n')
+		got <- answer{line, err}
+	}()
+	select {
+	case <-ctx.Done():
+		_, _ = fmt.Fprintln(a.stderr())
+		return false, ctx.Err()
+	case ans := <-got:
+		if ans.err != nil && !errors.Is(ans.err, io.EOF) {
+			return false, ans.err
+		}
+		if ans.line == "" || !strings.HasSuffix(ans.line, "\n") {
+			_, _ = fmt.Fprintln(a.stderr())
+		}
+		v := strings.ToLower(strings.TrimSpace(ans.line))
+		return v == "y" || v == "yes", nil
 	}
 }
 

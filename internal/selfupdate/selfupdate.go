@@ -81,6 +81,8 @@ type Updater struct {
 	Environ []string
 	// Exec replaces the process; syscall.Exec when nil.
 	Exec func(path string, argv, env []string) error
+	// BeforeExec, if set, runs just before Exec, to hand back the terminal.
+	BeforeExec func()
 	// Getenv reads the environment; os.Getenv when nil.
 	Getenv func(string) string
 }
@@ -207,6 +209,9 @@ func (u *Updater) SelfUpdate(ctx context.Context, version string) error {
 	exec := u.Exec
 	if exec == nil {
 		exec = syscall.Exec
+	}
+	if u.BeforeExec != nil {
+		u.BeforeExec()
 	}
 	if err := exec(res.Path, args, env); err != nil {
 		return exitcode.Failed("pic-sure was updated to %s, but running it failed: %v; run the command again", res.To, err)

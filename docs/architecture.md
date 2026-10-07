@@ -264,7 +264,8 @@ it.
   `ChooseDevPortsBase`, on a resumed one its ports must be free or its own;
   a loopback remote `--db-host` warns), `release` (`release.Fetch` at a
   resumed stack's recorded commit, else the branch head, then `Gate` with
-  `newSelfUpdater`) and `config` (`stack.Create`, the run log, the stack
+  `newSelfUpdater`, offering the self-update through `a.gateConfirm` as
+  update does, except when a `--*-stdin` flag is given) and `config` (`stack.Create`, the run log, the stack
   lock, pic-sure.yaml, `EnsureSecrets` with `OpenAuth`, state.json with
   the release and the operation). Then `ops.InitSteps` with `--skip-step`,
   and `initialized_at` once they succeed. `r.compose` builds the adapter
@@ -305,9 +306,10 @@ it.
   with the plan as the report. Otherwise, past the gate, up's `upSecrets`
   (`EnsureSecrets`), then it records the `update` operation and runs
   `ops.UpdateSteps` (`--no-build` skips `images`). The report is the plan,
-  and the text says whether anything changed. There is no TTY prompt for
-  the gate's self-update yet (`--self-update` is needed), since the
-  progress renderer owns the terminal.
+  and the text says whether anything changed. When `canPrompt`, the gate
+  offers the self-update through `a.gateConfirm` (`selfupdate.go`), which
+  ends the progress renderer and asks `[y/N]` on stderr; otherwise only
+  `--self-update` replaces the binary (exit 5 without it).
 - `tuiinit.go` (039): `initFromTUI`, the TUI's `Options.Init`, runs
   `initRun.run` in-process on the wizard's config (its ports given
   explicitly) or, with none, resumes DIR's pic-sure.yaml. For the call it
@@ -2147,6 +2149,8 @@ GitHub API root (mirrors, tests).
   stack lock) but skips deferred cleanups, so call the gate before taking
   anything else that needs one. A refusal is exit 5 here. A second
   `SelfUpdate` in a re-executed process is exit 5 rather than a loop.
+  `BeforeExec` runs just before the exec; the cli's ends the progress
+  renderer, so the new binary starts on a restored terminal.
 - HTTP errors name the asset or release, never a URL, so proxy credentials
   can't reach a message. A request that receives nothing for a minute is
   abandoned. Cancellation is checked again before the rename and the exec.
