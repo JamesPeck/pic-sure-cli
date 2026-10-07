@@ -244,7 +244,7 @@ services:
     labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
     environment:
       JAVA_OPTS: "-Xmx2g"
-      SPRING_PROFILES_ACTIVE: "genomic"
+      SPRING_PROFILES_ACTIVE: "bch-dev"
       "ID_BATCH_SIZE": "500"
       CACHE_SIZE: "1500"
       SMALL_TASK_THREADS: "1"

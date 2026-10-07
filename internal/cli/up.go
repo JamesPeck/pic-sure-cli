@@ -69,10 +69,6 @@ func (a *App) up(cmd *cobra.Command, _ []string) (err error) {
 	if err := cfg.CheckFiles(st.Dir); err != nil {
 		return configError(err)
 	}
-	if cfg.HPDS.Data == stack.HPDSShared {
-		// Render needs the data set's recorded HPDS profile (ticket 051).
-		return exitcode.Usage("up doesn't support shared HPDS data yet; set hpds.data to local")
-	}
 	state, err := st.LoadState()
 	if errors.Is(err, fs.ErrNotExist) || err == nil && state.InitializedAt.IsZero() {
 		return exitcode.Precondition("the stack in %s isn't initialised; run `pic-sure init %s` to finish it", st.Dir, st.Dir)

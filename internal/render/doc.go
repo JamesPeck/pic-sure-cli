@@ -6,5 +6,5 @@
 //
 // The embedded templates, ported from AIO, are in templates/ (ticket 020; its
 // README maps each one to its AIO source). Ticket 021 implements rendering
-// and the goldens; ticket 051 turns on shared HPDS data.
+// and the goldens.
 package render

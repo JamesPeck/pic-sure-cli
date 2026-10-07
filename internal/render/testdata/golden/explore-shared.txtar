@@ -211,7 +211,7 @@ services:
     labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
     environment:
       JAVA_OPTS: "-XX:+UseParallelGC -XX:SurvivorRatio=250 -Xms1g -Xmx16g"
-      SPRING_PROFILES_ACTIVE: "genomic"
+      SPRING_PROFILES_ACTIVE: "bch-dev"
       # 0 disables data export; 2000 enables it.
       ID_BATCH_SIZE: "2000"
       CACHE_SIZE: "1500"

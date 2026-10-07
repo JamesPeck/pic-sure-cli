@@ -394,7 +394,7 @@ func (p *UpdatePlan) planRestarts(ctx context.Context, d *Deps, st *stack.Stack,
 		}
 	}
 
-	files, err := renderStack(st, cfg, p.target, opts.Cache)
+	files, err := renderStack(ctx, d, st, cfg, p.target, opts.Cache)
 	if err != nil {
 		return err
 	}

@@ -478,3 +478,37 @@ func TestPublishSharedDataProbeScript(t *testing.T) {
 		t.Errorf("copied partitions %q", args)
 	}
 }
+
+func TestSharedDataProfile(t *testing.T) {
+	set := map[string]string{ops.SharedDataLabel: "x", ops.SharedDataProfileLabel: "bch-dev"}
+	tests := []struct {
+		name  string
+		setup func(*sharedFixture)
+		want  string
+	}{
+		{"published", nil, ""},
+		{"no genomic volume", func(fx *sharedFixture) { delete(fx.vols, "x_hpds-genomic") }, "shared data set x isn't on this Docker host (no volume x_hpds-genomic)"},
+		{"not a data set", func(fx *sharedFixture) {
+			fx.vols["x_hpds-data"] = map[string]string{stack.LabelStack: "x"}
+		}, "x_hpds-data isn't part of a published data set"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fx := newSharedFixture(t)
+			fx.vols["x_hpds-data"], fx.vols["x_hpds-genomic"] = set, map[string]string{ops.SharedDataLabel: "x"}
+			if tt.setup != nil {
+				tt.setup(fx)
+			}
+			profile, err := ops.SharedDataProfile(context.Background(), fx.d, "x")
+			if tt.want == "" {
+				if err != nil || profile != "bch-dev" {
+					t.Fatalf("profile %q, err %v; want bch-dev", profile, err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.want) || exitcode.FromError(err) != exitcode.CodePrecondition {
+				t.Fatalf("err = %v, want exit 3 with %q", err, tt.want)
+			}
+		})
+	}
+}

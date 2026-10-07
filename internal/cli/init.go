@@ -274,10 +274,7 @@ func (r *initRun) readConfig() error {
 		}
 		// A conflict's message quotes the stored value.
 		log.RegisterSecrets(r.cfg.Auth.AdminEmail)
-		if err := r.checkResumed(data, given); err != nil {
-			return err
-		}
-		return refuseShared(r.cfg)
+		return r.checkResumed(data, given)
 	case !errors.Is(err, fs.ErrNotExist):
 		return err
 	}
@@ -315,7 +312,7 @@ func (r *initRun) readConfig() error {
 	if r.cfg, err = r.doc.Config(); err != nil {
 		return r.flagProblems(err)
 	}
-	return refuseShared(r.cfg)
+	return nil
 }
 
 // initSet is one --set KEY=VALUE.
@@ -368,7 +365,8 @@ func (r *initRun) configFlags() ([]configFlag, error) {
 			keys: []string{f.Key}, values: []string{v},
 			apply: func(d *stack.ConfigDoc) error { return setFlag(d, f, v) }}
 		if mode, name, _ := strings.Cut(v, ":"); f.Flag == "hpds-data" && mode == string(stack.HPDSShared) {
-			c.keys, c.values = append(c.keys, "hpds.shared_name"), []string{mode, name}
+			// The name first: config set refuses shared data without one.
+			c.keys, c.values = []string{"hpds.shared_name", f.Key}, []string{name, mode}
 		}
 		out = append(out, c)
 	}
@@ -445,11 +443,6 @@ func (r *initRun) checkResumed(data []byte, given []configFlag) error {
 	if err := applyFlags(probe, given); err != nil {
 		return err
 	}
-	if cfg, err := probe.Config(); err == nil {
-		if err := refuseShared(cfg); err != nil {
-			return err
-		}
-	}
 	// Apply each alone: together, one change can make the config invalid
 	// and hide which value differs.
 	for _, c := range given {
@@ -499,15 +492,6 @@ func (r *initRun) setValue(key string) (value string, ok bool) {
 		}
 	}
 	return value, ok
-}
-
-// refuseShared refuses shared HPDS data, which init can't set up until
-// ticket 051: render needs the data set's recorded HPDS profile.
-func refuseShared(cfg *stack.Config) error {
-	if cfg.HPDS.Data == stack.HPDSShared {
-		return exitcode.Usage("init doesn't support shared HPDS data yet; use --hpds-data local")
-	}
-	return nil
 }
 
 // anyPortFree is a host whose ports are all free.
@@ -670,6 +654,12 @@ func (r *initRun) preconditions(ctx context.Context, sink events.Sink) error {
 	}
 	if user != "" {
 		return exitcode.Precondition("the stack name %s is in use by another stack or compose project (%s); choose another --name", r.cfg.Name, user)
+	}
+	if r.cfg.HPDS.Data == stack.HPDSShared {
+		// Render checks it too, but only after the images are built.
+		if _, err := ops.SharedDataProfile(ctx, r.d, r.cfg.HPDS.SharedName); err != nil {
+			return err
+		}
 	}
 	if r.cfg.DB.Mode == stack.DBRemote {
 		if hint := ops.LoopbackHint(r.cfg.DB.Remote.Host); hint != "" {

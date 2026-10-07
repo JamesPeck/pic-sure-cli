@@ -177,7 +177,7 @@ func RenderStep(d *Deps, st *stack.Stack, cfg *stack.Config, state *stack.State,
 			if err != nil {
 				return err
 			}
-			files, err := renderStack(st, cfg, fresh, opts.Cache)
+			files, err := renderStack(ctx, d, st, cfg, fresh, opts.Cache)
 			if err != nil {
 				return err
 			}
@@ -196,8 +196,16 @@ func RenderStep(d *Deps, st *stack.Stack, cfg *stack.Config, state *stack.State,
 }
 
 // renderStack renders the stack from cfg and the commits and tags state
-// records, without writing anything.
-func renderStack(st *stack.Stack, cfg *stack.Config, state *stack.State, c *cache.Cache) ([]render.File, error) {
+// records, without writing anything. With hpds.data: shared, the data set
+// must be published on this host.
+func renderStack(ctx context.Context, d *Deps, st *stack.Stack, cfg *stack.Config, state *stack.State, c *cache.Cache) ([]render.File, error) {
+	var sharedProfile string
+	if cfg.HPDS.Data == stack.HPDSShared {
+		var err error
+		if sharedProfile, err = SharedDataProfile(ctx, d, cfg.HPDS.SharedName); err != nil {
+			return nil, err
+		}
+	}
 	sources := map[string]string{}
 	for _, comp := range []string{catalog.PicSure, catalog.Migrations} {
 		if componentSource(cfg, comp) != "" {
@@ -217,11 +225,12 @@ func renderStack(st *stack.Stack, cfg *stack.Config, state *stack.State, c *cach
 		return nil, err
 	}
 	return render.Render(render.Input{
-		StackDir:    st.Dir,
-		Config:      cfg,
-		State:       state,
-		Sources:     sources,
-		CustomTrust: len(certs) > 0,
+		StackDir:      st.Dir,
+		Config:        cfg,
+		State:         state,
+		Sources:       sources,
+		CustomTrust:   len(certs) > 0,
+		SharedProfile: sharedProfile,
 	})
 }
 

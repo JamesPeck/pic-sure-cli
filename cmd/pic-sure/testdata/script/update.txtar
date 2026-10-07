@@ -17,10 +17,6 @@ exitcode 2 pic-sure --stack stack update --skip-step plan
 stderr '--skip-step plan: update has no such step; it can skip config, resolve, images, tls, truststore, render, db, migrate, seed, hpds-key, restart, start$'
 ! exists docker.log
 
-# Shared HPDS data needs ticket 051.
-exitcode 2 pic-sure --stack shared update
-stderr 'update doesn''t support shared HPDS data yet; set hpds.data to local'
-
 # A stack init hasn't finished is exit 3, pointing at init, even for a
 # dry run.
 exitcode 3 pic-sure --stack partial update
@@ -82,13 +78,6 @@ auth: {mode: required, admin_email: admin@example.com, auth0: {tenant: example, 
 db_root_password: rootpw
 auth0_client_secret: generated-0123456789abcdef0123456789abcdef
 auth0_client_secret_generated: true
--- shared/pic-sure.yaml --
-schema: 1
-name: shared
-auth: {mode: open, admin_email: admin@example.com}
-hpds: {data: shared, shared_name: demo-set}
--- shared/.pic-sure/state.json --
-{"cli_version": "dev", "schema_version": 1, "initialized_at": "2026-10-07T12:00:00Z"}
 -- short-secret/pic-sure.yaml --
 schema: 1
 name: short-secret

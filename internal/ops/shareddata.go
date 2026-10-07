@@ -476,3 +476,30 @@ func RemoveSharedData(ctx context.Context, d *Deps, name string) ([]string, erro
 	}
 	return vols, nil
 }
+
+// SharedDataProfile checks that data set name is published, both its
+// volumes present and labelled as the set's, and returns the HPDS profile
+// recorded on it: what a stack mounting the set runs with when its
+// hpds.profile is empty.
+func SharedDataProfile(ctx context.Context, d *Deps, name string) (string, error) {
+	data, genomic := sharedVolumes(name)
+	var profile string
+	for _, vol := range []string{data, genomic} {
+		v, err := d.Docker.VolumeInspect(ctx, vol)
+		if errors.Is(err, docker.ErrNotFound) {
+			return "", exitcode.Precondition("shared data set %s isn't on this Docker host (no volume %s); "+
+				"`pic-sure shared-data list` lists the published sets", name, vol)
+		}
+		if err != nil {
+			return "", err
+		}
+		if v.Labels[SharedDataLabel] != name {
+			return "", exitcode.Precondition("volume %s isn't part of a published data set (no %s=%s label); "+
+				"publish the set with `pic-sure shared-data publish`", vol, SharedDataLabel, name)
+		}
+		if vol == data {
+			profile = v.Labels[SharedDataProfileLabel]
+		}
+	}
+	return profile, nil
+}

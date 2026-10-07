@@ -251,8 +251,10 @@ it.
   value, and a `--set` port or `network.dev_ports.base` is used as given.
   Usage problems are exit 2 naming the flag, before docker is asked
   anything: a client secret under `jwt.MinSecretLen`, a
-  `--skip-step` that isn't in `ops.InitStepIDs(cfg)`, shared HPDS data
-  (until 051), `--self-update` with a stdin flag. A DIR whose state.json
+  `--skip-step` that isn't in `ops.InitStepIDs(cfg)`, `--self-update`
+  with a stdin flag. With `--hpds-data shared:NAME`, the host check also
+  requires the data set (`ops.SharedDataProfile`, exit 3), so a missing
+  set fails before the images are built. A DIR whose state.json
   has `initialized_at` gets "already initialised" and exit 0; a DIR with a
   `pic-sure.yaml` is resumed with that config as it is: a config flag,
   `--source` or `--set` that would change it is exit 2 naming `config set`
@@ -278,7 +280,7 @@ it.
   resumed stack's config).
 - `up.go` (035): `up`. Usage problems first: a `--skip-step` not in
   `ops.UpStepIDs(cfg)` is exit 2. Under the stack lock: the config with
-  `CheckFiles`; shared HPDS data is exit 2 until 051; a stack without `initialized_at` or without secrets.yaml is
+  `CheckFiles`; a stack without `initialized_at` or without secrets.yaml is
   exit 3 pointing at `init DIR`; outside open mode a client secret that is
   generated (`auth0_client_secret_generated`) or missing is exit 3 pointing
   at `secrets rotate auth0-client-secret` (§9.11); then `EnsureSecrets`
@@ -296,7 +298,7 @@ it.
   pending config migrations are allowed (a dry run uses
   `openStackUnlogged`, since a run log is a write to the stack); until the
   `config` step, pic-sure.yaml is migrated in memory only. Under the stack
-  lock: up's checks (CheckFiles, shared HPDS data, `initialized_at`, the
+  lock: up's checks (CheckFiles, `initialized_at`, the
   ports, and `checkSecrets`: what `upSecrets` would refuse), reading
   secrets.yaml only. Then two
   unskippable steps: `release` (`release.Fetch` of the `release.branch`
@@ -1115,7 +1117,10 @@ init, and the parts `up` and `update` reuse.
 - `RenderStep`, ID `render`, always applies: it renders from a fresh
   state.json (the TLS and truststore steps save it themselves), writes the
   files, records `cli_version` and `schema_version`, copies the state into
-  the caller's, and sets `d.Compose` to nil.
+  the caller's, and sets `d.Compose` to nil. With `hpds.data: shared` it
+  first reads the data set's recorded profile with `SharedDataProfile`
+  (render's `SharedProfile`); a set that isn't on the host is exit 3 and
+  nothing is written.
 - `ConvergeSteps` are steps 8–12: `DBSteps` (`db`, plus `db-bootstrap` for
   a remote database), `migrate`, `seed`, `hpds-key` and `start`, each
   wrapped so it sets `d.Compose` from `opts.Compose` when it is nil. The
@@ -1418,11 +1423,14 @@ Labels are AIO's, with `.cli-version` and `.source-stack` replacing
 `.aio-commit` and `.source-project` (`list` falls back to the latter) (`SharedDataLabel` = `org.hms-dbmi.picsure.shared-hpds-data`
 plus `.kind`, `.contents` = `phenotype=<marker|unknown>
 genomic=<partitions|none>`, `.hpds-profile` (`bch-dev` with genomic data,
-else empty: 051 reads it when `hpds.profile` is empty), `.picsure-commit`
+else empty: what hpds runs with when `hpds.profile` is empty), `.picsure-commit`
 (the hpds-etl image's `ReactorSrcLabel`, else state.json's pic-sure commit),
 `.cli-version`, `.source-stack`, `.created`). Never the stack's own labels:
 056's `destroy` removes volumes carrying them.
 `ListSharedData(ctx, d)` groups the labelled volumes by set.
+`SharedDataProfile(ctx, d, name)` requires both of a set's volumes,
+labelled as the set's (exit 3 otherwise), and returns its `.hpds-profile`;
+render and init's host check use it for a stack in shared mode.
 `RemoveSharedData(ctx, d, name)` removes only volumes labelled as that set,
 and refuses (exit 3) while any container, stopped ones too, mounts either.
 

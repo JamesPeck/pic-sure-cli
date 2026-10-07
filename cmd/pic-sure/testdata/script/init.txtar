@@ -25,8 +25,8 @@ exitcode 2 pic-sure init new --name Demo! --admin-email admin@example.com --auth
 stderr '--name'
 exitcode 2 pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --hpds-data shared
 stderr '--hpds-data shared: want local or shared:NAME'
-exitcode 2 pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --hpds-data shared:demo-set
-stderr 'init doesn''t support shared HPDS data yet'
+exitcode 2 pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --hpds-data shared:../set
+stderr 'hpds.shared_name: must be letters'
 exitcode 2 pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --source hpds=../x
 stderr '--source hpds=../x: want COMPONENT=PATH'
 exitcode 2 pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --http-port eighty
@@ -198,7 +198,7 @@ exitcode 2 pic-sure init staged --admin-email new@example.com
 stderr 'already has auth.admin_email \[REDACTED\]'
 ! stderr 'admin@example.com'
 exitcode 2 pic-sure init staged --hpds-data shared:demo
-stderr 'init doesn''t support shared HPDS data yet'
+stderr 'already has hpds.shared_name "", .*config set hpds.shared_name demo` first'
 exitcode 2 pic-sure init staged --name other
 stderr '--name other: .*staged.pic-sure.yaml already has name demo, and a stack''s name can''t change'
 exitcode 2 pic-sure init staged --http-port 8083 --set network.http_port=9000

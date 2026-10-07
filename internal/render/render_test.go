@@ -82,7 +82,6 @@ func goldenConfig(c goldenCase) *stack.Config {
 	if c.sharedHPDS {
 		cfg.HPDS.Data = stack.HPDSShared
 		cfg.HPDS.SharedName = "nhanes"
-		cfg.HPDS.Profile = "genomic"
 	}
 	if c.proxy {
 		cfg.Proxy = stack.Proxy{HTTP: "http://proxy.example.org:3128", HTTPS: "http://proxy.example.org:3128", NoProxy: "intranet.example.org"}
@@ -105,7 +104,7 @@ func goldenInput(c goldenCase) Input {
 			st.DevImages[img.Name] = "dev-golden-abc123def456"
 		}
 	}
-	return Input{
+	in := Input{
 		StackDir: goldenDir,
 		Config:   goldenConfig(c),
 		State:    st,
@@ -115,6 +114,11 @@ func goldenInput(c goldenCase) Input {
 		},
 		CustomTrust: c.trust,
 	}
+	if c.sharedHPDS {
+		// hpds.profile is empty, so this is the profile hpds runs with.
+		in.SharedProfile = "bch-dev"
+	}
+	return in
 }
 
 // goldenSecrets are distinctive values for every secret, so a test can look

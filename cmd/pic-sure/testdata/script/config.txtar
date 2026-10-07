@@ -58,6 +58,8 @@ exitcode 2 pic-sure --stack stack config set db.mode remote
 stderr 'db.remote.host: required when db.mode is remote'
 exitcode 2 pic-sure --stack stack config set proxy.http proxy:3128
 stderr 'proxy.http: want an http:// URL'
+exitcode 2 pic-sure --stack stack config set hpds.data shared
+stderr 'hpds.shared_name: required when hpds.data is shared'
 exitcode 2 pic-sure --stack stack config set tls.mode provided
 stderr 'tls.cert_file: .*certs/tls/server.crt does not exist'
 exitcode 2 pic-sure --stack stack config set name other
@@ -68,6 +70,12 @@ exitcode 2 pic-sure --stack stack config set nope 1
 stderr '^pic-sure: nope: unknown config key$'
 stderr 'Run ''pic-sure config set --help'' for usage.'
 cmp stack/pic-sure.yaml want.yaml
+
+# Switching to a shared data set takes its name first.
+exec pic-sure --stack stack config set hpds.shared_name nhanes-v1
+exec pic-sure --stack stack config set hpds.data shared
+exec pic-sure --stack stack config get hpds.data
+stdout '^shared$'
 
 # A valid set fixes a file that was invalid.
 cp bad.yaml stack/pic-sure.yaml
