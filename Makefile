@@ -5,7 +5,7 @@ COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
 DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS := -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(DATE)
 
-.PHONY: build snapshot install-test test fmt-check vet lint print-lint-version check compose-check clean
+.PHONY: build snapshot install-test test fmt-check vet lint print-lint-version check compose-check docs docs-check clean
 
 build:
 	$(GO) build -ldflags "$(LDFLAGS)" -o $(BIN) ./cmd/pic-sure
@@ -48,6 +48,15 @@ check: fmt-check vet lint test
 # skipping without docker compose.
 compose-check:
 	PICSURE_REQUIRE_COMPOSE=1 $(GO) test -count=1 ./internal/render
+
+# The command reference in docs/commands, generated from cobra's help.
+docs:
+	$(GO) run ./tools/gendocs docs/commands
+
+# CI: fail when docs/commands doesn't match the code (run make docs).
+docs-check: docs
+	@out="$$(git status --porcelain -- docs/commands)"; if [ -n "$$out" ]; then \
+		echo "docs/commands is stale; run make docs and commit it:"; echo "$$out"; exit 1; fi
 
 clean:
 	rm -rf bin dist

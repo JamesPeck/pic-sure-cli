@@ -103,6 +103,40 @@ no stack or it hasn't been rendered, and 1 when compose can't be asked.
 | `schema_version` | int | Always 2. |
 | `services` | array | The containers, in the shape and order of `status --json`'s `services`. |
 
+## `doctor --json`
+
+Exit code 1 when any check has status `fail`, 0 otherwise (warnings
+don't count); the report is printed either way, with no `result` after
+it. Exit code 3 when `--stack` names no stack.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `schema_version` | int | Always 2. |
+| `stack` | string, omitted | The stack directory checked; omitted when run outside a stack, which checks only the host and Docker. |
+| `checks` | array | The checks, in the order they ran. |
+| `checks[].name` | string | Stable name, listed below. |
+| `checks[].status` | string | `ok`, `warn` or `fail`. |
+| `checks[].message` | string | The result in words. |
+| `checks[].detail` | string, omitted | Extra guidance that may span lines, such as how to set the Docker daemon's proxy. |
+
+Check names. Host and Docker: `docker-cli`, `docker-daemon`,
+`docker-runtime`, `compose-version`, `buildx-version` (a failure only when
+images are built), `git`, `disk-cache`, `disk-docker`, `memory`,
+`arm64-images`. Stack: `config`, `compose-config`, `overrides`, `ports`,
+`auth0`, `proxy`. With `--network`: `network-release-control`,
+`network-github`, `network-maven-central`, `network-npm-registry`,
+`network-alpine-cdn`, and, when a proxy is set, `network-docker-pull`.
+New checks may be added; treat an unknown name like any other.
+
+## `version --json`
+
+| Field | Type | Meaning |
+|---|---|---|
+| `schema_version` | int | Always 2. |
+| `version` | string | The release, such as `v2.0.0`; `dev` for an unreleased build. |
+| `commit` | string | The commit it was built from. |
+| `date` | string | The build time. |
+
 ## `support-bundle --json`
 
 The archive `support-bundle` wrote. Exit code 0 once it is written, even
@@ -116,3 +150,59 @@ when parts couldn't be collected; 1 when it can't be written; 3 when
 | `files` | array of strings | The archive's files, relative to its top directory, such as `status.json` or `compose/logs/hpds.log`. |
 | `problems` | array of strings | What couldn't be collected, and why; also in the archive's `README.txt`. Empty when everything was. |
 | `short_secrets` | int | How many secrets are shorter than 4 bytes. They are redacted only where no letter or digit touches them, so check the archive for them before sharing it. |
+
+## NDJSON events
+
+Every other command, with `--json`, prints one JSON object per line on
+stdout as it runs, each with `type` first, and ends with exactly one
+`result` line. Logs and warnings meant for people go to stderr, so stdout
+is only events. Read lines until `result`; don't rely on the events before
+it beyond what's below.
+
+| `type` | Fields | Meaning |
+|---|---|---|
+| `step_started` | `id`, `title` | A step began. `id` is stable (the IDs `--skip-step` takes); `title` is for people. |
+| `progress` | `id`, `text`, `pct` (omitted when unknown) | Progress within a step; `pct` is 0–100. |
+| `log` | `id`, `stream` (`stdout` or `stderr`), `line` | One line of a subprocess's output, without the newline. |
+| `warning` | `id` (omitted when not tied to a step), `text` | Something to look at that didn't stop the command. |
+| `step_done` | `id`, `status` | A step ended: `ok`, `skipped` (already done, or `--skip-step`) or `failed`. |
+| `result` | `ok`, `data` (omitted when none), `error` (omitted on success) | The last line. |
+| | `error.exit_code` | The process's exit code (see docs/agents.md). |
+| | `error.message` | What went wrong, the same text as the `pic-sure: ` line on stderr. |
+| | `error.step` | The ID of the step that failed, when one did. |
+
+For example, `pic-sure up --json` on a running stack:
+
+```
+{"type":"step_started","id":"images","title":"Build the images"}
+{"type":"step_done","id":"images","status":"skipped"}
+...
+{"type":"step_started","id":"start","title":"Start the stack"}
+{"type":"log","id":"start","stream":"stderr","line":" Container demo-hpds-1  Running"}
+{"type":"step_done","id":"start","status":"ok"}
+{"type":"result","ok":true}
+```
+
+A command that fails before it starts any step (a usage error, no stack)
+prints only the `result` line.
+
+### `result.data`
+
+Commands that report something put it in `result.data`. The shapes follow
+the same additive-only rule:
+
+| Command | `data` |
+|---|---|
+| `init` | `{"stack", "dir", "already_initialized" (omitted unless true), "url", "auth0", "token_expiry", "next_steps"}`; `auth0` is `status --json`'s object. |
+| `update` | The plan: `{"stack", "dry_run", "config": {"from", "to", "migrations"}, "release": {"repo", "branch", "from", "to"}, "components": [{"name", "from_ref", "from_commit", "to_ref", "to_commit", "source", "changed"}], "images": [{"name", "component", "from", "to", "action"}], "migrations": {"status", "detail", "started_db"}, "token": {"expiry", "renew"}, "restarts": [{"service", "action", "reasons"}]}`. `images[].action` is `build`, `pull`, `up-to-date`, or `keep` (with `--no-build`); `migrations.status` is `pending`, `up-to-date` or `unknown`; `restarts[].action` is `recreate` or `restart`. Note the hyphen: `status --json` spells the same state `up_to_date`. |
+| `data demo` | `{"dataset": "demo:<name>"}`, where `<name>` is the argument, `all` included. |
+| `data load-phenotype` | `{"dataset": "phenotype:<sha256>", "dictionary": "auto" or "custom", "weights": bool}` |
+| `data load-genomic` | `{"partition", "promoted": [...], "profile"}` |
+| `shared-data publish` | The data set, as one entry of `shared-data list`. |
+| `shared-data list` | `{"data_sets": [...]}` |
+| `shared-data remove` | `{"name", "removed": [...]}` |
+| `dev list` | `{"variants": [...]}` |
+| `dev on`, `dev off` | `{"service", "on", "services", "port", "source"}` |
+| `reset`, `destroy` | `{"stack", "volumes": [...], "kept_volumes": [...], "images": [...], "files", "pruned"}`: the volumes removed, the volumes reset kept (`--keep-db`), destroy's dev images, and for destroy `files: {"removed", "kept", "remaining", "dir_removed"}` (`remaining` lists what you added, which destroy leaves). `pruned` is there with `--prune-images`. Empty lists may be omitted. |
+
+Other commands' `data` isn't listed here yet; treat it as informational.

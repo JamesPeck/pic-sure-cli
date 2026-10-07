@@ -44,7 +44,7 @@ read-only and must already hold one.` + dictionaryLong,
 	}
 	facets := c.Flags().Bool("include-dataset-facets", false, "also create the default facets")
 	clearFirst := c.Flags().Bool("clear", false, "empty the dictionary first")
-	heap := c.Flags().Int("heap", ops.DefaultColumnMetaHeap, "CreateColumnmetaCSV's heap in MB")
+	heap := c.Flags().Int("heap", ops.DefaultColumnMetaHeap, "CreateColumnmetaCSV's heap in `MB`")
 	c.RunE = func(cmd *cobra.Command, _ []string) error {
 		if *heap <= 0 {
 			return exitcode.Usage("--heap must be a positive number of MB")

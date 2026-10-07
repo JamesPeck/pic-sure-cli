@@ -440,6 +440,14 @@ it.
   the service keeps the source build while the source is set (§7.3), and
   that unsetting it and running `up` returns it to the release images.
 
+- `docs.go` (065): `WriteCommandDocs(dir)` writes `docs/commands/`, one
+  Markdown page per visible command (help and completion left out) and a
+  README.md index, from cobra's Short, Long, use line, examples and flags.
+  `tools/gendocs` calls it; `make docs` regenerates and `make docs-check`
+  (CI's `docs` job) fails when the committed pages differ. A new command,
+  flag or help text therefore needs `make docs`. The pages hold nothing
+  machine-specific, so keep help text free of paths and dates.
+
 | File | Commands | Ticket |
 |---|---|---|
 | `init.go` | `init` | 034 |

@@ -18,7 +18,7 @@ func newBuildCmd(a *App) *cobra.Command {
 	c := &cobra.Command{
 		Use:   "build [COMPONENT...]",
 		Short: "Build the stack's images (default: every component)",
-		Long: `Build, or in images.mode pull pull, the images of the components
+		Long: `Build (or, with images.mode pull, pull) the images of the components
 (pic-sure, frontend, migrations, dictionary-etl) at the commits the stack
 records, and record their tags. Built images that are already up to date
 are kept; pull mode pulls each time, since a ref can be a branch. A component with components.<name>.source set is built from that
