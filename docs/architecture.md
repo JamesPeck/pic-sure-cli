@@ -1453,8 +1453,8 @@ GitHub API root (mirrors, tests).
   in the paged release list that is neither a draft nor a prerelease (the
   rule `install.sh` uses; GitHub's `releases/latest` is just the last one
   published), and exit 3 if there is none; with `--to`, `releases/tags/vX`
-  (`--to 2.1.0` means `v2.1.0`; an unknown tag is exit 3). download `checksums.txt`, its cosign bundle if the release has one,
-  and `pic-sure_<os>_<arch>.tar.gz`, check the archive's SHA-256, extract
+  (`--to 2.1.0` means `v2.1.0`; an unknown tag is exit 3). Download
+  `checksums.txt`, its cosign bundle if the release has one, and `pic-sure_<os>_<arch>.tar.gz`, check the archive's SHA-256, extract
   `pic-sure` from the archive's root into a temp file beside the binary
   (keeping its mode) and rename it over the binary. The running version,
   or a newest release older than it, is a no-op; an explicit older `--to`

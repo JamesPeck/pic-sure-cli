@@ -59,8 +59,11 @@ const (
 	maxReleasePages = 10
 )
 
-// stableV2 matches the tags the newest-release search considers.
-var stableV2 = regexp.MustCompile(`^v2\.[0-9]+\.[0-9]+$`)
+// stableV2 admits only tags stack.CompareVersions can order: no leading
+// zeros, and components small enough for an int.
+var stableV2 = regexp.MustCompile(`^v2\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})$`)
+
+var errNotFound = errors.New("not found")
 
 // resolve fetches the release for version, or the newest stable v2 release
 // when version is empty.
@@ -71,7 +74,9 @@ func (u *Updater) resolve(ctx context.Context, version string) (*release, error)
 	what := "pic-sure release " + version
 	var r release
 	endpoint := fmt.Sprintf("%s/repos/%s/releases/tags/%s", u.apiBase(), u.repo(), url.PathEscape(version))
-	if err := u.getJSON(ctx, endpoint, what, maxMetadata, &r); err != nil {
+	if err := u.getJSON(ctx, endpoint, what, maxMetadata, &r); errors.Is(err, errNotFound) {
+		return nil, exitcode.Precondition("%s doesn't exist on github.com/%s", what, u.repo())
+	} else if err != nil {
 		return nil, err
 	}
 	if r.Tag == "" {
@@ -91,7 +96,9 @@ func (u *Updater) newest(ctx context.Context) (*release, error) {
 	for page := 1; page <= maxReleasePages; page++ {
 		var rels []release
 		endpoint := fmt.Sprintf("%s/repos/%s/releases?per_page=%d&page=%d", u.apiBase(), u.repo(), releasesPerPage, page)
-		if err := u.getJSON(ctx, endpoint, what, maxReleasePage, &rels); err != nil {
+		if err := u.getJSON(ctx, endpoint, what, maxReleasePage, &rels); errors.Is(err, errNotFound) {
+			return nil, exitcode.Precondition("github.com/%s doesn't exist", u.repo())
+		} else if err != nil {
 			return nil, err
 		}
 		for i := range rels {
@@ -116,7 +123,7 @@ func (u *Updater) newest(ctx context.Context) (*release, error) {
 }
 
 // getJSON decodes the GitHub API's answer at endpoint, at most limit bytes,
-// into v. what names the lookup in errors.
+// into v. what names the lookup in errors. An HTTP 404 is errNotFound.
 func (u *Updater) getJSON(ctx context.Context, endpoint, what string, limit int64, v any) error {
 	body, status, err := u.get(ctx, endpoint, "application/vnd.github+json")
 	if err != nil {
@@ -124,7 +131,7 @@ func (u *Updater) getJSON(ctx context.Context, endpoint, what string, limit int6
 	}
 	defer func() { _ = body.Close() }()
 	if status == http.StatusNotFound {
-		return exitcode.Precondition("%s doesn't exist on github.com/%s", what, u.repo())
+		return errNotFound
 	}
 	if status == http.StatusForbidden || status == http.StatusTooManyRequests {
 		return exitcode.Failed("looking up %s: GitHub answered HTTP %d, probably its rate limit "+

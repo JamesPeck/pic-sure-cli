@@ -39,7 +39,7 @@ func newSelfUpdateCmd(a *App) *cobra.Command {
 			return a.finish(res, func(w io.Writer) error { return writeSelfUpdate(w, res) })
 		},
 	}
-	c.Flags().String("to", "", "install this `VERSION` instead of the latest")
+	c.Flags().String("to", "", "install this `VERSION` instead of the newest stable v2 release")
 	return c
 }
 
@@ -109,7 +109,7 @@ func writeSelfUpdate(w io.Writer, r *selfupdate.Result) error {
 	case r.To == r.From:
 		_, err = fmt.Fprintf(w, "pic-sure is already %s\n", r.To)
 	default:
-		_, err = fmt.Fprintf(w, "pic-sure %s is newer than the latest release %s; nothing to do\n", r.From, r.To)
+		_, err = fmt.Fprintf(w, "pic-sure %s is newer than the newest release %s; nothing to do\n", r.From, r.To)
 	}
 	return err
 }

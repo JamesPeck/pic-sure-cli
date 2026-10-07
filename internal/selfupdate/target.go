@@ -98,7 +98,7 @@ func checkWritable(dir string) error {
 	return os.Remove(name)
 }
 
-// installCommand is the install.sh one-liner for version (the latest when
+// installCommand is the install.sh one-liner for version (the newest when
 // empty), with extra options.
 func installCommand(version, extra string) string {
 	args := extra
@@ -112,7 +112,7 @@ func installCommand(version, extra string) string {
 	return "`" + cmd + "`"
 }
 
-// toFlag is " --to VERSION", or nothing for the latest release.
+// toFlag is " --to VERSION", or nothing for the newest release.
 func toFlag(version string) string {
 	if version == "" {
 		return ""

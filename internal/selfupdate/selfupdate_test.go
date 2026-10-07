@@ -109,8 +109,7 @@ func (g *fakeGitHub) serveRelease(w http.ResponseWriter, base, tag string) {
 	_ = json.NewEncoder(w).Encode(rel.api(base))
 }
 
-// serveList serves one page of the release list, paged like GitHub's
-// (per_page defaults to 30, page to 1).
+// serveList serves one page of the release list, paged like GitHub's.
 func (g *fakeGitHub) serveList(w http.ResponseWriter, r *http.Request, base string) {
 	perPage, page := 30, 1
 	if v, err := strconv.Atoi(r.URL.Query().Get("per_page")); err == nil {
@@ -375,6 +374,7 @@ func TestInstallPicksTheNewestStableV2(t *testing.T) {
 			rels: []*fakeRelease{pre, draft, newFakeRelease(t, "v2.2.0")}, want: "v2.2.0"},
 		{name: "tags that aren't stable v2.x.y",
 			rels: []*fakeRelease{stub("v3.0.0"), stub("v2.9.0-rc.1"), stub("2.9.0"), stub("v2.9"), stub("v10.0.0"),
+				stub("v2.09.0"), stub("v2.99999999999.0"),
 				newFakeRelease(t, "v2.2.0")}, want: "v2.2.0"},
 		{name: "minor and patch compare as numbers",
 			rels: []*fakeRelease{newFakeRelease(t, "v2.9.0"), newFakeRelease(t, "v2.10.0"), newFakeRelease(t, "v2.9.10")}, want: "v2.10.0"},
@@ -414,6 +414,13 @@ func TestInstallWithoutAStableV2Release(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestInstallFromAMissingRepo(t *testing.T) {
+	u := newUpdater(newFakeGitHub(t, newFakeRelease(t, "v2.1.0")), installed(t, ""), nil)
+	u.Repo = "nobody/nothing"
+	_, err := u.Install(context.Background(), "")
+	wantCode(t, err, exitcode.CodePrecondition, "github.com/nobody/nothing doesn't exist")
 }
 
 func TestInstallReadsAtMostTenPages(t *testing.T) {
