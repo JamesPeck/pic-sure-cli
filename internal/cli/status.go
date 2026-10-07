@@ -42,7 +42,7 @@ func (a *App) status(cmd *cobra.Command) error {
 	defer func() { _ = st.Close() }()
 	d := a.newDeps()
 	opts := ops.StatusOptions{CLIVersion: a.Info.Version, Migrations: a.configMigrations()}
-	if c, err := docker.NewCompose(d.Runner, st.Dir, nil); err == nil {
+	if c, err := a.stackCompose(cmd, d.Runner, st); err == nil {
 		d.Compose = c
 	} else if !errors.Is(err, docker.ErrNotRendered) {
 		opts.ComposeErr = err

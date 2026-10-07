@@ -7,7 +7,7 @@ exitcode 3 pic-sure compose -- ps
 # A stack that hasn't been rendered: exit 3, pointing at up, before docker
 # is called.
 exitcode 3 pic-sure --stack unrendered down
-stderr '^pic-sure: the stack hasn''t been rendered yet; run `pic-sure up`$'
+stderr '^pic-sure: the stack has not been rendered yet; run `pic-sure up`$'
 exitcode 3 pic-sure --stack unrendered restart hpds
 exitcode 3 pic-sure --stack unrendered ps
 exitcode 3 pic-sure --stack unrendered logs

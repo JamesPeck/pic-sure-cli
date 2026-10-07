@@ -202,12 +202,14 @@ it.
   logger, so it can log argv. Until the others land, the sink discards
   events.
 
-- `composeverbs.go` (026): `a.stackCompose(cmd, runner, st)` is the
-  compose adapter for a command's stack: exit 3 with "run `pic-sure up`"
-  when it isn't rendered, `render.ComposeEnv` from the config and secrets
-  (a read-only command, by `commandClass`, falls back to the defaults when
-  it can't read them, so `ps` and `logs` work on a newer stack), and `ProgressJSON` under
-  `--json`. `down` and `restart` take the stack lock and run as one step
+- `composeverbs.go` (026, 069): `a.stackCompose(cmd, runner, st)` is the
+  compose adapter for every command on a stack, `status` and `doctor`
+  included: exit 3 with "run `pic-sure up`", wrapping
+  `docker.ErrNotRendered`, when it isn't rendered; `render.ComposeEnv` from
+  the config and secrets; and `ProgressJSON` under `--json`. A read-only
+  command, by `commandClass`, that can't read them warns on stderr and
+  carries on with the variables empty, so `ps`, `status` and `doctor` work
+  on a newer stack or one without secrets.yaml. `down` and `restart` take the stack lock and run as one step
   whose `Log` events are compose's output. `ps --json` uses status's
   service shape (`ops.StatusServices`). `logs` writes the logs to stdout and compose's own
   messages to stderr (a `logs` step under `--json`), and reports Ctrl-C as

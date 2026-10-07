@@ -1,0 +1,107 @@
+# Every compose call on a stack gets the rendered compose env
+# (render.ComposeEnv): the secrets, plus the proxy variables when the config
+# sets a proxy. bin/docker records them for each compose call, then hands
+# the call to the fake docker.
+env XDG_CACHE_HOME=/nonexistent-pic-sure-composeenv/cache
+chmod 755 bin/docker
+env PATH=$WORK/bin${:}$PATH
+
+exec pic-sure --stack stack status
+! stderr .
+grep '^compose DB_ROOT_PASSWORD=rootpw-0123456789 AUTH0_CLIENT_SECRET=client-secret-0123456789 HTTP_PROXY=http://proxy.example.com:3128$' compose-env.log
+rm compose-env.log
+
+# doctor's exit depends on the host's ports, so only its report is checked.
+exec sh -c 'pic-sure --stack stack doctor >doctor.out 2>doctor.err || true'
+grep '^\[ OK \] compose-config +docker compose config accepts' doctor.out
+! grep warning doctor.err
+grep 'config --quiet$' docker.log
+grep '^compose DB_ROOT_PASSWORD=rootpw-0123456789 AUTH0_CLIENT_SECRET=client-secret-0123456789 HTTP_PROXY=http://proxy.example.com:3128$' compose-env.log
+rm compose-env.log
+
+exec pic-sure --stack stack ps
+grep '^compose DB_ROOT_PASSWORD=rootpw-0123456789 AUTH0_CLIENT_SECRET=client-secret-0123456789 HTTP_PROXY=http://proxy.example.com:3128$' compose-env.log
+rm compose-env.log
+
+# --json makes compose's progress JSON.
+exec pic-sure --stack stack --json down
+grep '--progress json down' docker.log
+
+# Without secrets.yaml the read-only commands say why and carry on, with
+# the variables set but empty; a mutating one fails.
+exec pic-sure --stack nosecrets status
+stderr '^pic-sure: warning: docker compose runs with the stack''s secrets empty: .*secrets.yaml'
+grep '^compose DB_ROOT_PASSWORD= AUTH0_CLIENT_SECRET= HTTP_PROXY=<unset>$' compose-env.log
+exec sh -c 'pic-sure --stack nosecrets doctor >doctor.out 2>doctor.err || true'
+grep 'warning: docker compose runs with the stack''s secrets empty' doctor.err
+grep '^\[ OK \] compose-config ' doctor.out
+exec pic-sure --stack nosecrets ps
+stderr 'warning: docker compose runs with the stack''s secrets empty'
+! exec pic-sure --stack nosecrets down
+stderr 'secrets.yaml'
+
+# No secret reaches stderr or the run log, even when compose's error
+# quotes one.
+exitcode 1 pic-sure --stack leaky --log-level debug ps
+! stderr 'rootpw-0123456789'
+stderr 'password \[REDACTED\] rejected'
+exec sh -c 'cat leaky/.pic-sure/logs/*'
+stdout 'password \[REDACTED\] rejected'
+! stdout 'rootpw-0123456789'
+
+-- bin/docker --
+#!/bin/sh
+if [ "$1" = compose ]; then
+	echo "compose DB_ROOT_PASSWORD=${DB_ROOT_PASSWORD-<unset>} AUTH0_CLIENT_SECRET=${AUTH0_CLIENT_SECRET-<unset>} HTTP_PROXY=${HTTP_PROXY-<unset>}" >> "$HOME/compose-env.log"
+fi
+PATH=${PATH#*:} exec docker "$@"
+-- docker.scenario --
+docker info --format json => 0 stdout=info.json
+docker version --format json => 0 stdout=version.json
+docker image inspect alpine:* => 0 stdout=image.json
+docker run * df -Pk / => 0 stdout=df.txt
+docker rm -v -f pic-sure-doctor-* => 0
+re:^docker compose .*/leaky .* ps => 1 stderr=leak.txt
+docker compose * => 0
+docker * => 1
+-- leak.txt --
+password rootpw-0123456789 rejected
+-- info.json --
+{"ServerVersion":"28.5.1","OperatingSystem":"Docker Desktop","OSType":"linux","Architecture":"x86_64","MemTotal":17179869184,"DockerRootDir":"/var/lib/docker","ClientInfo":{"Context":"desktop-linux","Plugins":[{"Name":"compose","Version":"v2.29.7"},{"Name":"buildx","Version":"v0.17.1"}]}}
+-- version.json --
+{"Client":{"Version":"28.5.1"},"Server":{"Platform":{"Name":"Docker Desktop 4.48.0"},"Version":"28.5.1"}}
+-- image.json --
+[{"Id":"sha256:a1"}]
+-- df.txt --
+Filesystem 1024-blocks Used Available Capacity Mounted on
+overlay 200000000 1000 104857600 1% /
+-- stack/pic-sure.yaml --
+schema: 1
+name: demo
+auth: {mode: open, admin_email: admin@example.com}
+proxy: {http: "http://proxy.example.com:3128"}
+-- stack/.pic-sure/state.json --
+{"cli_version": "dev", "schema_version": 1}
+-- stack/.pic-sure/secrets.yaml --
+db_root_password: rootpw-0123456789
+auth0_client_secret: client-secret-0123456789
+-- stack/.pic-sure/render/compose.yaml --
+services: {}
+-- nosecrets/pic-sure.yaml --
+schema: 1
+name: nosecrets
+auth: {mode: open, admin_email: admin@example.com}
+-- nosecrets/.pic-sure/state.json --
+{"cli_version": "dev", "schema_version": 1}
+-- nosecrets/.pic-sure/render/compose.yaml --
+services: {}
+-- leaky/pic-sure.yaml --
+schema: 1
+name: leaky
+auth: {mode: open, admin_email: admin@example.com}
+-- leaky/.pic-sure/state.json --
+{"cli_version": "dev", "schema_version": 1}
+-- leaky/.pic-sure/secrets.yaml --
+db_root_password: rootpw-0123456789
+-- leaky/.pic-sure/render/compose.yaml --
+services: {}

@@ -16,7 +16,6 @@ import (
 	"syscall"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/cache"
-	"github.com/JamesPeck/pic-sure-cli/internal/docker"
 	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
 	"github.com/JamesPeck/pic-sure-cli/internal/ops"
 	"github.com/JamesPeck/pic-sure-cli/internal/stack"
@@ -51,7 +50,11 @@ func (a *App) doctor(cmd *cobra.Command, network bool) error {
 	case err == nil:
 		defer func() { _ = st.Close() }()
 		opts.Stack = st
-		d.Compose, opts.ComposeErr = newStackCompose(d.Runner, st)
+		if c, err := a.stackCompose(cmd, d.Runner, st); err == nil {
+			d.Compose = c
+		} else {
+			opts.ComposeErr = err
+		}
 	case errors.Is(err, stack.ErrNotFound) && a.Global.Stack == "":
 		// No stack here: check the host only.
 	default:
@@ -66,17 +69,6 @@ func (a *App) doctor(cmd *cobra.Command, network bool) error {
 		return exitcode.Failed("doctor: %d check(s) failed", report.Count(ops.CheckFail))
 	}
 	return nil
-}
-
-// newStackCompose returns the compose adapter for st, or nil and why not.
-func newStackCompose(r docker.Runner, st *stack.Stack) (docker.Composer, error) {
-	// TODO(021): supply the rendered compose env, so `config --quiet` sees
-	// the secrets and proxy variables instead of warning that they are unset.
-	c, err := docker.NewCompose(r, st.Dir, func() []string { return nil })
-	if err != nil {
-		return nil, err
-	}
-	return c, nil
 }
 
 var doctorMarks = map[ops.CheckStatus]string{ops.CheckOK: "[ OK ]", ops.CheckWarn: "[WARN]", ops.CheckFail: "[FAIL]"}

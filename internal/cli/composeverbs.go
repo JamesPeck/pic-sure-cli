@@ -235,25 +235,18 @@ compose's own, so --json is refused.`,
 
 // stackCompose returns the compose adapter for st, with the environment its
 // compose files need (render.ComposeEnv) and the progress format for the
-// output mode. A stack that hasn't been rendered is exit 3. For a read-only
-// command (gate.go), a config or secrets file this CLI can't read is no
-// error.
+// output mode. A stack that hasn't been rendered is exit 3, wrapping
+// docker.ErrNotRendered. A read-only command (gate.go) that can't read the
+// config or secrets warns and carries on without them.
 func (a *App) stackCompose(cmd *cobra.Command, r docker.Runner, st *stack.Stack) (*docker.Compose, error) {
 	c, err := docker.NewCompose(r, st.Dir, nil)
 	if errors.Is(err, docker.ErrNotRendered) {
-		return nil, exitcode.Precondition("the stack hasn't been rendered yet; run `pic-sure up`")
+		return nil, exitcode.Precondition("%w yet; run `pic-sure up`", docker.ErrNotRendered)
 	}
 	if err != nil {
 		return nil, err
 	}
-	env, err := stackComposeEnv(st)
-	if err != nil && commandClass(cmd) == stack.ReadOnly {
-		// ps and logs create no container, so the values matter only to
-		// keep compose from warning that they are unset. They must work
-		// on a stack whose config is invalid or newer (§10.6).
-		def := stack.DefaultConfig()
-		env, err = render.ComposeEnv(&def, &stack.Secrets{})
-	}
+	env, err := a.stackComposeEnv(cmd, st)
 	if err != nil {
 		return nil, err
 	}
@@ -264,14 +257,30 @@ func (a *App) stackCompose(cmd *cobra.Command, r docker.Runner, st *stack.Stack)
 	return c, nil
 }
 
-func stackComposeEnv(st *stack.Stack) ([]string, error) {
+func (a *App) stackComposeEnv(cmd *cobra.Command, st *stack.Stack) ([]string, error) {
 	cfg, err := st.LoadConfig()
 	if err != nil {
-		return nil, configError(err)
+		err = configError(err)
 	}
-	sec, err := st.LoadSecrets()
-	if err != nil {
-		return nil, err
+	var env []string
+	if err == nil {
+		var sec *stack.Secrets
+		if sec, err = st.LoadSecrets(); err == nil {
+			env, err = render.ComposeEnv(cfg, sec)
+		}
 	}
-	return render.ComposeEnv(cfg, sec)
+	if err == nil || commandClass(cmd) != stack.ReadOnly {
+		return env, err
+	}
+	a.warnStderr("docker compose runs with the stack's secrets empty: %v", err)
+	// The variables are still set, empty, so compose doesn't warn that
+	// they are unset. A read-only command creates no container, and must
+	// work on a stack whose config is invalid or newer (§10.6).
+	if cfg != nil {
+		if env, err = render.ComposeEnv(cfg, &stack.Secrets{}); err == nil {
+			return env, nil
+		}
+	}
+	def := stack.DefaultConfig()
+	return render.ComposeEnv(&def, &stack.Secrets{})
 }
