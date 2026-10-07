@@ -17,6 +17,20 @@ import (
 // Dir is where a stack keeps its run logs, relative to the stack directory.
 const Dir = ".pic-sure/logs"
 
+// Store is the stack directory a run keeps its log files in, with paths
+// relative to it. *stack.Stack is one: it confines the writes to the stack
+// and records what it creates in the stack's manifest, so destroy removes
+// the logs (§6.3).
+type Store interface {
+	MkdirAll(rel string, perm fs.FileMode) error
+	// CreateFile creates the new file rel; it fails with fs.ErrExist if
+	// rel exists.
+	CreateFile(rel string, perm fs.FileMode) (*os.File, error)
+	Remove(rel string) error
+	// Path returns rel as a path the os package can open.
+	Path(rel string) string
+}
+
 // maxEarly bounds the records a run holds in memory before it knows where
 // its log file goes. Past it, early records are dropped and counted.
 const maxEarly = 1 << 20
@@ -85,34 +99,23 @@ func New(opts Options) *Run {
 // Logger returns the run's logger.
 func (r *Run) Logger() *slog.Logger { return r.logger }
 
-// Path returns the run's log file, or "" if it has none.
-func (r *Run) Path() string {
-	if r.file == nil {
-		return ""
-	}
-	r.file.mu.Lock()
-	defer r.file.mu.Unlock()
-	return r.file.path
-}
-
-// OpenFile starts the run's log file in stackDir's Dir, named
-// cli-<now in UTC>.log, writes the records logged so far to it, and prunes
-// old run logs (prune). It returns the file's
-// path, or "" when the run writes no file (Options.File is false, or the run
-// is closed). Once a file is open, later calls return its path. Failing to
-// prune is logged, not returned.
-func (r *Run) OpenFile(stackDir string, now time.Time) (string, error) {
+// OpenFile starts the run's log file in st's Dir, named cli-<now in
+// UTC>.log, writes the records logged so far to it, and prunes old run logs
+// (prune). It returns the file's path, or "" when the run writes no file
+// (Options.File is false, or the run is closed). Once a file is open, later
+// calls return its path. Failing to prune is logged, not returned.
+func (r *Run) OpenFile(st Store, now time.Time) (string, error) {
 	if r.file == nil {
 		return "", nil
 	}
-	path, dropped, opened, err := r.file.open(stackDir, now)
+	path, dropped, opened, err := r.file.open(st, now)
 	if err != nil || !opened {
 		return path, err
 	}
 	if dropped > 0 {
 		r.logger.Debug("dropped early log records", "count", dropped)
 	}
-	if err := prune(stackDir, filepath.Base(path), maxFiles, maxBytes); err != nil {
+	if err := prune(st, filepath.Base(path), maxFiles, maxBytes); err != nil {
 		r.logger.Warn("can't prune old run logs", "err", err)
 	}
 	return path, nil
@@ -155,25 +158,19 @@ func (s *fileSink) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// open creates the log file, confined to stackDir, and flushes the early
-// records into it, redacting them with the secrets registered by now. It
-// reports whether it opened a file: not if one is already open or the sink
-// is closed.
-func (s *fileSink) open(stackDir string, now time.Time) (path string, dropped int, opened bool, err error) {
+// open creates the log file in st and flushes the early records into it,
+// redacting them with the secrets registered by now. It reports whether it
+// opened a file: not if one is already open or the sink is closed.
+func (s *fileSink) open(st Store, now time.Time) (path string, dropped int, opened bool, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.f != nil || s.closed {
 		return s.path, 0, false, nil
 	}
-	root, err := os.OpenRoot(stackDir)
-	if err != nil {
+	if err := st.MkdirAll(Dir, 0o700); err != nil {
 		return "", 0, false, err
 	}
-	defer func() { _ = root.Close() }()
-	if err := root.MkdirAll(Dir, 0o700); err != nil {
-		return "", 0, false, err
-	}
-	name, f, err := createRunFile(root, now)
+	name, f, err := createRunFile(st, now)
 	if err != nil {
 		return "", 0, false, err
 	}
@@ -183,7 +180,7 @@ func (s *fileSink) open(stackDir string, now time.Time) (path string, dropped in
 			return "", 0, false, err
 		}
 	}
-	s.f, s.path = f, filepath.Join(stackDir, Dir, name)
+	s.f, s.path = f, st.Path(Dir+"/"+name)
 	dropped = s.dropped
 	s.early, s.dropped = nil, 0
 	return s.path, dropped, true, nil
@@ -202,16 +199,16 @@ func (s *fileSink) close() error {
 	return err
 }
 
-// createRunFile creates Dir/cli-<ts>.log under root, mode 0600, adding a
-// counter if another run took the name in the same millisecond.
-func createRunFile(root *os.Root, now time.Time) (string, *os.File, error) {
+// createRunFile creates Dir/cli-<ts>.log in st, mode 0600, adding a counter
+// if another run took the name in the same millisecond.
+func createRunFile(st Store, now time.Time) (string, *os.File, error) {
 	ts := now.UTC().Format("20060102T150405.000Z")
 	for i := 0; ; i++ {
 		name := "cli-" + ts + ".log"
 		if i > 0 {
 			name = fmt.Sprintf("cli-%s-%d.log", ts, i)
 		}
-		f, err := root.OpenFile(Dir+"/"+name, os.O_WRONLY|os.O_CREATE|os.O_EXCL|os.O_APPEND, 0o600)
+		f, err := st.CreateFile(Dir+"/"+name, 0o600)
 		if errors.Is(err, fs.ErrExist) && i < 100 {
 			continue
 		}

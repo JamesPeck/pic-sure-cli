@@ -3,6 +3,7 @@ package log
 import (
 	"bytes"
 	"encoding/json"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -72,15 +73,15 @@ func TestOpenFileWritesEveryRecordFromTheStart(t *testing.T) {
 	dir := t.TempDir()
 	run := New(Options{Level: slog.LevelError, File: true, Redactor: &Redactor{}})
 	run.Logger().Debug("before")
-	path, err := run.OpenFile(dir, t0)
+	path, err := run.OpenFile(dirStore(dir), t0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := filepath.Join(dir, ".pic-sure", "logs", "cli-20261006T153045.123Z.log"); path != want || run.Path() != want {
-		t.Errorf("path = %q, Path() = %q, want %q", path, run.Path(), want)
+	if want := filepath.Join(dir, ".pic-sure", "logs", "cli-20261006T153045.123Z.log"); path != want {
+		t.Errorf("path = %q, want %q", path, want)
 	}
 	run.Logger().Info("after")
-	if again, err := run.OpenFile(t.TempDir(), t0); again != path || err != nil {
+	if again, err := run.OpenFile(dirStore(t.TempDir()), t0); again != path || err != nil {
 		t.Errorf("second OpenFile = %q, %v; want the first file", again, err)
 	}
 	if err := run.Close(); err != nil {
@@ -103,7 +104,7 @@ func TestOpenFileNameCollision(t *testing.T) {
 	var paths []string
 	for range 2 {
 		run := New(Options{File: true, Redactor: &Redactor{}})
-		p, err := run.OpenFile(dir, t0)
+		p, err := run.OpenFile(dirStore(dir), t0)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -119,7 +120,7 @@ func TestNoFileWithoutTheOption(t *testing.T) {
 	dir := t.TempDir()
 	run := New(Options{Level: slog.LevelDebug, Redactor: &Redactor{}})
 	run.Logger().Info("x")
-	if path, err := run.OpenFile(dir, t0); path != "" || err != nil {
+	if path, err := run.OpenFile(dirStore(dir), t0); path != "" || err != nil {
 		t.Errorf("OpenFile = %q, %v; want no file", path, err)
 	}
 	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
@@ -131,7 +132,7 @@ func TestOpenFileAfterCloseWritesNothing(t *testing.T) {
 	dir := t.TempDir()
 	run := New(Options{File: true, Redactor: &Redactor{}})
 	_ = run.Close()
-	if path, err := run.OpenFile(dir, t0); path != "" || err != nil {
+	if path, err := run.OpenFile(dirStore(dir), t0); path != "" || err != nil {
 		t.Errorf("OpenFile = %q, %v; want no file", path, err)
 	}
 	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
@@ -145,7 +146,7 @@ func TestEarlyRecordsAreBounded(t *testing.T) {
 	run.Logger().Info("first", "pad", big)
 	run.Logger().Info("second", "pad", big) // doesn't fit
 	run.Logger().Info("third")
-	path, err := run.OpenFile(t.TempDir(), t0)
+	path, err := run.OpenFile(dirStore(t.TempDir()), t0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +164,7 @@ func TestOpenFileFailureLeavesStderr(t *testing.T) {
 	var stderr bytes.Buffer
 	run := New(Options{Stderr: &stderr, File: true, Redactor: &Redactor{}})
 	missing := filepath.Join(t.TempDir(), "missing")
-	if path, err := run.OpenFile(missing, t0); err == nil || path != "" {
+	if path, err := run.OpenFile(dirStore(missing), t0); err == nil || path != "" {
 		t.Errorf("OpenFile = %q, %v; want an error", path, err)
 	}
 	run.Logger().Info("still here")
@@ -171,3 +172,35 @@ func TestOpenFileFailureLeavesStderr(t *testing.T) {
 		t.Errorf("stderr = %q", stderr.String())
 	}
 }
+
+// dirStore is a Store on a plain directory, without a manifest.
+type dirStore string
+
+func (d dirStore) MkdirAll(rel string, perm fs.FileMode) error {
+	r, err := os.OpenRoot(string(d))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = r.Close() }()
+	return r.MkdirAll(rel, perm)
+}
+
+func (d dirStore) CreateFile(rel string, perm fs.FileMode) (*os.File, error) {
+	r, err := os.OpenRoot(string(d))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = r.Close() }()
+	return r.OpenFile(rel, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
+}
+
+func (d dirStore) Remove(rel string) error {
+	r, err := os.OpenRoot(string(d))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = r.Close() }()
+	return r.Remove(rel)
+}
+
+func (d dirStore) Path(rel string) string { return filepath.Join(string(d), filepath.FromSlash(rel)) }

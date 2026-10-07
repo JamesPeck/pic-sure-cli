@@ -31,6 +31,9 @@ func TestRedactScrubsURLUserinfo(t *testing.T) {
 		`{"url":"https://tok@github.com/o/r.git"}`:    `{"url":"https://[REDACTED]@github.com/o/r.git"}`,
 		"HTTPS_PROXY=socks5h://u:p@h:1080 NO_PROXY=a": "HTTPS_PROXY=socks5h://[REDACTED]@h:1080 NO_PROXY=a",
 		"http://proxy:3128/a@b and admin@example.com": "http://proxy:3128/a@b and admin@example.com",
+		"args=[http://u:pa'ss@h:3128]":                "args=[http://[REDACTED]@h:3128]",
+		"http://u:p@ss@h:3128/x?to=a@b":               "http://[REDACTED]@h:3128/x?to=a@b",
+		`"http://a@b" "c@d"`:                          `"http://[REDACTED]@b" "c@d"`,
 	} {
 		if got := r.Redact(in); got != want {
 			t.Errorf("Redact(%q) = %q, want %q", in, got, want)
@@ -74,7 +77,7 @@ func TestRunRedactsSecretValuesEverywhere(t *testing.T) {
 		)
 	}
 	dir := t.TempDir()
-	path, err := run.OpenFile(dir, t0)
+	path, err := run.OpenFile(dirStore(dir), t0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +167,7 @@ func TestSecretNamedAttrsAreRedacted(t *testing.T) {
 	logger.WithGroup("secrets").Info("group", "db", "dbpass", slog.Group("g", "v", "w"))
 	logger.WithGroup("auth").Info("group", "client_id", "id", "client_secret", "s")
 
-	path, err := run.OpenFile(t.TempDir(), t0)
+	path, err := run.OpenFile(dirStore(t.TempDir()), t0)
 	if err != nil {
 		t.Fatal(err)
 	}

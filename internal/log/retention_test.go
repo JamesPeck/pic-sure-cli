@@ -67,7 +67,7 @@ func TestPruneKeepsTheNewestThatFit(t *testing.T) {
 			dir := t.TempDir()
 			names := makeLogs(t, dir, tt.sizes...)
 			current := names[len(names)-1]
-			if err := prune(dir, current, tt.maxFiles, tt.maxBytes); err != nil {
+			if err := prune(dirStore(dir), current, tt.maxFiles, tt.maxBytes); err != nil {
 				t.Fatal(err)
 			}
 			var want []string
@@ -84,7 +84,7 @@ func TestPruneKeepsTheNewestThatFit(t *testing.T) {
 func TestPruneKeepsCurrentEvenIfOlderByName(t *testing.T) {
 	dir := t.TempDir()
 	names := makeLogs(t, dir, 1, 1, 1)
-	if err := prune(dir, names[0], 2, 100); err != nil {
+	if err := prune(dirStore(dir), names[0], 2, 100); err != nil {
 		t.Fatal(err)
 	}
 	if got, want := listDir(t, dir), []string{names[0], names[2]}; !slices.Equal(got, want) {
@@ -112,7 +112,7 @@ func TestPruneLeavesOtherFilesAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := prune(dir, names[2], 1, 100); err != nil {
+	if err := prune(dirStore(dir), names[2], 1, 100); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"cli-00000000T000000.000Z.log", "cli-dir.log", "cli-x.txt", "debug.log", names[2], "notes.txt"}
@@ -137,7 +137,7 @@ func TestOpenFilePrunesToTheSpecLimits(t *testing.T) {
 	}
 	names := makeLogs(t, dir, sizes...)
 	run := New(Options{File: true, Redactor: &Redactor{}})
-	path, err := run.OpenFile(dir, now)
+	path, err := run.OpenFile(dirStore(dir), now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,12 +149,28 @@ func TestOpenFilePrunesToTheSpecLimits(t *testing.T) {
 	dir = t.TempDir()
 	names = makeLogs(t, dir, 20<<20, 20<<20, 20<<20)
 	run = New(Options{File: true, Redactor: &Redactor{}})
-	path, err = run.OpenFile(dir, now)
+	path, err = run.OpenFile(dirStore(dir), now)
 	if err != nil {
 		t.Fatal(err)
 	}
 	_ = run.Close()
 	if got, want := listDir(t, dir), []string{names[1], names[2], filepath.Base(path)}; !slices.Equal(got, want) {
 		t.Errorf("by size: kept %q, want %q", got, want)
+	}
+}
+
+func TestPruneOrdersACollisionAfterItsTwin(t *testing.T) {
+	dir := t.TempDir()
+	makeLogs(t, dir)
+	for _, name := range []string{"cli-20260101T000000.000Z.log", "cli-20260101T000000.000Z-1.log", "cli-20260101T000001.000Z.log"} {
+		if err := os.WriteFile(filepath.Join(dir, Dir, name), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := prune(dirStore(dir), "cli-20260101T000001.000Z.log", 2, 100); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := listDir(t, dir), []string{"cli-20260101T000000.000Z-1.log", "cli-20260101T000001.000Z.log"}; !slices.Equal(got, want) {
+		t.Errorf("left %q, want %q", got, want)
 	}
 }

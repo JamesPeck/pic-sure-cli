@@ -15,23 +15,13 @@ const (
 	maxBytes = 50 << 20
 )
 
-// prune deletes run logs (cli-*.log) in stackDir's Dir so that the newest
-// that fit in maxFiles and maxBytes remain. current, the running command's
-// log, is always kept and counts toward both limits. Logs are ordered by
-// name, which starts with their UTC timestamp. Other files, directories and
-// symlinks are left alone.
-func prune(stackDir, current string, maxFiles int, maxBytes int64) error {
-	root, err := os.OpenRoot(stackDir)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = root.Close() }()
-	dir, err := root.OpenRoot(Dir)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = dir.Close() }()
-	entries, err := fs.ReadDir(dir.FS(), ".")
+// prune deletes run logs (cli-*.log) in st's Dir so that the newest that
+// fit in maxFiles and maxBytes remain. current, the running command's log,
+// is always kept and counts toward both limits. Logs are ordered by their
+// names' UTC timestamps. Other files, directories and symlinks are left
+// alone.
+func prune(st Store, current string, maxFiles int, maxBytes int64) error {
+	entries, err := os.ReadDir(st.Path(Dir))
 	if err != nil {
 		return err
 	}
@@ -56,7 +46,11 @@ func prune(stackDir, current string, maxFiles int, maxBytes int64) error {
 		}
 		logs = append(logs, runLog{e.Name(), info.Size()})
 	}
-	slices.SortFunc(logs, func(a, b runLog) int { return strings.Compare(b.name, a.name) })
+	// Newest first. Without ".log", a collision's cli-<ts>-1 sorts after
+	// cli-<ts>.
+	slices.SortFunc(logs, func(a, b runLog) int {
+		return strings.Compare(strings.TrimSuffix(b.name, ".log"), strings.TrimSuffix(a.name, ".log"))
+	})
 
 	var errs []error
 	full := false
@@ -68,7 +62,7 @@ func prune(stackDir, current string, maxFiles int, maxBytes int64) error {
 		}
 		// Once one log doesn't fit, every older one goes too.
 		full = true
-		if err := dir.Remove(l.name); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		if err := st.Remove(Dir + "/" + l.name); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			errs = append(errs, err)
 		}
 	}

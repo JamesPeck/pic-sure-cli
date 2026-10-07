@@ -13,9 +13,9 @@ import (
 )
 
 // openStack opens the stack cmd acts on: --stack DIR, or the one containing
-// the current directory. No stack there is exit 3. It starts the run's log
-// file in the stack (openRunLog), then applies the version gate for cmd's
-// class (gate.go), so a command the gate refuses gets exit 5.
+// the current directory. No stack there is exit 3. It then applies the
+// version gate for cmd's class (gate.go), so a command the gate refuses
+// gets exit 5, and starts the run's log file in the stack (openRunLog).
 func (a *App) openStack(cmd *cobra.Command) (*stack.Stack, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -29,11 +29,11 @@ func (a *App) openStack(cmd *cobra.Command) (*stack.Stack, error) {
 	if err != nil {
 		return nil, err
 	}
-	a.openRunLog(dir)
 	if err := a.gate(cmd, st); err != nil {
 		_ = st.Close()
 		return nil, err
 	}
+	a.openRunLog(st)
 	return st, nil
 }
 

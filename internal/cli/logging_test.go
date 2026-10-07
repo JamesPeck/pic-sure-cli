@@ -18,7 +18,7 @@ import (
 )
 
 // runWithStack runs args with the command at path replaced by one that
-// finds its stack in dir, logs, and returns err. It returns the run logs
+// opens the stack in dir, logs, and returns err. It returns the run logs
 // left in dir and stderr.
 func runWithStack(t *testing.T, dir, path string, err error, args ...string) (logs []string, stderr string) {
 	t.Helper()
@@ -29,7 +29,12 @@ func runWithStack(t *testing.T, dir, path string, err error, args ...string) (lo
 		t.Fatalf("no command %q: %v", path, findErr)
 	}
 	c.RunE = func(*cobra.Command, []string) error {
-		a.openRunLog(dir)
+		st, openErr := stack.Open(dir)
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		defer func() { _ = st.Close() }()
+		a.openRunLog(st)
 		a.newDeps().Log.Debug("working")
 		return err
 	}
@@ -50,17 +55,17 @@ func TestReadOnlyCommandsWriteARunLogOnlyAtDebug(t *testing.T) {
 			if path == "config get" {
 				args = []string{"name"}
 			}
-			if logs, _ := runWithStack(t, t.TempDir(), path, nil, args...); len(logs) != 0 {
+			if logs, _ := runWithStack(t, newTestStack(t), path, nil, args...); len(logs) != 0 {
 				t.Errorf("at info: run logs %q, want none", logs)
 			}
-			if logs, _ := runWithStack(t, t.TempDir(), path, nil, append(args, "--log-level", "debug")...); len(logs) != 1 {
+			if logs, _ := runWithStack(t, newTestStack(t), path, nil, append(args, "--log-level", "debug")...); len(logs) != 1 {
 				t.Errorf("at debug: run logs %q, want one", logs)
 			}
 		})
 	}
 	for _, path := range []string{"up", "down", "data demo"} {
 		t.Run(path, func(t *testing.T) {
-			if logs, _ := runWithStack(t, t.TempDir(), path, nil, "--log-level", "error"); len(logs) != 1 {
+			if logs, _ := runWithStack(t, newTestStack(t), path, nil, "--log-level", "error"); len(logs) != 1 {
 				t.Errorf("at error: run logs %q, want one", logs)
 			}
 		})
@@ -70,7 +75,7 @@ func TestReadOnlyCommandsWriteARunLogOnlyAtDebug(t *testing.T) {
 func TestRunLogRecordsTheRun(t *testing.T) {
 	const secret = "Kx7Qm2Wv9Lp4Rt8Zb3Nc6Hd"
 	log.RegisterSecrets(secret)
-	logs, stderr := runWithStack(t, t.TempDir(), "up", errors.New("compose up failed: password "+secret),
+	logs, stderr := runWithStack(t, newTestStack(t), "up", errors.New("compose up failed: password "+secret),
 		"--skip-step", "db")
 	if len(logs) != 1 {
 		t.Fatalf("run logs %q, want one", logs)
@@ -108,8 +113,11 @@ func TestRunLogRecordsTheRun(t *testing.T) {
 }
 
 func TestRunLogFailureIsAWarning(t *testing.T) {
-	missing := filepath.Join(t.TempDir(), "missing")
-	_, stderr := runWithStack(t, missing, "up", nil)
+	dir := newTestStack(t)
+	if err := os.WriteFile(filepath.Join(dir, log.Dir), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, stderr := runWithStack(t, dir, "up", nil)
 	if !strings.Contains(stderr, `level=WARN msg="can't write the run log"`) {
 		t.Errorf("stderr = %q, want a warning", stderr)
 	}
@@ -163,6 +171,14 @@ func TestStackSecretsNeverReachTheLogs(t *testing.T) {
 	file, err := os.ReadFile(filepath.Join(dir, log.Dir, entries[0].Name()))
 	if err != nil {
 		t.Fatal(err)
+	}
+	st, err := stack.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	if m, err := st.Manifest(); err != nil || !m.Has(log.Dir+"/"+entries[0].Name()) {
+		t.Errorf("the manifest doesn't list the run log: %v, %v", m, err)
 	}
 	for name, out := range map[string]string{"stderr": stderr.String(), "run log": string(file)} {
 		if !strings.Contains(out, "connecting") || !strings.Contains(out, "proxy.example") {

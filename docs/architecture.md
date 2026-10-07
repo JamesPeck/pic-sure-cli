@@ -1288,12 +1288,14 @@ Ticket 005. Debug logging that is safe to attach to a bug report (§6.1,
   logging; `Run.Logger()` is what `Deps.Log` holds. Records at the
   `--log-level` go to stderr as text. With `File`, every record down to
   debug also goes, as JSON lines, to `<stack>/.pic-sure/logs/cli-<UTC
-  ts>.log` (0600, directories 0700, confined with `os.Root`), once
-  `Run.OpenFile(stackDir, now)` is called. Records from before that are
-  held in memory (up to 1 MiB) and written first. `OpenFile` then prunes
+  ts>.log` (0600, directories 0700), once `Run.OpenFile(store, now)` is
+  called. The `log.Store` is the stack (`*stack.Stack`), so the log files
+  and their directory are recorded in the manifest, and pruning goes
+  through `Stack.Remove`. Records from before that are held in memory (up
+  to 1 MiB) and written first. `OpenFile` then prunes
   the stack's run logs to the newest that fit in both 50 files and 50 MiB,
   always keeping the current one. Failing to open or prune is never a
-  command failure. `Run.Path()` is the file, for showing to the user.
+  command failure. `OpenFile` returns the file's path.
 - **Secret values.** `log.RegisterSecrets(values...)` adds to a
   process-wide registry. Every byte a run writes, to stderr or the file,
   passes through it, so a registered value is replaced with `[REDACTED]`
@@ -1320,8 +1322,8 @@ Ticket 005. Debug logging that is safe to attach to a bug report (§6.1,
 logging when a command's `RunE` starts, and `App.Run` closes it, writing
 the exit code and error as the last record. The first record has the
 version, OS, command, flags and arguments. `a.openStack` calls
-`a.openRunLog(stackDir)` once it has found the stack, before the version
-gate; `init` (034) must call it once `.pic-sure/` exists. Until something
+`a.openRunLog(st)` once the stack passes the version gate; `init` (034)
+must call it once `.pic-sure/` exists. Until something
 calls it, nothing is written to disk. The read-only commands (`status`, `ps`,
 `logs`, `doctor`, `config show/get`, `version`) get a file only at
 `--log-level debug`, so polling never fills the directory. A bad

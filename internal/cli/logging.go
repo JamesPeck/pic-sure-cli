@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"log/slog"
 	"runtime"
 	"strings"
@@ -50,17 +51,28 @@ func (a *App) startRunLog(cmd *cobra.Command, args []string) {
 		"command", cmd.CommandPath(), "flags", flags, "args", args)
 }
 
-// openRunLog starts the run's log file in stackDir/.pic-sure/logs. Call it
-// once the command has found or created its stack. It does nothing for a
-// read-only command below --log-level debug, and a failure is a warning,
+// openRunLog starts the run's log file in st's .pic-sure/logs. openStack
+// calls it once the stack has passed the version gate. It does nothing for
+// a read-only command below --log-level debug, and a failure is a warning,
 // never the command's failure.
-func (a *App) openRunLog(stackDir string) {
+func (a *App) openRunLog(st *stack.Stack) {
 	if a.runLog == nil {
 		return
 	}
-	if _, err := a.runLog.OpenFile(stackDir, time.Now()); err != nil {
-		a.runLog.Logger().Warn("can't write the run log", "dir", stackDir, "err", err)
+	if _, err := a.runLog.OpenFile(runLogStore{st}, time.Now()); err != nil {
+		a.runLog.Logger().Warn("can't write the run log", "dir", st.Dir, "err", err)
 	}
+}
+
+// runLogStore is the stack as log.Run uses it. Pruning leaves alone a run
+// log the manifest doesn't list, since pic-sure didn't create it.
+type runLogStore struct{ *stack.Stack }
+
+func (s runLogStore) Remove(rel string) error {
+	if err := s.Stack.Remove(rel); !errors.Is(err, stack.ErrNotCreated) {
+		return err
+	}
+	return nil
 }
 
 // endRunLog records how the run ended and closes its log file.

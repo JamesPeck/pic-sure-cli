@@ -44,8 +44,8 @@ func RegisterSecrets(values ...string) { registry.Register(values...) }
 func Redact(s string) string { return registry.Redact(s) }
 
 // minSecret is the shortest value Register accepts. A shorter one would
-// match all through unrelated text and make the log unreadable, and is no
-// real secret anyway; secret-named attrs still hide it.
+// match all through unrelated text and make the log unreadable. Such a
+// value is left to secret-named attrs and stack.Secret's own redaction.
 const minSecret = 4
 
 // Register adds values to r, ignoring those shorter than minSecret. Each value is also
@@ -102,9 +102,12 @@ func (r *Redactor) Redact(s string) string {
 	return s
 }
 
-// urlUserinfo matches a URL's scheme and userinfo. The userinfo stops at
-// white space, quotes and the characters that end a URL's authority.
-var urlUserinfo = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.-]*://)[^\s/?#@"'<>]+@`)
+// urlUserinfo matches a URL's scheme and userinfo. As in url.Parse, the
+// userinfo runs to the authority's last "@", so a password may hold a raw
+// "@" or "'". It stops at white space, at the characters that end an
+// authority, and at the quotes and angle brackets that can't appear in a
+// URL but delimit one in log output.
+var urlUserinfo = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.-]*://)[^\s/?#"<>]+@`)
 
 // escapedForms returns v as it can appear in log output: raw, escaped by
 // slog's JSON handler for strings and by encoding/json for values it

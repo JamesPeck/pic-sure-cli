@@ -58,11 +58,11 @@ Run with no arguments on a terminal to open the TUI.`,
 }
 
 // markRunning wraps the RunE of cmd and its descendants to set a.running
-// and start the run's logging.
-// cobra validates required flags and flag groups after the PreRun hooks, so
-// the start of RunE is the first point where the command line is known to
-// be valid. A PreRunE that fails for a reason other than bad usage must
-// return an *exitcode.Error to avoid being reported as a usage error.
+// and start the run's logging. cobra validates required flags and flag
+// groups after the PreRun hooks, so the start of RunE is the first point
+// where the command line is known to be valid. A PreRunE that fails for a
+// reason other than bad usage must return an *exitcode.Error to avoid being
+// reported as a usage error.
 func markRunning(a *App, cmd *cobra.Command) {
 	if run := cmd.RunE; run != nil {
 		cmd.RunE = func(c *cobra.Command, args []string) error {
