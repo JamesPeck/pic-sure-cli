@@ -23,7 +23,6 @@ type Screen int
 const (
 	ScreenLanding Screen = iota
 	ScreenDashboard
-	ScreenActivity
 	ScreenWizard
 	ScreenLoadData
 	ScreenRun
@@ -42,15 +41,17 @@ type Options struct {
 	Defaults func(dir string) stack.Config
 	// Dashboard reads the stack in Root for the dashboard.
 	Dashboard dashboard.Backend
-	// Command runs a pic-sure command line in-process for the dashboard's
-	// actions and the load wizard's loads, sending its events to req.Sink.
+	// Command runs a pic-sure command line in-process for the landing's
+	// and the dashboard's actions and the load wizard's loads, sending its
+	// events to req.Sink.
 	Command func(ctx context.Context, req CommandRequest) (InitResult, error)
 }
 
-// CommandRequest is a command the dashboard or the load wizard asks
-// Options.Command to run.
+// CommandRequest is a command the landing, the dashboard or the load
+// wizard asks Options.Command to run.
 type CommandRequest struct {
-	// Dir is the stack directory, which the command gets as --stack.
+	// Dir is the stack directory, which the command gets as --stack. It is
+	// empty for a command that runs without one (dashboard.Action.NoStack).
 	Dir string
 	// Args is the rest of the command line, such as ["restart", "hpds"].
 	Args []string
@@ -97,10 +98,9 @@ type app struct {
 	dash    tea.Model
 	// dashCancel stops the dashboard's polls and log follower.
 	dashCancel context.CancelFunc
-	// runCommand is set while the run screen runs a command line (a
-	// dashboard action or a load) rather than init.
+	// runCommand is set while the run screen runs a command line (an
+	// action or a load) rather than init.
 	runCommand bool
-	activity   *activity
 	wizard     *wizardScreen
 	load       *loadScreen
 	run        *runScreen
@@ -157,9 +157,6 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		a.width, a.height = msg.Width, msg.Height
 		a.landing.setSize(msg.Width, msg.Height)
-		if a.activity != nil {
-			a.activity.setSize(msg.Width, msg.Height)
-		}
 		if a.wizard != nil {
 			a.wizard.setSize(msg.Width, msg.Height)
 		}
@@ -189,20 +186,6 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case dashboard.LoadMsg:
 		return a.openLoad("")
-
-	case runActionMsg:
-		a.landing.stopAnimations()
-		a.activity = newActivity(a.opts.Root, msg.act)
-		a.activity.setSize(a.width, a.height)
-		a.screen = ScreenActivity
-		return a, a.activity.start()
-
-	case activityClosedMsg:
-		a.activity = nil
-		if msg.openDashboard {
-			return a.openDashboard()
-		}
-		return a.openLanding()
 
 	case openWizardMsg:
 		base, sec := stack.DefaultConfig(), stack.UserSecrets{}
@@ -291,13 +274,6 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		a.dash, cmd = a.dash.Update(msg)
 		return a, cmd
-	case ScreenActivity:
-		if a.activity == nil {
-			return a, nil
-		}
-		var cmd tea.Cmd
-		a.activity, cmd = a.activity.update(msg)
-		return a, cmd
 	case ScreenWizard:
 		if a.wizard == nil {
 			return a, nil
@@ -360,8 +336,8 @@ func (a *app) closeLoad() {
 	}
 }
 
-// startAction opens the run screen on a command line: a dashboard action
-// or a load. Closing it returns to the dashboard if one is open, else to
+// startAction opens the run screen on a command line: a landing or
+// dashboard action, or a load. Closing it returns to the dashboard if one is open, else to
 // the landing.
 func (a *app) startAction(act dashboard.Action) (tea.Model, tea.Cmd) {
 	if a.opts.Command == nil {
@@ -372,9 +348,14 @@ func (a *app) startAction(act dashboard.Action) (tea.Model, tea.Cmd) {
 		a.landing.result = act.Title + ": not available here"
 		return a, a.openLandingCmd()
 	}
+	a.landing.stopAnimations()
 	command := a.opts.Command
+	dir := a.opts.Root
+	if act.NoStack {
+		dir = ""
+	}
 	run := func(ctx context.Context, req InitRequest) (InitResult, error) {
-		return command(ctx, CommandRequest{Dir: req.Dir, Args: act.Args, Sink: req.Sink, Confirm: req.Confirm})
+		return command(ctx, CommandRequest{Dir: dir, Args: act.Args, Sink: req.Sink, Confirm: req.Confirm})
 	}
 	a.run = newRunScreen(a.ctx, act.Title, run, InitRequest{Dir: a.opts.Root}, a.opts.Animations)
 	a.run.doneText = act.Done
@@ -450,10 +431,6 @@ func (a *app) content() string {
 	case ScreenDashboard:
 		if a.dash != nil {
 			return a.dash.View().Content
-		}
-	case ScreenActivity:
-		if a.activity != nil {
-			return a.activity.view()
 		}
 	case ScreenWizard:
 		if a.wizard != nil {

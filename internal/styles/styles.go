@@ -10,8 +10,8 @@
 // style renders, from the flag the TUI sets with SetDarkBackground once the
 // terminal answers its background query. Colors degrade under NO_COLOR
 // because Bubble Tea downsamples its output to the terminal's color profile.
-// The status colors keep the plain ANSI 1/2/3 values the dashboard and
-// activity screens used before this package existed, so any terminal theme
+// The status colors keep the plain ANSI 1/2/3 values the dashboard used
+// before this package existed, so any terminal theme
 // that remaps those slots still applies.
 package styles
 

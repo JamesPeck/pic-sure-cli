@@ -263,7 +263,11 @@ func (s *runScreen) view() string {
 		parts = append(parts, styles.OK.Render("✓ "+s.doneText), strings.TrimRight(s.res.Summary, "\n"))
 		footer = "enter to go back"
 	case s.finished:
+		// A failed doctor's report is its summary.
 		parts = append(parts, styles.Bad.Render("✗ "+s.err.Error()))
+		if sum := strings.TrimRight(s.res.Summary, "\n"); sum != "" {
+			parts = append(parts, sum)
+		}
 		footer = "enter to go back"
 	default:
 		footer = "ctrl+c twice to cancel"

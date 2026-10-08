@@ -1,8 +1,8 @@
 package tui
 
 import (
-	"os"
-	"path/filepath"
+	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -11,7 +11,9 @@ import (
 	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
 
-	"github.com/JamesPeck/pic-sure-cli/internal/actions"
+	"github.com/JamesPeck/pic-sure-cli/internal/dashboard"
+	"github.com/JamesPeck/pic-sure-cli/internal/ops"
+	"github.com/JamesPeck/pic-sure-cli/internal/stack"
 )
 
 func keyEnter() tea.KeyPressMsg { return tea.KeyPressMsg{Code: tea.KeyEnter} }
@@ -92,35 +94,6 @@ func TestLandingMenuIsContextAware(t *testing.T) {
 	}
 }
 
-func TestLandingDevSubmenu(t *testing.T) {
-	l := newLanding("/tmp/x", readyStack, false)
-	keyDownN(l, 3) // select devmenu
-	l.update(keyEnter())
-	want := []string{"preflight", "migrate", "seed", "demo", "etl", "devoverlay", "devrevert", "relctl", "reset", "uninstall", "back"}
-	if got := menuIDs(l.menu); !eq(got, want) {
-		t.Fatalf("dev submenu = %v, want %v", got, want)
-	}
-	// "Preflight check" (demoted from the main menu) and "Load demo data…"
-	// live here now; the parameterless ETL picker lives here as
-	// "Maintenance / adv. ETL…" (the main-menu "Load your data…" now opens
-	// the guided load screen instead).
-	labels := menuLabels(l.menu)
-	if !contains(labels, "Preflight check") {
-		t.Errorf("dev submenu labels = %v, want one to be %q", labels, "Preflight check")
-	}
-	if !contains(labels, "Load demo data…") {
-		t.Errorf("dev submenu labels = %v, want one to be %q", labels, "Load demo data…")
-	}
-	if !contains(labels, "Maintenance / adv. ETL…") {
-		t.Errorf("dev submenu labels = %v, want one to be %q", labels, "Maintenance / adv. ETL…")
-	}
-	// esc returns to the main menu
-	l.update(tea.KeyPressMsg{Code: tea.KeyEscape})
-	if got := menuIDs(l.menu); len(got) != 5 {
-		t.Fatalf("esc did not return to main menu: %v", got)
-	}
-}
-
 // TestLandingDevMenuNoWrapAt80 guards against a dev-menu label that is wide
 // enough to wrap inside the menu box at the default 80-column width: the
 // selected row renders as "▸ " + label + " ◂" (label+4 cells) centered into
@@ -152,34 +125,6 @@ func TestLandingDevMenuNoWrapAt80(t *testing.T) {
 	}
 }
 
-// TestLandingResizeReflowsOpenDialog verifies that resizing the terminal
-// while a dialog is open re-sizes the live form. huh recomputes its group
-// viewport geometry only in its WindowSizeMsg handler; without re-feeding the
-// synthetic resize from setSize, a dialog opened wide and then shrunk keeps
-// rendering at the old budget (content clipped below the fold).
-func TestLandingResizeReflowsOpenDialog(t *testing.T) {
-	l := newLanding("/tmp/x", readyStack, false)
-	l.setSize(120, 40)
-	keyDownN(l, 3) // dev submenu
-	l.update(keyEnter())
-	// Open the reset dialog (a tall select+input group).
-	keyDownN(l, 8) // preflight, migrate, seed, demo, etl, devoverlay, devrevert, relctl, reset
-	l.update(keyEnter())
-	if l.form == nil || !l.resetting {
-		t.Fatalf("reset dialog did not open (form=%v resetting=%v)", l.form != nil, l.resetting)
-	}
-
-	wide := maxLineWidth(l.form.View())
-
-	// Shrink the terminal while the dialog is open.
-	l.setSize(50, 40)
-	narrow := maxLineWidth(l.form.View())
-
-	if narrow >= wide {
-		t.Errorf("open dialog was not reflowed on resize: wide width=%d, narrow width=%d", wide, narrow)
-	}
-}
-
 func maxLineWidth(s string) int {
 	w := 0
 	for _, line := range splitLines(s) {
@@ -188,53 +133,6 @@ func maxLineWidth(s string) int {
 		}
 	}
 	return w
-}
-
-func TestLandingSelectionsEmitRequests(t *testing.T) {
-	l := newLanding("/tmp/x", readyStack, false)
-	// Dashboard (first item)
-	_, cmd := l.update(keyEnter())
-	if _, ok := cmd().(openDashboardMsg); !ok {
-		t.Fatalf("dashboard selection = %T, want openDashboardMsg", cmd())
-	}
-	// Preflight runs immediately (read-only, no confirm). On a configured
-	// checkout it lives in the Developer options submenu now.
-	l = newLanding("/tmp/x", readyStack, false)
-	keyDownN(l, 3) // devmenu
-	l.update(keyEnter())
-	_, cmd = l.update(keyEnter()) // preflight is the first dev-submenu item
-	run, ok := cmd().(runActionMsg)
-	if !ok || run.act.Name != "preflight" {
-		t.Fatalf("preflight selection = %#v, want runActionMsg{preflight}", cmd())
-	}
-	// On a fresh checkout Preflight stays on the main menu and still runs
-	// immediately.
-	l = newLanding("/tmp/x", noStack, false)
-	keyDownN(l, 1) // setup, preflight
-	_, cmd = l.update(keyEnter())
-	run, ok = cmd().(runActionMsg)
-	if !ok || run.act.Name != "preflight" {
-		t.Fatalf("fresh preflight selection = %#v, want runActionMsg{preflight}", cmd())
-	}
-	// Update opens a light confirm, not an immediate run
-	l = newLanding("/tmp/x", readyStack, false)
-	keyDownN(l, 1)
-	_, _ = l.update(keyEnter())
-	if l.form == nil || l.pending == nil || l.pending.Name != "update" {
-		t.Fatal("update selection did not open a confirm dialog")
-	}
-	// Setup on a fresh checkout opens the embedded wizard
-	l = newLanding("/tmp/x", noStack, false)
-	_, cmd = l.update(keyEnter())
-	if _, ok := cmd().(openWizardMsg); !ok {
-		t.Fatalf("setup selection = %#v, want openWizardMsg", cmd())
-	}
-	// Resume setup runs init on the stack's own config.
-	l = newLanding("/tmp/x", partStack, false)
-	_, cmd = l.update(keyEnter())
-	if _, ok := cmd().(resumeSetupMsg); !ok {
-		t.Fatalf("resume selection = %#v, want resumeSetupMsg", cmd())
-	}
 }
 
 func TestLandingAnimationTicksSurviveConfirmDialog(t *testing.T) {
@@ -260,184 +158,6 @@ func TestLandingQuitKeys(t *testing.T) {
 	}
 	if msg := cmd(); msg != tea.Quit() {
 		t.Fatalf("q = %#v, want tea.Quit", msg)
-	}
-}
-
-// devOverlayNames are the overlays corresponding to devRoot.
-var devOverlayNames = []string{"httpd-hmr", "gateway"}
-
-// devRoot creates a minimal checkout root with two dev-overlay stub files and
-// installs a fetchDevOverlays stub that returns those names, matching what
-// `scripts/compose.sh dev list` would return on that root. Restores the
-// original fetchDevOverlays on cleanup.
-func devRoot(t *testing.T) string {
-	t.Helper()
-	dir := t.TempDir()
-	for _, f := range []string{"docker-compose.dev-httpd-hmr.yml", "docker-compose.dev-gateway.yml"} {
-		if err := os.WriteFile(filepath.Join(dir, f), []byte("services:\n  x:\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	orig := fetchDevOverlays
-	fetchDevOverlays = func(string) []string { return devOverlayNames }
-	t.Cleanup(func() { fetchDevOverlays = orig })
-	return dir
-}
-
-func TestLandingDevSubmenuHasOverlayEntries(t *testing.T) {
-	l := newLanding("/tmp/x", readyStack, false)
-	keyDownN(l, 3)
-	l.update(keyEnter()) // enter developer options
-	want := []string{"preflight", "migrate", "seed", "demo", "etl", "devoverlay", "devrevert", "relctl", "reset", "uninstall", "back"}
-	if got := menuIDs(l.menu); !eq(got, want) {
-		t.Fatalf("dev submenu = %v, want %v", got, want)
-	}
-}
-
-func TestLandingDevOverlayPickerRunsAction(t *testing.T) {
-	l := newLanding(devRoot(t), readyStack, false)
-	l.dev = true
-	l.rebuildMenu()
-	_, _ = l.choose("devoverlay")
-	if l.form == nil || l.pickerMake == nil {
-		t.Fatal("devoverlay did not open a picker")
-	}
-	// Complete the picker like the dashboard tests drive huh forms.
-	l.picked = "httpd-hmr"
-	l.form.State = huh.StateCompleted
-	_, cmd := l.update(struct{}{})
-	if cmd == nil {
-		t.Fatal("picker completion produced no command")
-	}
-	run, ok := cmd().(runActionMsg)
-	if !ok {
-		t.Fatalf("got %#v, want runActionMsg", cmd())
-	}
-	if want := []string{"dev", "up", "httpd-hmr"}; !eq(run.act.Args, want) {
-		t.Errorf("action args = %v, want %v", run.act.Args, want)
-	}
-}
-
-func TestLandingDevOverlayPickerCancel(t *testing.T) {
-	l := newLanding(devRoot(t), readyStack, false)
-	l.dev = true
-	l.rebuildMenu()
-	_, _ = l.choose("devoverlay")
-	l.picked = "" // Cancel option
-	l.form.State = huh.StateCompleted
-	_, cmd := l.update(struct{}{})
-	if cmd != nil {
-		t.Fatal("cancelled picker must not run anything")
-	}
-	if l.form != nil || l.pickerMake != nil {
-		t.Error("picker state not cleared on cancel")
-	}
-}
-
-// TestLandingDevPickerPrematureEnterCancels pins the placeholder-safety
-// invariant: the loading placeholder option carries an EMPTY value, so
-// completing the form before the async overlay fill arrives resolves to the
-// picker-completion handler's choice=="" Cancel guard — it must never
-// dispatch a bogus `dev up "(loading overlays…)"` action (the branch input's
-// safe-cancel invariant: an unfilled dialog can only cancel, never act).
-func TestLandingDevPickerPrematureEnterCancels(t *testing.T) {
-	l := newLanding(devRoot(t), readyStack, false)
-	l.dev = true
-	l.rebuildMenu()
-	_, _ = l.choose("devoverlay")
-	if l.form == nil {
-		t.Fatal("picker did not open")
-	}
-	// Do NOT pump the fill: the placeholder is still up and picked is "".
-	if l.picked != "" {
-		t.Fatalf("picked = %q before the fill, want empty (placeholder value)", l.picked)
-	}
-	l.form.State = huh.StateCompleted // premature enter on the placeholder
-	_, cmd := l.update(struct{}{})
-	if cmd != nil {
-		if msg := cmd(); msg != nil {
-			t.Errorf("premature enter dispatched %#v, want cancel (nothing)", msg)
-		}
-	}
-	if l.form != nil || l.pickerMake != nil {
-		t.Error("picker state not cleared after premature-enter cancel")
-	}
-}
-
-func TestLandingDevOverlayPickerNoFiles(t *testing.T) {
-	// Stub fetchDevOverlays to return nothing (simulates an empty checkout or
-	// a failed dev list call), restoring on cleanup.
-	orig := fetchDevOverlays
-	fetchDevOverlays = func(string) []string { return nil }
-	t.Cleanup(func() { fetchDevOverlays = orig })
-
-	l := newLanding(t.TempDir(), readyStack, false)
-	l.dev = true
-	l.rebuildMenu()
-	// The picker opens immediately with a placeholder; pump the async fill.
-	_, cmd := l.choose("devoverlay")
-	l = pumpLanding(l, cmd, 0)
-	// After the empty fill the picker must be closed and an explanatory result shown.
-	if l.form != nil {
-		t.Fatal("picker still open after empty overlay fill")
-	}
-	if l.pickerMake != nil {
-		t.Error("pickerMake not cleared after empty overlay fill")
-	}
-	if l.result == "" {
-		t.Error("expected an explanatory result line")
-	}
-}
-
-// pumpLanding executes a cmd tree and feeds the msgs back, like the runtime
-// (timing ticks discarded after 50ms, as in the wizard tests).
-func pumpLanding(l *landing, cmd tea.Cmd, depth int) *landing {
-	if cmd == nil || depth > 8 {
-		return l
-	}
-	ch := make(chan tea.Msg, 1)
-	go func() { ch <- cmd() }()
-	var msg tea.Msg
-	select {
-	case msg = <-ch:
-	case <-time.After(50 * time.Millisecond):
-		return l
-	}
-	switch m := msg.(type) {
-	case tea.BatchMsg:
-		for _, c := range m {
-			l = pumpLanding(l, c, depth+1)
-		}
-		return l
-	case nil:
-		return l
-	default:
-		var next tea.Cmd
-		l, next = l.update(msg)
-		return pumpLanding(l, next, depth+1)
-	}
-}
-
-func TestLandingEtlPicker(t *testing.T) {
-	// The parameterless ETL picker ("Maintenance / adv. ETL…") lives in the
-	// Developer options submenu now; the main-menu "Load your data…" opens the
-	// guided load screen instead (see TestLandingLoadDataOpensGuidedScreen).
-	l := newLanding("/tmp/x", readyStack, false)
-	l.dev = true
-	l.rebuildMenu()
-	_, _ = l.choose("etl")
-	if l.form == nil || l.pickerMake == nil {
-		t.Fatal("etl entry did not open a picker")
-	}
-	l.picked = "run-weights"
-	l.form.State = huh.StateCompleted
-	_, cmd := l.update(struct{}{})
-	run, ok := cmd().(runActionMsg)
-	if !ok || run.act.Ticket != actions.Etl("run-weights").Ticket {
-		t.Fatalf("got %#v, want runActionMsg{etl run-weights}", cmd())
-	}
-	if want := []string{"run-weights"}; !eq(run.act.Args, want) {
-		t.Errorf("args = %v, want %v", run.act.Args, want)
 	}
 }
 
@@ -472,540 +192,6 @@ func TestLandingDemoOpensTheLoadScreen(t *testing.T) {
 	}
 }
 
-// The two reset variants live on ONE screen: a scope select (keep DB vs full
-// wipe) plus the typed-word confirm. The scope drives which reset.sh
-// invocation runs, and the typed word still gates dispatch.
-func TestLandingResetCombinedScreen(t *testing.T) {
-	open := func() *landing {
-		l := newLanding("/tmp/x", readyStack, false)
-		l.dev = true
-		l.rebuildMenu()
-		_, _ = l.choose("reset")
-		if l.form == nil || !l.resetting {
-			t.Fatal("reset entry did not open the combined dialog")
-		}
-		if l.resetScope != "keep" {
-			t.Fatalf("default scope = %q, want keep", l.resetScope)
-		}
-		return l
-	}
-
-	// The scope choice, the repo toggle, and the typed-word confirm all render
-	// together — the whole point of "one screen".
-	l := open()
-	if l.resetRepos {
-		t.Fatalf("repo toggle defaulted ON, want OFF")
-	}
-	l.setSize(100, 35)
-	l = pumpLanding(l, l.form.Init(), 0)
-	view := wizardANSI.ReplaceAllString(l.view(), "")
-	for _, want := range []string{"Keep the database", "Full wipe", "reset sibling repos to release refs", `Type "reset"`} {
-		if !strings.Contains(view, want) {
-			t.Errorf("combined reset screen missing %q", want)
-		}
-	}
-
-	// Keep-DB scope, repos OFF, word typed → reset.sh --yes (no --all, no --repos).
-	l = open()
-	l.resetScope, l.resetRepos, l.confirmText = "keep", false, "reset"
-	l.form.State = huh.StateCompleted
-	_, cmd := l.update(struct{}{})
-	run, ok := cmd().(runActionMsg)
-	if !ok || run.act.Ticket != actions.Reset().Ticket {
-		t.Fatalf("keep: got %#v, want runActionMsg{reset}", cmd())
-	}
-	if want := []string{"--yes"}; !eq(run.act.Args, want) {
-		t.Errorf("keep args = %v, want %v", run.act.Args, want)
-	}
-
-	// Full-wipe scope, repos OFF, word typed → reset.sh --all --yes.
-	l = open()
-	l.resetScope, l.resetRepos, l.confirmText = "all", false, "reset"
-	l.form.State = huh.StateCompleted
-	_, cmd = l.update(struct{}{})
-	run, ok = cmd().(runActionMsg)
-	if !ok || run.act.Ticket != actions.Reset().Ticket {
-		t.Fatalf("full wipe: got %#v, want runActionMsg{reset}", cmd())
-	}
-	if want := []string{"--all", "--yes"}; !eq(run.act.Args, want) {
-		t.Errorf("full-wipe args = %v, want %v", run.act.Args, want)
-	}
-
-	// Keep-DB scope, repos ON → reset.sh --repos --yes.
-	l = open()
-	l.resetScope, l.resetRepos, l.confirmText = "keep", true, "reset"
-	l.form.State = huh.StateCompleted
-	_, cmd = l.update(struct{}{})
-	run, ok = cmd().(runActionMsg)
-	if !ok || run.act.Ticket != actions.Reset().Ticket {
-		t.Fatalf("keep+repos: got %#v, want runActionMsg{reset}", cmd())
-	}
-	if want := []string{"--repos", "--yes"}; !eq(run.act.Args, want) {
-		t.Errorf("keep+repos args = %v, want %v", run.act.Args, want)
-	}
-
-	// Full-wipe scope, repos ON → reset.sh --all --repos --yes.
-	l = open()
-	l.resetScope, l.resetRepos, l.confirmText = "all", true, "reset"
-	l.form.State = huh.StateCompleted
-	_, cmd = l.update(struct{}{})
-	run, ok = cmd().(runActionMsg)
-	if !ok || run.act.Ticket != actions.Reset().Ticket {
-		t.Fatalf("all+repos: got %#v, want runActionMsg{reset}", cmd())
-	}
-	if want := []string{"--all", "--repos", "--yes"}; !eq(run.act.Args, want) {
-		t.Errorf("all+repos args = %v, want %v", run.act.Args, want)
-	}
-
-	// Wrong word must not dispatch even if the form is forced complete.
-	l = open()
-	l.resetScope, l.resetRepos, l.confirmText = "all", true, "nope"
-	l.form.State = huh.StateCompleted
-	_, cmd = l.update(struct{}{})
-	if cmd != nil {
-		if msg := cmd(); msg != nil {
-			t.Errorf("wrong word emitted %#v, want no dispatch", msg)
-		}
-	}
-}
-
-// Regression: the dev picker opened scrolled to its Cancel row (empty
-// initial value matched Cancel; WithWidth froze the group viewport) — every
-// option must be visible on the very first render, cursor on the first one.
-// With the async dev list fetch the picker opens with a placeholder and is
-// rebuilt with real options once devOverlaysFillMsg arrives; all options must
-// be visible after the fill.
-func TestLandingDevPickerShowsAllOptionsInitially(t *testing.T) {
-	// devRoot stubs fetchDevOverlays → ["httpd-hmr", "gateway"].
-	l := newLanding(devRoot(t), readyStack, false)
-	l.setSize(100, 35)
-	l.dev = true
-	l.rebuildMenu()
-	_, cmd := l.choose("devoverlay")
-	// Pump: drives the async fetch and routes the devOverlaysFillMsg back in.
-	l = pumpLanding(l, cmd, 0)
-
-	view := wizardANSI.ReplaceAllString(l.view(), "")
-	for _, opt := range []string{"httpd-hmr", "gateway", "Cancel"} {
-		if !strings.Contains(view, opt) {
-			t.Errorf("picker render (after fill) missing option %q", opt)
-		}
-	}
-	if strings.Contains(view, "> Cancel") {
-		t.Error("picker cursor is on Cancel after fill")
-	}
-	if !strings.Contains(view, "> httpd-hmr") {
-		t.Error("cursor not on the first overlay after fill")
-	}
-}
-
-func TestLandingReleaseControlSubmenu(t *testing.T) {
-	orig := fetchReleaseBranch
-	fetchReleaseBranch = func(string) string { return "release/2.4" }
-	t.Cleanup(func() { fetchReleaseBranch = orig })
-
-	l := newLanding("/tmp/x", readyStack, false)
-	l.dev = true
-	l.rebuildMenu()
-	_, _ = l.choose("relctl")
-	want := []string{"rcapply", "rcdryrun", "rcbranch", "back"}
-	if got := menuIDs(l.menu); !eq(got, want) {
-		t.Fatalf("release-control submenu = %v, want %v", got, want)
-	}
-
-	// Switch branch: the one-field input opens IMMEDIATELY (the prefill read is
-	// slow and runs off the update path), then the prefill arrives as a message.
-	_, cmd := l.choose("rcbranch")
-	if l.form == nil || l.inputMake == nil {
-		t.Fatal("rcbranch did not open the input")
-	}
-	if l.inputVal != "" {
-		t.Errorf("input opened with a synchronous prefill %q, want empty (async)", l.inputVal)
-	}
-	if cmd == nil {
-		t.Fatal("rcbranch did not dispatch the prefill fetch command")
-	}
-	// The dispatched batch must carry a branchPrefillMsg with the fetched branch.
-	if !batchEmitsBranchPrefill(cmd, "release/2.4") {
-		t.Fatal("rcbranch command did not deliver the fetched branch as a branchPrefillMsg")
-	}
-
-	// Deliver the prefill: the input is still open and untouched, so it applies.
-	l, _ = l.update(branchPrefillMsg{seq: l.branchSeq, branch: "release/2.4"})
-	if l.inputVal != "release/2.4" {
-		t.Errorf("prefill = %q, want release/2.4", l.inputVal)
-	}
-
-	l.inputVal = "feature/x"
-	l.form.State = huh.StateCompleted
-	_, cmd = l.update(struct{}{})
-	run, ok := cmd().(runActionMsg)
-	if !ok {
-		t.Fatalf("got %#v, want runActionMsg", cmd())
-	}
-	if want := []string{"--branch", "feature/x"}; !eq(run.act.Args, want) {
-		t.Errorf("args = %v, want %v", run.act.Args, want)
-	}
-
-	// back navigates to the dev submenu
-	l2 := newLanding("/tmp/x", readyStack, false)
-	l2.dev = true
-	l2.rebuildMenu()
-	_, _ = l2.choose("relctl")
-	_, _ = l2.choose("back")
-	if l2.relctl || !l2.dev {
-		t.Error("back did not return to the developer submenu")
-	}
-}
-
-// batchEmitsBranchPrefill runs cmd (possibly a tea.Batch) and reports whether
-// any emitted message is a branchPrefillMsg carrying wantBranch.
-func batchEmitsBranchPrefill(cmd tea.Cmd, wantBranch string) bool {
-	if cmd == nil {
-		return false
-	}
-	switch m := cmd().(type) {
-	case tea.BatchMsg:
-		for _, c := range m {
-			if batchEmitsBranchPrefill(c, wantBranch) {
-				return true
-			}
-		}
-	case branchPrefillMsg:
-		return m.branch == wantBranch
-	}
-	return false
-}
-
-// TestLandingDevPickerOpensImmediately verifies that the dev list fetch never
-// blocks the update path: the picker opens synchronously with a placeholder
-// and only schedules the overlay fetch as a tea.Cmd.
-func TestLandingDevPickerOpensImmediately(t *testing.T) {
-	called := make(chan struct{}, 1)
-	orig := fetchDevOverlays
-	fetchDevOverlays = func(string) []string {
-		called <- struct{}{}
-		return []string{"hpds", "gateway"}
-	}
-	t.Cleanup(func() { fetchDevOverlays = orig })
-
-	l := newLanding("/tmp/x", readyStack, false)
-	l.setSize(80, 24)
-	l.dev = true
-	l.rebuildMenu()
-
-	_, cmd := l.choose("devoverlay")
-	// fetchDevOverlays must NOT have run synchronously inside choose().
-	select {
-	case <-called:
-		t.Fatal("fetchDevOverlays ran synchronously inside choose() — it must run in a tea.Cmd")
-	default:
-	}
-	if l.form == nil || l.pickerMake == nil {
-		t.Fatal("dev picker did not open immediately")
-	}
-	// The command must eventually deliver a devOverlaysFillMsg with the overlays.
-	if !batchEmitsDevOverlaysFill(cmd, []string{"hpds", "gateway"}) {
-		t.Fatal("choose did not dispatch the overlay fetch as a command delivering devOverlaysFillMsg")
-	}
-}
-
-// TestLandingDevPickerFillStaleness pins the staleness guard: a fill for a
-// since-closed/reopened picker (stale seq) must be dropped.
-func TestLandingDevPickerFillStaleness(t *testing.T) {
-	orig := fetchDevOverlays
-	fetchDevOverlays = func(string) []string { return []string{"hpds"} }
-	t.Cleanup(func() { fetchDevOverlays = orig })
-
-	l := newLanding("/tmp/x", readyStack, false)
-	l.setSize(80, 24)
-	l.dev = true
-	l.rebuildMenu()
-
-	_, _ = l.choose("devoverlay")
-	staleSeq := l.devPickerSeq
-	// Close and reopen the picker (bumps devPickerSeq).
-	l.form, l.pickerMake = nil, nil
-	_, _ = l.choose("devoverlay")
-	if l.devPickerSeq == staleSeq {
-		t.Fatal("reopening the picker did not bump devPickerSeq")
-	}
-	// A stale fill must be dropped.
-	beforeForm := l.form
-	l, _ = l.update(devOverlaysFillMsg{seq: staleSeq, overlays: []string{"hpds"}})
-	if l.form != beforeForm {
-		t.Error("stale devOverlaysFillMsg replaced the form of the fresh picker")
-	}
-}
-
-// batchEmitsDevOverlaysFill runs cmd (possibly a tea.Batch) and reports
-// whether any emitted message is a devOverlaysFillMsg carrying wantOverlays.
-func batchEmitsDevOverlaysFill(cmd tea.Cmd, wantOverlays []string) bool {
-	if cmd == nil {
-		return false
-	}
-	switch m := cmd().(type) {
-	case tea.BatchMsg:
-		for _, c := range m {
-			if batchEmitsDevOverlaysFill(c, wantOverlays) {
-				return true
-			}
-		}
-	case devOverlaysFillMsg:
-		if len(m.overlays) != len(wantOverlays) {
-			return false
-		}
-		for i, o := range m.overlays {
-			if o != wantOverlays[i] {
-				return false
-			}
-		}
-		return true
-	}
-	return false
-}
-
-// TestDevOverlaysFetchParsing verifies that the overlay list returned by
-// fetchDevOverlays is parsed tolerantly when routed through the picker: blank
-// lines and entries with only whitespace are dropped, and valid names are
-// sorted. Uses a table of pre-parsed stub returns (the RunOutput call itself
-// is tested implicitly by the other async picker tests).
-func TestDevOverlaysFetchParsing(t *testing.T) {
-	cases := []struct {
-		name    string
-		fetched []string // what fetchDevOverlays returns
-		wantNil bool     // whether the picker should be closed (empty list)
-		visible []string // options that must appear in the picker view
-	}{
-		{
-			name:    "normal sorted output",
-			fetched: []string{"hpds", "httpd-hmr", "gateway"},
-			visible: []string{"hpds", "httpd-hmr", "gateway", "Cancel"},
-		},
-		{
-			name:    "pre-sorted output stays sorted",
-			fetched: []string{"hpds", "gateway"},
-			visible: []string{"hpds", "gateway", "Cancel"},
-		},
-		{
-			name:    "empty output closes picker",
-			fetched: nil,
-			wantNil: true,
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			orig := fetchDevOverlays
-			fetchDevOverlays = func(string) []string { return tc.fetched }
-			t.Cleanup(func() { fetchDevOverlays = orig })
-
-			l := newLanding("/tmp/x", readyStack, false)
-			l.setSize(100, 35)
-			l.dev = true
-			l.rebuildMenu()
-			_, cmd := l.choose("devoverlay")
-			l = pumpLanding(l, cmd, 0) // drives the async fetch
-			if tc.wantNil {
-				if l.form != nil {
-					t.Error("empty overlay list should have closed the picker")
-				}
-				return
-			}
-			if l.form == nil {
-				t.Fatal("picker not open after fill")
-			}
-			view := wizardANSI.ReplaceAllString(l.view(), "")
-			for _, name := range tc.visible {
-				if !strings.Contains(view, name) {
-					t.Errorf("picker view missing %q", name)
-				}
-			}
-		})
-	}
-}
-
-// TestLandingBranchInputOpensImmediately verifies the slow status.sh read no
-// longer blocks the update path: rcbranch opens the input synchronously, with a
-// placeholder and an empty value, and only schedules the prefill fetch.
-func TestLandingBranchInputOpensImmediately(t *testing.T) {
-	called := make(chan struct{}, 1)
-	orig := fetchReleaseBranch
-	fetchReleaseBranch = func(string) string {
-		called <- struct{}{}
-		return "release/9.9"
-	}
-	t.Cleanup(func() { fetchReleaseBranch = orig })
-
-	l := newLanding("/tmp/x", readyStack, false)
-	l.setSize(80, 24)
-	l.dev = true
-	l.rebuildMenu()
-
-	_, cmd := l.choose("rcbranch")
-	// The input is open at once — fetchReleaseBranch has NOT run on the update path.
-	select {
-	case <-called:
-		t.Fatal("fetchReleaseBranch ran synchronously inside choose() — it must run in a tea.Cmd")
-	default:
-	}
-	if l.form == nil || l.inputMake == nil {
-		t.Fatal("rcbranch did not open the input immediately")
-	}
-	if l.inputVal != "" {
-		t.Errorf("opened with value %q, want empty pending the async prefill", l.inputVal)
-	}
-	if !strings.Contains(wizardANSI.ReplaceAllString(l.view(), ""), "reading current branch") {
-		t.Errorf("input did not show the reading-branch placeholder:\n%s", wizardANSI.ReplaceAllString(l.view(), ""))
-	}
-	// The fetch is dispatched as a command (and does deliver the branch).
-	if !batchEmitsBranchPrefill(cmd, "release/9.9") {
-		t.Fatal("rcbranch did not dispatch the prefill fetch as a command")
-	}
-}
-
-// TestLandingBranchPrefillStaleness pins the three staleness guards: a prefill
-// applies to the open, untouched input; a prefill for a since-superseded
-// opening (stale seq) is dropped; and a prefill never clobbers a value the user
-// has already typed.
-func TestLandingBranchPrefillStaleness(t *testing.T) {
-	orig := fetchReleaseBranch
-	fetchReleaseBranch = func(string) string { return "release/2.4" }
-	t.Cleanup(func() { fetchReleaseBranch = orig })
-
-	open := func() *landing {
-		l := newLanding("/tmp/x", readyStack, false)
-		l.setSize(80, 24)
-		l.dev = true
-		l.rebuildMenu()
-		_, _ = l.choose("rcbranch")
-		if l.form == nil {
-			t.Fatal("rcbranch did not open the input")
-		}
-		return l
-	}
-
-	// Happy path: still open, untouched → prefill applies.
-	l := open()
-	l, _ = l.update(branchPrefillMsg{seq: l.branchSeq, branch: "release/2.4"})
-	if l.inputVal != "release/2.4" {
-		t.Errorf("prefill not applied: inputVal = %q, want release/2.4", l.inputVal)
-	}
-
-	// Stale seq: a prefill for an earlier opening must be dropped (the input was
-	// closed and reopened, bumping branchSeq).
-	l = open()
-	staleSeq := l.branchSeq
-	l.inputMake, l.form = nil, nil // close
-	_, _ = l.choose("rcbranch")    // reopen → branchSeq++
-	if l.branchSeq == staleSeq {
-		t.Fatal("reopening the input did not bump branchSeq")
-	}
-	l, _ = l.update(branchPrefillMsg{seq: staleSeq, branch: "release/2.4"})
-	if l.inputVal != "" {
-		t.Errorf("stale-seq prefill clobbered the reopened input: inputVal = %q, want empty", l.inputVal)
-	}
-
-	// User typed before the prefill arrived: never clobber their input.
-	l = open()
-	l.inputVal = "feature/typed-first"
-	l, _ = l.update(branchPrefillMsg{seq: l.branchSeq, branch: "release/2.4"})
-	if l.inputVal != "feature/typed-first" {
-		t.Errorf("prefill clobbered typed input: inputVal = %q, want feature/typed-first", l.inputVal)
-	}
-}
-
-// TestLandingBranchPrefillFailure pins the fetch-failure path: an empty branch
-// must swap the "(reading current branch…)" placeholder for an explanatory one
-// instead of leaving the reading note up forever — without touching the (still
-// empty) value, and still honoring the staleness guards.
-func TestLandingBranchPrefillFailure(t *testing.T) {
-	orig := fetchReleaseBranch
-	fetchReleaseBranch = func(string) string { return "" } // status.sh failed
-	t.Cleanup(func() { fetchReleaseBranch = orig })
-
-	open := func() *landing {
-		l := newLanding("/tmp/x", readyStack, false)
-		l.setSize(80, 24)
-		l.dev = true
-		l.rebuildMenu()
-		_, _ = l.choose("rcbranch")
-		if l.form == nil {
-			t.Fatal("rcbranch did not open the input")
-		}
-		return l
-	}
-
-	l := open()
-	l, cmd := l.update(branchPrefillMsg{seq: l.branchSeq, branch: ""})
-	if l.inputVal != "" {
-		t.Errorf("failed fetch set a value: inputVal = %q, want empty", l.inputVal)
-	}
-	if l.form == nil || l.inputMake == nil {
-		t.Fatal("failed fetch closed the input")
-	}
-	if cmd == nil {
-		t.Error("placeholder rebuild returned no init command")
-	}
-	view := wizardANSI.ReplaceAllString(l.view(), "")
-	if !strings.Contains(view, "couldn't read current branch") {
-		t.Errorf("failure placeholder not shown:\n%s", view)
-	}
-	if strings.Contains(view, "reading current branch") {
-		t.Errorf("stale reading placeholder still shown after the fetch failed:\n%s", view)
-	}
-
-	// Staleness still guards the failure path: a stale-seq empty prefill must
-	// not rebuild the (fresh) reopened input's placeholder.
-	l = open()
-	staleSeq := l.branchSeq
-	l.inputMake, l.form = nil, nil // close
-	_, _ = l.choose("rcbranch")    // reopen → branchSeq++
-	l, _ = l.update(branchPrefillMsg{seq: staleSeq, branch: ""})
-	view = wizardANSI.ReplaceAllString(l.view(), "")
-	if !strings.Contains(view, "reading current branch") {
-		t.Errorf("stale empty prefill replaced the reopened input's reading placeholder:\n%s", view)
-	}
-
-	// And a typed value suppresses the rebuild entirely (no form reset under
-	// the user's cursor).
-	formBefore := l.form
-	l.inputVal = "feature/typed"
-	l, _ = l.update(branchPrefillMsg{seq: l.branchSeq, branch: ""})
-	if l.form != formBefore {
-		t.Error("empty prefill rebuilt the form under typed input")
-	}
-	if l.inputVal != "feature/typed" {
-		t.Errorf("empty prefill disturbed typed input: %q", l.inputVal)
-	}
-}
-
-// The landing frame must never exceed the terminal box, dialogs included —
-// composite() clips by construction; this pins it (the dashboard and
-// activity screens carry the same invariant tests).
-func TestLandingFrameStaysInBoxWithDialogs(t *testing.T) {
-	sizes := [][2]int{{60, 16}, {80, 24}, {120, 30}}
-	open := []func(l *landing){
-		func(l *landing) { _, _ = l.choose("etl") },
-		func(l *landing) { _, _ = l.choose("reset") },
-	}
-	for _, sz := range sizes {
-		for i, openDialog := range open {
-			l := newLanding("/tmp/x", readyStack, false)
-			l.setSize(sz[0], sz[1])
-			openDialog(l)
-			view := l.view()
-			if h := lipgloss.Height(view); h > sz[1] {
-				t.Errorf("size %dx%d dialog %d: frame height %d exceeds %d", sz[0], sz[1], i, h, sz[1])
-			}
-			for n, line := range strings.Split(view, "\n") {
-				if w := lipgloss.Width(line); w > sz[0] {
-					t.Errorf("size %dx%d dialog %d line %d: width %d exceeds %d", sz[0], sz[1], i, n, w, sz[0])
-				}
-			}
-		}
-	}
-}
-
 // TestLandingFooterSwitchesWhenDialogIsOpen guards the footer copy: while a
 // dialog is open 'q' types into the input, so the default "q quit" hint is
 // wrong. The footer must switch to a dialog-appropriate hint ("esc cancel")
@@ -1036,44 +222,253 @@ func TestLandingFooterSwitchesWhenDialogIsOpen(t *testing.T) {
 	}
 }
 
-// huh ships its esc binding disabled (only ctrl+c aborts a form) — the same
-// root cause as the wizard's esc bug. Every landing dialog advertises
-// "esc cancels"; the screen must intercept it.
-func TestLandingEscCancelsEveryDialogKind(t *testing.T) {
-	open := []struct {
-		name string
-		do   func(l *landing)
-	}{
-		{"combined reset (scope + repo toggle + typed word)", func(l *landing) {
-			_, _ = l.choose("reset")
-			l.resetRepos = true // ensure esc clears the toggle too
-		}},
-		{"light confirm (update)", func(l *landing) { _, _ = l.choose("update") }},
-		{"picker (etl)", func(l *landing) { _, _ = l.choose("etl") }},
-		{"input (release-control branch)", func(l *landing) {
-			orig := fetchReleaseBranch
-			fetchReleaseBranch = func(string) string { return "main" }
-			defer func() { fetchReleaseBranch = orig }()
-			_, _ = l.choose("rcbranch")
-		}},
+// testConfig is the stack readConfig returns in these tests: named demo,
+// on the main branch, with the first dev service on.
+func testConfig(t *testing.T) *stack.Config {
+	t.Helper()
+	cfg := stack.DefaultConfig()
+	cfg.Name = "demo"
+	cfg.Release.Branch = "main"
+	cfg.Dev.Services = []string{ops.DevList(&cfg)[0].Name}
+	orig := readConfig
+	readConfig = func(string) (*stack.Config, error) { return &cfg, nil }
+	t.Cleanup(func() { readConfig = orig })
+	return &cfg
+}
+
+func TestLandingDevSubmenu(t *testing.T) {
+	l := newLanding("/tmp/x", readyStack, false)
+	keyDownN(l, 3) // select devmenu
+	l.update(keyEnter())
+	want := []string{"preflight", "dryrun", "branch", "migrate", "demo", "dictionary", "devon", "devoff", "reset", "destroy", "back"}
+	if got := menuIDs(l.menu); !eq(got, want) {
+		t.Fatalf("dev submenu = %v, want %v", got, want)
 	}
-	for _, tc := range open {
+	l.update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if got := menuIDs(l.menu); len(got) != 5 {
+		t.Fatalf("esc did not return to main menu: %v", got)
+	}
+}
+
+// pumpApp runs cmd and feeds what it sends back to a, following the
+// commands that returns.
+func pumpApp(a *app, cmd tea.Cmd, depth int) {
+	if depth > 10 {
+		return
+	}
+	for _, msg := range runCmd(cmd) {
+		_, next := a.Update(msg)
+		pumpApp(a, next, depth+1)
+	}
+}
+
+func pressApp(a *app, msgs ...tea.Msg) {
+	for _, m := range msgs {
+		_, cmd := a.Update(m)
+		pumpApp(a, cmd, 0)
+	}
+}
+
+// Every landing menu item runs the pic-sure command it names, through
+// Options.Command on the run screen, once its dialog is answered.
+func TestLandingActionsRunTheirCommands(t *testing.T) {
+	cfg := testConfig(t)
+	var devOn, devOff string
+	for _, v := range ops.DevList(cfg) {
+		if v.On && devOff == "" {
+			devOff = v.Name
+		}
+	}
+	devOn = ops.DevList(cfg)[0].Name
+	name := typeText("demo")
+	tests := []struct {
+		status  stackStatus
+		dev     bool
+		id      string
+		keys    []tea.Msg
+		want    []string
+		noStack bool
+	}{
+		{noStack, false, "preflight", nil, []string{"doctor"}, true},
+		{readyStack, false, "update", []tea.Msg{left, enter}, []string{"update"}, false},
+		{readyStack, true, "preflight", nil, []string{"doctor"}, false},
+		{readyStack, true, "dryrun", nil, []string{"update", "--dry-run"}, false},
+		{readyStack, true, "branch", append(typeText("-next"), enter), []string{"config", "set", "release.branch", "main-next"}, false},
+		{readyStack, true, "migrate", []tea.Msg{left, enter}, []string{"migrate"}, false},
+		{readyStack, true, "dictionary", []tea.Msg{enter}, []string{"dictionary", "hydrate"}, false},
+		{readyStack, true, "dictionary", []tea.Msg{down, enter}, []string{"dictionary", "weights"}, false},
+		{readyStack, true, "devon", []tea.Msg{enter}, []string{"dev", "on", devOn}, false},
+		{readyStack, true, "devoff", []tea.Msg{enter}, []string{"dev", "off", devOff}, false},
+		{readyStack, true, "reset", append(append([]tea.Msg{enter}, name...), enter), []string{"--yes", "reset"}, false},
+		{readyStack, true, "reset", append(append([]tea.Msg{down, enter}, name...), enter), []string{"--yes", "reset", "--keep-db"}, false},
+		{readyStack, true, "destroy", append(name, enter), []string{"--yes", "destroy"}, false},
+		{partStack, true, "migrate", []tea.Msg{left, enter}, []string{"migrate"}, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.id+" "+strings.Join(tc.want, " "), func(t *testing.T) {
+			root := t.TempDir()
+			got := make(chan CommandRequest, 1)
+			a := newApp(context.Background(), Options{Root: root, Command: func(_ context.Context, req CommandRequest) (InitResult, error) {
+				got <- req
+				return InitResult{}, nil
+			}})
+			a.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+			a.landing.setStatus(tc.status)
+			a.landing.dev = tc.dev
+			a.landing.rebuildMenu()
+			_, cmd := a.landing.choose(tc.id)
+			pumpApp(a, cmd, 0)
+			if a.landing.form != nil {
+				pumpApp(a, a.landing.form.Init(), 0)
+			}
+			pressApp(a, tc.keys...)
+			select {
+			case req := <-got:
+				if !eq(req.Args, tc.want) {
+					t.Errorf("args = %q, want %q", req.Args, tc.want)
+				}
+				if wantDir := root; tc.noStack {
+					if req.Dir != "" {
+						t.Errorf("dir = %q, want none", req.Dir)
+					}
+				} else if req.Dir != wantDir {
+					t.Errorf("dir = %q, want %q", req.Dir, wantDir)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatalf("no command ran; screen %v, view:\n%s", a.screen, a.content())
+			}
+			if a.screen != ScreenRun {
+				t.Errorf("screen = %v, want the run screen", a.screen)
+			}
+			a.run.close()
+		})
+	}
+}
+
+// Every item on every landing menu does something: navigates, opens a
+// dialog or runs a command. None is a dead end.
+func TestLandingEveryItemIsWired(t *testing.T) {
+	testConfig(t)
+	nav := map[string]bool{"quit": true, "back": true, "devmenu": true}
+	for _, st := range []stackStatus{noStack, partStack, readyStack} {
+		for _, dev := range []bool{false, true} {
+			l := newLanding("/tmp/x", st, false)
+			l.dev = dev
+			l.rebuildMenu()
+			for _, id := range menuIDs(l.menu) {
+				if nav[id] {
+					continue
+				}
+				m := newLanding("/tmp/x", st, false)
+				m.dev = dev
+				m.rebuildMenu()
+				_, cmd := m.choose(id)
+				switch {
+				case m.form != nil:
+				case cmd != nil:
+					if run, ok := cmd().(dashboard.RunMsg); ok && len(run.Action.Args) == 0 {
+						t.Errorf("%s runs an empty command line", id)
+					}
+				default:
+					t.Errorf("%s (status %v, dev %v) does nothing: %q", id, st, dev, m.result)
+				}
+			}
+		}
+	}
+}
+
+// Cancelling a dialog runs nothing.
+func TestLandingDialogsCancel(t *testing.T) {
+	testConfig(t)
+	for _, id := range []string{"update", "migrate", "dictionary", "devon", "devoff", "branch", "reset", "destroy"} {
 		l := newLanding("/tmp/x", readyStack, false)
 		l.setSize(80, 24)
-		tc.do(l)
+		_, _ = l.choose(id)
 		if l.form == nil {
-			t.Fatalf("%s: dialog did not open", tc.name)
+			t.Fatalf("%s: no dialog", id)
 		}
 		_, cmd := l.update(tea.KeyPressMsg{Code: tea.KeyEscape})
-		if l.form != nil {
-			t.Errorf("%s: esc did not close the dialog", tc.name)
-		}
-		if l.pending != nil || l.pickerMake != nil || l.inputMake != nil || l.resetting || l.resetRepos {
-			t.Errorf("%s: dialog state not fully cleared on esc", tc.name)
+		if l.form != nil || l.pending != nil || l.pickerMake != nil || l.inputMake != nil || l.teardown {
+			t.Errorf("%s: esc left the dialog open", id)
 		}
 		if cmd != nil {
 			if msg := cmd(); msg != nil {
-				t.Errorf("%s: esc emitted %#v, want nothing", tc.name, msg)
+				t.Errorf("%s: esc sent %#v", id, msg)
+			}
+		}
+	}
+	// A completed yes/no answered no, and a teardown whose typed name
+	// doesn't match, run nothing.
+	l := newLanding("/tmp/x", readyStack, false)
+	_, _ = l.choose("update")
+	l.form.State = huh.StateCompleted
+	if _, cmd := l.update(struct{}{}); cmd != nil {
+		t.Errorf("update answered no sent %#v", cmd())
+	}
+	_, _ = l.choose("destroy")
+	l.confirmText = "other"
+	l.form.State = huh.StateCompleted
+	if _, cmd := l.update(struct{}{}); cmd != nil {
+		t.Errorf("destroy with the wrong name sent %#v", cmd())
+	}
+}
+
+func TestLandingDevPickers(t *testing.T) {
+	cfg := testConfig(t)
+	l := newLanding("/tmp/x", readyStack, false)
+	l.setSize(100, 40)
+	_, _ = l.choose("devon")
+	view := wizardANSI.ReplaceAllString(l.form.View(), "")
+	for _, v := range ops.DevList(cfg) {
+		if !strings.Contains(view, v.Name) {
+			t.Errorf("dev on picker lacks %s:\n%s", v.Name, view)
+		}
+	}
+	l.closeForm()
+
+	cfg.Dev.Services = nil
+	_, _ = l.choose("devoff")
+	if l.form != nil || l.result != "no service is in dev mode" {
+		t.Errorf("dev off with none on: form %v, result %q", l.form != nil, l.result)
+	}
+
+	readConfig = func(string) (*stack.Config, error) { return nil, errors.New("bad yaml") }
+	for _, id := range []string{"devon", "branch", "reset"} {
+		l.result = ""
+		_, _ = l.choose(id)
+		if l.form != nil || !strings.Contains(l.result, "bad yaml") {
+			t.Errorf("%s with an unreadable config: form %v, result %q", id, l.form != nil, l.result)
+		}
+	}
+}
+
+func TestLandingResizeReflowsOpenDialog(t *testing.T) {
+	testConfig(t)
+	l := newLanding("/tmp/x", readyStack, false)
+	l.setSize(120, 40)
+	_, _ = l.choose("reset")
+	wide := maxLineWidth(l.form.View())
+	l.setSize(50, 40)
+	if narrow := maxLineWidth(l.form.View()); narrow >= wide {
+		t.Errorf("open dialog was not reflowed on resize: wide width=%d, narrow width=%d", wide, narrow)
+	}
+}
+
+func TestLandingFrameStaysInBoxWithDialogs(t *testing.T) {
+	testConfig(t)
+	for _, sz := range [][2]int{{60, 16}, {80, 24}, {120, 30}} {
+		for _, id := range []string{"dictionary", "reset", "destroy", "devon"} {
+			l := newLanding("/tmp/x", readyStack, false)
+			l.setSize(sz[0], sz[1])
+			_, _ = l.choose(id)
+			view := l.view()
+			if h := lipgloss.Height(view); h > sz[1] {
+				t.Errorf("size %dx%d %s: frame height %d exceeds %d", sz[0], sz[1], id, h, sz[1])
+			}
+			for n, line := range strings.Split(view, "\n") {
+				if w := lipgloss.Width(line); w > sz[0] {
+					t.Errorf("size %dx%d %s line %d: width %d exceeds %d", sz[0], sz[1], id, n, w, sz[0])
+				}
 			}
 		}
 	}

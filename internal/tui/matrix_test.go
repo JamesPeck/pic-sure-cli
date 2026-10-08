@@ -1,6 +1,6 @@
 package tui
 
-// U13 size/color verification matrix for landing and activity surfaces.
+// U13 size/color verification matrix for the landing.
 // Each matrix sub-test renders at the canonical sizes and asserts the
 // view-specific properties described by the audit. Color emission is pinned
 // per color profile in TestLandingColorProfileSGR.
@@ -11,11 +11,9 @@ import (
 	"strings"
 	"testing"
 
-	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/colorprofile"
 
-	"github.com/JamesPeck/pic-sure-cli/internal/actions"
 	"github.com/JamesPeck/pic-sure-cli/internal/styles/stylestest"
 )
 
@@ -79,91 +77,6 @@ func TestLandingNarrowLogoMatrix(t *testing.T) {
 	}
 }
 
-// TestActivityFooterMatrix renders the activity footer at each canonical size
-// in the three finished end-states (success / non-zero exit / aborted) and
-// checks that each one follows the "[icon status] — [next action]" phrasing
-// (U10), and that the view stays within the terminal box.
-func TestActivityFooterMatrix(t *testing.T) {
-	type endState struct {
-		name  string
-		setup func(a *activity)
-		// wantIcon is a substring expected in the footer.
-		wantIcon string
-		// wantAction is a substring expected in the footer after the em-dash.
-		wantAction string
-	}
-	endStates := []endState{
-		{
-			name: "success",
-			setup: func(a *activity) {
-				a.done, a.code = true, 0
-				a.elapsed = 3
-			},
-			wantIcon:   "✓",
-			wantAction: "dashboard",
-		},
-		{
-			name: "nonzero exit",
-			setup: func(a *activity) {
-				a.done, a.code = true, 1
-				a.elapsed = 2
-			},
-			wantIcon:   "✗",
-			wantAction: "menu",
-		},
-		{
-			name: "aborted",
-			setup: func(a *activity) {
-				a.done, a.aborted, a.code = true, true, 130
-				a.elapsed = 5
-			},
-			wantIcon:   "⚠",
-			wantAction: "menu",
-		},
-	}
-
-	for _, sz := range matrixSizes {
-		w, h := sz[0], sz[1]
-		for _, es := range endStates {
-			t.Run("", func(t *testing.T) {
-				a := newActivity(t.TempDir(), actions.Update())
-				a.setSize(w, h)
-				es.setup(a)
-				a.runner = nil
-
-				footer := a.footerLine()
-				plain := ansiSGR.ReplaceAllString(footer, "")
-
-				if !strings.Contains(plain, es.wantIcon) {
-					t.Errorf("%dx%d %s: footer missing icon %q: %q", w, h, es.name, es.wantIcon, plain)
-				}
-				if !strings.Contains(plain, "—") {
-					t.Errorf("%dx%d %s: footer missing em-dash separator: %q", w, h, es.name, plain)
-				}
-				if !strings.Contains(plain, es.wantAction) {
-					t.Errorf("%dx%d %s: footer missing next-action hint %q: %q", w, h, es.name, es.wantAction, plain)
-				}
-
-				// Height must stay inside the terminal box. Width is
-				// not checked for the aborted state: AbortNote can be
-				// long (pre-existing behavior; truncation is out of
-				// scope for U10).
-				view := a.view()
-				if fh := lipgloss.Height(view); fh > h {
-					t.Errorf("%dx%d %s: frame height %d > terminal height %d", w, h, es.name, fh, h)
-				}
-				if es.name != "aborted" {
-					for i, line := range strings.Split(view, "\n") {
-						if lw := lipgloss.Width(line); lw > w {
-							t.Errorf("%dx%d %s: line %d width %d > terminal width %d", w, h, es.name, i, lw, w)
-						}
-					}
-				}
-			})
-		}
-	}
-}
-
 // TestLandingColorProfileSGR pins both sides of color emission. Lip Gloss v2
 // renders full color whatever the environment, and Bubble Tea downsamples each
 // frame to the terminal's color profile on output, so the test downsamples the
@@ -184,41 +97,5 @@ func TestLandingColorProfileSGR(t *testing.T) {
 		if stylestest.HasColor(stylestest.Downsample(view, colorprofile.Ascii)) {
 			t.Errorf("%dx%d Ascii (NO_COLOR): colors present in output", w, h)
 		}
-	}
-}
-
-// TestActivitySuccessFooterContents pins the exact as-built phrasing for
-// U10 regression coverage: success says "✓ done in Xs — enter: dashboard ·
-// esc/q: menu".
-func TestActivitySuccessFooterContents(t *testing.T) {
-	a, _ := runningActivity(t)
-	a.update(actions.DoneMsg{Code: 0})
-	// elapsed will be 0s since we skip tickElapsed; just strip the time part.
-	footer := ansiSGR.ReplaceAllString(a.footerLine(), "")
-	for _, want := range []string{"✓", "done in", "—", "enter: dashboard", "esc/q: menu"} {
-		if !strings.Contains(footer, want) {
-			t.Errorf("success footer missing %q: %q", want, footer)
-		}
-	}
-}
-
-// TestActivityAbortFooterContents pins the aborted footer (U10): "⚠ aborted —
-// <AbortNote>  esc/q: menu".
-func TestActivityAbortFooterContents(t *testing.T) {
-	a, fr := runningActivity(t)
-	a.update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
-	a.update(tea.KeyPressMsg{Code: 'y', Text: "y"})
-	if !fr.interrupted {
-		t.Fatal("abort confirmation did not interrupt the runner")
-	}
-	a.update(actions.DoneMsg{Code: 130})
-	footer := ansiSGR.ReplaceAllString(a.footerLine(), "")
-	for _, want := range []string{"⚠", "aborted", "—", "esc/q: menu"} {
-		if !strings.Contains(footer, want) {
-			t.Errorf("aborted footer missing %q: %q", want, footer)
-		}
-	}
-	if !strings.Contains(footer, a.act.AbortNote) {
-		t.Errorf("aborted footer missing AbortNote %q: %q", a.act.AbortNote, footer)
 	}
 }

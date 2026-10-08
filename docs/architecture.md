@@ -2483,19 +2483,29 @@ calls it, nothing is written to disk. The read-only commands (`status`, `ps`,
 
 ## internal/tui
 
-The TUI shell: landing, setup wizard, run screen, activity screen and load
-wizard. `tui.Run` takes the command's context and turns off Bubble Tea's
-signal handler, so SIGINT and SIGTERM end the TUI through the context and
-the CLI exits 128+N. Ticket 001 removed its script layer: every action fails
-to start with "not implemented in v2 yet (ticket NNN)", the release-branch
-and dev-overlay lookups return nothing, and the archive lister fails.
-Ticket 040 rewired the dashboard (see its section), and 047 the load
-wizard.
+The TUI shell: landing, setup wizard, run screen and load wizard.
+`tui.Run` takes the command's context and turns off Bubble Tea's signal
+handler, so SIGINT and SIGTERM end the TUI through the context and the CLI
+exits 128+N. Ticket 040 rewired the dashboard (see its section), 047 the
+load wizard, and 083 the landing's actions.
 
 - **Landing (039).** It reads its directory (`detectStack`): no
   pic-sure.yaml offers set up; a pic-sure.yaml whose state.json lacks
   `initialized_at` offers "Resume setup"; a finished stack offers the
-  dashboard, update and load data.
+  dashboard, update and load data. Without a stack it also offers the
+  preflight check (`doctor`), sent with `Action.NoStack` so it runs
+  without `--stack` and checks only the host and Docker.
+- **Landing actions (083).** Every item runs one pic-sure command line as a
+  `dashboard.Action` (`dashboard.RunMsg`), on the run screen through
+  `Options.Command`, as the dashboard's do. Update, migrate, reset and
+  destroy share the dashboard's `UpdateAction`, `MigrateAction`,
+  `TeardownAction` and `dialog.TeardownForm`. The developer menu adds
+  `update --dry-run`, `config set release.branch B`, `dictionary
+  hydrate|weights`, and `dev on|off SERVICE` with a picker from
+  `ops.DevList`. The branch prefill, the dev pickers and the stack name
+  the teardown asks for come from `readConfig` (pic-sure.yaml), read when
+  the dialog opens. A picked value, a typed branch or a yes is the consent;
+  esc cancels every dialog.
 - **Setup (039).** The wizard screen hosts `wizard.Form`, opened with
   `Options.Defaults(root)`. On consent it sends the config and secrets to
   the run screen, which calls `Options.Init` in a goroutine and shows its
@@ -2564,9 +2574,11 @@ which takes a success line) and returns to the dashboard when it closes, or
 to the landing when the stack is gone (destroy). In `internal/cli`
 (`tuidashboard.go`), `dashBackend` opens the stack as `ps`, `status` and
 `logs` would (their gate, no run log, warnings dropped) and redacts errors.
-`commandFromTUI` (also the load wizard's runner) runs `pic-sure --stack DIR ARGS...` in-process on a child
-`App` with no terminal: `App.tuiSink` replaces the output mode's sink with
-the TUI's (the `Result` event becomes the returned error), log records go
+`commandFromTUI` (also the load wizard's and the landing's runner) runs
+`pic-sure --stack DIR ARGS...` (no `--stack` for an empty `Dir`)
+in-process on a child `App` with no terminal: `App.tuiSink` replaces the
+output mode's sink with the TUI's (the `Result` event becomes the
+returned error), log records go
 to it as `Log` events, and the summary the command prints is the result's
 `Summary`. Its warnings become `Warning` events, and `--wait-lock` is passed
 on. `CommandRequest.Confirm` is the run screen's yes/no dialog: update's
@@ -2606,7 +2618,8 @@ Bubble Tea downsamples it, so tests that check NO_COLOR output downsample with
 
 ## internal/dialog
 
-The huh dialogs shared by `tui` and `dashboard` (the reset form), and `Fit`,
+The huh dialogs shared by `tui` and `dashboard` (`TeardownForm`, the typed
+confirmation for reset and destroy), and `Fit`,
 which sizes an embedded form with a synthetic `WindowSizeMsg` and gives it
 `Theme`: huh's Charm theme for the background `styles` reports, with v1's
 option grays (huh v2.0.3 swaps their light and dark values).
@@ -2757,13 +2770,8 @@ cache holds.
 
 These packages exist only until the TUI tickets replace what uses them:
 
-- `internal/actions`: the TUI's action descriptions (init no longer has
-  one: the TUI runs it in-process). `Ticket` names the v2
-  ticket behind each one, and `Args` keeps the v1 script arguments the TUI
-  tests assert on.
 - `internal/contract`: the v1 status and compose-ps JSON types the dashboard
   renders (040 removes them).
-- `internal/dialog`: the reset confirmation dialog.
 - `internal/tty`: the terminal check behind `App.IsTerminal`, which output
   mode selection (004) also uses. It uses isatty, so `/dev/null` on stdin
   doesn't count as a terminal.

@@ -303,9 +303,9 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "u":
-		return m.startConfirm(updateAction())
+		return m.startConfirm(UpdateAction())
 	case "m":
-		return m.startConfirm(migrateAction())
+		return m.startConfirm(MigrateAction())
 	case "l":
 		return m, func() tea.Msg { return LoadMsg{} }
 	case "R":

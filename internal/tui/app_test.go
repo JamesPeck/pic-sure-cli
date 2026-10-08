@@ -11,7 +11,6 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/JamesPeck/pic-sure-cli/internal/actions"
 	"github.com/JamesPeck/pic-sure-cli/internal/dashboard"
 	"github.com/JamesPeck/pic-sure-cli/internal/events"
 	"github.com/JamesPeck/pic-sure-cli/internal/stack"
@@ -34,12 +33,6 @@ func TestAppStartsOnRequestedScreen(t *testing.T) {
 }
 
 func TestAppNavigationCycle(t *testing.T) {
-	orig := startRunner
-	startRunner = func(string, actions.Action, int, int) (runnerHandle, error) {
-		return &fakeRunner{}, nil
-	}
-	t.Cleanup(func() { startRunner = orig })
-
 	a := testApp(ScreenLanding)
 
 	a.Update(openDashboardMsg{})
@@ -50,19 +43,6 @@ func TestAppNavigationCycle(t *testing.T) {
 	a.Update(dashboard.BackMsg{})
 	if a.screen != ScreenLanding || a.dash != nil {
 		t.Fatal("BackMsg did not return to the landing / drop the dashboard")
-	}
-
-	a.Update(runActionMsg{act: actions.Preflight()})
-	if a.screen != ScreenActivity || a.activity == nil {
-		t.Fatal("runActionMsg did not open the activity screen")
-	}
-
-	a.Update(activityClosedMsg{openDashboard: true})
-	if a.screen != ScreenDashboard {
-		t.Fatal("activityClosedMsg{openDashboard} did not open the dashboard")
-	}
-	if a.activity != nil {
-		t.Fatal("activity not dropped after close")
 	}
 }
 

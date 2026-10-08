@@ -1,7 +1,7 @@
 // Package tui is the unified PIC-SURE terminal app: an animated landing page,
-// the dashboard, and a full-screen activity runner as sibling screens of one
-// Bubble Tea program. All mutations still run the real bash scripts (via
-// internal/actions); the TUI adds presentation only.
+// the setup and load wizards, the dashboard and the run screen as sibling
+// screens of one Bubble Tea program. Every action runs a pic-sure command
+// in-process through Options.Command.
 package tui
 
 import (

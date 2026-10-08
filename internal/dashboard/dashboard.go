@@ -35,6 +35,10 @@ type Action struct {
 	// example ["restart", "hpds"]. A destructive one carries --yes, given
 	// once the user typed the stack's name.
 	Args []string
+	// NoStack runs it without --stack, for the landing's preflight check
+	// in a directory that holds no stack yet: doctor then checks only the
+	// host and Docker.
+	NoStack bool
 }
 
 // RunMsg asks the embedding program to run an action. It sends ActionDoneMsg

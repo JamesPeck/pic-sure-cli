@@ -9,31 +9,15 @@ import (
 	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
 
-	"github.com/JamesPeck/pic-sure-cli/internal/actions"
+	"github.com/JamesPeck/pic-sure-cli/internal/dashboard"
 	"github.com/JamesPeck/pic-sure-cli/internal/dialog"
+	"github.com/JamesPeck/pic-sure-cli/internal/ops"
+	"github.com/JamesPeck/pic-sure-cli/internal/stack"
 	"github.com/JamesPeck/pic-sure-cli/internal/styles"
 )
 
-// Navigation/action requests the landing emits; the app routes them.
+// openDashboardMsg asks the app to open the dashboard.
 type openDashboardMsg struct{}
-type runActionMsg struct{ act actions.Action }
-
-// branchPrefillMsg carries the current release-control branch read off the hot
-// path. seq stamps the branch-input opening it was
-// fetched for, so a prefill that arrives after the input was closed and another
-// reopened cannot land in the wrong dialog.
-type branchPrefillMsg struct {
-	seq    int
-	branch string
-}
-
-// devOverlaysFillMsg carries the overlay list fetched off the update
-// hot-path. seq guards against
-// a stale fetch landing in a since-closed/reopened picker.
-type devOverlaysFillMsg struct {
-	seq      int
-	overlays []string
-}
 
 var (
 	landingBoxStyle    = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(1, 4)
@@ -41,47 +25,45 @@ var (
 	landingResultStyle = lipgloss.NewStyle().Bold(true)
 )
 
-// fetchReleaseBranch reads the current release-control branch for the
-// switch-branch prefill. It must run inside a tea.Cmd (startBranchInput
-// dispatches it off the update path), never in Update itself. Until ticket
-// 039 reads the stack config, there is no prefill.
-var fetchReleaseBranch = func(string) string { return "" }
+// readConfig reads the stack's pic-sure.yaml for the branch prefill, the
+// dev pickers and the typed confirmation. Tests replace it.
+var readConfig = func(root string) (*stack.Config, error) {
+	st, err := stack.Open(root)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = st.Close() }()
+	return st.LoadConfig()
+}
 
-// fetchDevOverlays lists the dev overlay names for the dev pickers, sorted.
-// It must run inside a tea.Cmd, never in Update. Until `pic-sure dev list`
-// exists (ticket 052) the list is empty and the pickers show their empty
-// state.
-var fetchDevOverlays = func(string) []string { return nil }
-
-// landing is the starfield + logo + menu home screen. Menu growth rule
-// (spec, Constraints): an entry collects at most one input and maps 1:1 to a
-// script invocation already exposed by the CLI.
+// landing is the starfield + logo + menu home screen. Each action runs one
+// pic-sure command through the app's run screen (dashboard.RunMsg), as the
+// dashboard's do, and collects at most one input for it.
 type landing struct {
 	root       string
 	status     stackStatus
 	animations bool
 
-	star   *starfield
-	logo   *logo
-	menu   *menu
-	dev    bool // in the developer-options submenu
-	relctl bool // in the release-control submenu (nested under dev)
+	star *starfield
+	logo *logo
+	menu *menu
+	dev  bool // in the developer-options submenu
 
-	form           *huh.Form
-	confirmOK      bool
-	confirmText    string
-	pending        *actions.Action
-	resetting      bool                        // true while the combined reset dialog is open
-	resetScope     string                      // "keep" or "all" — set only while resetting is true
-	resetRepos     bool                        // reset-sibling-repos toggle — set only while resetting is true
-	picked         string                      // picker selection value
-	pickerMake     func(string) actions.Action // non-nil while a picker is open
-	devPickerSeq   int                         // stamps each dev-picker opening for overlay-fill staleness
-	devPickerTitle string                      // stashed for form rebuild when the async fill arrives
-	devPickerDesc  string                      // stashed for form rebuild when the async fill arrives
-	inputVal       string                      // text-input value
-	inputMake      func(string) actions.Action // non-nil while a text-input is open
-	branchSeq      int                         // stamps each branch-input opening for prefill staleness
+	form      *huh.Form
+	confirmOK bool
+	pending   *dashboard.Action // the yes/no dialog's action
+	picked    string
+	// pickerMake builds the action for the picked value while a picker is
+	// open; inputMake for the typed value while the branch input is.
+	pickerMake func(string) dashboard.Action
+	inputVal   string
+	inputMake  func(string) dashboard.Action
+	// The typed confirmation for reset or destroy.
+	teardown        bool
+	teardownName    string
+	teardownDestroy bool
+	keepDB          bool
+	confirmText     string
 
 	result        string
 	width, height int
@@ -101,25 +83,18 @@ func newLanding(root string, status stackStatus, animations bool) *landing {
 
 func (l *landing) rebuildMenu() {
 	switch {
-	case l.relctl:
-		l.menu = newMenu(
-			menuItem{ID: "rcapply", Label: "Re-apply current branch"},
-			menuItem{ID: "rcdryrun", Label: "Dry run"},
-			menuItem{ID: "rcbranch", Label: "Switch branch…"},
-			menuItem{ID: "back", Label: "Back"},
-		)
 	case l.dev:
 		l.menu = newMenu(
 			menuItem{ID: "preflight", Label: "Preflight check"},
+			menuItem{ID: "dryrun", Label: "Preview update"},
+			menuItem{ID: "branch", Label: "Switch release branch…"},
 			menuItem{ID: "migrate", Label: "Run migrations"},
-			menuItem{ID: "seed", Label: "Seed database"},
 			menuItem{ID: "demo", Label: "Load demo data…"},
-			menuItem{ID: "etl", Label: "Maintenance / adv. ETL…"},
-			menuItem{ID: "devoverlay", Label: "Apply dev overlay…"},
-			menuItem{ID: "devrevert", Label: "Revert dev overlay…"},
-			menuItem{ID: "relctl", Label: "Release control…"},
+			menuItem{ID: "dictionary", Label: "Rebuild dictionary…"},
+			menuItem{ID: "devon", Label: "Dev mode on…"},
+			menuItem{ID: "devoff", Label: "Dev mode off…"},
 			menuItem{ID: "reset", Label: "Reset…"},
-			menuItem{ID: "uninstall", Label: "Uninstall…"},
+			menuItem{ID: "destroy", Label: "Destroy…"},
 			menuItem{ID: "back", Label: "Back"},
 		)
 	case l.status == readyStack:
@@ -168,7 +143,6 @@ func (l *landing) setStatus(status stackStatus) {
 	}
 	l.status = status
 	l.dev = false
-	l.relctl = false
 	l.rebuildMenu()
 }
 
@@ -194,14 +168,6 @@ func (l *landing) update(msg tea.Msg) (*landing, tea.Cmd) {
 		return l, l.star.update(msg)
 	case logoShineStartMsg, logoShineStepMsg:
 		return l, l.logo.update(msg)
-	case branchPrefillMsg:
-		// Handled before the form gate: the prefill must reach the open input
-		// (the gate would otherwise route it into the form, which ignores it).
-		return l.applyBranchPrefill(msg)
-	case devOverlaysFillMsg:
-		// Handled before the form gate: the fill must reach the open picker
-		// (the gate would otherwise route it into the form, which ignores it).
-		return l.applyDevOverlaysFill(msg)
 	}
 
 	// Confirm dialog consumes everything else while open.
@@ -224,10 +190,7 @@ func (l *landing) handleKey(msg tea.KeyPressMsg) (*landing, tea.Cmd) {
 	case "down", "j":
 		l.menu.move(1)
 	case "esc":
-		if l.relctl {
-			l.relctl = false
-			l.rebuildMenu()
-		} else if l.dev {
+		if l.dev {
 			l.dev = false
 			l.rebuildMenu()
 		}
@@ -238,16 +201,12 @@ func (l *landing) handleKey(msg tea.KeyPressMsg) (*landing, tea.Cmd) {
 }
 
 func (l *landing) choose(id string) (*landing, tea.Cmd) {
-	l.result = "" // any navigation retires the last setup-result line
+	l.result = "" // any navigation retires the last result line
 	switch id {
 	case "quit":
 		return l, tea.Quit
 	case "back":
-		if l.relctl {
-			l.relctl = false
-		} else {
-			l.dev = false
-		}
+		l.dev = false
 		l.rebuildMenu()
 		return l, nil
 	case "devmenu":
@@ -261,55 +220,90 @@ func (l *landing) choose(id string) (*landing, tea.Cmd) {
 	case "resume":
 		return l, func() tea.Msg { return resumeSetupMsg{} }
 	case "preflight":
-		// Read-only: runs immediately, no confirm (spec: Flows table).
-		act := actions.Preflight()
-		return l, func() tea.Msg { return runActionMsg{act: act} }
+		// Read-only, so it runs without asking.
+		return l, runAction(preflightAction(l.status == noStack))
+	case "dryrun":
+		return l, runAction(dryRunAction())
 	case "update":
-		return l.startConfirm(actions.Update())
-	case "demo":
-		return l, func() tea.Msg { return openLoadDataMsg{kind: kindDemo} }
+		return l.startConfirm(dashboard.UpdateAction())
 	case "migrate":
-		return l.startConfirm(actions.Migrate())
-	case "seed":
-		return l.startConfirm(actions.SeedDB())
+		return l.startConfirm(dashboard.MigrateAction())
 	case "loaddata":
 		return l, func() tea.Msg { return openLoadDataMsg{} }
-	case "etl":
-		return l.startSelectPicker("Maintenance / advanced ETL",
-			"Parameterless etl.sh operations; subcommands that take file arguments\n(load-csv, load-vcf, ...) are CLI-only — see `pic-sure etl --help`.",
-			"hydrate-dictionary",
+	case "demo":
+		return l, func() tea.Msg { return openLoadDataMsg{kind: kindDemo} }
+	case "dictionary":
+		return l.startPicker("Rebuild the dictionary",
+			"The stack must be up. Loading a dictionary CSV or facets is\n"+
+				"CLI-only: see pic-sure dictionary --help.",
+			"hydrate",
 			[]huh.Option[string]{
-				huh.NewOption("hydrate-dictionary", "hydrate-dictionary"),
-				huh.NewOption("run-weights", "run-weights"),
-				huh.NewOption("promote-genomic", "promote-genomic"),
-				huh.NewOption("public-1000genomes — setup instructions (no download)", "public-1000genomes"),
+				huh.NewOption("Rebuild it from the HPDS data (dictionary hydrate)", "hydrate"),
+				huh.NewOption("Recompute the search weights (dictionary weights)", "weights"),
 				huh.NewOption("Cancel", ""),
 			},
-			actions.Etl)
-	case "devoverlay":
-		return l.startDevPicker("Apply dev overlay",
-			"Recreates the overlay's service from local source (one-shot:\na later plain up or update reverts it to the release image).",
-			actions.DevUp)
-	case "devrevert":
-		return l.startDevPicker("Revert service to release",
-			"Recreates the selected overlay's service from the release image\n(base compose files only).",
-			actions.DevOff)
-	case "relctl":
-		l.relctl = true
-		l.rebuildMenu()
-		return l, nil
-	case "rcapply":
-		return l.startConfirm(actions.ReleaseControlApply())
-	case "rcdryrun":
-		return l.startConfirm(actions.ReleaseControlDryRun())
-	case "rcbranch":
+			dictionaryAction)
+	case "devon":
+		return l.startDevPicker(true)
+	case "devoff":
+		return l.startDevPicker(false)
+	case "branch":
 		return l.startBranchInput()
 	case "reset":
-		return l.startResetConfirm()
-	case "uninstall":
-		return l.startConfirm(actions.Uninstall())
+		return l.startTeardown(false)
+	case "destroy":
+		return l.startTeardown(true)
 	}
 	return l, nil
+}
+
+func runAction(act dashboard.Action) tea.Cmd {
+	return func() tea.Msg { return dashboard.RunMsg{Action: act} }
+}
+
+// preflightAction is `doctor`; with noStack it checks only the host and
+// Docker.
+func preflightAction(noStack bool) dashboard.Action {
+	return dashboard.Action{
+		Title:   "Preflight check",
+		Done:    "Preflight check passed",
+		Args:    []string{"doctor"},
+		NoStack: noStack,
+	}
+}
+
+func dryRunAction() dashboard.Action {
+	return dashboard.Action{
+		Title: "Planning the update",
+		Done:  "Update plan (nothing was changed)",
+		Args:  []string{"update", "--dry-run"},
+	}
+}
+
+func dictionaryAction(sub string) dashboard.Action {
+	if sub == "weights" {
+		return dashboard.Action{Title: "Recomputing the search weights", Done: "Search weights recomputed",
+			Args: []string{"dictionary", "weights"}}
+	}
+	return dashboard.Action{Title: "Rebuilding the dictionary", Done: "Dictionary rebuilt",
+		Args: []string{"dictionary", "hydrate"}}
+}
+
+func devAction(on bool, service string) dashboard.Action {
+	if on {
+		return dashboard.Action{Title: "Turning on dev mode for " + service,
+			Done: service + " runs from local source", Args: []string{"dev", "on", service}}
+	}
+	return dashboard.Action{Title: "Turning off dev mode for " + service,
+		Done: "Dev mode is off for " + service, Args: []string{"dev", "off", service}}
+}
+
+func branchAction(branch string) dashboard.Action {
+	return dashboard.Action{
+		Title: "Switching the release branch",
+		Done:  fmt.Sprintf("release.branch is now %s; choose Update to move the stack to it", branch),
+		Args:  []string{"config", "set", "release.branch", branch},
+	}
 }
 
 // sizeForm fits a landing dialog form to the landing's centre column
@@ -323,10 +317,9 @@ func (l *landing) sizeForm(f *huh.Form) *huh.Form {
 	return dialog.Fit(f, width, height)
 }
 
-// startSelectPicker opens a single-select dialog; the selection is the
-// consent (menu growth rule: one input, mapping 1:1 to a CLI-exposed script
-// invocation). Remember the huh gotcha: Value is bound BEFORE Options.
-func (l *landing) startSelectPicker(title, description, preselect string, opts []huh.Option[string], makeAction func(string) actions.Action) (*landing, tea.Cmd) {
+// startPicker opens a single-select dialog; picking a value is the consent.
+// Value is bound before Options, or huh's cursor starts on the wrong row.
+func (l *landing) startPicker(title, description, preselect string, opts []huh.Option[string], makeAction func(string) dashboard.Action) (*landing, tea.Cmd) {
 	l.picked = preselect
 	l.pickerMake = makeAction
 	l.form = l.sizeForm(huh.NewForm(huh.NewGroup(
@@ -339,198 +332,107 @@ func (l *landing) startSelectPicker(title, description, preselect string, opts [
 	return l, l.form.Init()
 }
 
-// buildDevPickerForm constructs the dev-picker form from pre-built options.
-// Mirrors buildBranchForm: Value is bound before Options, and the form is
-// rebuilt when the overlay list arrives from the async fetch.
-func (l *landing) buildDevPickerForm(title, description string, opts []huh.Option[string]) *huh.Form {
-	return huh.NewForm(huh.NewGroup(
-		huh.NewSelect[string]().
-			Title(title).
-			Description(description).
-			Value(&l.picked).
-			Options(opts...),
-	))
-}
-
-// devPickerOptions maps overlay names to picker options plus the trailing
-// Cancel row (empty value — the picker-completion handler treats "" as cancel).
-func devPickerOptions(overlays []string) []huh.Option[string] {
-	opts := make([]huh.Option[string], 0, len(overlays)+1)
-	for _, o := range overlays {
-		opts = append(opts, huh.NewOption(o, o))
-	}
-	return append(opts, huh.NewOption("Cancel", ""))
-}
-
-// startDevPicker opens an overlay picker; the selection is the consent (like
-// the demo-data picker). The overlay list is fetched asynchronously so the
-// picker opens immediately with a placeholder — matching the
-// fetchReleaseBranch / startBranchInput pattern.
-func (l *landing) startDevPicker(title, description string, makeAction func(string) actions.Action) (*landing, tea.Cmd) {
-	l.picked = ""
-	l.pickerMake = makeAction
-	l.devPickerTitle = title
-	l.devPickerDesc = description
-	l.devPickerSeq++
-
-	// Open immediately with a placeholder option so the dialog is visible at
-	// once; the real list replaces it when the fetch delivers devOverlaysFillMsg.
-	// The placeholder carries an EMPTY value: a premature enter resolves to the
-	// picker-completion handler's choice=="" Cancel guard instead of dispatching
-	// a bogus `dev up "(loading overlays…)"` (the branch input's safe-cancel
-	// invariant — an unfilled dialog can only cancel, never act).
-	l.form = l.sizeForm(l.buildDevPickerForm(title, description,
-		[]huh.Option[string]{huh.NewOption("(loading overlays…)", "")}))
-
-	seq, root := l.devPickerSeq, l.root
-	fetch := func() tea.Msg {
-		return devOverlaysFillMsg{seq: seq, overlays: fetchDevOverlays(root)}
-	}
-	return l, tea.Batch(l.form.Init(), fetch)
-}
-
-// applyDevOverlaysFill lands the asynchronously-fetched overlay list into the
-// open picker. Mirrors applyBranchPrefill: staleness is guarded by seq (a
-// fetch for a since-closed/reopened picker is dropped), and an empty result
-// (script call failed or no overlays exist) shows an explanatory result line
-// and closes the picker instead of leaving the placeholder up forever.
-func (l *landing) applyDevOverlaysFill(msg devOverlaysFillMsg) (*landing, tea.Cmd) {
-	if l.form == nil || l.pickerMake == nil || msg.seq != l.devPickerSeq {
+// startDevPicker opens the service picker for `dev on` (every service with
+// a dev mode, as `dev list` shows them) or `dev off` (those that are on).
+func (l *landing) startDevPicker(on bool) (*landing, tea.Cmd) {
+	cfg, err := readConfig(l.root)
+	if err != nil {
+		l.result = "can't read the stack's config: " + err.Error()
 		return l, nil
 	}
-	if len(msg.overlays) == 0 {
-		// Fetch failed or checkout has no dev overlays — close the picker and
-		// explain, mirroring the "no overlays" path from the old synchronous impl.
-		l.form = nil
-		l.pickerMake = nil
-		l.result = "no dev overlays available"
+	var opts []huh.Option[string]
+	for _, v := range ops.DevList(cfg) {
+		switch {
+		case !on && v.On:
+			opts = append(opts, huh.NewOption(v.Name, v.Name))
+		case on && v.Source == "":
+			opts = append(opts, huh.NewOption(v.Name+" (no source set)", v.Name))
+		case on && v.On:
+			opts = append(opts, huh.NewOption(v.Name+" (on)", v.Name))
+		case on:
+			opts = append(opts, huh.NewOption(v.Name, v.Name))
+		}
+	}
+	if len(opts) == 0 {
+		l.result = "no service is in dev mode"
 		return l, nil
 	}
-	// Rebuild the picker with the real overlay list. Pre-select the first
-	// overlay so the cursor is not pinned to the Cancel row on open.
-	l.picked = msg.overlays[0]
-	l.form = l.sizeForm(l.buildDevPickerForm(l.devPickerTitle, l.devPickerDesc, devPickerOptions(msg.overlays)))
-	return l, l.form.Init()
+	first := opts[0].Value
+	opts = append(opts, huh.NewOption("Cancel", ""))
+	if on {
+		return l.startPicker("Dev mode on",
+			"Builds the service's component from its local checkout\n"+
+				"(components.<component>.source) and recreates it with a debug port.\n"+
+				"Set the source first: pic-sure config set components.<component>.source DIR.",
+			first, opts, func(s string) dashboard.Action { return devAction(true, s) })
+	}
+	return l.startPicker("Dev mode off",
+		"Recreates the service without its debug port. It keeps running the\n"+
+			"build of its source until you unset the source and run pic-sure up.",
+		first, opts, func(s string) dashboard.Action { return devAction(false, s) })
 }
 
-// startBranchInput is the one-field release-control branch input (the menu
-// growth rule's ceiling: one input, prefilled, mapping 1:1 to
-// release-control.sh --branch). The prefill (the current branch) is read by
-// fetchReleaseBranch, which forks git per repo and probes docker — far too slow
-// to run inside Update. So the input opens immediately with a placeholder and
-// the prefill is fetched in a tea.Cmd that delivers a branchPrefillMsg.
+// startBranchInput asks for the release branch, prefilled with the current
+// one. Typing a branch is the consent; an empty one cancels.
 func (l *landing) startBranchInput() (*landing, tea.Cmd) {
-	l.inputVal = ""
-	l.inputMake = actions.ReleaseControlBranch
-	l.branchSeq++
-	l.form = l.sizeForm(l.buildBranchForm("(reading current branch…)"))
-	seq, root := l.branchSeq, l.root
-	fetch := func() tea.Msg {
-		return branchPrefillMsg{seq: seq, branch: fetchReleaseBranch(root)}
-	}
-	return l, tea.Batch(l.form.Init(), fetch)
-}
-
-// buildBranchForm constructs the branch-input form, seeding the textinput from
-// the current l.inputVal (huh reads the bound value at construction, so a
-// prefill arriving later must rebuild the form, not just mutate l.inputVal).
-func (l *landing) buildBranchForm(placeholder string) *huh.Form {
-	return huh.NewForm(huh.NewGroup(
-		huh.NewInput().
-			Title("Switch release-control branch").
-			Description("Switches, resolves, and applies the branch's refs\n(empty input cancels; esc cancels).").
-			Placeholder(placeholder).
-			Value(&l.inputVal),
-	))
-}
-
-// applyBranchPrefill lands the asynchronously-fetched branch into the open
-// input, but ONLY if it is still the right, untouched input: the branch input
-// must still be open, the seq must match the opening the fetch was issued for
-// (a stale fetch for a since-closed/reopened dialog is dropped), and the user
-// must not have typed yet (a non-empty inputVal means they did — never clobber
-// it). huh seeds its textinput from the bound value at construction, so the
-// form is rebuilt to display the prefill. A failed fetch (empty branch) swaps
-// the "(reading current branch…)" placeholder for an explanatory one instead of
-// leaving the reading note up forever.
-func (l *landing) applyBranchPrefill(msg branchPrefillMsg) (*landing, tea.Cmd) {
-	if l.form == nil || l.inputMake == nil || msg.seq != l.branchSeq || l.inputVal != "" {
+	cfg, err := readConfig(l.root)
+	if err != nil {
+		l.result = "can't read the stack's config: " + err.Error()
 		return l, nil
 	}
-	if msg.branch == "" {
-		// Fetch failed: no value to prefill, but tell the user so (the value
-		// stays empty, so this rebuild clobbers nothing).
-		l.form = l.sizeForm(l.buildBranchForm("(couldn't read current branch — type one)"))
-		return l, l.form.Init()
-	}
-	l.inputVal = msg.branch
-	l.form = l.sizeForm(l.buildBranchForm(""))
+	l.inputVal = cfg.Release.Branch
+	l.inputMake = branchAction
+	l.form = l.sizeForm(huh.NewForm(huh.NewGroup(
+		huh.NewInput().
+			Title("Switch the release branch").
+			Description("Sets release.branch in pic-sure.yaml. Choose Update afterwards to\n" +
+				"move the stack to the branch's release (empty input cancels).").
+			Value(&l.inputVal),
+	)).WithShowHelp(true))
 	return l, l.form.Init()
 }
 
-// startConfirm mirrors the dashboard's dialog semantics: destructive actions
-// require typing the action name; everything else is a light yes/no.
-func (l *landing) startConfirm(act actions.Action) (*landing, tea.Cmd) {
+// startConfirm opens the yes/no dialog for act.
+func (l *landing) startConfirm(act dashboard.Action, c dashboard.Confirmation) (*landing, tea.Cmd) {
 	l.pending = &act
 	l.confirmOK = false
-	l.confirmText = ""
+	l.form = l.sizeForm(huh.NewForm(huh.NewGroup(huh.NewConfirm().
+		Title(c.Question).
+		Description(c.Describe).
+		Affirmative("Run").
+		Negative("Cancel").
+		Value(&l.confirmOK))).WithShowHelp(true))
+	return l, l.form.Init()
+}
 
-	var field huh.Field
-	if act.Destructive {
-		word := act.ConfirmWord
-		field = huh.NewInput().
-			Title(fmt.Sprintf("⚠ %s — this destroys data", act.Name)).
-			Description(act.Describe + fmt.Sprintf("\n\nType %q to confirm (esc cancels):", word)).
-			Value(&l.confirmText).
-			Validate(func(s string) error {
-				if s != word {
-					return fmt.Errorf("type %q exactly to confirm", word)
-				}
-				return nil
-			})
-	} else {
-		field = huh.NewConfirm().
-			Title(fmt.Sprintf("Run %s?", act.Name)).
-			Description(act.Describe).
-			Affirmative("Run").
-			Negative("Cancel").
-			Value(&l.confirmOK)
+// startTeardown opens the dashboard's typed confirmation for reset or
+// destroy: the user types the stack's name.
+func (l *landing) startTeardown(destroy bool) (*landing, tea.Cmd) {
+	cfg, err := readConfig(l.root)
+	if err != nil {
+		l.result = "can't read the stack's config: " + err.Error()
+		return l, nil
 	}
-
-	l.form = l.sizeForm(huh.NewForm(huh.NewGroup(field)).WithShowHelp(true))
-	return l, l.form.Init()
-}
-
-// resetAction maps the combined reset dialog's scope choice and repo toggle to
-// the script invocation: "all" → reset.sh --all (full wipe), anything else →
-// the DB-preserving reset; repos=true adds --repos (git-preserving repo reset).
-func resetAction(scope string, repos bool) actions.Action {
-	return actions.ResetWith(scope == "all", repos)
-}
-
-// startResetConfirm opens ONE screen that carries both the scope choice
-// (keep the database vs. full wipe), the repos toggle, and the typed-word
-// confirm, so the two reset variants share a single dialog instead of two menu
-// items. The form construction is shared with the dashboard's R key via
-// dialog.ResetForm; each screen sizes the returned form itself.
-func (l *landing) startResetConfirm() (*landing, tea.Cmd) {
-	l.resetting = true
-	l.resetScope = "keep"
-	l.resetRepos = false
+	l.teardown = true
+	l.teardownName = cfg.Name
+	l.teardownDestroy = destroy
+	l.keepDB = false
 	l.confirmText = ""
-	word := actions.Reset().ConfirmWord
-
-	l.form = l.sizeForm(dialog.ResetForm(&l.resetScope, &l.resetRepos, &l.confirmText, word))
+	l.form = l.sizeForm(dialog.TeardownForm(cfg.Name, l.root, destroy, &l.keepDB, &l.confirmText))
 	return l, l.form.Init()
+}
+
+func (l *landing) closeForm() {
+	l.form, l.pending, l.pickerMake, l.inputMake = nil, nil, nil, nil
+	l.teardown = false
 }
 
 func (l *landing) updateForm(msg tea.Msg) (*landing, tea.Cmd) {
 	// huh ships its esc binding disabled (only ctrl+c aborts a form), but
-	// every dialog here advertises "esc cancels" — intercept it, exactly as
-	// the wizard screen does. One chokepoint covers all four dialog kinds.
+	// every dialog here advertises "esc cancels": intercept it, exactly as
+	// the wizard screen does.
 	if key, ok := msg.(tea.KeyPressMsg); ok && key.String() == "esc" {
-		l.form, l.pending, l.pickerMake, l.inputMake = nil, nil, nil, nil
-		l.resetting, l.resetScope, l.resetRepos = false, "", false
+		l.closeForm()
 		return l, nil
 	}
 
@@ -540,44 +442,34 @@ func (l *landing) updateForm(msg tea.Msg) (*landing, tea.Cmd) {
 	}
 	switch l.form.State {
 	case huh.StateCompleted:
-		if l.resetting {
-			act := resetAction(l.resetScope, l.resetRepos)
-			l.form, l.resetting, l.resetScope, l.resetRepos = nil, false, "", false
-			// Re-validate the typed word at the dispatch seam (defense in
-			// depth: the form's own Validate already gates real input).
-			if !actions.ConfirmAccepted(act, false, l.confirmText) {
-				return l, nil
+		var act *dashboard.Action
+		switch {
+		case l.teardown:
+			// The form's own validation gates real input.
+			if l.confirmText == l.teardownName {
+				a := dashboard.TeardownAction(l.teardownDestroy, l.keepDB)
+				act = &a
 			}
-			return l, func() tea.Msg { return runActionMsg{act: act} }
-		}
-		if l.inputMake != nil {
-			makeAction, val := l.inputMake, strings.TrimSpace(l.inputVal)
-			l.form, l.inputMake = nil, nil
-			if val == "" {
-				return l, nil
+		case l.inputMake != nil:
+			if val := strings.TrimSpace(l.inputVal); val != "" {
+				a := l.inputMake(val)
+				act = &a
 			}
-			a := makeAction(val)
-			return l, func() tea.Msg { return runActionMsg{act: a} }
-		}
-		if l.pickerMake != nil {
-			makeAction, choice := l.pickerMake, l.picked
-			l.form, l.pickerMake = nil, nil
-			if choice == "" {
-				return l, nil // Cancel
+		case l.pickerMake != nil:
+			if l.picked != "" { // "" is Cancel
+				a := l.pickerMake(l.picked)
+				act = &a
 			}
-			a := makeAction(choice)
-			return l, func() tea.Msg { return runActionMsg{act: a} }
+		case l.confirmOK:
+			act = l.pending
 		}
-		act := l.pending
-		l.form, l.pending = nil, nil
-		if !actions.ConfirmAccepted(*act, l.confirmOK, l.confirmText) {
+		l.closeForm()
+		if act == nil {
 			return l, nil
 		}
-		a := *act
-		return l, func() tea.Msg { return runActionMsg{act: a} }
+		return l, runAction(*act)
 	case huh.StateAborted:
-		l.form, l.pending, l.pickerMake, l.inputMake = nil, nil, nil, nil
-		l.resetting, l.resetScope, l.resetRepos = false, "", false
+		l.closeForm()
 		return l, nil
 	}
 	return l, cmd
@@ -634,7 +526,7 @@ func (l *landing) footer() string {
 	if l.form != nil {
 		return "↑/↓ · enter · esc cancel"
 	}
-	if l.dev || l.relctl {
+	if l.dev {
 		return "↑/↓ select · enter · esc back · q quit"
 	}
 	return "↑/↓ select · enter · q quit"

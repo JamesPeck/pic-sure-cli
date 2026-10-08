@@ -151,9 +151,9 @@ The first screen's menu depends on the directory:
 
 | The directory holds | The menu offers |
 |---|---|
-| No stack | **Set up PIC-SURE**: the setup wizard. |
-| A stack whose init didn't finish | **Resume setup**: init again with the stack's `pic-sure.yaml`, from the step that failed. |
-| A stack | **Dashboard**, and **Load your data…**: the load wizard. |
+| No stack | **Set up PIC-SURE**: the setup wizard. **Preflight check**: `doctor` on the host and Docker. |
+| A stack whose init didn't finish | **Resume setup**: init again with the stack's `pic-sure.yaml`, from the step that failed. **Developer options…** |
+| A stack | **Dashboard**. **Update**: `update`, after asking. **Load your data…**: the load wizard. **Developer options…** |
 
 Move with the arrow keys or `j`/`k`, choose with Enter, go back with Esc
 and quit with `q`.
@@ -168,6 +168,21 @@ and quit with `q`.
   init fails, fix the cause and pick **Resume setup**, or **Set up
   PIC-SURE** again if it failed before writing `pic-sure.yaml`: the wizard
   reopens with your answers.
+- **Developer options.** Each item runs one command:
+
+  | Item | Runs |
+  |---|---|
+  | Preflight check | `doctor` |
+  | Preview update | `update --dry-run` |
+  | Switch release branch… | `config set release.branch B`, prefilled with the current branch; choose Update afterwards |
+  | Run migrations | `migrate`, after asking |
+  | Load demo data… | the load wizard, on its demo datasets |
+  | Rebuild dictionary… | `dictionary hydrate` or `dictionary weights` |
+  | Dev mode on… / off… | `dev on SERVICE` / `dev off SERVICE`, from a list of the services `dev list` shows |
+  | Reset… | `reset`, keeping or removing the database |
+  | Destroy… | `destroy` |
+
+  Reset and Destroy make you type the stack's name, as on the dashboard.
 - **Dashboard.** The stack's services and their state, a status summary
   (config, version, images, migrations), and the logs of the selected
   service.
