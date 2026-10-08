@@ -18,7 +18,7 @@ import (
 const skillsDir = "../../skills"
 
 func TestSkillCommandsExist(t *testing.T) {
-	files := skillFiles(t)
+	files := skillFiles(t, ".md")
 	root := newDocRoot()
 	allFlags := flagNames(root)
 	topLevel := map[string]bool{}
@@ -55,7 +55,7 @@ func TestSkillCommandsExist(t *testing.T) {
 }
 
 func TestSkillHasNoEmDash(t *testing.T) {
-	for _, f := range skillFiles(t) {
+	for _, f := range skillFiles(t, "") {
 		data, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatal(err)
@@ -76,6 +76,7 @@ func TestSkillCheckerCatchesMistakes(t *testing.T) {
 		"pic-sure init DIR --json --name x --auth-mode",
 		"pic-sure status > status.json --heap 1024",
 		"pic-sure data DIR",
+		"pic-sure data demo nhanse --json",
 	} {
 		args := picSureInvocations(line)
 		if len(args) != 1 {
@@ -100,11 +101,12 @@ func TestSkillCheckerCatchesMistakes(t *testing.T) {
 	}
 }
 
-func skillFiles(t *testing.T) []string {
+// skillFiles returns the files under skillsDir whose names end in suffix.
+func skillFiles(t *testing.T, suffix string) []string {
 	t.Helper()
 	var files []string
 	err := filepath.WalkDir(skillsDir, func(p string, d fs.DirEntry, err error) error {
-		if err == nil && !d.IsDir() && strings.HasSuffix(p, ".md") {
+		if err == nil && !d.IsDir() && strings.HasSuffix(p, suffix) {
 			files = append(files, p)
 		}
 		return err
@@ -186,9 +188,9 @@ func picSureInvocations(line string) [][]string {
 		case w == "#":
 			flush()
 			i = len(words)
-		case strings.HasPrefix(w, ">") || strings.HasPrefix(w, "2>") || strings.HasPrefix(w, "<"):
+		case strings.HasPrefix(w, ">") || strings.HasPrefix(w, "2>") || strings.HasPrefix(w, "&>") || strings.HasPrefix(w, "<"):
 			// A redirection and its target aren't arguments.
-			if w == ">" || w == "2>" || w == "<" {
+			if w == ">" || w == "2>" || w == "&>" || w == "<" {
 				i++
 			}
 		case atStart:
@@ -255,9 +257,12 @@ func checkInvocation(args []string) error {
 	if len(pos) > 0 && placeholderRe.MatchString(pos[0]) && !cmd.HasParent() {
 		return nil
 	}
-	// Argument counts aren't checked: prose names commands without them.
-	if len(pos) > 0 && cmd.HasAvailableSubCommands() {
+	if len(pos) == 0 {
+		// Prose names commands without their arguments.
+		return nil
+	}
+	if cmd.HasAvailableSubCommands() {
 		return fmt.Errorf("%s has no subcommand %q", cmd.CommandPath(), pos[0])
 	}
-	return nil
+	return cmd.ValidateArgs(pos)
 }

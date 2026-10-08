@@ -28,7 +28,9 @@ References, when this file isn't enough:
    `text` to the user. Reports (`status`, `doctor`, `ps`,
    `version`, `support-bundle`) print one object.
 3. **Decide on the exit code first**, then read the JSON for detail (see
-   the table below).
+   the table below). A failed `result` line carries the same code as
+   `.error.exit_code`, which is how you get it for a command you ran in
+   the background.
 4. **`--yes` is consent, not a formality.** Only add it when the user asked
    for that destructive action.
 5. **Secrets go on stdin, never in arguments, files you write, or logs:**
@@ -65,8 +67,8 @@ References, when this file isn't enough:
   user gave you (for example "try it, then tear it down") counts as asked.
 - Loading data replaces the stack's phenotype data (`data demo`,
   `data load-phenotype`), with no confirmation. On a stack you didn't
-  just create, check what's loaded (`status --deep`) and ask before
-  loading over it.
+  just create, assume it holds data the user cares about and ask before
+  loading over it. `status --deep` can't tell you which data is loaded.
 - Open mode (`--auth-mode open`) lets anyone who reaches the URL query the
   data, and its ports listen on every interface. Use it for local trials
   with demo data only.
@@ -131,7 +133,7 @@ Other datasets: `pic-sure data demo synthea --json`, `1000genomes` or
 | 2 | Usage error | Fix the command line: see `pic-sure COMMAND --help`. On a resumed `init`, a flag that differs from the saved config is exit 2: re-run with the original flags and change the setting with `config set`. |
 | 3 | Precondition unmet | Fix what the message names: start Docker, free the ports (or `--auto-ports` at init), run `init` (no stack) or `up` (not rendered), or supply the real Auth0 secret. |
 | 4 | Confirmation required | Nothing changed. Ask the user; add `--yes` only if they agree. |
-| 5 | Incompatible | Pending config migrations: run `update`. The release needs a newer pic-sure: with the user's consent, run `pic-sure self-update --json` and re-run the command (or add `--self-update`, which init refuses alongside a `--*-stdin` flag). A newer pic-sure rendered the stack: update this binary. |
+| 5 | Incompatible | Pending config migrations: run `update`. The release needs a newer pic-sure: with the user's consent, run the `pic-sure self-update --to VERSION` the message names and re-run the command (or add `--self-update`, which init refuses alongside a `--*-stdin` flag). A newer pic-sure rendered the stack: update this binary. |
 | 130, 143 | Interrupted (Ctrl-C, SIGTERM) | Cleanups ran. Re-run the same command to resume. |
 
 ## Common tasks
@@ -174,8 +176,8 @@ Run these inside the stack directory, or add `--stack DIR`.
   The admin email must be a Google account. The URLs to register in the
   Auth0 application are in `.data.auth0` of init's result and `.auth0` of
   `status --json`: `callback_url`, `logout_url` and `web_origin`.
-- **Open mode to Auth0 later:** `pic-sure config set auth.auth0.client_id ID`,
-  then `pic-sure config set auth.mode required`, then
+- **Open mode to Auth0 later:** `pic-sure config set --json auth.auth0.client_id ID`,
+  then `pic-sure config set --json auth.mode required`, then
   `printf '%s\n' "$AUTH0_CLIENT_SECRET" | pic-sure --yes --json secrets rotate auth0-client-secret`,
   then `pic-sure up --json`.
 - **Remote MySQL:** `pic-sure init DIR --db-mode remote --db-host HOST
@@ -184,24 +186,25 @@ Run these inside the stack directory, or add `--stack DIR`.
   `pic-sure init --help` and `pic-sure db bootstrap --help`.
 - **Proxy:** `pic-sure init DIR --https-proxy http://HOST:PORT` plus the
   usual flags (always `http://`, even for HTTPS), or
-  `pic-sure config set proxy.https http://HOST:PORT` and `pic-sure up --json`. See the README's
+  `pic-sure config set --json proxy.https http://HOST:PORT` and `pic-sure up --json`. See the README's
   [Proxy](https://github.com/JamesPeck/pic-sure-cli/blob/v2/README.md#proxy)
   section; `doctor --network` explains the Docker daemon's own proxy.
 - **Tear down** (only when asked): `pic-sure --stack DIR destroy --yes --json`
   removes the stack's containers, volumes and the files pic-sure created.
-  `pic-sure reset --yes --json` removes the data and the database
-  (`--keep-db` keeps the database) but keeps the config; the stack stays
-  stopped until `pic-sure up --json`.
+  `pic-sure reset --yes --json` removes the stack's volumes (its data,
+  and the bundled database unless `--keep-db`; a remote database is left
+  alone) but keeps the config; the stack stays stopped until
+  `pic-sure up --json`.
   `pic-sure cache prune --json` frees images no stack uses.
 
 ## Troubleshooting
 
 - **Ports busy** (exit 3, or "port is already allocated"): use
-  `--auto-ports` at init, or `pic-sure config set network.https_port PORT`
-  and `pic-sure config set network.http_port PORT`, then `pic-sure up --json`.
+  `--auto-ports` at init, or `pic-sure config set --json network.https_port PORT`
+  and `pic-sure config set --json network.http_port PORT`, then `pic-sure up --json`.
 - **Not enough memory:** `doctor`'s `memory` check compares Docker's
   memory with the HPDS heap. Lower it (`--set hpds.java_opts=-Xmx2g` at
-  init, or `pic-sure config set hpds.java_opts -Xmx2g` and `pic-sure up --json`) or ask the user to
+  init, or `pic-sure config set --json hpds.java_opts -Xmx2g` and `pic-sure up --json`) or ask the user to
   give Docker more (Docker Desktop: Settings, Resources). `data demo
   --heap 1024` lowers the loader's heap.
 - **"all predefined address pools have been fully subnetted":** Docker
