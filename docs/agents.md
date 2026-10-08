@@ -4,7 +4,9 @@ How to drive pic-sure from scripts, CI and AI agents. Every command runs
 without a terminal; this page covers how to keep it from prompting, what to
 parse and what the exit codes mean. The [README](../README.md) explains
 what the commands do, and the [command reference](commands/README.md) lists
-every flag.
+every flag. For a coding agent, the [pic-sure skill](../skills/pic-sure/SKILL.md)
+turns this page into a task-oriented guide; the README's
+[For AI agents](../README.md#for-ai-agents) section says how to install it.
 
 ## Rules
 

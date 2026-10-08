@@ -302,6 +302,23 @@ delete the binary (`~/.local/bin/pic-sure`) and the cache directory.
 - Another pic-sure command holds the stack lock: wait for it, or pass
   `--wait-lock`.
 
+## For AI agents
+
+[skills/pic-sure/SKILL.md](skills/pic-sure/SKILL.md) is an
+[Agent Skill](https://agentskills.io) that teaches a coding agent with a
+shell (Claude Code, Codex and the like) to install, run, load data into,
+check, update and tear down stacks with pic-sure: the rules, the standard
+flow, what to do for each exit code, and troubleshooting. To install it,
+copy `skills/pic-sure/` into the agent's skills directory. For Claude
+Code that's `~/.claude/skills/pic-sure/`, or `.claude/skills/pic-sure/` in
+a project:
+
+```sh
+mkdir -p ~/.claude/skills/pic-sure
+curl -fsSL -o ~/.claude/skills/pic-sure/SKILL.md \
+  https://raw.githubusercontent.com/JamesPeck/pic-sure-cli/v2/skills/pic-sure/SKILL.md
+```
+
 ## Development
 
 Package layout, the shared interfaces and how to add a command or an
