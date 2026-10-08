@@ -117,7 +117,7 @@ pic-sure status
   the containers, including whether HPDS has data loaded.
 
 On a terminal you can also run `pic-sure` in an empty directory and let the
-wizard ask for all of this.
+wizard ask for all of this; see [The TUI](#the-tui).
 
 If init fails, fix the cause and run the same command again: it resumes
 from the step that failed. It reuses the `pic-sure.yaml` it already wrote,
@@ -139,6 +139,70 @@ different flag.
 | `pic-sure support-bundle` | A redacted diagnostics archive to attach to an issue. |
 
 The [command reference](docs/commands/README.md) has every command.
+
+## The TUI
+
+Run `pic-sure` with no arguments on a terminal to open the TUI. It works on
+the stack containing the current directory, or on `--stack DIR`. Anywhere
+else it offers to create a stack in that directory. It doesn't open when
+stdin or stdout isn't a terminal, or with `--yes`, `--non-interactive`,
+`--json` or `--plain`; `pic-sure` prints its help instead.
+
+The first screen's menu depends on the directory:
+
+| The directory holds | The menu offers |
+|---|---|
+| No stack | **Set up PIC-SURE**: the setup wizard. |
+| A stack whose init didn't finish | **Resume setup**: init again with the stack's `pic-sure.yaml`, from the step that failed. |
+| A stack | **Dashboard**, and **Load your data…**: the load wizard. |
+
+Move with the arrow keys or `j`/`k`, choose with Enter, go back with Esc
+and quit with `q`.
+
+- **Setup wizard.** It asks for what `init`'s flags would set: the stack's
+  name (suggested from the directory's), the release-control branch and
+  frontend theme, the auth mode and admin email, the Auth0 application
+  outside open mode, the ports (free ones are filled in), a local or
+  remote database, HPDS's JVM options and a proxy. It then shows a summary
+  and asks before creating anything. On yes it runs init and shows its
+  steps. Esc leaves the wizard, asking first if you changed anything. If
+  init fails, fix the cause and pick **Resume setup**, or **Set up
+  PIC-SURE** again if it failed before writing `pic-sure.yaml`: the wizard
+  reopens with your answers.
+- **Dashboard.** The stack's services and their state, a status summary
+  (config, version, images, migrations), and the logs of the selected
+  service.
+
+  | Key | Does |
+  |---|---|
+  | ↑/↓ or `j`/`k` | Select a service; the log pane follows it. |
+  | PgUp/PgDn, Home/End | Scroll the logs. |
+  | `h` | Check the gateway, HPDS's data and the CSP. Takes up to a minute. |
+  | `r` | Restart the selected service. |
+  | `u` | Run `update`. |
+  | `m` | Run `migrate`. |
+  | `l` | Open the load wizard. |
+  | `R` | Run `reset`, keeping or removing the database. |
+  | `X` | Run `destroy`. |
+  | Esc / `q` | Back to the menu / quit. |
+
+  `r`, `u` and `m` ask first. `R` and `X` make you type the stack's name.
+- **Load wizard.** It loads a phenotype CSV file or directory
+  (`data load-phenotype`), a demo dataset (`data demo`) or genomic VCFs
+  (`data load-genomic`). It asks for what the command's flags would set,
+  with a file browser for paths, and asks before it starts.
+
+Commands run from the TUI show their steps on a run screen; Enter goes back
+when they finish. Run from a shell, long commands such as `init`, `up`,
+`update` and `data` show the same live checklist and leave it in the
+scrollback. Ctrl-C asks to confirm, a second Ctrl-C cancels and lets the
+command clean up, and a third while it stops quits at once.
+
+| To get | Use |
+|---|---|
+| Plain timestamped lines instead of the live view | `--plain`; also the default off a terminal, or when `CI` is set (to anything but `false` or `0`) |
+| No animation | `--no-animations` or `PIC_SURE_NO_ANIMATIONS=1`. Off by default over SSH; `PIC_SURE_NO_ANIMATIONS=0` turns it back on |
+| No colour | `NO_COLOR` set to any value |
 
 ## The stack directory
 
