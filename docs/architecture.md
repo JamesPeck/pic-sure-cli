@@ -2493,13 +2493,15 @@ load wizard, and 083 the landing's actions.
   pic-sure.yaml offers set up; a pic-sure.yaml whose state.json lacks
   `initialized_at` offers "Resume setup"; a finished stack offers the
   dashboard, update and load data. Without a stack it also offers the
-  preflight check (`doctor`), sent with `Action.NoStack` so it runs
-  without `--stack` and checks only the host and Docker.
+  preflight check (`doctor`), sent with `Action.NoStack`: the command
+  then finds no stack, even one above the current directory, and checks
+  only the host and Docker.
 - **Landing actions (083).** Every item runs one pic-sure command line as a
   `dashboard.Action` (`dashboard.RunMsg`), on the run screen through
   `Options.Command`, as the dashboard's do. Update, migrate, reset and
   destroy share the dashboard's `UpdateAction`, `MigrateAction`,
-  `TeardownAction` and `dialog.TeardownForm`. The developer menu adds
+  `TeardownAction`, `dialog.ConfirmForm` and
+  `dialog.TeardownForm`. The developer menu adds
   `update --dry-run`, `config set release.branch B`, `dictionary
   hydrate|weights`, and `dev on|off SERVICE` with a picker from
   `ops.DevList`. The branch prefill, the dev pickers and the stack name
@@ -2575,7 +2577,7 @@ to the landing when the stack is gone (destroy). In `internal/cli`
 (`tuidashboard.go`), `dashBackend` opens the stack as `ps`, `status` and
 `logs` would (their gate, no run log, warnings dropped) and redacts errors.
 `commandFromTUI` (also the load wizard's and the landing's runner) runs
-`pic-sure --stack DIR ARGS...` (no `--stack` for an empty `Dir`)
+`pic-sure --stack DIR ARGS...` (no stack at all for an empty `Dir`)
 in-process on a child `App` with no terminal: `App.tuiSink` replaces the
 output mode's sink with the TUI's (the `Result` event becomes the
 returned error), log records go
@@ -2618,8 +2620,9 @@ Bubble Tea downsamples it, so tests that check NO_COLOR output downsample with
 
 ## internal/dialog
 
-The huh dialogs shared by `tui` and `dashboard` (`TeardownForm`, the typed
-confirmation for reset and destroy), and `Fit`,
+The huh dialogs shared by `tui` and `dashboard` (`ConfirmForm`, the yes/no
+for safe actions, and `TeardownForm`, the typed confirmation for reset and
+destroy), and `Fit`,
 which sizes an embedded form with a synthetic `WindowSizeMsg` and gives it
 `Theme`: huh's Charm theme for the background `styles` reports, with v1's
 option grays (huh v2.0.3 swaps their light and dark values).

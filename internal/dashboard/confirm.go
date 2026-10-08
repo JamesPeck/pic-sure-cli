@@ -60,12 +60,7 @@ func TeardownAction(destroy, keepDB bool) Action {
 func (m *model) startConfirm(act Action, c Confirmation) (tea.Model, tea.Cmd) {
 	m.pending = &act
 	m.confirmOK = false
-	m.form = m.sizeForm(huh.NewForm(huh.NewGroup(huh.NewConfirm().
-		Title(c.Question).
-		Description(c.Describe).
-		Affirmative("Run").
-		Negative("Cancel").
-		Value(&m.confirmOK))).WithShowHelp(true))
+	m.form = m.sizeForm(dialog.ConfirmForm(c.Question, c.Describe, &m.confirmOK))
 	return m, m.form.Init()
 }
 

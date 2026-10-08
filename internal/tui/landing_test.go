@@ -292,7 +292,7 @@ func TestLandingActionsRunTheirCommands(t *testing.T) {
 		{noStack, false, "preflight", nil, []string{"doctor"}, true},
 		{readyStack, false, "update", []tea.Msg{left, enter}, []string{"update"}, false},
 		{readyStack, true, "preflight", nil, []string{"doctor"}, false},
-		{readyStack, true, "dryrun", nil, []string{"update", "--dry-run"}, false},
+		{readyStack, true, "dryrun", []tea.Msg{left, enter}, []string{"update", "--dry-run"}, false},
 		{readyStack, true, "branch", append(typeText("-next"), enter), []string{"config", "set", "release.branch", "main-next"}, false},
 		{readyStack, true, "migrate", []tea.Msg{left, enter}, []string{"migrate"}, false},
 		{readyStack, true, "dictionary", []tea.Msg{enter}, []string{"dictionary", "hydrate"}, false},
@@ -380,7 +380,7 @@ func TestLandingEveryItemIsWired(t *testing.T) {
 // Cancelling a dialog runs nothing.
 func TestLandingDialogsCancel(t *testing.T) {
 	testConfig(t)
-	for _, id := range []string{"update", "migrate", "dictionary", "devon", "devoff", "branch", "reset", "destroy"} {
+	for _, id := range []string{"update", "dryrun", "migrate", "dictionary", "devon", "devoff", "branch", "reset", "destroy"} {
 		l := newLanding("/tmp/x", readyStack, false)
 		l.setSize(80, 24)
 		_, _ = l.choose(id)

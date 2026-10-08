@@ -173,7 +173,7 @@ and quit with `q`.
   | Item | Runs |
   |---|---|
   | Preflight check | `doctor` |
-  | Preview update | `update --dry-run` |
+  | Preview update | `update --dry-run`, after asking |
   | Switch release branch… | `config set release.branch B`, prefilled with the current branch; choose Update afterwards |
   | Run migrations | `migrate`, after asking |
   | Load demo data… | the load wizard, on its demo datasets |

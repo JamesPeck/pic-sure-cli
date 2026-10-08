@@ -84,6 +84,9 @@ type runScreen struct {
 	finished bool
 	res      InitResult
 	err      error
+	// scroll is the first summary line shown when the summary is taller
+	// than the screen, such as doctor's report on a small terminal.
+	scroll int
 
 	width, height int
 }
@@ -170,6 +173,19 @@ func (s *runScreen) close() {
 	<-s.done
 }
 
+// summaryLines is the finished command's summary, wrapped to the block.
+func (s *runScreen) summaryLines() []string {
+	sum := strings.TrimRight(s.res.Summary, "\n")
+	if sum == "" {
+		return nil
+	}
+	return strings.Split(lipgloss.NewStyle().Width(s.blockWidth()).Render(sum), "\n")
+}
+
+// summaryRoom is how many summary lines fit below the title, five step
+// lines and the result line, with view's margins.
+func (s *runScreen) summaryRoom() int { return max(s.height-11, 1) }
+
 // blockWidth is the width of the screen's content. It is fixed, so the
 // centered block doesn't shift as lines come and go.
 func (s *runScreen) blockWidth() int { return min(max(s.width-4, 40), 100) }
@@ -205,9 +221,23 @@ func (s *runScreen) update(msg tea.Msg) (*runScreen, tea.Cmd) {
 			return s.updateAsk(msg)
 		}
 		if s.finished {
-			if k := msg.String(); k == "enter" || k == "esc" || k == "q" || k == "ctrl+c" {
+			switch msg.String() {
+			case "enter", "esc", "q", "ctrl+c":
 				return s, func() tea.Msg { return runClosedMsg{} }
+			case "up", "k":
+				s.scroll--
+			case "down", "j":
+				s.scroll++
+			case "pgup":
+				s.scroll -= s.summaryRoom()
+			case "pgdown":
+				s.scroll += s.summaryRoom()
+			case "home":
+				s.scroll = 0
+			case "end":
+				s.scroll = len(s.summaryLines())
 			}
+			s.scroll = min(max(s.scroll, 0), max(len(s.summaryLines())-s.summaryRoom(), 0))
 			return s, nil
 		}
 		return s, s.feed(msg)
@@ -259,16 +289,23 @@ func (s *runScreen) view() string {
 	case s.askDlg != nil:
 		parts = append(parts, s.askDlg.View())
 		footer = "enter answer · esc no"
-	case s.finished && s.err == nil:
-		parts = append(parts, styles.OK.Render("✓ "+s.doneText), strings.TrimRight(s.res.Summary, "\n"))
-		footer = "enter to go back"
 	case s.finished:
-		// A failed doctor's report is its summary.
-		parts = append(parts, styles.Bad.Render("✗ "+s.err.Error()))
-		if sum := strings.TrimRight(s.res.Summary, "\n"); sum != "" {
-			parts = append(parts, sum)
+		if s.err == nil {
+			parts = append(parts, styles.OK.Render("✓ "+s.doneText))
+		} else {
+			parts = append(parts, styles.Bad.Render("✗ "+s.err.Error()))
 		}
 		footer = "enter to go back"
+		// A failed command can have a summary too: doctor's report.
+		if lines := s.summaryLines(); len(lines) > 0 {
+			room := s.summaryRoom()
+			if s.height > 0 && len(lines) > room {
+				top := min(s.scroll, len(lines)-room) // after a resize
+				lines = lines[top : top+room]
+				footer = "↑/↓ pgup/pgdn scroll · enter to go back"
+			}
+			parts = append(parts, strings.Join(lines, "\n"))
+		}
 	default:
 		footer = "ctrl+c twice to cancel"
 	}

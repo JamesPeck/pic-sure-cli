@@ -120,7 +120,7 @@ func redacted(err error) error {
 }
 
 // commandFromTUI is tui.Options.Command: `pic-sure --stack DIR ARGS...`
-// (without --stack when req.Dir is empty) run in-process for a landing or
+// (with no stack at all when req.Dir is empty) run in-process for a landing or
 // dashboard action or a load. Its events, and the run log's
 // stderr records, go to req.Sink; the summary it would print is the
 // result's Summary. Its exit code and message come back as the error.
@@ -129,7 +129,9 @@ func (a *App) commandFromTUI(ctx context.Context, req tui.CommandRequest) (tui.I
 	var result *events.Result
 	c := a.actionApp(req, &out, &errOut, func(r events.Result) { result = &r })
 	var args []string
-	if req.Dir != "" {
+	if req.Dir == "" {
+		c.noStack = true
+	} else {
 		args = append(args, "--stack", req.Dir)
 	}
 	if a.Global.WaitLock {

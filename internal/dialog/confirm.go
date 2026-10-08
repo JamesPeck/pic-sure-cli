@@ -1,6 +1,6 @@
 // Package dialog holds the huh dialog helpers shared by the TUI's screens
 // (internal/tui) and the dashboard (internal/dashboard): Fit, which sizes
-// and styles any embedded form, and the reset and destroy confirmation.
+// and styles any embedded form, and the confirmations for actions.
 // internal/tui imports internal/dashboard, so the dashboard can't reach
 // back into tui for them.
 package dialog
@@ -50,4 +50,15 @@ func TeardownForm(name, root string, destroy bool, keepDB *bool, typed *string) 
 		}
 	}
 	return huh.NewForm(huh.NewGroup(fields...)).WithShowHelp(true)
+}
+
+// ConfirmForm builds the yes/no dialog for a safe action, into ok. The form
+// is returned unfitted.
+func ConfirmForm(question, describe string, ok *bool) *huh.Form {
+	return huh.NewForm(huh.NewGroup(huh.NewConfirm().
+		Title(question).
+		Description(describe).
+		Affirmative("Run").
+		Negative("Cancel").
+		Value(ok))).WithShowHelp(true)
 }

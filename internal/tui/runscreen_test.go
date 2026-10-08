@@ -3,11 +3,13 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/events"
 )
@@ -150,5 +152,34 @@ func TestRunScreenCloseStopsTheOperation(t *testing.T) {
 	case <-stopped:
 	default:
 		t.Fatal("close returned before the operation did")
+	}
+}
+
+// A failed command's summary (doctor's report) is shown, and one taller
+// than the screen scrolls.
+func TestRunScreenScrollsAFailedCommandsSummary(t *testing.T) {
+	var report []string
+	for i := range 40 {
+		report = append(report, fmt.Sprintf("check-%02d", i))
+	}
+	run := func(context.Context, InitRequest) (InitResult, error) {
+		return InitResult{Summary: strings.Join(report, "\n") + "\n"}, errors.New("doctor: 1 check(s) failed")
+	}
+	s := newRunScreen(context.Background(), "Preflight check", run, InitRequest{}, false)
+	s.setSize(80, 24)
+	defer s.close()
+	pumpRun(t, s, func() bool { return s.finished })
+	view := plainView(s)
+	for _, want := range []string{"✗ doctor: 1 check(s) failed", "check-00", "pgup/pgdn scroll"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("view lacks %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "check-39") || lipgloss.Height(view) > 24 {
+		t.Errorf("the summary isn't cut to the screen:\n%s", view)
+	}
+	s.update(tea.KeyPressMsg{Code: tea.KeyEnd})
+	if view := plainView(s); !strings.Contains(view, "check-39") || strings.Contains(view, "check-00") {
+		t.Errorf("end didn't scroll to the last line:\n%s", view)
 	}
 }

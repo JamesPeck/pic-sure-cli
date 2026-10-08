@@ -72,6 +72,11 @@ type App struct {
 	// compatibility gate offers its self-update through it, and installs
 	// without re-running (installOnly).
 	tuiConfirm func(context.Context, string) (bool, error)
+	// noStack makes openStack find no stack, as if none were at or above
+	// the current directory: the TUI's preflight check (doctor) in a
+	// directory without one (commandFromTUI with no Dir). The cache's and
+	// self-update's own stack lookups don't check it.
+	noStack bool
 	// interrupt cancels the running command's context as SIGINT would. The
 	// TUI renderer calls it when the user confirms Ctrl-C, which the
 	// terminal delivers as a key rather than a signal while it runs.

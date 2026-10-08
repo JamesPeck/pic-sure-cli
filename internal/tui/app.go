@@ -337,8 +337,8 @@ func (a *app) closeLoad() {
 }
 
 // startAction opens the run screen on a command line: a landing or
-// dashboard action, or a load. Closing it returns to the dashboard if one is open, else to
-// the landing.
+// dashboard action, or a load. Closing it returns to the dashboard if one
+// is open, else to the landing.
 func (a *app) startAction(act dashboard.Action) (tea.Model, tea.Cmd) {
 	if a.opts.Command == nil {
 		if a.dash != nil {

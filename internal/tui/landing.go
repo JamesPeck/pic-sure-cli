@@ -38,7 +38,7 @@ var readConfig = func(root string) (*stack.Config, error) {
 
 // landing is the starfield + logo + menu home screen. Each action runs one
 // pic-sure command through the app's run screen (dashboard.RunMsg), as the
-// dashboard's do, and collects at most one input for it.
+// dashboard's do.
 type landing struct {
 	root       string
 	status     stackStatus
@@ -223,7 +223,7 @@ func (l *landing) choose(id string) (*landing, tea.Cmd) {
 		// Read-only, so it runs without asking.
 		return l, runAction(preflightAction(l.status == noStack))
 	case "dryrun":
-		return l, runAction(dryRunAction())
+		return l.startConfirm(dryRunAction())
 	case "update":
 		return l.startConfirm(dashboard.UpdateAction())
 	case "migrate":
@@ -272,12 +272,16 @@ func preflightAction(noStack bool) dashboard.Action {
 	}
 }
 
-func dryRunAction() dashboard.Action {
+func dryRunAction() (dashboard.Action, dashboard.Confirmation) {
 	return dashboard.Action{
-		Title: "Planning the update",
-		Done:  "Update plan (nothing was changed)",
-		Args:  []string{"update", "--dry-run"},
-	}
+			Title: "Planning the update",
+			Done:  "Update plan (nothing was changed)",
+			Args:  []string{"update", "--dry-run"},
+		}, dashboard.Confirmation{Question: "Preview the update?",
+			Describe: "Shows what Update would change: the config, the component commits,\n" +
+				"the images, the migrations, the token and the restarts. It changes\n" +
+				"nothing in the stack, but may start the database to compare its\n" +
+				"migrations."}
 }
 
 func dictionaryAction(sub string) dashboard.Action {
@@ -355,15 +359,18 @@ func (l *landing) startDevPicker(on bool) (*landing, tea.Cmd) {
 	}
 	if len(opts) == 0 {
 		l.result = "no service is in dev mode"
+		if on {
+			l.result = "no service has a dev mode"
+		}
 		return l, nil
 	}
 	first := opts[0].Value
 	opts = append(opts, huh.NewOption("Cancel", ""))
 	if on {
 		return l.startPicker("Dev mode on",
-			"Builds the service's component from its local checkout\n"+
-				"(components.<component>.source) and recreates it with a debug port.\n"+
-				"Set the source first: pic-sure config set components.<component>.source DIR.",
+			"Builds the service's component from its local checkout and recreates\n"+
+				"it with a debug port. Set the checkout first: pic-sure config set\n"+
+				"components.<component>.source DIR.",
 			first, opts, func(s string) dashboard.Action { return devAction(true, s) })
 	}
 	return l.startPicker("Dev mode off",
@@ -392,16 +399,10 @@ func (l *landing) startBranchInput() (*landing, tea.Cmd) {
 	return l, l.form.Init()
 }
 
-// startConfirm opens the yes/no dialog for act.
 func (l *landing) startConfirm(act dashboard.Action, c dashboard.Confirmation) (*landing, tea.Cmd) {
 	l.pending = &act
 	l.confirmOK = false
-	l.form = l.sizeForm(huh.NewForm(huh.NewGroup(huh.NewConfirm().
-		Title(c.Question).
-		Description(c.Describe).
-		Affirmative("Run").
-		Negative("Cancel").
-		Value(&l.confirmOK))).WithShowHelp(true))
+	l.form = l.sizeForm(dialog.ConfirmForm(c.Question, c.Describe, &l.confirmOK))
 	return l, l.form.Init()
 }
 

@@ -156,17 +156,18 @@ func TestCommandFromTUISummary(t *testing.T) {
 	}
 }
 
-// Without a Dir the command gets no --stack: the landing's preflight check
-// in a directory that holds no stack checks only the host.
+// Without a Dir the command finds no stack, not even the one it runs in:
+// the landing's preflight check in a directory that holds no stack checks
+// only the host.
 func TestCommandFromTUIWithoutAStack(t *testing.T) {
 	fakeDocker(t)
-	t.Chdir(t.TempDir())
+	t.Chdir(renderedStack(t))
 	a, _, _ := testApp(t)
 	res, err := a.commandFromTUI(context.Background(), tui.CommandRequest{Args: []string{"doctor"}, Sink: events.Discard})
 	if err != nil && strings.Contains(err.Error(), "no pic-sure stack") {
 		t.Fatalf("doctor looked for a stack: %v", err)
 	}
-	if !strings.Contains(res.Summary, "docker") || strings.Contains(res.Summary, "stack") {
+	if !strings.Contains(res.Summary, "docker") || strings.Contains(res.Summary, "Stack:") {
 		t.Errorf("summary:\n%s", res.Summary)
 	}
 }
