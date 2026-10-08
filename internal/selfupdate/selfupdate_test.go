@@ -471,7 +471,7 @@ func TestManagedSystemPrefixes(t *testing.T) {
 		}
 	}
 	r := managed("/usr/bin/pic-sure", "v2.1.0")
-	if !strings.Contains(r.Error(), "/v2/install.sh | bash -s -- --version v2.1.0`") {
+	if !strings.Contains(r.Error(), "/main/install.sh | bash -s -- --version v2.1.0`") {
 		t.Errorf("refusal %q doesn't give the install.sh command", r)
 	}
 }

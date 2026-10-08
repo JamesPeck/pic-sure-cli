@@ -13,9 +13,9 @@ on:
   schedule:
     - cron: "23 5 * * *"
   push:
-    branches: [v2, main]
+    branches: [main]
   pull_request:
-    branches: [v2, main]
+    branches: [main]
     types: [opened, synchronize, reopened, labeled]
   workflow_dispatch:
     inputs:

@@ -6,7 +6,7 @@
 # OS/architecture. It verifies the archive against checksums.txt and, when
 # cosign is installed, verifies checksums.txt against its Sigstore bundle.
 #
-#   curl -fsSL https://raw.githubusercontent.com/JamesPeck/pic-sure-cli/v2/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/JamesPeck/pic-sure-cli/main/install.sh | bash
 #   curl -fsSL .../install.sh | bash -s -- --version v2.0.0
 #
 # Usage:

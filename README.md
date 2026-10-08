@@ -15,9 +15,8 @@ This README is for people running stacks. If you're scripting pic-sure or
 are an agent, read [docs/agents.md](docs/agents.md) as well. Every command
 and flag is in the [command reference](docs/commands/README.md).
 
-> **v1.** This is the `v2` branch. pic-sure v1 (the wrapper around the
-> bash All-in-One scripts) lives on `main` and is frozen: it gets no
-> further releases. v2 doesn't read v1 or bash All-in-One installs; create
+> **v1.** pic-sure v1 (the wrapper around the bash All-in-One scripts)
+> lives on the `wrapper` branch and is frozen: it gets no further releases. v2 doesn't read v1 or bash All-in-One installs; create
 > new stacks with `pic-sure init`. What changed compared with the bash
 > All-in-One is in
 > [docs/differences-from-bash-aio.md](docs/differences-from-bash-aio.md).
@@ -43,7 +42,7 @@ and flag is in the [command reference](docs/commands/README.md).
 ## Install
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/JamesPeck/pic-sure-cli/v2/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/JamesPeck/pic-sure-cli/main/install.sh | bash
 ```
 
 That installs the newest stable v2 release into `~/.local/bin`, creating
@@ -52,7 +51,7 @@ and prints the line to add. It needs no terminal, and exits non-zero if
 anything fails. Options go after `bash -s --`:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/JamesPeck/pic-sure-cli/v2/install.sh \
+curl -fsSL https://raw.githubusercontent.com/JamesPeck/pic-sure-cli/main/install.sh \
   | bash -s -- --bin-dir /usr/local/bin --version v2.0.0
 ```
 
@@ -75,7 +74,7 @@ the same checks (`--to VERSION` for a specific one).
 **From source** (Go 1.26, or let `GOTOOLCHAIN=auto` fetch it):
 
 ```sh
-git clone --branch v2 https://github.com/JamesPeck/pic-sure-cli.git
+git clone https://github.com/JamesPeck/pic-sure-cli.git
 cd pic-sure-cli
 make build                  # writes bin/pic-sure
 ```
@@ -380,7 +379,7 @@ a project:
 ```sh
 mkdir -p ~/.claude/skills/pic-sure
 curl -fsSL -o ~/.claude/skills/pic-sure/SKILL.md \
-  https://raw.githubusercontent.com/JamesPeck/pic-sure-cli/v2/skills/pic-sure/SKILL.md
+  https://raw.githubusercontent.com/JamesPeck/pic-sure-cli/main/skills/pic-sure/SKILL.md
 ```
 
 ## Development

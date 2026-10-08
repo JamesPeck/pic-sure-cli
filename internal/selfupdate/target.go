@@ -105,7 +105,7 @@ func installCommand(version, extra string) string {
 	if version != "" {
 		args = strings.TrimSpace(args + " --version " + version)
 	}
-	cmd := fmt.Sprintf("curl -fsSL https://raw.githubusercontent.com/%s/v2/install.sh | bash", DefaultRepo)
+	cmd := fmt.Sprintf("curl -fsSL https://raw.githubusercontent.com/%s/main/install.sh | bash", DefaultRepo)
 	if args != "" {
 		cmd += " -s -- " + args
 	}

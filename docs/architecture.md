@@ -2707,7 +2707,7 @@ and commit are dispatch inputs.
 Tickets 062 and 063, spec §11. `.github/workflows/e2e.yml` runs
 `e2e-core.sh`, then `e2e-two-stacks.sh` and `e2e-genomic.sh` (one matrix
 job, `stacks`) on `ubuntu-latest` and `ubuntu-24.04-arm` (nightly, on pushes
-to `v2`/`main`, and on PRs labelled `e2e`); all run locally as they are.
+to `main`, and on PRs labelled `e2e`); all run locally as they are.
 `e2e-lib.sh` holds what they share and documents the settings
 (`E2E_*` variables): open mode with no client secret (init generates one),
 `--auto-ports`, `--set hpds.java_opts`, and an EXIT trap that, on failure

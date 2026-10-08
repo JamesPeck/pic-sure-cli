@@ -12,9 +12,9 @@ stacks with the host's `docker` and `git`. A stack is a directory holding
 
 References, when this file isn't enough:
 - `pic-sure COMMAND --help`: always there, always matches the binary.
-- [docs/agents.md](https://github.com/JamesPeck/pic-sure-cli/blob/v2/docs/agents.md): rules, prompts and exit codes for automation.
-- [docs/json-schemas.md](https://github.com/JamesPeck/pic-sure-cli/blob/v2/docs/json-schemas.md): every JSON shape.
-- [README](https://github.com/JamesPeck/pic-sure-cli/blob/v2/README.md) and the [command reference](https://github.com/JamesPeck/pic-sure-cli/blob/v2/docs/commands/README.md).
+- [docs/agents.md](https://github.com/JamesPeck/pic-sure-cli/blob/main/docs/agents.md): rules, prompts and exit codes for automation.
+- [docs/json-schemas.md](https://github.com/JamesPeck/pic-sure-cli/blob/main/docs/json-schemas.md): every JSON shape.
+- [README](https://github.com/JamesPeck/pic-sure-cli/blob/main/README.md) and the [command reference](https://github.com/JamesPeck/pic-sure-cli/blob/main/docs/commands/README.md).
 
 ## Rules
 
@@ -82,7 +82,7 @@ References, when this file isn't enough:
 ## Set up a local stack with demo data
 
 ```sh
-pic-sure version --json || curl -fsSL https://raw.githubusercontent.com/JamesPeck/pic-sure-cli/v2/install.sh | bash
+pic-sure version --json || curl -fsSL https://raw.githubusercontent.com/JamesPeck/pic-sure-cli/main/install.sh | bash
 pic-sure doctor --json > doctor.json
 ```
 
@@ -187,7 +187,7 @@ Run these inside the stack directory, or add `--stack DIR`.
 - **Proxy:** `pic-sure init DIR --https-proxy http://HOST:PORT` plus the
   usual flags (always `http://`, even for HTTPS), or
   `pic-sure config set --json proxy.https http://HOST:PORT` and `pic-sure up --json`. See the README's
-  [Proxy](https://github.com/JamesPeck/pic-sure-cli/blob/v2/README.md#proxy)
+  [Proxy](https://github.com/JamesPeck/pic-sure-cli/blob/main/README.md#proxy)
   section; `doctor --network` explains the Docker daemon's own proxy.
 - **Tear down** (only when asked): `pic-sure --stack DIR destroy --yes --json`
   removes the stack's containers, volumes and the files pic-sure created.
