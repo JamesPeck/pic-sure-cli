@@ -46,10 +46,13 @@ References, when this file isn't enough:
 9. **Long commands:** the first `init` builds every image from source and
    takes 30 to 60 minutes; later stacks reuse the images and take a few
    minutes. `data demo` takes a few minutes. If your shell tool has a
-   shorter timeout than that, run the command in the background with its
-   output in a file and poll the file until the final `result` line
-   appears. A killed or failed `init`, `up` or `update` resumes when you
-   re-run the same command.
+   shorter timeout than that, start the command in the background with
+   its output in a file, then keep checking in the foreground until it has
+   finished, e.g. `until grep -q '"type":"result"' init.ndjson; do sleep 20; done`
+   in calls that fit your timeout. Don't end your turn or session while it
+   runs: in a non-interactive session (`claude -p`, `codex exec`) that
+   kills the command. A killed or failed `init`, `up` or `update` resumes
+   when you re-run the same command.
 
 ## Safety with the user's stack
 
