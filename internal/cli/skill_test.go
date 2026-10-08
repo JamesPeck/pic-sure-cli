@@ -13,21 +13,26 @@ import (
 	"github.com/spf13/pflag"
 )
 
-// skillDir is the agent skill for using pic-sure (skills/pic-sure), whose
-// command lines must match the real command tree.
-const skillDir = "../../skills/pic-sure"
+// skillsDir holds the agent skills, whose command lines must match the
+// real command tree.
+const skillsDir = "../../skills"
 
 func TestSkillCommandsExist(t *testing.T) {
 	files := skillFiles(t)
-	allFlags := flagNames(newDocRoot())
+	root := newDocRoot()
+	allFlags := flagNames(root)
+	topLevel := map[string]bool{}
+	for _, c := range root.Commands() {
+		topLevel[c.Name()] = true
+	}
 	checked := 0
 	for _, f := range files {
 		data, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatal(err)
 		}
-		name, _ := filepath.Rel(skillDir, f)
-		for _, line := range skillCommandLines(string(data)) {
+		name, _ := filepath.Rel(skillsDir, f)
+		for _, line := range skillCommandLines(string(data), topLevel) {
 			for _, args := range picSureInvocations(line) {
 				checked++
 				if err := checkInvocation(args); err != nil {
@@ -56,7 +61,7 @@ func TestSkillHasNoEmDash(t *testing.T) {
 			t.Fatal(err)
 		}
 		for i, line := range strings.Split(string(data), "\n") {
-			if strings.ContainsRune(line, '—') {
+			if strings.ContainsRune(line, '\u2014') {
 				t.Errorf("%s:%d has an em dash", f, i+1)
 			}
 		}
@@ -69,6 +74,8 @@ func TestSkillCheckerCatchesMistakes(t *testing.T) {
 		"pic-sure data demo --hep 1024",
 		"pic-sure --stack DIR destroy --yes --prune",
 		"pic-sure init DIR --json --name x --auth-mode",
+		"pic-sure status > status.json --heap 1024",
+		"pic-sure data DIR",
 	} {
 		args := picSureInvocations(line)
 		if len(args) != 1 {
@@ -96,7 +103,7 @@ func TestSkillCheckerCatchesMistakes(t *testing.T) {
 func skillFiles(t *testing.T) []string {
 	t.Helper()
 	var files []string
-	err := filepath.WalkDir(skillDir, func(p string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(skillsDir, func(p string, d fs.DirEntry, err error) error {
 		if err == nil && !d.IsDir() && strings.HasSuffix(p, ".md") {
 			files = append(files, p)
 		}
@@ -106,18 +113,9 @@ func skillFiles(t *testing.T) []string {
 		t.Fatal(err)
 	}
 	if len(files) == 0 {
-		t.Fatalf("no skill files in %s", skillDir)
+		t.Fatalf("no skill files in %s", skillsDir)
 	}
 	return files
-}
-
-// newDocRoot is the command tree with cobra's help and version flags, which
-// it otherwise adds only at execute time.
-func newDocRoot() *cobra.Command {
-	root := newRootCmd(NewApp(BuildInfo{}))
-	root.InitDefaultHelpFlag()
-	root.InitDefaultVersionFlag()
-	return root
 }
 
 func flagNames(cmd *cobra.Command) map[string]bool {
@@ -141,8 +139,10 @@ var (
 )
 
 // skillCommandLines returns the lines of fenced code blocks, with
-// backslash continuations joined, and every inline code span.
-func skillCommandLines(md string) []string {
+// backslash continuations joined, and every inline code span. A span that
+// starts with a top-level command, such as `status --deep`, is read as a
+// pic-sure command.
+func skillCommandLines(md string, topLevel map[string]bool) []string {
 	var out []string
 	for _, m := range fenceRe.FindAllStringSubmatch(md, -1) {
 		block := strings.ReplaceAll(m[1], "\\\n", " ")
@@ -152,7 +152,11 @@ func skillCommandLines(md string) []string {
 	// Inline spans may wrap across lines in Markdown.
 	prose = strings.ReplaceAll(prose, "\n", " ")
 	for _, m := range inlineCodeRe.FindAllStringSubmatch(prose, -1) {
-		out = append(out, m[1])
+		span := m[1]
+		if w := strings.Fields(span); len(w) > 0 && topLevel[w[0]] {
+			span = "pic-sure " + span
+		}
+		out = append(out, span)
 	}
 	return out
 }
@@ -177,19 +181,15 @@ func picSureInvocations(line string) [][]string {
 	for i := 0; i < len(words); i++ {
 		w := words[i]
 		switch {
-		case w == "|" || w == "||" || w == "&&" || w == ";":
+		case w == "|" || w == "||" || w == "&&" || w == ";" || w == "&":
 			flush()
 		case w == "#":
 			flush()
 			i = len(words)
 		case strings.HasPrefix(w, ">") || strings.HasPrefix(w, "2>") || strings.HasPrefix(w, "<"):
-			// A redirection and its target end the command's arguments.
+			// A redirection and its target aren't arguments.
 			if w == ">" || w == "2>" || w == "<" {
 				i++
-			}
-			if inPS {
-				out = append(out, cur)
-				inPS = false
 			}
 		case atStart:
 			atStart = false
@@ -252,11 +252,12 @@ func checkInvocation(args []string) error {
 		return err
 	}
 	pos := cmd.Flags().Args()
-	if len(pos) > 0 && placeholderRe.MatchString(pos[0]) && cmd.HasAvailableSubCommands() {
+	if len(pos) > 0 && placeholderRe.MatchString(pos[0]) && !cmd.HasParent() {
 		return nil
 	}
+	// Argument counts aren't checked: prose names commands without them.
 	if len(pos) > 0 && cmd.HasAvailableSubCommands() {
 		return fmt.Errorf("%s has no subcommand %q", cmd.CommandPath(), pos[0])
 	}
-	return cmd.ValidateArgs(pos)
+	return nil
 }

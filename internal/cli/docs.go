@@ -15,10 +15,7 @@ import (
 // The pages hold only what cobra's help shows, so they are
 // the same on every machine.
 func WriteCommandDocs(dir string) error {
-	root := newRootCmd(NewApp(BuildInfo{}))
-	// cobra adds these at execute time; the root page should list them.
-	root.InitDefaultHelpFlag()
-	root.InitDefaultVersionFlag()
+	root := newDocRoot()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
@@ -43,6 +40,15 @@ func WriteCommandDocs(dir string) error {
 		}
 	}
 	return os.WriteFile(filepath.Join(dir, "README.md"), index.Bytes(), 0o644)
+}
+
+// newDocRoot is the command tree with cobra's help and version flags,
+// which cobra otherwise adds only at execute time.
+func newDocRoot() *cobra.Command {
+	root := newRootCmd(NewApp(BuildInfo{}))
+	root.InitDefaultHelpFlag()
+	root.InitDefaultVersionFlag()
+	return root
 }
 
 // docCommands returns cmd and its visible descendants, depth first in

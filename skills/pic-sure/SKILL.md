@@ -46,23 +46,34 @@ References, when this file isn't enough:
 9. **Long commands:** the first `init` builds every image from source and
    takes 30 to 60 minutes; later stacks reuse the images and take a few
    minutes. `data demo` takes a few minutes. If your shell tool has a
-   shorter timeout than that, start the command in the background with
-   its output in a file, then keep checking in the foreground until it has
-   finished, e.g. `until grep -q '"type":"result"' init.ndjson; do sleep 20; done`
-   in calls that fit your timeout. Don't end your turn or session while it
-   runs: in a non-interactive session (`claude -p`, `codex exec`) that
-   kills the command. A killed or failed `init`, `up` or `update` resumes
-   when you re-run the same command.
+   shorter timeout than that, redirect the command's output to a file and
+   append `& echo $! > cmd.pid`, then repeat
+   `while kill -0 "$(cat cmd.pid)" 2>/dev/null; do sleep 20; done` in
+   calls that fit your timeout until it returns. Then read the output's
+   last line; if it isn't a `result`, the command was killed. Don't end
+   your turn or session while it runs: in a non-interactive session
+   (`claude -p`, `codex exec`) that kills the command. A killed or failed
+   `init`, `up` or `update` resumes when you re-run the same command.
+10. **The examples use `jq`.** If it isn't installed, read the JSON some
+   other way (e.g. `python3 -m json.tool`); don't install it without
+   asking.
 
 ## Safety with the user's stack
 
 - Never run `destroy`, `reset`, `secrets rotate` or `self-update` unless
   the user asked for that. A stack you created yourself for a task the
   user gave you (for example "try it, then tear it down") counts as asked.
+- Loading data replaces the stack's phenotype data (`data demo`,
+  `data load-phenotype`), with no confirmation. On a stack you didn't
+  just create, check what's loaded (`status --deep`) and ask before
+  loading over it.
 - Open mode (`--auth-mode open`) lets anyone who reaches the URL query the
   data, and its ports listen on every interface. Use it for local trials
   with demo data only.
-- Demo data is synthetic. Real data may be in a stack: don't copy it out,
+- The demo datasets are public: NHANES (de-identified survey data),
+  Synthea (synthetic patients) and 1000 Genomes. Pick Synthea when the
+  user wants synthetic data only. A stack may also hold the user's own
+  data: don't copy it out,
   and don't share a support bundle from such a stack without asking. The
   bundle is redacted, but check it before it leaves the machine.
 
@@ -79,8 +90,9 @@ the user the failing checks
 (`jq -r '.checks[] | select(.status == "fail") | "\(.name): \(.message)"' doctor.json`)
 and fix them first. Warnings are fine.
 
-Then create the stack. Pick a directory and a name (letters, digits, `-`
-and `_`; the name can't change later):
+Then create the stack. Pick a directory and a name (lowercase letters,
+digits, `-` and `_`, starting with a letter or digit; it can't change
+later):
 
 ```sh
 pic-sure init ~/picsure/demo --json --name demo --auth-mode open \
@@ -119,7 +131,7 @@ Other datasets: `pic-sure data demo synthea --json`, `1000genomes` or
 | 2 | Usage error | Fix the command line: see `pic-sure COMMAND --help`. On a resumed `init`, a flag that differs from the saved config is exit 2: re-run with the original flags and change the setting with `config set`. |
 | 3 | Precondition unmet | Fix what the message names: start Docker, free the ports (or `--auto-ports` at init), run `init` (no stack) or `up` (not rendered), or supply the real Auth0 secret. |
 | 4 | Confirmation required | Nothing changed. Ask the user; add `--yes` only if they agree. |
-| 5 | Incompatible | Pending config migrations: run `update`. The release needs a newer pic-sure: run `self-update` (or add `--self-update`) only with the user's consent. A newer pic-sure rendered the stack: update this binary. |
+| 5 | Incompatible | Pending config migrations: run `update`. The release needs a newer pic-sure: with the user's consent, run `pic-sure self-update --json` and re-run the command (or add `--self-update`, which init refuses alongside a `--*-stdin` flag). A newer pic-sure rendered the stack: update this binary. |
 | 130, 143 | Interrupted (Ctrl-C, SIGTERM) | Cleanups ran. Re-run the same command to resume. |
 
 ## Common tasks
@@ -128,13 +140,13 @@ Run these inside the stack directory, or add `--stack DIR`.
 
 - **Health:** `pic-sure status --deep --json`, `pic-sure ps --json`,
   `pic-sure doctor --json` (add `--network` for connectivity and proxies).
-- **Change config:** `pic-sure config set hpds.java_opts -Xmx4g`, then
+- **Change config:** `pic-sure config set --json hpds.java_opts -Xmx4g`, then
   `pic-sure up --json`. `config show --json` prints the whole config;
   `config get KEY --json` one value. `config set` takes its flags before
   KEY.
 - **Start and stop:** `pic-sure up --json` (safe to re-run; it converges),
   `pic-sure down --json` (keeps data), `pic-sure restart --json SERVICE`.
-- **Logs:** `pic-sure logs --json SERVICE | tail -n 200 | jq -r .line`
+- **Logs:** `pic-sure logs --json SERVICE | jq -r 'select(.type == "log") | .line' | tail -n 200`
   (no SERVICE means every service). Avoid `--follow` in a tool call; it
   doesn't return.
 - **Update:** `pic-sure update --dry-run --json` shows the plan; then
@@ -177,7 +189,9 @@ Run these inside the stack directory, or add `--stack DIR`.
   section; `doctor --network` explains the Docker daemon's own proxy.
 - **Tear down** (only when asked): `pic-sure --stack DIR destroy --yes --json`
   removes the stack's containers, volumes and the files pic-sure created.
-  `pic-sure reset --yes --json` empties the data but keeps the config.
+  `pic-sure reset --yes --json` removes the data and the database
+  (`--keep-db` keeps the database) but keeps the config; the stack stays
+  stopped until `pic-sure up --json`.
   `pic-sure cache prune --json` frees images no stack uses.
 
 ## Troubleshooting
@@ -197,8 +211,9 @@ Run these inside the stack directory, or add `--stack DIR`.
   Then re-run the same command.
 - **Docker Desktop file sharing:** a data file outside Docker's shared
   folders is copied into pic-sure's cache first, so expect a copy step.
-  If even the copy can't be seen, the load exits 3: move the file under
-  the user's home directory.
+  If even the copy can't be seen, the load exits 3: move the file to a
+  directory Docker shares (Docker Desktop: Settings, Resources, File
+  sharing).
 - **Stack locked** (exit 1, "locked by"): another pic-sure command is
   changing the stack. Wait for it, or re-run with `--wait-lock`.
 - **"Data Sources: 0"** on the landing page with one dataset loaded is
