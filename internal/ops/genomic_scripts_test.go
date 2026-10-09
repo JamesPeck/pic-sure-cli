@@ -337,6 +337,17 @@ func TestLoadGenomicInterruptedBeforeRecoveringLeftovers(t *testing.T) {
 	if fx.recovers != 0 {
 		t.Errorf("%d recover helpers", fx.recovers)
 	}
+
+	// Without --promote this load wouldn't recover them.
+	fx = newGenomicFixture(t)
+	fx.live = ".old-a\n.promote-a\n"
+	ctx, cancel = context.WithCancel(context.Background())
+	defer cancel()
+	fx.onMove = cancel
+	_, err = fx.loadCtx(ctx, ops.GenomicLoadOptions{EnableProfile: true})
+	if err == nil || !strings.Contains(err.Error(), "HPDS may be stopped: run the load again, or `pic-sure up` to start HPDS") {
+		t.Errorf("interrupted without --promote: err = %v", err)
+	}
 }
 
 // TestLoadGenomicFollowsLinksAsTheContainerDoes checks which symlinked
@@ -362,7 +373,7 @@ func TestLoadGenomicFollowsLinksAsTheContainerDoes(t *testing.T) {
 	}{
 		{name: "relative, inside", link: func(string) string { return "../chr21.vcf.gz" }},
 		{name: "absolute, inside", link: func(dir string) string { return filepath.Join(dir, "chr21.vcf.gz") }},
-		{name: "relative, outside", link: func(string) string { return "../../../outside.vcf" }, copied: true},
+		{name: "relative, outside", link: func(string) string { return "../../outside.vcf" }, copied: true},
 		{name: "absolute through a linked --vcf-dir", viaDir: true, link: func(string) string { return filepath.Join(real, "data/chr22.vcf") }, copied: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -1553,9 +1553,9 @@ skippable:
   cancelled context, so each partition is its old or its new copy. The
   error names the partitions promoted (the script's output, settle's, and
   any that are there now and weren't before) and those not. While
-  leftovers may remain (found and not yet recovered, or the recovery
-  failed), an error says to run the load again before starting HPDS
-  rather than suggesting `up`. HPDS reads
+  leftovers this `Promote` load would recover may remain (found and not
+  yet recovered, or the recovery failed), an error says to run the load
+  again before starting HPDS rather than suggesting `up`. HPDS reads
   `<genomic dir>/<partition>/<contig>/`.
 - `hpds-profile` and `render` (`EnableProfile`): `hpds.profile` is set to
   `GenomicProfile` (`bch-dev`) in pic-sure.yaml and cfg, and up's render

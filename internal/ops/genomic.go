@@ -230,8 +230,9 @@ type genomicLoad struct {
 	wasLive []string
 	// promoteErr is what promote returned, which steps.Run replaces with
 	// the context's cause when interrupted. unrecovered reports that
-	// hpds-genomic may hold leftovers: from input finding them until
-	// promote recovers them, or after settling it failed.
+	// hpds-genomic may hold leftovers this load would recover: from input
+	// finding them until promote recovers them, or after settling it
+	// failed.
 	promoteErr  error
 	unrecovered bool
 }
@@ -278,7 +279,7 @@ func (g *genomicLoad) input(ctx context.Context, sink events.Sink) error {
 		}
 	}
 	g.wasLive = live
-	g.unrecovered = len(g.leftovers) > 0
+	g.unrecovered = g.opts.Promote && len(g.leftovers) > 0
 	if len(g.leftovers) > 0 {
 		what := g.vol(hpdsGenomicVolume) + " holds what an interrupted promote left (" + strings.Join(g.leftovers, ", ") + ")"
 		if g.opts.Promote {
