@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -25,10 +26,10 @@ import (
 // helperScripts runs the alpine helper containers' scripts for real, so a
 // test checks what they do rather than their text. Locally, the script runs
 // under sh with each mount target in its arguments replaced by the host
-// directory standing in for the volume; the scripts take every path they
-// touch as an argument for this. In Docker, it runs in the alpine
-// container the argv names, with the stack's volumes swapped for the
-// test's own.
+// directory standing in for the volume, so it works only for a script that
+// takes every path it touches as an argument. In Docker, it runs in the
+// alpine container the argv names, with each mount's source swapped for
+// the test's own volume.
 type helperScripts struct {
 	t *testing.T
 	// vols maps the stack's volume names to a host directory, or in Docker
@@ -108,10 +109,11 @@ func (h *helperScripts) run(ctx context.Context, c fakerunner.Call, env ...strin
 			case "-v":
 				i++
 				src, rest, _ := strings.Cut(c.Argv[i], ":")
-				if v, ok := h.vols[src]; ok {
-					src = v
+				v, ok := h.vols[src]
+				if !ok {
+					return docker.Result{}, fmt.Errorf("the test has no volume for mount %s", c.Argv[i])
 				}
-				argv = append(argv, a, src+":"+rest)
+				argv = append(argv, a, v+":"+rest)
 			default:
 				argv = append(argv, a)
 			}
@@ -233,9 +235,12 @@ func (h *helperScripts) docker(vol, script string, args ...string) string {
 	h.names = append(h.names, name)
 	alpine, _ := catalog.LookupImage("alpine")
 	argv := append([]string{"run", "--rm", "--name", name, "--network", "none", "-v", h.vols[vol] + ":/d", alpine.Ref, "sh", "-c", script, "sh"}, args...)
-	out, err := exec.CommandContext(ctx, "docker", argv...).Output()
+	var stderr bytes.Buffer
+	cmd := exec.CommandContext(ctx, "docker", argv...)
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
 	if err != nil {
-		h.t.Fatalf("docker %s: %v", script, err)
+		h.t.Fatalf("docker %s: %v: %s", script, err, stderr.String())
 	}
 	return string(out)
 }

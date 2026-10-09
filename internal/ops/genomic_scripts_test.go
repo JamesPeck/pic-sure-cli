@@ -233,8 +233,8 @@ func TestLoadGenomicInterruptedPromoteSaysWhatIsLeft(t *testing.T) {
 			}
 			want := []string{"not promoted: synth", "HPDS is stopped: run the load again, or `pic-sure up` to start HPDS"}
 			if unrecovered {
-				want = []string{"HPDS would load its leftover .promote-* and .old-* directories",
-					"HPDS is stopped; don't start it until a load with --promote has recovered demo_hpds-genomic"}
+				want = []string{"HPDS would load its leftover .promote-* and .old-* directories as partitions",
+					"HPDS is stopped; run the load again, which recovers demo_hpds-genomic, before starting it"}
 			}
 			for _, w := range want {
 				if !strings.Contains(err.Error(), w) {
@@ -308,5 +308,124 @@ func TestLoadGenomicCopiesVCFsLinkedFromOutside(t *testing.T) {
 	}
 	if want := link + " links to a file outside " + fx.vcfDir + ", which the loaders can't see; copying the VCFs into the cache"; !slices.Contains(progress, want) {
 		t.Errorf("progress %q", progress)
+	}
+}
+
+// TestLoadGenomicInterruptedBeforeRecoveringLeftovers checks that a load
+// interrupted after finding an earlier promote's leftovers, but before
+// recovering them, doesn't advise starting HPDS on them.
+func TestLoadGenomicInterruptedBeforeRecoveringLeftovers(t *testing.T) {
+	fx := newGenomicFixture(t)
+	fx.live = ".old-a\n.promote-a\n"
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fx.onSplit = cancel
+	_, err := fx.loadCtx(ctx, ops.GenomicLoadOptions{Promote: true})
+	if err == nil || strings.Contains(err.Error(), "pic-sure up") || !strings.Contains(err.Error(), "HPDS and its data are unchanged; run the load again") {
+		t.Errorf("interrupted while loading: err = %v", err)
+	}
+
+	fx = newGenomicFixture(t)
+	fx.live = ".old-a\n.promote-a\n"
+	ctx, cancel = context.WithCancel(context.Background())
+	defer cancel()
+	fx.onMove = cancel // after finalize, before HPDS stops
+	_, err = fx.loadCtx(ctx, ops.GenomicLoadOptions{Promote: true})
+	if err == nil || !strings.Contains(err.Error(), "HPDS may be stopped; run the load again, which recovers demo_hpds-genomic, before starting it") {
+		t.Errorf("interrupted while stopping HPDS: err = %v", err)
+	}
+	if fx.recovers != 0 {
+		t.Errorf("%d recover helpers", fx.recovers)
+	}
+}
+
+// TestLoadGenomicFollowsLinksAsTheContainerDoes checks which symlinked
+// VCFs are copied without asking the daemon: those whose links leave
+// --vcf-dir as a container that mounts only it sees them.
+func TestLoadGenomicFollowsLinksAsTheContainerDoes(t *testing.T) {
+	real := t.TempDir()
+	write := func(p, data string) {
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join(real, "chr21.vcf.gz"), "vcf 21")
+	write(filepath.Join(real, "data/chr22.vcf"), "vcf 22")
+	for _, tc := range []struct {
+		name   string
+		link   func(dir string) (target string) // where dir/sub/chr22.vcf points
+		viaDir bool                             // --vcf-dir is a symlink to real/data
+		copied bool
+	}{
+		{name: "relative, inside", link: func(string) string { return "../chr21.vcf.gz" }},
+		{name: "absolute, inside", link: func(dir string) string { return filepath.Join(dir, "chr21.vcf.gz") }},
+		{name: "relative, outside", link: func(string) string { return "../../../outside.vcf" }, copied: true},
+		{name: "absolute through a linked --vcf-dir", viaDir: true, link: func(string) string { return filepath.Join(real, "data/chr22.vcf") }, copied: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newGenomicFixture(t)
+			dir := fx.vcfDir
+			if tc.viaDir {
+				dir = filepath.Join(t.TempDir(), "vcfs")
+				if err := os.Symlink(filepath.Join(real, "data"), dir); err != nil {
+					t.Fatal(err)
+				}
+				write(filepath.Join(real, "data/chr21.vcf.gz"), "vcf 21")
+				if err := os.MkdirAll(filepath.Join(real, "data/sub"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				fx.index = filepath.Join(fx.vcfDir, "vcfIndex.tsv")
+			}
+			link := filepath.Join(dir, "sub/chr22.vcf")
+			_ = os.Remove(link)
+			if !strings.HasPrefix(tc.link(dir), "/") {
+				write(filepath.Join(filepath.Dir(link), tc.link(dir)), "vcf outside")
+			}
+			if err := os.Symlink(tc.link(dir), link); err != nil {
+				t.Fatal(err)
+			}
+			if tc.viaDir {
+				_ = os.Remove(filepath.Join(real, "data/sub/chr22.vcf"))
+				if err := os.Symlink(tc.link(dir), filepath.Join(real, "data/sub/chr22.vcf")); err != nil && !os.IsExist(err) {
+					t.Fatal(err)
+				}
+			}
+			fx.writeIndex(t, "filename\n"+filepath.Join(dir, "chr21.vcf.gz")+"\n"+link+"\n")
+			_, err := fx.load(ops.GenomicLoadOptions{VCFDir: dir, MkdirTemp: func(p string) (string, error) { return os.MkdirTemp(t.TempDir(), p) }})
+			if err != nil {
+				t.Fatal(err)
+			}
+			// One probe either way: of --vcf-dir, or only of the copy.
+			if len(fx.probes) != 1 {
+				t.Fatalf("probes %q", fx.probes)
+			}
+			copied := !slices.Contains(fx.probes[0], dir+":"+dir+":ro")
+			if copied != tc.copied {
+				t.Errorf("copied = %v, probes %q", copied, fx.probes)
+			}
+		})
+	}
+}
+
+// TestLoadGenomicProbeSizesSymlinkTargets runs the input probe in alpine
+// over a volume holding the VCFs, one of them a relative symlink, and
+// checks that busybox sizes the link's target, as the host does.
+func TestLoadGenomicProbeSizesSymlinkTargets(t *testing.T) {
+	fx := newGenomicFixture(t)
+	fx.probeH = newDockerHelperScripts(t, fx.vcfDir)
+	link := filepath.Join(fx.vcfDir, "sub/chr22.vcf")
+	if err := os.Rename(link, filepath.Join(fx.vcfDir, "chr22.vcf")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../chr22.vcf", link); err != nil {
+		t.Fatal(err)
+	}
+	fx.probeH.seed(fx.vcfDir, map[string]string{"chr21.vcf.gz": "vcf chr21.vcf.gz", "chr22.vcf": "vcf sub/chr22.vcf"})
+	fx.probeH.docker(fx.vcfDir, "mkdir -p /d/sub; ln -s ../chr22.vcf /d/sub/chr22.vcf")
+	if _, err := fx.load(ops.GenomicLoadOptions{}); err != nil {
+		t.Fatalf("the probe didn't see the VCFs: %v", err)
 	}
 }

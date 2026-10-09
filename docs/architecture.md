@@ -1513,9 +1513,9 @@ skippable:
   mounted at its own path (the probe sizes symlinks' targets, `stat -L`,
   as the host does), or they are copied (keeping their relative paths)
   into a `MkdirTemp` dir that is mounted at that path instead, under
-  `LockUse` until the copy is removed. A VCF that is a symlink to a file
-  outside `VCFDir` is copied without probing, since the container can't
-  follow it. With `Promote`, it works out what to promote and refuses
+  `LockUse` until the copy is removed. If a VCF's symlinks, followed by
+  their text as a container that mounts only `VCFDir` does, leave
+  `VCFDir`, the VCFs are copied without probing. With `Promote`, it works out what to promote and refuses
   (exit 3) to leave more than `hpdsMaxPartitions` (10) in `hpds-genomic`,
   HPDS's limit, counting an interrupted promote's `.old-<p>` as `<p>`; with
   only `EnableProfile`, it warns if `hpds-genomic` holds no partition, or
@@ -1552,9 +1552,10 @@ skippable:
   even an interrupted one, `genomic-recover` runs again without the
   cancelled context, so each partition is its old or its new copy. The
   error names the partitions promoted (the script's output, settle's, and
-  any that are there now and weren't before) and those not; if the
-  recovery itself fails, it says not to start HPDS until a `Promote` load
-  has recovered the volume. HPDS reads
+  any that are there now and weren't before) and those not. While
+  leftovers may remain (found and not yet recovered, or the recovery
+  failed), an error says to run the load again before starting HPDS
+  rather than suggesting `up`. HPDS reads
   `<genomic dir>/<partition>/<contig>/`.
 - `hpds-profile` and `render` (`EnableProfile`): `hpds.profile` is set to
   `GenomicProfile` (`bch-dev`) in pic-sure.yaml and cfg, and up's render

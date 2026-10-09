@@ -189,7 +189,10 @@ func LoadGenomic(ctx context.Context, d *Deps, st *stack.Stack, cfg *stack.Confi
 	case GenomicInputStepID:
 		return nil, failed
 	case LoaderStopStepID:
-		if se.Interrupted {
+		switch {
+		case se.Interrupted && g.unrecovered:
+			return nil, fmt.Errorf("%w. HPDS may be stopped; run the load again, which recovers %s, before starting it", failed, g.vol(hpdsGenomicVolume))
+		case se.Interrupted:
 			return nil, fmt.Errorf("%w. HPDS may be stopped: run the load again, or `pic-sure up` to start HPDS", failed)
 		}
 		return nil, failed
@@ -197,7 +200,7 @@ func LoadGenomic(ctx context.Context, d *Deps, st *stack.Stack, cfg *stack.Confi
 		return nil, fmt.Errorf("%w. HPDS and its data are unchanged; %s", failed, again)
 	case GenomicPromoteStepID:
 		if g.unrecovered {
-			return nil, fmt.Errorf("%w. HPDS is stopped; don't start it until a load with --promote has recovered %s", failed, g.vol(hpdsGenomicVolume))
+			return nil, fmt.Errorf("%w. HPDS is stopped; run the load again, which recovers %s, before starting it", failed, g.vol(hpdsGenomicVolume))
 		}
 		return nil, fmt.Errorf("%w. HPDS is stopped: %s, or `pic-sure up` to start HPDS on the partitions it has", failed, again)
 	case LoaderStartStepID:
@@ -227,7 +230,8 @@ type genomicLoad struct {
 	wasLive []string
 	// promoteErr is what promote returned, which steps.Run replaces with
 	// the context's cause when interrupted. unrecovered reports that
-	// settling hpds-genomic after it failed also failed.
+	// hpds-genomic may hold leftovers: from input finding them until
+	// promote recovers them, or after settling it failed.
 	promoteErr  error
 	unrecovered bool
 }
@@ -274,6 +278,7 @@ func (g *genomicLoad) input(ctx context.Context, sink events.Sink) error {
 		}
 	}
 	g.wasLive = live
+	g.unrecovered = len(g.leftovers) > 0
 	if len(g.leftovers) > 0 {
 		what := g.vol(hpdsGenomicVolume) + " holds what an interrupted promote left (" + strings.Join(g.leftovers, ", ") + ")"
 		if g.opts.Promote {
@@ -411,19 +416,52 @@ func (g *genomicLoad) checkVisible(ctx context.Context, sink events.Sink) error 
 	return nil
 }
 
-// linksOut returns the first VCF that is a symlink to a file outside
-// VCFDir, where a container that mounts only VCFDir can't follow it, or "".
+// linksOut returns the first VCF whose symlinks a container that mounts
+// only VCFDir, at its own path, can't follow, or "".
 func (g *genomicLoad) linksOut() string {
-	dir, err := filepath.EvalSymlinks(g.opts.VCFDir)
-	if err != nil {
-		return ""
-	}
 	for _, f := range g.vcfs {
-		if real, err := filepath.EvalSymlinks(f); err == nil && !within(real, dir) {
+		if !followsWithin(f, g.opts.VCFDir) {
 			return f
 		}
 	}
 	return ""
+}
+
+// followsWithin reports whether f, under dir, resolves to a file without
+// leaving dir, following symlinks as a container that mounts only dir at
+// its own path does: by their text, relative to the link's directory.
+func followsWithin(f, dir string) bool {
+	p := f
+	for range 40 { // Linux's limit on symlinks in one lookup
+		rel, err := filepath.Rel(dir, p)
+		if err != nil || !filepath.IsLocal(rel) {
+			return false
+		}
+		cur, parts, followed := dir, strings.Split(rel, string(filepath.Separator)), false
+		for i, part := range parts {
+			next := filepath.Join(cur, part)
+			fi, err := os.Lstat(next)
+			if err != nil {
+				return false
+			}
+			if fi.Mode()&os.ModeSymlink != 0 {
+				target, err := os.Readlink(next)
+				if err != nil {
+					return false
+				}
+				if !filepath.IsAbs(target) {
+					target = filepath.Join(cur, target)
+				}
+				p, followed = filepath.Join(append([]string{target}, parts[i+1:]...)...), true
+				break
+			}
+			cur = next
+		}
+		if !followed {
+			return true
+		}
+	}
+	return false
 }
 
 // stage clears the loaders' working directories in the staging volume,
@@ -516,10 +554,11 @@ const recoverScript = `cd "$1"; for d in ./` + promotePrefix + `* ./` + oldPrefi
 // .old-<p>, the copy to <p>, and .old-<p> removed, so an interruption
 // leaves at most one partition part way, which settle puts right. It
 // prints "promoted <p>" before removing .old-<p>, so that a partition is
-// reported as promoted by it or, after an interruption, by settle. After any failure, even an interrupted one, a second helper run
-// without the cancelled context settles every partition, since HPDS would
-// load a leftover as a partition. With Backup it first copies the live
-// store into the staging volume's all-bak the same way.
+// reported as promoted by it or, after an interruption, by settle. After
+// any failure, even an interrupted one, a second helper run without the
+// cancelled context settles every partition, since HPDS would load a
+// leftover as a partition. With Backup it first copies the live store into
+// the staging volume's all-bak the same way.
 func (g *genomicLoad) promote(ctx context.Context, sink events.Sink) (err error) {
 	staging, live := g.vol(genomicStagingVolume), g.vol(hpdsGenomicVolume)
 	var out bytes.Buffer
@@ -559,10 +598,10 @@ func (g *genomicLoad) promote(ctx context.Context, sink events.Sink) (err error)
 func (g *genomicLoad) afterFailedPromote(ctx context.Context, err error, out string) error {
 	live := g.vol(hpdsGenomicVolume)
 	settled, rerr := g.settleLive(ctx)
+	g.unrecovered = rerr != nil
 	if rerr != nil {
-		g.unrecovered = true
-		return errors.Join(err, fmt.Errorf("recovering volume %s: %w. HPDS would load its leftover %s* and %s* directories "+
-			"as partitions; the next load with --promote recovers them", live, rerr, promotePrefix, oldPrefix))
+		return errors.Join(err, fmt.Errorf("recovering volume %s: %w. HPDS would load its leftover %s* and %s* directories as partitions",
+			live, rerr, promotePrefix, oldPrefix))
 	}
 	// A partition is promoted if the script or settle said so, or if it is
 	// there now and wasn't before.
@@ -607,6 +646,7 @@ func (g *genomicLoad) recoverLive(ctx context.Context, sink events.Sink) error {
 	if err != nil {
 		return fmt.Errorf("recovering volume %s: %w", live, err)
 	}
+	g.unrecovered = false
 	if out = strings.TrimSpace(out); out != "" {
 		sink.Emit(events.Progress{ID: GenomicPromoteStepID, Text: strings.ReplaceAll(out, "\n", "; ")})
 	}

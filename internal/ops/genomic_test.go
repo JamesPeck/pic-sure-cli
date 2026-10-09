@@ -10,7 +10,9 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/JamesPeck/pic-sure-cli/internal/cache"
 	"github.com/JamesPeck/pic-sure-cli/internal/catalog"
 	"github.com/JamesPeck/pic-sure-cli/internal/docker"
 	"github.com/JamesPeck/pic-sure-cli/internal/docker/fakerunner"
@@ -39,11 +41,14 @@ type genomicFixture struct {
 	recovers    int        // genomic-recover helpers run
 	recoverExit int
 	onPromote   func() (docker.Result, error) // answers the promote helper
+	onSplit     func()                        // runs as the split loader does
+	onMove      func()                        // runs as the move helper does
 	// h, if set, runs the list, move, backup, promote and recover helpers'
 	// scripts for real, and the split loader writes a contig into all/
 	// for them. shim is the environment of the backup and promote runs.
 	h         *helperScripts
 	shim      []string
+	probeH    *helperScripts // if set, runs the input probe for real
 	partition string
 }
 
@@ -72,8 +77,11 @@ func newGenomicFixture(t *testing.T) *genomicFixture {
 		out, _ := json.Marshal([]map[string]any{{"Name": vol, "CreatedAt": "2026-10-07T12:00:00Z", "Labels": map[string]string{stack.LabelStack: "demo"}}})
 		f.On(fakerunner.Exact("docker", "volume", "inspect", vol)).Stdout(string(out))
 	}
-	f.On(fakerunner.Glob("docker run --rm --name demo-genomic-input-* --network none *")).Do(func(_ context.Context, c fakerunner.Call) (docker.Result, error) {
+	f.On(fakerunner.Glob("docker run --rm --name demo-genomic-input-* --network none *")).Do(func(ctx context.Context, c fakerunner.Call) (docker.Result, error) {
 		fx.probes = append(fx.probes, c.Argv)
+		if fx.probeH != nil {
+			return fx.probeH.run(ctx, c)
+		}
 		if fx.hiddenOnce && len(fx.probes) == 1 {
 			return docker.Result{Stdout: []byte("-1\n-1\n")}, nil
 		}
@@ -93,6 +101,9 @@ func newGenomicFixture(t *testing.T) *genomicFixture {
 	})
 	for _, id := range []string{ops.GenomicSplitStepID, ops.GenomicMetadataStepID, ops.GenomicFinalizeStepID} {
 		f.On(fakerunner.Glob("docker run --rm --name demo-" + id + "-* --user 0:0 --network none *")).Do(func(context.Context, fakerunner.Call) (docker.Result, error) {
+			if fx.onSplit != nil && id == ops.GenomicSplitStepID {
+				fx.onSplit()
+			}
 			if fx.h != nil && id == ops.GenomicSplitStepID {
 				fx.h.seed("demo_genomic-staging", map[string]string{"all/chr21/variants": "new " + fx.partition})
 			}
@@ -100,6 +111,9 @@ func newGenomicFixture(t *testing.T) *genomicFixture {
 		})
 	}
 	f.On(fakerunner.Glob("docker run --rm --name demo-genomic-move-* *")).Do(func(ctx context.Context, c fakerunner.Call) (docker.Result, error) {
+		if fx.onMove != nil {
+			fx.onMove()
+		}
 		if fx.h != nil {
 			return fx.h.run(ctx, c)
 		}
@@ -347,15 +361,35 @@ func TestLoadGenomicRefusals(t *testing.T) {
 func TestLoadGenomicCopiesVCFsTheDaemonCantSee(t *testing.T) {
 	fx := newGenomicFixture(t)
 	fx.hiddenOnce = true
-	var copyDir string
-	_, err := fx.load(ops.GenomicLoadOptions{MkdirTemp: func(p string) (string, error) {
-		var err error
-		copyDir, err = os.MkdirTemp(t.TempDir(), p)
-		return copyDir, err
-	}})
+	c, err := cache.Open(filepath.Join(t.TempDir(), "cache"), cache.Options{LockTimeout: 100 * time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
 	}
+	pruneErr := errors.New("the split loader didn't run")
+	fx.onSplit = func() {
+		lock, err := c.LockPrune(context.Background())
+		if err == nil {
+			_ = lock.Unlock()
+		}
+		pruneErr = err
+	}
+	var copyDir string
+	_, err = fx.load(ops.GenomicLoadOptions{MkdirTemp: func(p string) (string, error) {
+		var err error
+		copyDir, err = c.TempDir(p)
+		return copyDir, err
+	}, LockUse: c.LockUse})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pruneErr == nil {
+		t.Error("a prune could run while the loaders read the copy")
+	}
+	lock, err := c.LockPrune(context.Background())
+	if err != nil {
+		t.Fatalf("the use lock is still held after the load: %v", err)
+	}
+	_ = lock.Unlock()
 	if len(fx.probes) != 2 || !slices.Contains(fx.probes[1], copyDir+":"+fx.vcfDir+":ro") {
 		t.Fatalf("probes %q", fx.probes)
 	}
