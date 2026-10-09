@@ -263,7 +263,9 @@ it.
   exit 3, pointing at `init`. `status` and `doctor` pass their reports
   through `log.Redact`, since compose's errors can quote a secret.
   `down` and `restart` take the stack lock and run as one step
-  whose `Log` events are compose's output. `ps --json` uses status's
+  whose `Log` events are compose's output; `down` first runs
+  `ops.RemoveHelperContainers` (095), since a helper a killed command left
+  keeps the data network. `ps --json` uses status's
   service shape (`ops.StatusServices`). `logs` writes the logs to stdout and compose's own
   messages to stderr (a `logs` step under `--json`), and reports Ctrl-C as
   the signal alone. `compose` refuses `--json`, runs in the foreground
@@ -1426,7 +1428,9 @@ steps depend on each other, so the command doesn't take `--skip-step`:
 
 A failure after `hpds-stop` leaves hpds stopped, and the error says how to
 recover: run the load again (or `up` to start HPDS without data), or, when
-only the start failed, check the logs and run `up`. A load holds no cache
+only the start failed, an `*HPDSStartError` (095), returned with the
+provenance since the data is loaded, that says to check the logs and run
+`up`. A load holds no cache
 lock for a plain CSV, which isn't in the cache, or an extracted one, which
 is in a fresh `tmp/` dir that prune keeps while it is recent or mounted. A
 copy made because the daemon can't see the input is held under `LockUse`
@@ -1439,7 +1443,8 @@ load-phenotype --input-dir`), AIO's `etl.sh load_multiple`: the sequential
 loader runs before hpds stops, so a failed load leaves HPDS as it was.
 
 - `hpds-input`: as above, for the directory's inputs (`dirInputs`): its
-  top-level `*.csv` files and `config.json`, following symlinks. No CSV, or
+  top-level `*.csv` files and `config.json`, following symlinks, skipping
+  macOS metadata (`phenoinput.MacMetadata`, 095). No CSV, or
   an `*.sql`/`sql.properties` (D26), is exit 2; other entries get a warning
   that they aren't loaded. The provenance is `phenotype:<sha256 of the
   manifest>`, one `<sha256>  <name>` line per input in name order. The
@@ -1476,7 +1481,11 @@ facets, as AIO's `hydrate-dictionary --clear`); `DictionaryCustom` is
 touched it builds the step list (so a bad custom CSV is exit 2) and runs
 `Preflight`, or `PreflightETL` with `SkipWeights`. A dictionary step's
 failure or interrupt is a `*PhenotypeDictionaryError{Step, Interrupted,
-Err}` (its exit code is Err's), returned with the dataset HPDS now has.
+Err, HPDSStart}` (its exit code is Err's), returned with the dataset HPDS
+now has. The dictionary-etl reads only the data volume, never HPDS, so an
+`*HPDSStartError` from the load doesn't stop the dictionary steps (095): it
+is returned once they succeed, or kept in the dictionary error's
+`HPDSStart`. The cli then gives no rerun hint for a start failure alone.
 
 **Dictionary (044, `dictionary.go`, `dictionary_csv.go`).** §9.6's
 dictionary operations. `NewDictionary(d, st, cfg, sec, state)` holds one
@@ -1485,9 +1494,12 @@ removes it even after a cancel. The phenotype and demo loads (045, 046)
 concatenate its step lists with their own and end with one `RefreshStep()`.
 
 - **ETL.** Started by the first step that needs it: `hms-dbmi/dictionary-etl`
-  at state.json's tag, `docker run -d` with a unique name and the stack's
-  labels (no `--rm`, so its logs survive a failed start), on
-  `<name>_data` as `dictionaryetl`, the dictionary DB's `POSTGRES_*` as
+  at state.json's tag, `docker run -d` with a unique name
+  (`<name>-dictionaryetl-<hex>`) and the stack's labels (no `--rm`, so
+  its logs survive a failed start). First `RemoveHelperContainers` removes
+  any such container of this stack an earlier run left (095: a second
+  Ctrl-C, a kill, a failed `Rm`), which would share the alias. It runs on
+  `<name>_data` as `dictionaryetl`, with the dictionary DB's `POSTGRES_*` as
   env names, `hpds-data` (or the shared set's volume, read-only) at
   `/opt/local/hpds`. The image has Spring actuator, so readiness is
   `/actuator/health` reporting `UP`, polled with `docker exec … wget`
@@ -1521,6 +1533,12 @@ concatenate its step lists with their own and end with one `RefreshStep()`.
   `concepts_*.csv` files, at any depth, in name order, split by exact
   `dataset_ref` into a temp dir, one pass per 200 datasets (`LoadCSVOptions.TempDir`; the cli
   uses the cache's), then one PUT per dataset, `datasetRef` URL-encoded. `FacetSteps`: `facets`, three PUTs in order.
+  It reads the files first (`openFacetLoad`, 095), byte order mark dropped:
+  the categories and facets files need dictionary-etl's columns
+  (`name(unique)`, `facet_name(unique)`; AIO's custom fixtures predate
+  them and the ETL answers 400) and at least one row, no row narrower
+  than its header, and no file a column twice; otherwise exit 2 before
+  HPDS or the dictionary is touched.
   `FacetConfigSteps(json)` (046): `facet-config`, POST
   `/api/facet/loader/load`; the answer must be the ETL's JSON result.
   `Preflight(ctx, WeightsOptions)` (046) checks what hydrate and weights
@@ -1631,7 +1649,9 @@ DemoOptions{Dataset, HeapMB, Cache, HTTP})` is `data demo` (§9.6).
   `HydrateSteps` (default facets, clear), `FacetConfigSteps` with
   `render.DemoFacetConfig()`, `WeightsSteps` and `RefreshStep`.
 - A dictionary failure says HPDS has the data and to re-run `data demo`;
-  the downloads are reused.
+  the downloads are reused. HPDS failing to start doesn't stop the
+  dictionary run (095); its `*HPDSStartError` is returned afterwards, or
+  joined to the dictionary failure.
 
 **Shared data sets (050, `shareddata.go`).** §9.7.
 `PublishSharedData(ctx, d, st, cfg, state, PublishOptions{Name,
@@ -1795,9 +1815,15 @@ one without stack labels predates them and is taken as the stack's.
 `doctor`'s `stack-name` check reports the same.
 
 **Reset and destroy (056, `teardown.go`).** §9.8. Both run a `down` step
-(compose down; nothing when `d.Compose` is nil, a never-rendered stack)
+(`RemoveHelperContainers`, then compose down; nothing more when
+`d.Compose` is nil, a never-rendered stack)
 and a `volumes` step over `StackResources`' volumes that are the stack's
-own or adopted (084), selected by label, never by name. `Reset` makes the
+own or adopted (084), selected by label, never by name.
+`RemoveHelperContainers(ctx, d, sink, step, st, name, match)` (095)
+removes, with a warning each, the containers labelled for the stack that
+compose didn't start and `stack.Owner` calls its own or moved, so a
+copy never removes its original's: a leaked dictionary-etl would
+otherwise hold `_hpds-data` and the data network. `Reset` makes the
 ownership check first, so in a copy it is exit 3 before anything changes.
 `Destroy` with any foreign resource (a copy, or another stack of the same
 name) runs only the `files` step, lists those resources in `LeftAlone`
@@ -2899,7 +2925,8 @@ the loader can mount (§9.6), using only Go's archive libraries.
   7-Zip), and an archive without `.csv` entries are rejected.
 - **Entries** are an archive's regular files whose names end in `.csv` (any
   case), cleaned with `path.Clean`, so `./a.csv` is listed and matched as
-  `a.csv`. macOS metadata (`._*`, `__MACOSX/`) doesn't count. An archive
+  `a.csv`. macOS metadata (`._*`, `__MACOSX/`; `MacMetadata`, which the
+  `--input-dir` loader shares) doesn't count. An archive
   with a CSV entry outside its own directory (`../x.csv`, `/x.csv`) or two
   CSV entries of the same name is rejected outright.
 - `Resolve(ctx, file, Options{Entry, MkdirTemp})` returns an `Input` (`CSV`,
@@ -2915,6 +2942,8 @@ the loader can mount (§9.6), using only Go's archive libraries.
   run left behind.
 - One CSV entry is selected automatically. Several need `--entry`, and a
   missing or unknown `--entry` is an `*EntryError` listing the entries.
+  A problem with the file itself (empty, binary, unsupported or corrupt,
+  no usable entry) is an `*InputError` (095); the cli makes both exit 2.
   `--entry` for a non-archive becomes a warning in `Input.Warnings` for the
   caller to emit. Reads stop when `ctx` ends, with its cause as the error.
 - Gzip input may hold several members and trailing zero padding, as GNU

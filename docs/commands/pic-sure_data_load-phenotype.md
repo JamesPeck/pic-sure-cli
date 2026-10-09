@@ -9,8 +9,9 @@ archive with several CSVs needs --entry. HPDS is stopped for the load and
 started again once the loader has finished.
 
 --input-dir instead takes a directory of such CSVs (and the loader's
-optional config.json; other entries are left out), which the sequential
-loader reads into a temporary volume while HPDS keeps running. HPDS is
+optional config.json; other entries, and macOS "._" files, are left
+out), which the sequential loader reads into a temporary volume while
+HPDS keeps running. HPDS is
 then stopped, and the loader's output replaces its phenotype data.
 
 With --file, the previous load's files are removed before the loader runs,
@@ -21,10 +22,15 @@ Then the dictionary is rebuilt. --dictionary auto (the default) builds it
 from the loaded data. --dictionary custom loads --datasets and --concepts
 (as `dictionary load-csv`), and the facets if --facets-categories,
 --facets and --facet-concepts are all given (as `dictionary load-facets`).
-Both replace the dictionary's contents. Last, the search weights are
-recomputed, unless --skip-weights. If a dictionary step fails, HPDS keeps
-the new data and the error gives the dictionary commands that finish the
-load.
+Both replace the dictionary's contents. The custom files, facets included,
+are checked for the columns dictionary-etl requires before HPDS is
+touched. Last, the search weights are recomputed, unless --skip-weights.
+If a dictionary step fails, HPDS keeps the new data and the error gives
+the dictionary commands that finish the load.
+
+The dictionary is built from the data volume, so it is rebuilt even when
+HPDS fails to start after the load; the error then says to check
+`pic-sure logs hpds` and run `pic-sure up`.
 ```
 
 ```

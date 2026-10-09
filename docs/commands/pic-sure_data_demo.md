@@ -5,6 +5,8 @@ Load a demo dataset (default: nhanes)
 ```text
 Replace the stack's HPDS phenotype data with a public demo dataset, then
 rebuild the dictionary from it with the demo facets and search weights.
+The dictionary is rebuilt even when HPDS fails to start after the load;
+the error then says to run `pic-sure up`.
 
 The files come from hms-dbmi/pic-sure-public-datasets at a commit pinned in
 pic-sure, through the stack's proxy, and are checked against pinned SHA-256

@@ -98,8 +98,12 @@ func newDictionaryLoadFacetsCmd(a *App) *cobra.Command {
 	c := &cobra.Command{
 		Use:   "load-facets --categories FILE --facets FILE --concepts FILE",
 		Short: "Load facet categories, facets and facet concepts",
-		Long:  `Load facet categories, facets and facet concepts from CSV, in that order.` + dictionaryLong,
-		Args:  cobra.NoArgs,
+		Long: `Load facet categories, facets and facet concepts from CSV, in that order.
+The categories file needs the columns name(unique), display name and
+description; the facets file facet_category, facet_name(unique),
+display_name, description and parent_name; and both need rows. A file
+without them is exit 2 before anything changes.` + dictionaryLong,
+		Args: cobra.NoArgs,
 	}
 	categories := c.Flags().String("categories", "", "the facet categories CSV")
 	facets := c.Flags().String("facets", "", "the facets CSV")
