@@ -1298,8 +1298,9 @@ init, and the parts `up` and `update` reuse.
   `stack.PeekState(dir)` reads state.json without opening the stack.
 
 **Up (035, `up.go`).** §9.2. `UpSteps(d, st, cfg, sec, state,
-ConvergeOptions)` is init's plan with a `restart` step before `start`:
-`resolve`, `images`, `tls`,
+ConvergeOptions)` is init's plan with `genomic-leftovers` after
+`resolve` and a `restart` step before `start`:
+`resolve`, `genomic-leftovers`, `images`, `tls`,
 `truststore`, `render`, `db`[, `db-bootstrap`], `migrate`, `seed`,
 `hpds-key`, `restart`, `start`; `UpStepIDs(cfg)` lists the IDs. Its
 `resolve` (079) is build's, limited to the components state.json records
@@ -1325,7 +1326,9 @@ the genomic store holds an interrupted promote's leftovers
 (`GenomicLeftovers`, below), since HPDS would load them as partitions.
 Starting all but hpds isn't clean (the query service depends on it), and
 a later refusal would let `restart` restart hpds and `update` migrate the
-database first, so nothing after it runs.
+database first, so nothing after it runs. Like every up step it can be
+skipped (`--skip-step genomic-leftovers`), an explicit override for an
+operator who can't run the load that recovers.
 
 **Update (036, `update.go`).** §9.3. `PlanUpdate(ctx, d, st, doc, cfg,
 sec, state, UpdateOptions{ConvergeOptions, Release, Components,
