@@ -302,27 +302,29 @@ type FacetOptions struct {
 
 // FacetSteps loads facet categories, facets and facet concepts, in that
 // order, as one step, `facets`. It reads and checks the three files first
-// (openFacetLoad), so a file the ETL would reject is a usage error before
+// (checkFacetFiles), so a file the ETL would reject is a usage error before
 // anything changes.
 func (x *Dictionary) FacetSteps(opts FacetOptions) ([]steps.Step, error) {
-	in, err := openFacetLoad(opts)
-	if err != nil {
+	if err := checkFacetFiles(opts); err != nil {
 		return nil, err
 	}
 	return []steps.Step{{
 		ID:    StepFacets,
 		Title: "Load the facets",
 		Apply: func(ctx context.Context, sink events.Sink) error {
-			for _, put := range []struct {
-				file, path string
-				data       []byte
-			}{
-				{opts.Categories, "/api/facet/category/csv", in.categories},
-				{opts.Facets, "/api/facet/csv", in.facets},
-				{opts.Concepts, "/api/facet/concept/csv", in.concepts},
+			for _, put := range []struct{ file, path string }{
+				{opts.Categories, "/api/facet/category/csv"},
+				{opts.Facets, "/api/facet/csv"},
+				{opts.Concepts, "/api/facet/concept/csv"},
 			} {
 				sink.Emit(events.Progress{ID: StepFacets, Text: "loading " + filepath.Base(put.file)})
-				if _, err := x.request(ctx, sink, StepFacets, "PUT", put.path, "text/plain", bytes.NewReader(put.data)); err != nil {
+				in, err := openWithoutBOM(put.file)
+				if err != nil {
+					return err
+				}
+				_, err = x.request(ctx, sink, StepFacets, "PUT", put.path, "text/plain", in)
+				_ = in.Close()
+				if err != nil {
 					return err
 				}
 			}

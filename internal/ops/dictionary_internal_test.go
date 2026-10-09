@@ -782,7 +782,7 @@ func TestDictionaryRemovesALeftoverETLFirst(t *testing.T) {
 	compose := x.st.Labels("demo")
 	compose[stack.LabelComposeProject] = "demo"
 	x.helpers = ps("demo-dictionaryetl-0a1b2c3d", x.st.Labels("demo")) + // this stack's leftover
-		ps("demo-dictionaryetl-44556677", copied) + // a copy's
+		ps("demo-dictionaryetl-44556677", copied) + // another directory's
 		ps("demo-hpds-load-8899aabb", x.st.Labels("demo")) + // not an ETL
 		ps("demo-dictionary-api-1", compose)
 	x.stackUp()

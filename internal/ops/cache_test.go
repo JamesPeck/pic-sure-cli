@@ -70,6 +70,9 @@ func (fd *fakeDaemon) answer(argv []string) (docker.Result, error) {
 		}
 		return docker.Result{Stdout: []byte(strings.Join(ids, "\n"))}, nil
 	case "rm -v":
+		if msg, ok := fd.rmFail[argv[len(argv)-1]]; ok {
+			return docker.Result{ExitCode: 1, Stderr: []byte("Error response from daemon: " + msg)}, nil
+		}
 		fd.containers = slices.DeleteFunc(fd.containers, func(c fakeContainer) bool { return c.name == argv[len(argv)-1] })
 		return docker.Result{}, nil
 	case "container inspect":

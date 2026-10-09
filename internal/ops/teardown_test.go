@@ -433,3 +433,20 @@ func withLabel(labels map[string]string, k, v string) map[string]string {
 	l[k] = v
 	return l
 }
+
+func TestResetRunsComposeDownWhenAHelperStays(t *testing.T) {
+	cx := newCopyFixture(t)
+	cx.fx.daemon.containers = append(cx.fx.daemon.containers, fakeContainer{name: "alpha-dictionaryetl-0a1b2c3d", labels: cx.st.Labels("alpha")})
+	cx.fx.daemon.rmFail = map[string]string{"alpha-dictionaryetl-0a1b2c3d": "removal of container is already in progress"}
+	f := teardownRunner(t, cx.fx.daemon)
+	comp := &downComposer{}
+	d := &ops.Deps{Runner: f, Docker: docker.NewEngine(f), Compose: comp, Clock: ops.FixedClock(cacheNow), Sink: events.Discard}
+
+	_, err := ops.Reset(context.Background(), d, cx.st, ops.TeardownOptions{Name: "alpha"})
+	if err == nil || !strings.Contains(err.Error(), "couldn't remove containers alpha-dictionaryetl-0a1b2c3d") {
+		t.Fatalf("err = %v", err)
+	}
+	if comp.downs != 1 {
+		t.Errorf("compose down ran %d times, want once despite the helper", comp.downs)
+	}
+}

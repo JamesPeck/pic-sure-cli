@@ -220,7 +220,7 @@ func (p *publish) check(ctx context.Context, sink events.Sink) error {
 		return err
 	}
 	if slices.Equal(probe.missing, []string{"columnMeta.csv"}) {
-		return exitcode.Precondition("volume %s has no columnMeta.csv, which only the dictionary's %s step makes (a custom-dictionary load skips it); "+
+		return exitcode.Precondition("volume %s has no columnMeta.csv (or an empty one), which only the dictionary's %s step makes (a custom-dictionary load skips it); "+
 			"make it with `pic-sure dictionary hydrate --skip-step %s`", p.srcData, StepColumnMeta, StepHydrate)
 	}
 	if len(probe.missing) > 0 {

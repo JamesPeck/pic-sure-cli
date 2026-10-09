@@ -146,8 +146,6 @@ func DataDemo(ctx context.Context, d *Deps, st *stack.Stack, cfg *stack.Config, 
 	if err := x.Preflight(ctx, WeightsOptions{Cache: opts.Cache}); err != nil {
 		return "", err
 	}
-	// The dictionary reads only the data volume, so HPDS failing to start
-	// doesn't stop it.
 	dataset, err := demoLoad(ctx, d, st, cfg, state, opts, files)
 	var startErr *HPDSStartError
 	if err != nil && !errors.As(err, &startErr) {

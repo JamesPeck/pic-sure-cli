@@ -241,3 +241,27 @@ func (c ctxReader) Read(p []byte) (int, error) {
 	}
 	return c.r.Read(p)
 }
+
+// inputReader makes r's read errors, a corrupt or truncated archive or
+// stream, *InputErrors, unless ctx has ended, so they stay apart from
+// errors writing the extracted CSV.
+type inputReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (i inputReader) Read(p []byte) (int, error) {
+	n, err := i.r.Read(p)
+	if err != nil && err != io.EOF && i.ctx.Err() == nil {
+		err = &InputError{Err: err}
+	}
+	return n, err
+}
+
+// readErr is an error reading file: an *InputError unless ctx has ended.
+func readErr(ctx context.Context, file string, err error) error {
+	if ctx.Err() != nil {
+		return fmt.Errorf("reading %s: %w", file, err)
+	}
+	return inputErr("reading %s: %w", file, err)
+}

@@ -6,7 +6,8 @@ Load facet categories, facets and facet concepts
 Load facet categories, facets and facet concepts from CSV, in that order.
 The categories file needs the columns name(unique), display name and
 description; the facets file facet_category, facet_name(unique),
-display_name, description and parent_name; and both need rows. A file
+display_name, description and parent_name; and both need rows, none with
+fewer fields than the header (dictionary-etl would skip it). A file
 without them is exit 2 before anything changes.
 The stack must be up: the operation runs a dictionary-etl container on the
 stack's data network, sends it the data from short-lived curl containers,

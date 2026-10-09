@@ -31,10 +31,8 @@ func newDownCmd(a *App) *cobra.Command {
 				if err != nil {
 					return configError(err)
 				}
-				if err := ops.RemoveHelperContainers(cmd.Context(), d, d.Sink, "down", st, cfg.Name, nil); err != nil {
-					return err
-				}
-				return d.Compose.Down(cmd.Context(), docker.ComposeDownOpts{Out: out})
+				helperErr := ops.RemoveHelperContainers(cmd.Context(), d, d.Sink, "down", st, cfg.Name, nil)
+				return errors.Join(helperErr, d.Compose.Down(cmd.Context(), docker.ComposeDownOpts{Out: out}))
 			})
 		},
 	}

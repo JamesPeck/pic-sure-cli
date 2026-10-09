@@ -184,25 +184,23 @@ func Destroy(ctx context.Context, d *Deps, st *stack.Stack, opts TeardownOptions
 	return report, steps.Run(ctx, d.Sink, plan, steps.Options{})
 }
 
-// downStep removes the stack's helper containers, then runs compose down.
-// A stack that was never rendered has no compose file, and no containers
-// compose started.
+// downStep removes the stack's helper containers, then runs compose down,
+// even if a helper couldn't be removed. A stack that was never rendered
+// has no compose file, and no containers compose started.
 func downStep(d *Deps, st *stack.Stack, name string) steps.Step {
 	return steps.Step{
 		ID:    StepTeardownDown,
 		Title: "Stop and remove the stack's containers",
 		Apply: func(ctx context.Context, sink events.Sink) error {
-			if err := RemoveHelperContainers(ctx, d, sink, StepTeardownDown, st, name, nil); err != nil {
-				return err
-			}
+			helperErr := RemoveHelperContainers(ctx, d, sink, StepTeardownDown, st, name, nil)
 			if d.Compose == nil {
 				sink.Emit(events.Progress{ID: StepTeardownDown, Text: "the stack was never rendered, so compose started nothing"})
-				return nil
+				return helperErr
 			}
 			out := events.NewLogWriter(sink, StepTeardownDown, events.StreamStderr)
 			err := d.Compose.Down(ctx, docker.ComposeDownOpts{Out: out})
 			_ = out.Close()
-			return err
+			return errors.Join(helperErr, err)
 		},
 	}
 }

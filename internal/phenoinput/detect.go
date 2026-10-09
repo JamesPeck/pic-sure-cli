@@ -3,7 +3,6 @@ package phenoinput
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"io"
 	"os"
 	"strconv"
@@ -39,7 +38,7 @@ var unsupported = []struct {
 func detect(ctx context.Context, file string) (Format, error) {
 	st, err := os.Stat(file)
 	if err != nil {
-		return "", err
+		return "", &InputError{Err: err}
 	}
 	if !st.Mode().IsRegular() {
 		return "", inputErr("%s is not a regular file", file)
@@ -49,12 +48,12 @@ func detect(ctx context.Context, file string) (Format, error) {
 	}
 	f, err := os.Open(file)
 	if err != nil {
-		return "", err
+		return "", &InputError{Err: err}
 	}
 	defer func() { _ = f.Close() }()
 	head, err := sniff(ctxReader{ctx, f})
 	if err != nil {
-		return "", fmt.Errorf("reading %s: %w", file, err)
+		return "", readErr(ctx, file, err)
 	}
 
 	switch {

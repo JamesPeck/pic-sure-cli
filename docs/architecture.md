@@ -265,7 +265,7 @@ it.
   `down` and `restart` take the stack lock and run as one step
   whose `Log` events are compose's output; `down` first runs
   `ops.RemoveHelperContainers` (095), since a helper a killed command left
-  keeps the data network. `ps --json` uses status's
+  keeps the data network; compose down runs even if that fails. `ps --json` uses status's
   service shape (`ops.StatusServices`). `logs` writes the logs to stdout and compose's own
   messages to stderr (a `logs` step under `--json`), and reports Ctrl-C as
   the signal alone. `compose` refuses `--json`, runs in the foreground
@@ -1533,11 +1533,12 @@ concatenate its step lists with their own and end with one `RefreshStep()`.
   `concepts_*.csv` files, at any depth, in name order, split by exact
   `dataset_ref` into a temp dir, one pass per 200 datasets (`LoadCSVOptions.TempDir`; the cli
   uses the cache's), then one PUT per dataset, `datasetRef` URL-encoded. `FacetSteps`: `facets`, three PUTs in order.
-  It reads the files first (`openFacetLoad`, 095), byte order mark dropped:
+  It reads the files first (`checkFacetFiles`, 095) and streams them
+  afterwards, byte order mark dropped (`openWithoutBOM`):
   the categories and facets files need dictionary-etl's columns
   (`name(unique)`, `facet_name(unique)`; AIO's custom fixtures predate
   them and the ETL answers 400) and at least one row, no row narrower
-  than its header, and no file a column twice; otherwise exit 2 before
+  than its header (the ETL would skip it), and no file a column twice; otherwise exit 2 before
   HPDS or the dictionary is touched.
   `FacetConfigSteps(json)` (046): `facet-config`, POST
   `/api/facet/loader/load`; the answer must be the ETL's JSON result.
@@ -1815,8 +1816,8 @@ one without stack labels predates them and is taken as the stack's.
 `doctor`'s `stack-name` check reports the same.
 
 **Reset and destroy (056, `teardown.go`).** §9.8. Both run a `down` step
-(`RemoveHelperContainers`, then compose down; nothing more when
-`d.Compose` is nil, a never-rendered stack)
+(`RemoveHelperContainers`, then compose down even if a helper stayed;
+nothing more when `d.Compose` is nil, a never-rendered stack)
 and a `volumes` step over `StackResources`' volumes that are the stack's
 own or adopted (084), selected by label, never by name.
 `RemoveHelperContainers(ctx, d, sink, step, st, name, match)` (095)
@@ -2943,7 +2944,8 @@ the loader can mount (§9.6), using only Go's archive libraries.
 - One CSV entry is selected automatically. Several need `--entry`, and a
   missing or unknown `--entry` is an `*EntryError` listing the entries.
   A problem with the file itself (empty, binary, unsupported or corrupt,
-  no usable entry) is an `*InputError` (095); the cli makes both exit 2.
+  no usable entry, a truncated or corrupt stream, the file unreadable) is
+  an `*InputError` (095), unless `ctx` ended; the cli makes both exit 2.
   `--entry` for a non-archive becomes a warning in `Input.Warnings` for the
   caller to emit. Reads stop when `ctx` ends, with its cause as the error.
 - Gzip input may hold several members and trailing zero padding, as GNU

@@ -171,7 +171,7 @@ func (a *App) loadPhenotype(cmd *cobra.Command, args []string) error {
 		var entryErr *phenoinput.EntryError
 		var inputErr *phenoinput.InputError
 		switch {
-		case errors.As(err, &entryErr), errors.As(err, &inputErr), errors.Is(err, fs.ErrNotExist), errors.Is(err, fs.ErrPermission):
+		case errors.As(err, &entryErr), errors.As(err, &inputErr), errors.Is(err, fs.ErrNotExist):
 			return exitcode.Usage("%w", err)
 		case err != nil:
 			return err
@@ -229,11 +229,11 @@ func (p phenotypeArgs) rerunHint(dir, dataset string, err error) error {
 	}
 	pic := "pic-sure --stack " + shellQuote(dir) + " "
 	var de *ops.PhenotypeDictionaryError
-	var startErr *ops.HPDSStartError
-	if errors.As(err, &startErr) && !errors.As(err, &de) {
-		return err
-	}
 	if !errors.As(err, &de) {
+		var startErr *ops.HPDSStartError
+		if errors.As(err, &startErr) {
+			return err
+		}
 		return fmt.Errorf("%w; to retry the load, run: %s", err, pic+p.command())
 	}
 	type group struct {

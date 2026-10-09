@@ -34,7 +34,7 @@ func walk(ctx context.Context, file string, format Format, fn func(name string, 
 	if format == TarGz {
 		gz, err := newGzipReader(r)
 		if err != nil {
-			return fmt.Errorf("reading %s as gzip: %w", file, err)
+			return readErr(ctx, file+" as gzip", err)
 		}
 		defer func() { _ = gz.Close() }()
 		r = gz
@@ -47,18 +47,18 @@ func walk(ctx context.Context, file string, format Format, fn func(name string, 
 				// Read on to the end of the gzip stream, which verifies
 				// its checksum; the tar's end marker comes before it.
 				if _, err := io.Copy(io.Discard, r); err != nil {
-					return fmt.Errorf("reading %s: %w", file, err)
+					return readErr(ctx, file, err)
 				}
 			}
 			return nil
 		}
 		if err != nil && !errors.Is(err, tar.ErrInsecurePath) {
-			return fmt.Errorf("reading %s: %w", file, err)
+			return readErr(ctx, file, err)
 		}
 		if hdr.Typeflag != tar.TypeReg {
 			continue
 		}
-		if err := fn(hdr.Name, func() (io.ReadCloser, error) { return io.NopCloser(tr), nil }); err != nil {
+		if err := fn(hdr.Name, func() (io.ReadCloser, error) { return io.NopCloser(inputReader{ctx, tr}), nil }); err != nil {
 			return err
 		}
 	}
@@ -83,12 +83,12 @@ func walkZip(ctx context.Context, file string, f *os.File, fn func(string, func(
 		open := func() (io.ReadCloser, error) {
 			rc, err := zf.Open()
 			if err != nil {
-				return nil, err
+				return nil, readErr(ctx, file, err)
 			}
 			return struct {
 				io.Reader
 				io.Closer
-			}{ctxReader{ctx, rc}, rc}, nil
+			}{inputReader{ctx, ctxReader{ctx, rc}}, rc}, nil
 		}
 		if err := fn(zf.Name, open); err != nil {
 			return err
@@ -171,10 +171,10 @@ func gunzip(ctx context.Context, file, dir string) (string, error) {
 	defer func() { _ = f.Close() }()
 	gz, err := newGzipReader(ctxReader{ctx, f})
 	if err != nil {
-		return "", fmt.Errorf("reading %s as gzip: %w", file, err)
+		return "", readErr(ctx, file+" as gzip", err)
 	}
 	defer func() { _ = gz.Close() }()
-	if err := writeCSV(dir, gz); err != nil {
+	if err := writeCSV(dir, inputReader{ctx, gz}); err != nil {
 		return "", fmt.Errorf("decompressing %s: %w", file, err)
 	}
 	return filepath.Join(dir, csvName), nil

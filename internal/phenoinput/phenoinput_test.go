@@ -594,3 +594,45 @@ func TestResolveStopsWhenCanceledDuringExtraction(t *testing.T) {
 		})
 	}
 }
+
+func TestResolveCorruptInputIsAnInputError(t *testing.T) {
+	big := noisyCSV()
+	tgz := tgzBytes(t, reg("a.csv", big))
+	gz := gzipBytes(t, []byte(big))
+	for _, tc := range []struct {
+		name string
+		data []byte
+	}{
+		{"truncated tgz", tgz[:len(tgz)/2]},
+		{"truncated csv.gz", gz[:len(gz)/2]},
+		{"tgz with a bad checksum", append(tgz[:len(tgz)-8:len(tgz)-8], 0, 0, 0, 0, 0, 0, 0, 0)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			file := filepath.Join(dir, "in")
+			if err := os.WriteFile(file, tc.data, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			_, _, err := phenoinput.Resolve(context.Background(), file, phenoinput.Options{MkdirTemp: func(p string) (string, error) { return os.MkdirTemp(dir, p) }})
+			var ie *phenoinput.InputError
+			if !errors.As(err, &ie) {
+				t.Fatalf("err = %v, want an *InputError", err)
+			}
+		})
+	}
+}
+
+func TestResolveCancelledIsNoInputError(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "in.tgz")
+	if err := os.WriteFile(file, tgzBytes(t, reg("a.csv", noisyCSV())), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _, err := phenoinput.Resolve(ctx, file, phenoinput.Options{MkdirTemp: func(p string) (string, error) { return os.MkdirTemp(dir, p) }})
+	var ie *phenoinput.InputError
+	if err == nil || errors.As(err, &ie) {
+		t.Fatalf("err = %v, want a non-input error", err)
+	}
+}

@@ -2,6 +2,7 @@ package ops
 
 import (
 	"archive/zip"
+	"bufio"
 	"bytes"
 	"encoding/csv"
 	"errors"
@@ -155,7 +156,8 @@ func readDatasetRefs(data []byte) ([]string, error) {
 }
 
 // checkWidth refuses a row narrower than its header, which the ETL indexes
-// past the end of. It ignores extra fields, as the ETL does.
+// past the end of (datasets, concepts) or silently skips (facets). It
+// ignores extra fields, as the ETL does.
 func checkWidth(rec, header []string, line int) error {
 	if len(rec) < len(header) {
 		return fmt.Errorf("line %d has %d fields; the header has %d", line, len(rec), len(header))
@@ -316,46 +318,57 @@ var (
 	facetColumns         = []string{"facet_category", "facet_name(unique)", "display_name", "description", "parent_name"}
 )
 
-// facetLoad is the input of `dictionary load-facets`, each file without a
-// byte order mark.
-type facetLoad struct {
-	categories, facets, concepts []byte
-}
-
-// openFacetLoad reads and checks the three facet files. The ETL answers
+// checkFacetFiles reads and checks the three facet files. The ETL answers
 // 400 to a categories or facets file without its columns (such as AIO's
 // fixtures from before name(unique)) or without rows, and skips a row
-// narrower than its header. Problems are usage errors.
-func openFacetLoad(opts FacetOptions) (*facetLoad, error) {
-	in := &facetLoad{}
+// narrower than its header, which is refused here rather than lost.
+// Problems are usage errors.
+func checkFacetFiles(opts FacetOptions) error {
 	for _, f := range []struct {
 		what, path string
 		columns    []string
 		needRows   bool
-		data       *[]byte
 	}{
-		{"facet categories", opts.Categories, facetCategoryColumns, true, &in.categories},
-		{"facets", opts.Facets, facetColumns, true, &in.facets},
-		{"facet concepts", opts.Concepts, nil, false, &in.concepts},
+		{"facet categories", opts.Categories, facetCategoryColumns, true},
+		{"facets", opts.Facets, facetColumns, true},
+		{"facet concepts", opts.Concepts, nil, false},
 	} {
-		data, err := os.ReadFile(f.path)
+		in, err := openWithoutBOM(f.path)
 		if err != nil {
-			return nil, exitcode.Usage("%s: %w", f.what, err)
+			return exitcode.Usage("%s: %w", f.what, err)
 		}
-		data = bytes.TrimPrefix(data, []byte(bom))
-		if err := checkFacetCSV(data, f.columns, f.needRows); err != nil {
-			return nil, exitcode.Usage("%s file %s: %w", f.what, f.path, err)
+		err = checkFacetCSV(in, f.columns, f.needRows)
+		_ = in.Close()
+		if err != nil {
+			return exitcode.Usage("%s file %s: %w", f.what, f.path, err)
 		}
-		*f.data = data
 	}
-	return in, nil
+	return nil
+}
+
+// openWithoutBOM opens path, skipping a leading byte order mark, which the
+// ETL would take as part of the first header.
+func openWithoutBOM(path string) (io.ReadCloser, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	br := bufio.NewReader(f)
+	if head, _ := br.Peek(len(bom)); string(head) == bom {
+		_, _ = br.Discard(len(bom))
+	}
+	return struct {
+		io.Reader
+		io.Closer
+	}{br, f}, nil
 }
 
 // checkFacetCSV parses a facet file: its header must have columns and no
 // column twice, and with columns no row may be narrower than the header.
-func checkFacetCSV(data []byte, columns []string, needRows bool) error {
-	r := csv.NewReader(bytes.NewReader(data))
+func checkFacetCSV(data io.Reader, columns []string, needRows bool) error {
+	r := csv.NewReader(data)
 	r.FieldsPerRecord = -1
+	r.ReuseRecord = true
 	header, err := r.Read()
 	if errors.Is(err, io.EOF) {
 		return errors.New("the file is empty")
