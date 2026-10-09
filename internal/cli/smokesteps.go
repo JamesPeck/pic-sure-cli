@@ -99,5 +99,5 @@ func newSmokeStepsCmd(a *App) *cobra.Command {
 	cmd.Flags().BoolVar(&fail, "fail", false, "fail the build step")
 	cmd.Flags().BoolVar(&wait, "wait", false, "block in the build step until cancelled")
 	cmd.Flags().BoolVar(&hang, "hang", false, "block in the build step for good")
-	return cmd
+	return skippable(cmd)
 }

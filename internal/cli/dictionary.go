@@ -8,8 +8,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"slices"
-	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -54,7 +52,7 @@ read-only and must already hold one.` + dictionaryLong,
 			return ops.DictionaryHydrate(ctx, x.d, x.st, x.cfg, x.sec, x.state, opts, a.Global.SkipSteps)
 		})
 	}
-	return c
+	return skippable(c)
 }
 
 func newDictionaryLoadCSVCmd(a *App) *cobra.Command {
@@ -93,7 +91,7 @@ dataset_ref column.` + dictionaryLong,
 			return ops.DictionaryLoadCSV(ctx, x.d, x.st, x.cfg, x.sec, x.state, opts, a.Global.SkipSteps)
 		})
 	}
-	return c
+	return skippable(c)
 }
 
 func newDictionaryLoadFacetsCmd(a *App) *cobra.Command {
@@ -125,7 +123,7 @@ func newDictionaryLoadFacetsCmd(a *App) *cobra.Command {
 			return ops.DictionaryLoadFacets(ctx, x.d, x.st, x.cfg, x.sec, x.state, opts, a.Global.SkipSteps)
 		})
 	}
-	return c
+	return skippable(c)
 }
 
 func newDictionaryWeightsCmd(a *App) *cobra.Command {
@@ -155,7 +153,7 @@ The default weights file is the one in the stack's pic-sure source.`,
 			return ops.DictionaryWeights(ctx, x.d, x.st, x.cfg, x.sec, x.state, opts, a.Global.SkipSteps)
 		})
 	}
-	return c
+	return skippable(c)
 }
 
 func openCache(cmd *cobra.Command) (*cache.Cache, error) {
@@ -203,10 +201,8 @@ type dictionaryRun struct {
 // one ends with; a --skip-step naming none of them is exit 2 before the lock.
 func (a *App) dictionary(cmd *cobra.Command, ids []string, done string, op func(context.Context, *dictionaryRun) error) error {
 	ids = append(ids, ops.StepDictionaryRefresh)
-	for _, id := range a.Global.SkipSteps {
-		if !slices.Contains(ids, id) {
-			return exitcode.Usage("--skip-step %s: %s has no such step; it can skip %s", id, cmd.CommandPath(), strings.Join(ids, ", "))
-		}
+	if err := checkSkipSteps(cmd, ids, a.Global.SkipSteps); err != nil {
+		return err
 	}
 	ctx := cmd.Context()
 	st, err := a.openStack(cmd)

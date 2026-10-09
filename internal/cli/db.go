@@ -39,12 +39,18 @@ OrbStack).`,
 	bootstrap.Flags().Bool("check", false, "report schemas, users and grants without changing anything")
 	bootstrap.Flags().Bool("sync-passwords", false, "set the users' passwords to match secrets.yaml")
 	bootstrap.MarkFlagsMutuallyExclusive("check", "sync-passwords")
-	return newGroup("db", "Manage a remote MySQL (db.mode remote only)", bootstrap)
+	return newGroup("db", "Manage a remote MySQL (db.mode remote only)", skippable(bootstrap))
 }
 
 func (a *App) dbBootstrap(cmd *cobra.Command, _ []string) error {
 	check, _ := cmd.Flags().GetBool("check")
 	sync, _ := cmd.Flags().GetBool("sync-passwords")
+	if check && len(a.Global.SkipSteps) > 0 {
+		return exitcode.Usage("--skip-step can't be used with --check, which runs no steps")
+	}
+	if err := checkSkipSteps(cmd, ops.BootstrapStepIDs(), a.Global.SkipSteps); err != nil {
+		return err
+	}
 	st, err := a.openStack(cmd)
 	if err != nil {
 		return err

@@ -46,9 +46,6 @@ func (a *App) publishSharedData(cmd *cobra.Command, args []string) error {
 	if err := ops.CheckSharedDataName(name); err != nil {
 		return err
 	}
-	if len(a.Global.SkipSteps) > 0 {
-		return exitcode.Usage("--skip-step: publish's steps depend on each other, so none can be skipped")
-	}
 	ctx := cmd.Context()
 	st, err := a.openStack(cmd)
 	if err != nil {

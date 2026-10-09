@@ -128,6 +128,11 @@ env XDG_CACHE_HOME=/nonexistent-pic-sure-init/cache
 exec pic-sure --json init done
 stdout '"already_initialized":true'
 stdout '"url":"https://localhost:8443/"'
+# It runs no steps, so --skip-step is exit 2, and it registers nothing.
+env XDG_CACHE_HOME=$WORK/cache-skip
+exitcode 2 pic-sure init done --skip-step seed
+stderr 'already initialised, so init runs no steps'
+! exists $WORK/cache-skip
 
 # --set sets any non-secret key, as config set does, before the
 # preconditions: the memory check reads the heap it sets.

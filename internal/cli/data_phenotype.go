@@ -123,9 +123,6 @@ func (a *App) loadPhenotype(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	if len(a.Global.SkipSteps) > 0 {
-		return exitcode.Usage("--skip-step: load-phenotype's steps depend on each other, so none can be skipped")
-	}
 
 	ctx := cmd.Context()
 	st, err := a.openStack(cmd)

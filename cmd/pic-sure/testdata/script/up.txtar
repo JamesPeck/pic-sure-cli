@@ -34,6 +34,8 @@ stderr 'the stack has no Auth0 client secret; pipe'
 cp registered.scenario docker.scenario
 exec pic-sure --stack registered up --skip-step images --skip-step tls --skip-step truststore --skip-step render --skip-step db --skip-step migrate --skip-step seed --skip-step hpds-key --skip-step restart --skip-step start
 exec grep -r '"name":"registered"' cache/pic-sure/stacks
+# With --skip-step, the run log starts once the IDs are checked.
+exists registered/.pic-sure/logs
 
 -- stack/pic-sure.yaml --
 schema: 1

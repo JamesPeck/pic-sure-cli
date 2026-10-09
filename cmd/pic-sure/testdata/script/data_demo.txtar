@@ -13,7 +13,7 @@ stderr '--heap must be a positive number of MB, not 0'
 
 # The steps can't be skipped.
 exitcode 2 pic-sure --stack stack data demo --skip-step weights
-stderr 'data demo''s steps depend on each other, so none can be skipped'
+stderr 'data demo has no steps to skip'
 
 # No stack: exit 3.
 exitcode 3 pic-sure data demo

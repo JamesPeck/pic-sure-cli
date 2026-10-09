@@ -84,7 +84,7 @@ the cache (see cache prune).`,
 	c.Flags().Bool("ignore-cli-version", false, "go on even if the release was validated with another pic-sure version")
 	c.Flags().StringArray("source", nil, "build `COMPONENT=PATH` from a local checkout (repeatable)")
 	c.Flags().StringArray("set", nil, "set any non-secret config `KEY=VALUE`, as pic-sure config set does (repeatable)")
-	return c
+	return skippable(c)
 }
 
 // initRun is one init's state, shared by its steps. initStack sets its
@@ -158,6 +158,9 @@ func (r *initRun) run(ctx context.Context) (_ *ops.InitSummary, err error) {
 		return nil, err
 	}
 	if r.prior != nil && !r.prior.InitializedAt.IsZero() {
+		if len(a.Global.SkipSteps) > 0 {
+			return nil, exitcode.Usage("--skip-step: the stack in %s is already initialised, so init runs no steps; use `pic-sure up` or `pic-sure update`", r.dir)
+		}
 		return a.alreadyInitialized(r.cmd, r.dir)
 	}
 	if r.cfg == nil {
@@ -166,7 +169,7 @@ func (r *initRun) run(ctx context.Context) (_ *ops.InitSummary, err error) {
 		}
 	}
 	log.RegisterSecrets(r.cfg.Auth.AdminEmail)
-	if err := checkInitSkips(r.cfg, a.Global.SkipSteps); err != nil {
+	if err := checkSkipSteps(r.cmd, ops.InitStepIDs(r.cfg), a.Global.SkipSteps); err != nil {
 		return nil, err
 	}
 	if r.fromFlags {
@@ -219,18 +222,6 @@ func (r *initRun) run(ctx context.Context) (_ *ops.InitSummary, err error) {
 		return nil, err
 	}
 	return ops.Summary(r.st, r.cfg, r.sec), nil
-}
-
-// checkInitSkips refuses a --skip-step that names no step of init's plan
-// for cfg, before anything is created.
-func checkInitSkips(cfg *stack.Config, skips []string) error {
-	ids := ops.InitStepIDs(cfg)
-	for _, id := range skips {
-		if !slices.Contains(ids, id) {
-			return exitcode.Usage("--skip-step %s: init has no such step; it can skip %s", id, strings.Join(ids, ", "))
-		}
-	}
-	return nil
 }
 
 func (a *App) alreadyInitialized(cmd *cobra.Command, dir string) (*ops.InitSummary, error) {

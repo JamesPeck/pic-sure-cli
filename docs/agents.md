@@ -46,7 +46,7 @@ turns this page into a task-oriented guide; the README's
 | `--non-interactive` | Never prompt; fail when an answer is needed (exit 4 for a missing confirmation). |
 | `--yes` | Answer yes to every confirmation, including destructive ones. |
 | `--wait-lock` | If another pic-sure command is changing the stack, wait for it instead of failing with exit 1. |
-| `--skip-step ID` | Skip a step of a converging command (repeatable). The IDs are the `id`s of its `step_started` events; an unknown ID is exit 2. |
+| `--skip-step ID` | Skip a step (repeatable). Only init, up, update, build, migrate, db bootstrap and the dictionary commands take it; every other command is exit 2 before it does anything. The IDs are the `id`s of the command's `step_started` events; an unknown ID is exit 2 before anything changes. |
 | `--log-level LEVEL` | stderr log level: `debug`, `info`, `warn` or `error`. The per-run file log under `.pic-sure/logs/` is always at debug. |
 | `--no-animations` | Static TUI. |
 

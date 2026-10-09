@@ -28,8 +28,8 @@ type GlobalOptions struct {
 	// LogLevel is --log-level: the stderr log level, in lower case. The
 	// per-run log file always records debug (logging.go).
 	LogLevel string
-	// SkipSteps is --skip-step ID, repeatable: steps a converging command
-	// must skip (ticket 011).
+	// SkipSteps is --skip-step ID, repeatable: steps a skippable command
+	// must skip (skipstep.go).
 	SkipSteps []string
 }
 
@@ -44,6 +44,6 @@ func (g *GlobalOptions) register(cmd *cobra.Command) {
 	f.BoolVar(&g.NoAnimations, "no-animations", false, "static TUI, without animation")
 	g.LogLevel = "info"
 	f.Var(levelFlag{&g.LogLevel}, "log-level", "stderr log `LEVEL`: debug, info, warn or error")
-	f.StringArrayVar(&g.SkipSteps, "skip-step", nil, "skip the step with this `ID` (repeatable; converging commands only)")
+	f.StringArrayVar(&g.SkipSteps, "skip-step", nil, "skip the step with this `ID` (repeatable; init, up, update, build, migrate, db bootstrap and dictionary only)")
 	cmd.MarkFlagsMutuallyExclusive("json", "plain")
 }

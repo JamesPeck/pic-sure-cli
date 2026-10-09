@@ -164,7 +164,22 @@ it.
 - `root.go`: registers every command. It wraps each `RunE` so that any
   error raised before a `RunE` starts is reported as a usage error. A
   `PreRunE` that fails for any other reason must return an
-  `*exitcode.Error`.
+  `*exitcode.Error`. The root's `PersistentPreRunE` is `refuseSkipStep`,
+  so no subcommand may set its own.
+- `skipstep.go` (085): `--skip-step` is refused unless the command is
+  marked `skippable(c)` (an annotation): init, up, update, build, migrate,
+  db bootstrap, the dictionary commands, and the hidden smoke-steps. On
+  any other command, a destructive one included, `refuseSkipStep` makes it
+  exit 2 before `RunE`, naming the commands that take it. A skippable
+  command calls `checkSkipSteps(cmd, ids, skips)` with its plan's IDs
+  (`ops.InitStepIDs`, `UpStepIDs`, `UpdateStepIDs`, `BuildStepIDs`,
+  `MigrateStepIDs`, `BootstrapStepIDs`, or the dictionary command's)
+  before the lock, state.json or the stack registry, so an unknown ID is
+  exit 2 with nothing changed. One whose IDs depend on the config (up,
+  update, migrate) opens the stack with `openStackToCheckSkips` and checks
+  with `checkStackSkipSteps`, which starts the run log only once the IDs
+  pass. `migrate --check`, `db bootstrap --check` and init on a stack
+  that is already initialised run no steps, so they refuse `--skip-step`.
 - `helpers.go`: `newGroup` and the `help`
   command. A group run without a subcommand, or with an unknown one, is a
   usage error, and so is `help` with an unknown topic.
@@ -361,8 +376,8 @@ it.
   AIO's `etl.sh load_phenotype` does (all exit 2): `--heap` positive,
   `--dictionary` auto or custom, custom needs `--datasets` and `--concepts`,
   auto takes none of the custom flags, the facet trio is all or none, and
-  each custom file is a readable file (`inputFile`, which the `dictionary` commands share). No `--skip-step`, since the steps depend on each
-  other. Under the stack lock, shared HPDS data is exit 1 and an
+  each custom file is a readable file (`inputFile`, which the `dictionary` commands share). It doesn't take `--skip-step`, since the steps
+  depend on each other. Under the stack lock, shared HPDS data is exit 1 and an
   uninitialised stack exit 3; then `phenoinput.Resolve` with the cache's
   `TempDir` (a missing file or an `*EntryError` is exit 2), and
   `ops.DataLoadPhenotype`, recording the `data load-phenotype` operation in
@@ -411,7 +426,7 @@ it.
   [--vcf-dir D] [--heap MB] [--promote [--all-partitions] [--backup]]
   [--enable-profile]`. Usage checks first (`GenomicLoadOptions.Check`, the
   paths made absolute, the index a regular file, `--vcf-dir` a directory
-  defaulting to the index's, no `--skip-step`); then, under the stack lock,
+  defaulting to the index's); then, under the stack lock,
   the same refusals as load-phenotype, and `ops.LoadGenomic` with the
   cache's `TempDir` and, for `--enable-profile`, up's `ConvergeOptions`
   (cache, CLI version, lazy-env Composer). It records the `data
@@ -419,7 +434,7 @@ it.
   [...], "profile"}`.
 
 - `shareddata.go` (050): `shared-data publish NAME` checks the name
-  (`ops.CheckSharedDataName`, exit 2) and refuses `--skip-step`; then,
+  (`ops.CheckSharedDataName`, exit 2); then,
   under the stack lock, refuses a shared-mode stack
   (`ops.RefusePublishFromShared`, exit 1) and an uninitialised or
   unrendered one (exit 3), records the `shared-data publish` operation and
@@ -430,8 +445,7 @@ it.
 - `dev.go` (052): `dev list` (`ops.DevList`: every variant with its port
   on 127.0.0.1, whether it is on, and its component's source; `--json` is
   `{"variants": [...]}`), and `dev on|off SERVICE`. Usage problems first:
-  an unknown variant (`ops.LookupDev`, exit 2, listing them) and any
-  `--skip-step`. Under the stack lock: `dev off` of a variant that isn't on
+  an unknown variant (`ops.LookupDev`, exit 2, listing them). Under the stack lock: `dev off` of a variant that isn't on
   changes nothing. Then an initialised stack, and for `on`
   `ops.CheckDevOn` (exit 3: the component's source, httpd-hmr's
   `.nvmrc`, not httpd beside httpd-hmr); `upSecrets`; `StackNameInUse`, and
@@ -1310,7 +1324,7 @@ state, PhenotypeLoadOptions{CSV | InputDir, Dataset, HeapMB, LoaderArgs,
 MkdirTemp, LockUse})` returns the provenance it wrote. The caller holds the stack lock and
 sets `d.Compose`. `RefuseSharedHPDS(cfg)` is its shared-mode refusal (a
 plain error, exit 1), for a command to call before any slow work. The
-steps depend on each other, so the command refuses `--skip-step`:
+steps depend on each other, so the command doesn't take `--skip-step`:
 
 - `hpds-input`: the loader image from state.json's `images`
   (`pic-sure-hpds-etl`; exit 3 if unrecorded or missing), the stack's HPDS

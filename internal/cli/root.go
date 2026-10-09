@@ -19,6 +19,9 @@ Run with no arguments on a terminal to open the TUI.`,
 		Args:          cobra.NoArgs,
 		SilenceErrors: true, // App.Run reports errors
 		SilenceUsage:  true,
+		// No subcommand sets its own PersistentPreRunE, which would replace
+		// this one.
+		PersistentPreRunE: refuseSkipStep,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if a.canPrompt() && !a.Global.Plain {
 				return a.startTUI(cmd.Context())

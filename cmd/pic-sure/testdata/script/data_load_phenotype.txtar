@@ -30,7 +30,7 @@ stderr 'invalid argument "4g" for "--heap"'
 
 # The loader's steps can't be skipped.
 exitcode 2 pic-sure --stack stack data load-phenotype --file pheno.csv --skip-step hpds-input
-stderr 'load-phenotype''s steps depend on each other, so none can be skipped'
+stderr 'data load-phenotype has no steps to skip'
 
 # The dictionary flags are checked before the stack is looked at.
 exitcode 2 pic-sure data load-phenotype --file pheno.csv --dictionary manual

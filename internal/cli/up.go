@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"slices"
-	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -23,7 +21,7 @@ import (
 )
 
 func newUpCmd(a *App) *cobra.Command {
-	return &cobra.Command{
+	return skippable(&cobra.Command{
 		Use:   "up",
 		Short: "Converge an existing stack to running",
 		Long: `Bring the stack to running: build any missing images, install the TLS
@@ -42,12 +40,12 @@ the images and recreates its services. It never moves the stack to
 another release; that is pic-sure update.`,
 		Args: cobra.NoArgs,
 		RunE: a.up,
-	}
+	})
 }
 
 func (a *App) up(cmd *cobra.Command, _ []string) (err error) {
 	ctx := cmd.Context()
-	st, err := a.openStack(cmd)
+	st, err := a.openStackToCheckSkips(cmd)
 	if err != nil {
 		return err
 	}
@@ -57,7 +55,7 @@ func (a *App) up(cmd *cobra.Command, _ []string) (err error) {
 		return configError(err)
 	}
 	log.RegisterSecrets(cfg.Auth.AdminEmail)
-	if err := checkUpSkips(cfg, a.Global.SkipSteps); err != nil {
+	if err := a.checkStackSkipSteps(cmd, st, ops.UpStepIDs(cfg)); err != nil {
 		return err
 	}
 	d := a.newDeps()
@@ -127,18 +125,6 @@ func (a *App) up(cmd *cobra.Command, _ []string) (err error) {
 		_, err := fmt.Fprintf(w, "Stack %s is up: %s\n", summary.Stack, summary.URL)
 		return err
 	})
-}
-
-// checkUpSkips refuses a --skip-step that names no step of up's plan for
-// cfg, before the lock is taken.
-func checkUpSkips(cfg *stack.Config, skips []string) error {
-	ids := ops.UpStepIDs(cfg)
-	for _, id := range skips {
-		if !slices.Contains(ids, id) {
-			return exitcode.Usage("--skip-step %s: up has no such step; it can skip %s", id, strings.Join(ids, ", "))
-		}
-	}
-	return nil
 }
 
 // upSecrets loads secrets.yaml, generating any generated secret it lacks

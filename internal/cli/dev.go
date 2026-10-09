@@ -114,9 +114,6 @@ func (a *App) dev(cmd *cobra.Command, name string, on bool) (err error) {
 	if err != nil {
 		return err
 	}
-	if len(a.Global.SkipSteps) > 0 {
-		return exitcode.Usage("--skip-step: dev's steps depend on each other, so none can be skipped")
-	}
 	ctx := cmd.Context()
 	st, err := a.openStack(cmd)
 	if err != nil {

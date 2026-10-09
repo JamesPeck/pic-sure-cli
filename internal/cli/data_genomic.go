@@ -39,9 +39,6 @@ func (a *App) loadGenomic(cmd *cobra.Command, _ []string) error {
 	if f.Changed("heap") && opts.HeapMB == 0 {
 		return exitcode.Usage("--heap must be a positive number of MB, not 0")
 	}
-	if len(a.Global.SkipSteps) > 0 {
-		return exitcode.Usage("--skip-step: load-genomic's steps depend on each other, so none can be skipped")
-	}
 	var err error
 	if opts.VCFIndex, err = inputPath("--vcf-index", index, false); err != nil {
 		return err

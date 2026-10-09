@@ -61,8 +61,17 @@ func DBSteps(d *Deps, cfg *stack.Config, sec *stack.Secrets, opts DBOptions) []s
 // Bootstrap is the `db bootstrap` command: probe the remote database, then
 // bootstrap it unless CheckBootstrap finds everything in place.
 func Bootstrap(ctx context.Context, d *Deps, cfg *stack.Config, sec *stack.Secrets, opts BootstrapOptions, skip []string) error {
-	plan := []steps.Step{DBStep(d, cfg, sec, DBOptions{}), BootstrapStep(d, cfg, sec, opts)}
-	return steps.Run(ctx, d.Sink, plan, steps.Options{Skip: skip})
+	return steps.Run(ctx, d.Sink, bootstrapSteps(d, cfg, sec, opts), steps.Options{Skip: skip})
+}
+
+// BootstrapStepIDs are the IDs of Bootstrap's steps, so `db bootstrap` can
+// check --skip-step before it takes the lock.
+func BootstrapStepIDs() []string {
+	return stepIDs(bootstrapSteps(&Deps{}, &stack.Config{}, &stack.Secrets{}, BootstrapOptions{}))
+}
+
+func bootstrapSteps(d *Deps, cfg *stack.Config, sec *stack.Secrets, opts BootstrapOptions) []steps.Step {
+	return []steps.Step{DBStep(d, cfg, sec, DBOptions{}), BootstrapStep(d, cfg, sec, opts)}
 }
 
 // BootstrapStep prepares a remote database, ID "db-bootstrap": as the

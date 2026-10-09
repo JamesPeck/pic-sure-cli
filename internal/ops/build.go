@@ -100,12 +100,31 @@ type imagePart struct {
 // image of the selected components.
 func Build(ctx context.Context, d *Deps, st *stack.Stack, cfg *stack.Config, state *stack.State, opts BuildOptions) (*BuildReport, error) {
 	report := &BuildReport{Images: []BuiltImage{}}
+	plan := buildSteps(d, st, cfg, state, opts, report)
+	return report, steps.Run(ctx, d.Sink, plan, steps.Options{Skip: opts.SkipSteps})
+}
+
+// BuildStepIDs are the IDs of Build's steps, so build can check
+// --skip-step before it takes the lock.
+func BuildStepIDs() []string {
+	return stepIDs(buildSteps(&Deps{}, nil, &stack.Config{}, &stack.State{}, BuildOptions{}, &BuildReport{}))
+}
+
+func buildSteps(d *Deps, st *stack.Stack, cfg *stack.Config, state *stack.State, opts BuildOptions, report *BuildReport) []steps.Step {
 	images := imagesStep(d, st, cfg, state, opts.ImagesOptions, report)
 	// The builds skip what is up to date themselves, and so report every
 	// image.
 	images.Check = nil
-	plan := []steps.Step{resolveStep(d, st, cfg, state, opts.Cache, unresolved), images}
-	return report, steps.Run(ctx, d.Sink, plan, steps.Options{Skip: opts.SkipSteps})
+	return []steps.Step{resolveStep(d, st, cfg, state, opts.Cache, unresolved), images}
+}
+
+// stepIDs are the IDs of plan's steps, in order.
+func stepIDs(plan []steps.Step) []string {
+	ids := make([]string, len(plan))
+	for i, s := range plan {
+		ids[i] = s.ID
+	}
+	return ids
 }
 
 // resolveStep resolves the commits of the components pending lists:

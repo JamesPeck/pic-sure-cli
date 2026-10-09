@@ -52,7 +52,7 @@ components and images the stack runs and doesn't move its release.`,
 	f.Bool("no-build", false, "skip building and pulling images")
 	f.Bool("self-update", false, "replace this binary if the release names a newer CLI")
 	f.Bool("ignore-cli-version", false, "skip the CLI compatibility gate")
-	return c
+	return skippable(c)
 }
 
 // updateRun is one update: its flags, then what it reads as it goes.
@@ -92,7 +92,7 @@ func (a *App) update(cmd *cobra.Command, _ []string) (err error) {
 	}
 
 	ctx := cmd.Context()
-	open := a.openStack
+	open := a.openStackToCheckSkips
 	if r.dryRun {
 		// A run log is a write to the stack, and its retention removes old
 		// ones.
@@ -105,7 +105,7 @@ func (a *App) update(cmd *cobra.Command, _ []string) (err error) {
 	if err := r.readConfig(); err != nil {
 		return err
 	}
-	if err := checkUpdateSkips(r.cfg, a.Global.SkipSteps); err != nil {
+	if err := a.checkStackSkipSteps(cmd, r.st, ops.UpdateStepIDs(r.cfg)); err != nil {
 		return err
 	}
 	r.d = a.newDeps()
@@ -192,18 +192,6 @@ func (r *updateRun) readConfig() error {
 	}
 	r.doc, r.cfg = doc, cfg
 	log.RegisterSecrets(cfg.Auth.AdminEmail)
-	return nil
-}
-
-// checkUpdateSkips refuses a --skip-step that names no step of update's
-// plan for cfg, before the lock is taken.
-func checkUpdateSkips(cfg *stack.Config, skips []string) error {
-	ids := ops.UpdateStepIDs(cfg)
-	for _, id := range skips {
-		if !slices.Contains(ids, id) {
-			return exitcode.Usage("--skip-step %s: update has no such step; it can skip %s", id, strings.Join(ids, ", "))
-		}
-	}
 	return nil
 }
 

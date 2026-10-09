@@ -18,7 +18,7 @@ stdout '"name":"httpd-hmr","component":"frontend","services":\["httpd"\],"port":
 exitcode 2 pic-sure --stack stack dev on nope
 stderr 'no dev variant "nope"; want one of psama, hpds, gateway, operations, query, visualization, dictionary, httpd, httpd-hmr'
 exitcode 2 pic-sure --stack stack dev on psama --skip-step images
-stderr 'none can be skipped'
+stderr 'dev on has no steps to skip'
 
 # dev on needs the component's local source.
 exitcode 3 pic-sure --stack stack dev on httpd

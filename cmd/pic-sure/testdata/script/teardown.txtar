@@ -20,6 +20,13 @@ stdout '"type":"result","ok":false,"error":\{"exit_code":4,'
 exists pic-sure.yaml
 exists .pic-sure/state.json
 
+# reset has no steps to skip, so --skip-step is exit 2 before docker is
+# asked anything or a run log is written.
+exitcode 2 pic-sure --yes reset --keep-db --skip-step volumes
+stderr '^pic-sure: --skip-step: reset has no steps to skip; only build, db bootstrap, .*, update take it$'
+! exists $WORK/docker.log
+! exists .pic-sure/logs
+
 # reset --yes: compose down, then the stack's labelled data volumes; the
 # logs volume, the config and the secrets stay.
 exec pic-sure --plain --yes reset

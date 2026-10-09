@@ -20,7 +20,7 @@ stderr '--all-partitions needs --promote'
 exitcode 2 pic-sure data load-genomic --partition p --vcf-index vcfs/vcfIndex.tsv --heap 0
 stderr '--heap must be a positive number of MB, not 0'
 exitcode 2 pic-sure data load-genomic --partition p --vcf-index vcfs/vcfIndex.tsv --skip-step genomic-split
-stderr 'load-genomic''s steps depend on each other, so none can be skipped'
+stderr 'data load-genomic has no steps to skip'
 
 # No stack: exit 3.
 exitcode 3 pic-sure data load-genomic --partition p --vcf-index vcfs/vcfIndex.tsv

@@ -30,17 +30,31 @@ removes failed entries from the history so a fixed migration can run again.`,
 	c.Flags().Bool("check", false, "verify the migration inputs without running them")
 	c.Flags().Bool("repair", false, "run Flyway repair")
 	c.MarkFlagsMutuallyExclusive("check", "repair")
-	return c
+	return skippable(c)
 }
 
 func (a *App) migrate(cmd *cobra.Command, _ []string) error {
 	check, _ := cmd.Flags().GetBool("check")
 	repair, _ := cmd.Flags().GetBool("repair")
-	st, err := a.openStack(cmd)
+	if check && len(a.Global.SkipSteps) > 0 {
+		return exitcode.Usage("--skip-step can't be used with --check, which runs no steps")
+	}
+	st, err := a.openStackToCheckSkips(cmd)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = st.Close() }()
+	if len(a.Global.SkipSteps) > 0 {
+		// The plan depends on db.mode, so this reads the config before the
+		// lock to check the IDs.
+		cfg, err := st.LoadConfig()
+		if err != nil {
+			return configError(err)
+		}
+		if err := a.checkStackSkipSteps(cmd, st, ops.MigrateStepIDs(cfg)); err != nil {
+			return err
+		}
+	}
 	d := a.newDeps()
 	if !check {
 		lock, err := a.lockStack(cmd.Context(), cmd, st, d.Sink)

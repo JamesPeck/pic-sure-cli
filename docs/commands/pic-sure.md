@@ -51,7 +51,7 @@ pic-sure [flags]
       --no-animations     static TUI, without animation
       --non-interactive   never prompt; fail when an answer is needed
       --plain             plain timestamped output instead of the TUI
-      --skip-step ID      skip the step with this ID (repeatable; converging commands only)
+      --skip-step ID      skip the step with this ID (repeatable; init, up, update, build, migrate, db bootstrap and dictionary only)
       --stack DIR         act on the stack in DIR (default: the stack containing the current directory)
   -v, --version           version for pic-sure
       --wait-lock         if another pic-sure command is changing the stack, wait for it instead of failing

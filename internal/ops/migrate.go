@@ -339,8 +339,17 @@ func restartCaches(ctx context.Context, d *Deps, sink events.Sink) error {
 // Migrate is the `migrate` command: the db steps (DBSteps), then the
 // migrate step, so a database that is already migrated is skipped.
 func Migrate(ctx context.Context, d *Deps, cfg *stack.Config, sec *stack.Secrets, opts MigrateOptions, skip []string) error {
-	plan := append(DBSteps(d, cfg, sec, DBOptions{}), MigrateStep(d, cfg, sec, opts))
-	return steps.Run(ctx, d.Sink, plan, steps.Options{Skip: skip})
+	return steps.Run(ctx, d.Sink, migrateSteps(d, cfg, sec, opts), steps.Options{Skip: skip})
+}
+
+// MigrateStepIDs are the IDs of Migrate's steps for a stack with config
+// cfg, so `migrate` can check --skip-step before it takes the lock.
+func MigrateStepIDs(cfg *stack.Config) []string {
+	return stepIDs(migrateSteps(&Deps{}, cfg, &stack.Secrets{}, MigrateOptions{}))
+}
+
+func migrateSteps(d *Deps, cfg *stack.Config, sec *stack.Secrets, opts MigrateOptions) []steps.Step {
+	return append(DBSteps(d, cfg, sec, DBOptions{}), MigrateStep(d, cfg, sec, opts))
 }
 
 // historyTable is one Flyway history and the migrations it records: the

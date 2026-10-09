@@ -30,10 +30,13 @@ checkout has uncommitted changes. Build logs go to .pic-sure/logs/build/.`,
 		},
 	}
 	c.Flags().Bool("force", false, "rebuild even if the images exist")
-	return c
+	return skippable(c)
 }
 
 func (a *App) build(cmd *cobra.Command, components []string, force bool) (err error) {
+	if err := checkSkipSteps(cmd, ops.BuildStepIDs(), a.Global.SkipSteps); err != nil {
+		return err
+	}
 	ctx := cmd.Context()
 	st, err := a.openStack(cmd)
 	if err != nil {

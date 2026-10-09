@@ -30,9 +30,6 @@ func (a *App) dataDemo(cmd *cobra.Command, args []string) error {
 	if heap < 0 || cmd.Flags().Changed("heap") && heap == 0 {
 		return exitcode.Usage("--heap must be a positive number of MB, not %d", heap)
 	}
-	if len(a.Global.SkipSteps) > 0 {
-		return exitcode.Usage("--skip-step: data demo's steps depend on each other, so none can be skipped")
-	}
 
 	ctx := cmd.Context()
 	st, err := a.openStack(cmd)
