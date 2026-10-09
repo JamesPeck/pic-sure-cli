@@ -3116,9 +3116,10 @@ changing the scripts.
 A, one contig per partition: `chr21` into staging only, then `chr22` with
 `--promote --all-partitions`, so both go live. It then marks the live
 `chr21`, reloads it and promotes it over the live data with `--backup`:
-the live `chr21` must match the reloaded copy file for file (md5), `all-bak`
-in genomic-staging must match the previous live store, marker included,
-and neither volume may hold leftovers (094's `.promote-*`, `.old-*`, `all-bak.new`, `all-bak.old`).
+every file of the reloaded copy must be in the live `chr21` unchanged (md5;
+HPDS adds its `variantIndex_fbbis*` files when it starts) and the marker
+gone, `all-bak` in genomic-staging must match the previous live store,
+marker included, and neither volume may hold leftovers (094's `.promote-*`, `.old-*`, `all-bak.new`, `all-bak.old`).
 It publishes A's data as a shared set, destroys A, and mounts the set in
 stack B. After each promote on A, and on B, it runs every
 `testdata/genomic/expected.json` query against HPDS from an `alpine` container on the stack's `query` network: the patient

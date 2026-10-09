@@ -108,9 +108,14 @@ before="$(files "$a" hpds-genomic .)"
 load_genomic chr21 --promote --backup
 live="$(entries "$a" hpds-genomic .)"
 [ "$live" = "chr21 chr22" ] || fail "$a: the replace left the live store holding: $live"
+# HPDS adds its variant index (variantIndex_fbbis*) to a live partition when
+# it starts, so the live chr21 is the reloaded files plus that.
 live="$(files "$a" hpds-genomic chr21)"
 staged="$(files "$a" genomic-staging genomic/chr21)"
-if [ -z "$live" ] || [ "$live" != "$staged" ]; then fail "$a: the live chr21 isn't the reloaded one"; fi
+missing="$(comm -23 <(sort <<< "$staged") <(sort <<< "$live"))"
+if [ -z "$staged" ] || [ -n "$missing" ] || grep -q e2e-marker <<< "$live"; then
+	fail "$a: the live chr21 isn't the reloaded one; it lacks: $missing"
+fi
 bak="$(files "$a" genomic-staging all-bak)"
 [ "$bak" = "$before" ] || fail "$a: all-bak isn't the previous live store: $(diff <(echo "$before") <(echo "$bak"))"
 staged="$(entries "$a" genomic-staging .)"
