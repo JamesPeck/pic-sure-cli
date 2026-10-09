@@ -276,3 +276,16 @@ func TestRunLogRedactsConfigSetValues(t *testing.T) {
 		t.Errorf("a secret-named key's boolean: %q, %q", got, log.Redact("ok: false"))
 	}
 }
+
+// --set records each pair, a private key's with its value redacted, a
+// boolean too, though only other values are registered.
+func TestRunLogRedactsSetValues(t *testing.T) {
+	a, _, stderr := testApp(t)
+	a.Run(context.Background(), []string{"--log-level", "debug", "init", t.TempDir(),
+		"--set", "email.password=false", "--set", "hpds.java_opts=-Xmx2g"})
+	out := stderr.String()
+	if strings.Contains(out, "email.password=false") || !strings.Contains(out, "--set=email.password=[REDACTED]") ||
+		!strings.Contains(out, "--set=hpds.java_opts=-Xmx2g") {
+		t.Errorf("stderr:\n%s", out)
+	}
+}

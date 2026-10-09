@@ -172,7 +172,7 @@ stderr 'step release failed'
 
 # The debug log of the flags redacts an admin email given with --set too.
 exitcode 2 pic-sure --log-level debug init new --name demo --auth-mode open --set auth.admin_email=admin@example.com --skip-step bogus
-stderr 'flags=.*--set=\[auth.admin_email=\[REDACTED\]\]'
+stderr 'flags=.*--set=auth.admin_email=\[REDACTED\]'
 ! stderr 'admin@example.com'
 exitcode 2 pic-sure --log-level debug init new --name demo --auth-mode open --set auth.auth0.client_secret=synthetic-secret-value
 ! stderr 'synthetic-secret-value'

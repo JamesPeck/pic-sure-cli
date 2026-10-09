@@ -633,8 +633,8 @@ func configSecretValues(data []byte) []string {
 	if yaml.Unmarshal(data, &doc) != nil {
 		for _, re := range []*regexp.Regexp{secretKeyLine, secretFlowKey} {
 			for _, m := range re.FindAllSubmatch(data, -1) {
-				if v, register, ok := secretLineValue(m); ok && register {
-					values = append(values, v)
+				if vs, register, ok := secretLineValue(m); ok && register {
+					values = append(values, vs...)
 				}
 			}
 		}
@@ -670,29 +670,41 @@ func redactSecretKeyLines(data []byte) []byte {
 	return data
 }
 
-// secretLineValue returns the value of a secretKeyLine or secretFlowKey
+// secretLineValue returns the values of a secretKeyLine or secretFlowKey
 // match whose key is the last part of a configSecretFields key, or is
 // secret-named and not configPlainLeaves', and whose value is a scalar other
-// than null or "", whatever its type. register is configSecretValues' rule:
-// false for a boolean under a key that is only secret-named.
-func secretLineValue(m [][]byte) (value string, register, ok bool) {
+// than null or "", whatever its type, or a flow sequence of scalars.
+// register is configSecretValues' rule: false for a boolean under a key that
+// is only secret-named.
+func secretLineValue(m [][]byte) (values []string, register, ok bool) {
 	k := string(m[2])
 	field := configSecretLeaves[k]
 	if !field && (!log.IsSecretName(k) || configPlainLeaves[k]) {
-		return "", false, false
+		return nil, false, false
 	}
 	var doc yaml.Node
 	if yaml.Unmarshal(m[3], &doc) != nil {
 		v := strings.Trim(strings.TrimSpace(string(m[3])), `"'`)
-		return v, true, true
+		return []string{v}, true, true
 	}
-	if len(doc.Content) != 1 || doc.Content[0].Kind != yaml.ScalarNode {
-		return "", false, false
+	if len(doc.Content) != 1 {
+		return nil, false, false
 	}
-	// The node's value leaves out a trailing comment, which m[3] holds.
+	// A node's value leaves out a trailing comment, which m[3] holds.
 	n := doc.Content[0]
-	if n.ShortTag() == "!!null" || n.Value == "" {
-		return "", false, false
+	switch {
+	case n.Kind == yaml.ScalarNode && n.ShortTag() != "!!null" && n.Value != "":
+		return []string{n.Value}, field || n.ShortTag() != "!!bool", true
+	case n.Kind == yaml.SequenceNode && len(n.Content) > 0:
+		for _, c := range n.Content {
+			if c.Kind != yaml.ScalarNode {
+				return nil, false, false
+			}
+			if field || c.ShortTag() != "!!bool" {
+				values = append(values, c.Value)
+			}
+		}
+		return values, true, true
 	}
-	return n.Value, field || n.ShortTag() != "!!bool", true
+	return nil, false, false
 }

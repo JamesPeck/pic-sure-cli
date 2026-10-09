@@ -57,8 +57,11 @@ func (a *App) startRunLog(cmd *cobra.Command, args []string) {
 				key, v, _ := strings.Cut(kv, "=")
 				if privateConfigKey(key) {
 					registerConfigValue(v)
+					kv = key + "=" + log.Redacted
 				}
+				flags = append(flags, "--set="+kv)
 			}
+			return
 		}
 		flags = append(flags, "--"+f.Name+"="+f.Value.String())
 	})

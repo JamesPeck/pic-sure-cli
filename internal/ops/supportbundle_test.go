@@ -531,7 +531,7 @@ func TestSupportBundleCancelled(t *testing.T) {
 func TestSupportBundleRedactsNonStringSecrets(t *testing.T) {
 	for name, cfg := range map[string]string{
 		"valid":     "schema: 1\nauth:\n  consent_authorization: false\nservices:\n  psama:\n    env:\n      SMTP_PASSWORD: 12345678\n      API_TOKEN: true\n      DB_PASSWORD: 13572468  # temp\n      API_TOKENS: [24681357]\nemail:\n  password: 87654321\n",
-		"malformed": "schema: 1\nauth: {consent_authorization: false}\nservices: {psama: {env: {SMTP_PASSWORD: 12345678, API_TOKEN: true}}}\nemail: {password: 87654321}\nextra:\n  DB_PASSWORD: 13572468  # temp\nbroken: [\n",
+		"malformed": "schema: 1\nauth: {consent_authorization: false}\nservices: {psama: {env: {SMTP_PASSWORD: 12345678, API_TOKEN: true}}}\nemail: {password: 87654321}\nextra:\n  DB_PASSWORD: 13572468  # temp\n  API_TOKENS: [24681357]\nbroken: [\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			st := newBundleStack(t)

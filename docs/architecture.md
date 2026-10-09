@@ -1748,9 +1748,9 @@ failing to write w, or ctx ending, is an error. With no Stack it holds doctor al
   as personal data) and any other secret-named key (`log.IsSecretName`,
   env vars included) with a non-null scalar value of any type (093), all
   shown as `[REDACTED]` in `stack/pic-sure.yaml`. A `stack.Fields` key
-  that isn't secret (`auth.consent_authorization`) stays. A boolean is
-  blanked in the file but not redacted elsewhere, where every `true` would
-  go. Values of `log.MinSecret` (4) bytes or more go
+  that isn't secret (`auth.consent_authorization`) stays. A boolean under a
+  key that is only secret-named is blanked in the file but not redacted
+  elsewhere, where every `true` would go; a secret field's is. Values of `log.MinSecret` (4) bytes or more go
   through a `log.Redactor` (escaped forms, plus encoding/json's
   HTML-escaped one, and URL userinfo); a shorter one, which only an
   operator can supply, is replaced only where no ASCII letter or digit
@@ -2547,10 +2547,11 @@ Ticket 005. Debug logging that is safe to attach to a bug report (§6.1,
 logging when a command's `RunE` starts, and `App.Run` closes it, writing
 the exit code and error as the last record. The first record has the
 version, OS, command, flags and arguments. `config set` of a secret field,
-the admin email, or a secret-named key (`privateConfigKey`) logs the key
-with `[REDACTED]` for the value, and registers the value, since config set
-may refuse it before it reaches secrets.yaml (093); `--set` values are
-registered by the same rule. `a.openStack` calls
+the admin email, or a secret-named key that isn't a plain field
+(`privateConfigKey`) logs the key with `[REDACTED]` for the value, and
+registers the value unless it is `true` or `false`, since config set may
+refuse it before it reaches secrets.yaml (093); each `--set KEY=VALUE` is
+recorded by the same rule. `a.openStack` calls
 `a.openRunLog(st)` once the stack passes the version gate; `init` (034)
 must call it once `.pic-sure/` exists. Until something
 calls it, nothing is written to disk. The read-only commands (`status`, `ps`,
