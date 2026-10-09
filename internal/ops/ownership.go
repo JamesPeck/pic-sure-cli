@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/JamesPeck/pic-sure-cli/internal/catalog"
 	"github.com/JamesPeck/pic-sure-cli/internal/docker"
 	"github.com/JamesPeck/pic-sure-cli/internal/events"
 	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
@@ -19,7 +20,7 @@ import (
 
 // ResourceRef is a Docker resource as reports and messages name it.
 type ResourceRef struct {
-	// Kind is "container", "volume" or "network".
+	// Kind is "container", "volume", "network" or "image".
 	Kind string `json:"kind"`
 	Name string `json:"name"`
 	// Stack and StackDir are its stack and stack-dir labels.
@@ -106,7 +107,7 @@ func ResourceList(rs []ResourceRef) string {
 				parts = append(parts, r.String())
 			}
 		} else {
-			for _, kind := range []string{"container", "volume", "network"} {
+			for _, kind := range []string{"container", "volume", "network", "image"} {
 				if n := len(slices.DeleteFunc(slices.Clone(group), func(r ResourceRef) bool { return r.Kind != kind })); n > 0 {
 					parts = append(parts, fmt.Sprintf("%d %ss", n, kind))
 				}
@@ -180,7 +181,7 @@ func newResource(kind, name string, labels map[string]string, claim func(map[str
 
 // CheckOwnership is the ownership check every command that changes a
 // stack's Docker resources makes (§6.1), holding the stack lock: exit 3 if
-// stack name selects another stack's resources. Resources still labelled
+// the stack's name selects another stack's resources. Resources still labelled
 // with the directory the stack moved from are adopted, with a note.
 func CheckOwnership(ctx context.Context, d *Deps, st *stack.Stack, name string) (*Ownership, error) {
 	o, err := StackResources(ctx, d, name, st.ID(), st.Dir)
@@ -192,11 +193,13 @@ func CheckOwnership(ctx context.Context, d *Deps, st *stack.Stack, name string) 
 }
 
 // NoteMoved emits a note for each directory the stack moved from whose
-// resources it adopts.
+// containers or networks it adopts. Those are recreated with the new
+// directory on the next up; volumes keep the old one for good, so they
+// alone don't repeat the note on every command.
 func NoteMoved(sink events.Sink, o *Ownership) {
 	var dirs []string
 	for _, r := range o.Moved() {
-		if dir := r.StackDir; !slices.Contains(dirs, dir) {
+		if dir := r.StackDir; r.Kind != "volume" && !slices.Contains(dirs, dir) {
 			dirs = append(dirs, dir)
 			sink.Emit(events.Warning{Text: "stack moved from " + dir + "; adopting its resources"})
 		}
@@ -279,4 +282,22 @@ func withLabels(labels, extra map[string]string) map[string]string {
 	l := maps.Clone(labels)
 	maps.Copy(l, extra)
 	return l
+}
+
+// DevImages returns the dev images of stack name (dev-<name>-* tags of the
+// built catalog images) that carry stack labels, as foreign resources of
+// kind "image": what init must refuse, since a build would tag over them.
+func DevImages(ctx context.Context, d *Deps, name string) ([]Resource, error) {
+	imgs, err := d.Docker.ImageList(ctx, catalog.Namespace+"/*")
+	if err != nil {
+		return nil, fmt.Errorf("listing images: %w", err)
+	}
+	var rs []Resource
+	for _, img := range imgs {
+		if devStack, ok := cachedImage(img.Ref); !ok || devStack != name || img.Labels[stack.LabelStackDir] == "" {
+			continue
+		}
+		rs = append(rs, newResource("image", img.Ref, img.Labels, func(map[string]string) stack.Claim { return stack.Foreign }))
+	}
+	return rs, nil
 }

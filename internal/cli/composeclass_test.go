@@ -59,3 +59,22 @@ func TestComposeHelpListsReadOnly(t *testing.T) {
 		}
 	}
 }
+
+func TestComposeProjectFlag(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"-p", "a", "down"}, "-p"},
+		{[]string{"-pa", "down"}, "-pa"},
+		{[]string{"--project-name=a", "down"}, "--project-name=a"},
+		{[]string{"--profile", "x", "--project-name", "a", "down"}, "--project-name"},
+		{[]string{"--file", "-p", "ps"}, ""},
+		{[]string{"down", "-p"}, ""},
+		{[]string{"--progress=plain", "up", "-d"}, ""},
+	} {
+		if got := composeProjectFlag(tc.args); got != tc.want {
+			t.Errorf("composeProjectFlag(%q) = %q, want %q", tc.args, got, tc.want)
+		}
+	}
+}

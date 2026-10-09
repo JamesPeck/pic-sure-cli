@@ -321,6 +321,11 @@ func TestDestroyInACopyRemovesOnlyItsFiles(t *testing.T) {
 	var rec events.Recorder
 	d := &ops.Deps{Runner: f, Docker: docker.NewEngine(f), Compose: comp, Clock: ops.FixedClock(cacheNow), Sink: &rec}
 
+	// A volume of the copy's own is left too, and named.
+	own := cx.copied.Labels("alpha")
+	own["com.docker.compose.project"] = "alpha"
+	cx.fx.daemon.volumes["alpha_copy-only"] = own
+
 	report, err := ops.Destroy(context.Background(), d, cx.copied, ops.TeardownOptions{Name: "alpha"})
 	if err != nil {
 		t.Fatal(err)
@@ -328,10 +333,16 @@ func TestDestroyInACopyRemovesOnlyItsFiles(t *testing.T) {
 	if comp.downs != 0 {
 		t.Error("compose down ran in the copy")
 	}
+	if !slices.ContainsFunc(rec.Events(), func(e events.Event) bool {
+		w, ok := e.(events.Warning)
+		return ok && strings.Contains(w.Text, "this stack's own Docker resources are left too") && strings.Contains(w.Text, "volume alpha_copy-only")
+	}) {
+		t.Errorf("no warning naming the copy's own volume in %v", rec.Events())
+	}
 	f.AssertNotCalled(fakerunner.Glob("docker volume rm *"))
 	f.AssertNotCalled(fakerunner.Glob("docker image rm *"))
-	if len(cx.fx.daemon.volumes) != 2 {
-		t.Errorf("volumes left %v, want alpha's two", slices.Sorted(maps.Keys(cx.fx.daemon.volumes)))
+	if len(cx.fx.daemon.volumes) != 3 {
+		t.Errorf("volumes left %v, want all three", slices.Sorted(maps.Keys(cx.fx.daemon.volumes)))
 	}
 	if len(report.LeftAlone) != 3 || report.LeftAlone[0].StackDir != cx.st.Dir {
 		t.Errorf("left alone %+v, want alpha's container and two volumes", report.LeftAlone)

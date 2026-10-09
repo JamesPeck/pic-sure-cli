@@ -70,3 +70,23 @@ func downsProject(args []string) bool {
 	}
 	return false
 }
+
+// composeProjectFlag returns the -p or --project-name among compose's
+// global flags in args, or "". pic-sure sets the project from the stack's
+// name, and the ownership check (§6.1) covers only that project.
+func composeProjectFlag(args []string) string {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if !strings.HasPrefix(arg, "-") {
+			return ""
+		}
+		name, _, hasValue := strings.Cut(arg, "=")
+		switch {
+		case name == "-p" || name == "--project-name" || strings.HasPrefix(name, "-p") && len(name) > 2 && name[1] != '-':
+			return arg
+		case composeValueFlags[name] && !hasValue:
+			i++
+		}
+	}
+	return ""
+}

@@ -2,14 +2,11 @@ package stack
 
 import (
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
-	"os"
 	"path/filepath"
-	"syscall"
 )
 
 // Claim is whose a Docker resource is, by the ownership rule (§6.1).
@@ -39,13 +36,13 @@ func Owner(id, dir string, labels map[string]string) Claim {
 	labelID := labels[LabelStackID]
 	switch {
 	case labelID == "":
-		if labelDir != "" && labelDir == dir {
+		if sameDir(labelDir, dir) {
 			return Own
 		}
 		return Foreign
 	case labelID != id:
 		return Foreign
-	case labelDir == dir:
+	case sameDir(labelDir, dir):
 		return Own
 	case !filepath.IsAbs(labelDir):
 		return Foreign
@@ -55,6 +52,16 @@ func Owner(id, dir string, labels map[string]string) Claim {
 		return Foreign
 	}
 	return Moved
+}
+
+// sameDir reports whether the labelled directory is dir, also through a
+// symlink left at the old path after a move.
+func sameDir(labelDir, dir string) bool {
+	if labelDir == "" || labelDir == dir {
+		return labelDir != ""
+	}
+	r, err := filepath.EvalSymlinks(labelDir)
+	return err == nil && r == dir
 }
 
 // OwnerName describes, for a message, the stack a resource with labels
@@ -76,18 +83,9 @@ func OwnerName(labels map[string]string) string {
 // state. An error means dir couldn't be read, which the ownership rule
 // counts as another stack's.
 func IDAt(dir string) (string, error) {
-	data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(StateFile)))
-	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
-		return "", nil
-	}
-	if err != nil {
+	st, err := PeekState(dir)
+	if st == nil {
 		return "", err
-	}
-	var st struct {
-		StackID string `json:"stack_id"`
-	}
-	if err := json.Unmarshal(data, &st); err != nil {
-		return "", fmt.Errorf("reading %s: %w", filepath.Join(dir, filepath.FromSlash(StateFile)), err)
 	}
 	return st.StackID, nil
 }

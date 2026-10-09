@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"slices"
 	"strings"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/cache"
@@ -127,6 +128,10 @@ func Destroy(ctx context.Context, d *Deps, st *stack.Stack, opts TeardownOptions
 	if report.LeftAlone = Refs(owned.Foreign()); len(report.LeftAlone) > 0 {
 		d.Sink.Emit(events.Warning{ID: StepFiles, Text: fmt.Sprintf("the stack name %s is in use by another stack's Docker resources, so destroy removes only this directory's files and leaves these alone:\n%s",
 			opts.Name, ResourceList(report.LeftAlone))})
+		if own := Refs(slices.DeleteFunc(slices.Clone(owned.Resources), func(r Resource) bool { return r.Claim == stack.Foreign })); len(own) > 0 {
+			d.Sink.Emit(events.Warning{ID: StepFiles, Text: fmt.Sprintf("this stack's own Docker resources are left too, since compose down would reach the other stack's; remove them with docker once that is sorted out:\n%s",
+				ResourceList(own))})
+		}
 	} else {
 		plan = []steps.Step{
 			downStep(d),

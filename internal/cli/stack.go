@@ -71,7 +71,7 @@ func (a *App) initDir(args []string) (string, error) {
 // sink. Holding the lock, it applies the version gate again: the holder it
 // waited for may have been a newer pic-sure that re-rendered the stack.
 // Commands that change the stack's Docker resources then make the
-// ownership check, checkOwned.
+// ownership check (checkOwned, or ops.CheckOwnership inside the operation).
 func (a *App) lockStack(ctx context.Context, cmd *cobra.Command, st *stack.Stack, sink events.Sink) (*stack.Lock, error) {
 	l, err := st.Lock(ctx, stack.LockOptions{
 		Wait:    a.Global.WaitLock,

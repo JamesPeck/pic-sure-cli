@@ -9,6 +9,7 @@ import (
 
 	"github.com/JamesPeck/pic-sure-cli/internal/docker"
 	"github.com/JamesPeck/pic-sure-cli/internal/docker/fakerunner"
+	"github.com/JamesPeck/pic-sure-cli/internal/events"
 	"github.com/JamesPeck/pic-sure-cli/internal/ops"
 	"github.com/JamesPeck/pic-sure-cli/internal/stack"
 )
@@ -74,5 +75,41 @@ func TestStackResources(t *testing.T) {
 	o, err = ops.StackResources(context.Background(), d, "demo", "", "")
 	if err != nil || len(o.Foreign()) != len(o.Resources) || len(o.Published) != 0 {
 		t.Errorf("for a new stack: %d of %d foreign, published %v, err %v; want all foreign", len(o.Foreign()), len(o.Resources), o.Published, err)
+	}
+}
+
+func TestNoteMovedOnlyForContainersAndNetworks(t *testing.T) {
+	moved := func(kind string) ops.Resource {
+		return ops.Resource{ResourceRef: ops.ResourceRef{Kind: kind, StackDir: "/stacks/a"}, Claim: stack.Moved}
+	}
+	var rec events.Recorder
+	// After the first up only the volumes keep the old directory.
+	ops.NoteMoved(&rec, &ops.Ownership{Resources: []ops.Resource{moved("volume"), moved("volume")}})
+	if n := len(rec.Events()); n != 0 {
+		t.Errorf("%d notes for moved volumes alone, want none", n)
+	}
+	ops.NoteMoved(&rec, &ops.Ownership{Resources: []ops.Resource{moved("container"), moved("network"), moved("volume")}})
+	if ev := rec.Events(); len(ev) != 1 || ev[0].(events.Warning).Text != "stack moved from /stacks/a; adopting its resources" {
+		t.Errorf("notes %v, want one", ev)
+	}
+}
+
+func TestDevImages(t *testing.T) {
+	f := fakerunner.New(t)
+	f.On(fakerunner.Glob("docker image ls --filter reference=hms-dbmi/* *")).Stdout(
+		"hms-dbmi/pic-sure-hpds:0123456789ab\nhms-dbmi/pic-sure-psama:dev-demo-0123456789ab\nhms-dbmi/pic-sure-httpd:dev-demo-0123456789ab\nhms-dbmi/pic-sure-psama:dev-demo2-0123456789ab\n")
+	f.On(fakerunner.Glob("docker image inspect *")).Stdout(`[{"Id":"sha256:a","RepoTags":["hms-dbmi/pic-sure-hpds:0123456789ab"]},` +
+		`{"Id":"sha256:b","RepoTags":["hms-dbmi/pic-sure-psama:dev-demo-0123456789ab"],"Config":{"Labels":{"` + stack.LabelStack + `":"demo","` + stack.LabelStackDir + `":"/stacks/demo"}}},` +
+		`{"Id":"sha256:c","RepoTags":["hms-dbmi/pic-sure-httpd:dev-demo-0123456789ab"]},` +
+		`{"Id":"sha256:d","RepoTags":["hms-dbmi/pic-sure-psama:dev-demo2-0123456789ab"],"Config":{"Labels":{"` + stack.LabelStackDir + `":"/stacks/demo2"}}}]`)
+	d := &ops.Deps{Runner: f, Docker: docker.NewEngine(f)}
+	rs, err := ops.DevImages(context.Background(), d, "demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The commit-tagged image is shared, httpd's predates stack labels, and
+	// demo2's is another stack's name.
+	if len(rs) != 1 || rs[0].String() != "image hms-dbmi/pic-sure-psama:dev-demo-0123456789ab" || rs[0].StackDir != "/stacks/demo" || rs[0].Claim != stack.Foreign {
+		t.Errorf("DevImages = %+v, want only demo's labelled psama image", rs)
 	}
 }

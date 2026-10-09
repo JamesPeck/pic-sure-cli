@@ -2,7 +2,12 @@ package stack
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"syscall"
 	"time"
 )
 
@@ -166,6 +171,24 @@ func (s *Stack) LoadState() (*State, error) {
 		return nil, fmt.Errorf("reading %s: %w", s.Path(StateFile), err)
 	}
 	return &st, nil
+}
+
+// PeekState reads the state.json of the stack, or partly created stack, in
+// dir without opening it, or returns nil when there is none.
+func PeekState(dir string) (*State, error) {
+	path := filepath.Join(dir, filepath.FromSlash(StateFile))
+	data, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var s State
+	if err := json.Unmarshal(data, &s); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return &s, nil
 }
 
 // SaveState atomically writes state.json. A State without a StackID keeps

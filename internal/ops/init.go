@@ -2,11 +2,8 @@ package ops
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -468,21 +465,4 @@ func Summary(st *stack.Stack, cfg *stack.Config, sec *stack.Secrets) *InitSummar
 		s.TokenExpiry = sec.IntrospectionTokenExpiry.UTC()
 	}
 	return s
-}
-
-// PeekState reads the state.json of the stack, or partly created stack, in
-// dir without opening it, or returns nil when there is none.
-func PeekState(dir string) (*stack.State, error) {
-	data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(stack.StateFile)))
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	var s stack.State
-	if err := json.Unmarshal(data, &s); err != nil {
-		return nil, fmt.Errorf("%s: %w", filepath.Join(dir, filepath.FromSlash(stack.StateFile)), err)
-	}
-	return &s, nil
 }

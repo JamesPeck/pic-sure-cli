@@ -55,7 +55,11 @@ grep '--progress plain restart hpds psama$' $WORK/docker.log
 exitcode 5 pic-sure --stack $WORK/newer down
 exitcode 5 pic-sure --stack $WORK/newer restart
 exitcode 5 pic-sure --stack $WORK/newer compose -- up -d
-exitcode 5 pic-sure --stack $WORK/newer compose -- -p newer nosuch
+exitcode 5 pic-sure --stack $WORK/newer compose -- --profile x nosuch
+
+# compose runs on the stack's own project only.
+exitcode 2 pic-sure --stack $WORK/newer compose -- -p other down
+stderr 'compose -- -p: pic-sure runs compose on the stack''s own project; use --stack DIR for another stack'
 
 # compose's read-only subcommands run on a newer stack, with a warning.
 exec pic-sure --stack $WORK/newer compose -- -f x.yaml ps -a

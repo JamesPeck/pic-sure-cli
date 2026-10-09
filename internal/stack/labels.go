@@ -9,11 +9,16 @@ const (
 )
 
 // Labels returns the labels that mark a resource as belonging to this stack,
-// whose pic-sure.yaml name is name. A stack without an ID yet gets no
-// stack-id label.
+// whose pic-sure.yaml name is name.
 func (s *Stack) Labels(name string) map[string]string {
-	l := map[string]string{LabelStack: name, LabelStackDir: s.Dir}
-	if id := s.ID(); id != "" {
+	return StackLabels(name, s.Dir, s.ID())
+}
+
+// StackLabels returns the labels of stack name in dir with ID id. A stack
+// without an ID yet gets no stack-id label.
+func StackLabels(name, dir, id string) map[string]string {
+	l := map[string]string{LabelStack: name, LabelStackDir: dir}
+	if id != "" {
 		l[LabelStackID] = id
 	}
 	return l

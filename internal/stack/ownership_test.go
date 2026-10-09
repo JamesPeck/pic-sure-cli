@@ -98,3 +98,23 @@ func TestEnsureID(t *testing.T) {
 		t.Errorf("after saving a State without the ID: ID = %q, labels %v; want %q", s.ID(), s.Labels("demo"), id)
 	}
 }
+
+func TestOwnerThroughASymlinkAtTheOldPath(t *testing.T) {
+	// mv a c && ln -s c a: the labels still say a.
+	c, err := filepath.EvalSymlinks(stateDir(t, testID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := filepath.Join(t.TempDir(), "a")
+	if err := os.Symlink(c, a); err != nil {
+		t.Fatal(err)
+	}
+	for _, labels := range []map[string]string{
+		{LabelStackDir: a, LabelStackID: testID},
+		{LabelStackDir: a},
+	} {
+		if got := Owner(testID, c, labels); got != Own {
+			t.Errorf("Owner(%v) = %d, want Own", labels, got)
+		}
+	}
+}

@@ -175,7 +175,7 @@ func detectStack(root string) stackStatus {
 	if _, err := os.Stat(filepath.Join(root, stack.ConfigFile)); err != nil {
 		return noStack
 	}
-	if st, err := ops.PeekState(root); err != nil || st == nil || st.InitializedAt.IsZero() {
+	if st, err := stack.PeekState(root); err != nil || st == nil || st.InitializedAt.IsZero() {
 		return partStack
 	}
 	return readyStack

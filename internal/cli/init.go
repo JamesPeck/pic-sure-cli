@@ -154,7 +154,7 @@ func (a *App) initStack(cmd *cobra.Command, args []string) error {
 // run creates and converges the stack, and returns its summary.
 func (r *initRun) run(ctx context.Context) (_ *ops.InitSummary, err error) {
 	a := r.a
-	if r.prior, err = ops.PeekState(r.dir); err != nil {
+	if r.prior, err = stack.PeekState(r.dir); err != nil {
 		return nil, err
 	}
 	if r.prior != nil && !r.prior.InitializedAt.IsZero() {
@@ -703,14 +703,14 @@ func (r *initRun) preconditions(ctx context.Context, sink events.Sink) error {
 	return nil
 }
 
-// choosePorts chooses the ports init wasn't given on h.
 // checkName makes the ownership check before init writes anything (§6.1).
-// A new stack owns no Docker resources yet, so whatever its name selects
-// is foreign; a resumed one owns those labelled with its ID or, without
-// one, its directory. Foreign resources labelled with this directory, or
-// with one that no longer holds a stack, are the leftovers of a stack
-// deleted without destroy, which init names with the commands that remove
-// them.
+// A new stack owns no Docker resources yet, so whatever its name selects,
+// dev images included, is foreign; a resumed one owns those labelled with
+// its ID or, without one, its directory. Foreign resources labelled with
+// this directory are the leftovers of a stack deleted here without
+// destroy, which init names with the commands that remove them. Others
+// are listed with their directory but no commands: one that holds no
+// stack now may be a moved stack's.
 func (r *initRun) checkName(ctx context.Context) (*ops.Ownership, error) {
 	id, dir := "", ""
 	if r.prior != nil {
@@ -722,32 +722,43 @@ func (r *initRun) checkName(ctx context.Context) (*ops.Ownership, error) {
 	}
 	ops.NoteMoved(r.d.Sink, owned)
 	foreign := owned.Foreign()
+	if r.prior == nil {
+		imgs, err := ops.DevImages(ctx, r.d, r.cfg.Name)
+		if err != nil {
+			return nil, err
+		}
+		foreign = append(foreign, imgs...)
+	}
 	if len(foreign) == 0 {
 		return owned, nil
 	}
 	here := ops.CanonicalDir(r.dir)
-	var leftovers []ops.Resource
+	var leftovers, others []ops.Resource
 	for _, res := range foreign {
-		if res.StackDir == "" {
-			continue
-		}
-		if id, err := stack.IDAt(res.StackDir); res.StackDir == here || id == "" && err == nil {
+		if res.StackDir == here {
 			leftovers = append(leftovers, res)
+		} else {
+			others = append(others, res)
 		}
 	}
-	if len(leftovers) == 0 {
-		return nil, exitcode.Precondition("%v\nChoose another --name", owned.Err(r.cfg.Name))
+	var msg []string
+	if len(leftovers) > 0 {
+		msg = append(msg, fmt.Sprintf("the stack name %s has Docker resources left by a stack deleted from %s without `pic-sure destroy`:\n%s\n"+
+			"They hold that stack's data and passwords, which this stack can't use. Remove them with:\n%s",
+			r.cfg.Name, here, ops.ResourceList(ops.Refs(leftovers)), removeCommands(leftovers)))
 	}
-	return nil, exitcode.Precondition("the stack name %s has Docker resources left by a stack deleted without `pic-sure destroy`:\n%s\n"+
-		"They hold that stack's data and passwords, which this stack can't use. Remove them with:\n%s\nor choose another --name",
-		r.cfg.Name, ops.ResourceList(ops.Refs(leftovers)), removeCommands(leftovers))
+	if len(others) > 0 {
+		msg = append(msg, fmt.Sprintf("the stack name %s is in use by other Docker resources, which pic-sure won't touch:\n%s",
+			r.cfg.Name, ops.ResourceList(ops.Refs(others))))
+	}
+	return nil, exitcode.Precondition("%s\nChoose another --name, or remove them", strings.Join(msg, "\n"))
 }
 
 // removeCommands are the docker commands that remove resources: containers
 // first, since a volume or network in use can't be removed.
 func removeCommands(rs []ops.Resource) string {
 	var cmds []string
-	for _, kind := range []struct{ kind, argv string }{{"container", "docker rm -f"}, {"volume", "docker volume rm"}, {"network", "docker network rm"}} {
+	for _, kind := range []struct{ kind, argv string }{{"container", "docker rm -f"}, {"volume", "docker volume rm"}, {"network", "docker network rm"}, {"image", "docker image rm"}} {
 		var names []string
 		for _, res := range rs {
 			if res.Kind == kind.kind {
@@ -761,6 +772,7 @@ func removeCommands(rs []ops.Resource) string {
 	return strings.Join(cmds, "\n")
 }
 
+// choosePorts chooses the ports init wasn't given on h.
 func (r *initRun) choosePorts(h ops.Host) error {
 	return r.setPorts(h, r.httpPort, r.httpsPort, r.autoPorts)
 }
@@ -884,7 +896,7 @@ func (r *initRun) writeConfig(ctx context.Context, sink events.Sink) error {
 		return err
 	}
 	// Under the lock, another init may have finished or started the stack.
-	prior, err := ops.PeekState(r.dir)
+	prior, err := stack.PeekState(r.dir)
 	if err != nil {
 		return err
 	}

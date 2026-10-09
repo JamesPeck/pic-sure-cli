@@ -213,6 +213,9 @@ the stack does.`,
 			if a.Global.JSON {
 				return exitcode.Usage("compose prints compose's own output, so it takes no --json; pass compose's --format json instead")
 			}
+			if flag := composeProjectFlag(args); flag != "" {
+				return exitcode.Usage("compose -- %s: pic-sure runs compose on the stack's own project; use --stack DIR for another stack", flag)
+			}
 			st, err := a.openStack(cmd)
 			if err != nil {
 				return err

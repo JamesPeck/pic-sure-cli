@@ -161,7 +161,7 @@ func TestInitWritesTheConfigSecretsAndState(t *testing.T) {
 	if err != nil || !r2.resumed || r2.cfg.Name != "demo" {
 		t.Fatalf("resume: err %v, resumed %v, name %s", err, r2.resumed, r2.cfg.Name)
 	}
-	if r2.prior, err = ops.PeekState(r.dir); err != nil {
+	if r2.prior, err = stack.PeekState(r.dir); err != nil {
 		t.Fatal(err)
 	}
 	if opts := r2.releaseOptions(); opts.Commit != r.rel.Commit || opts.Repo != r.rel.Repo {
