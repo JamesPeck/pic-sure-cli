@@ -148,12 +148,22 @@ func TestAppStartsOneRunAtATime(t *testing.T) {
 	for _, m := range []tea.Msg{
 		dashboard.RunMsg{Action: preflightAction(false)},
 		loadRunMsg{act: dashboard.Action{Title: "Loading", Args: []string{"data", "demo"}}},
-		resumeSetupMsg{}, dashboard.LoadMsg{}, openLoadDataMsg{}, dashboard.BackMsg{}, openWizardMsg{},
+		resumeSetupMsg{}, dashboard.LoadMsg{}, openLoadDataMsg{}, openWizardMsg{}, openDashboardMsg{},
+		wizardDoneMsg{}, wizardClosedMsg{}, loadDataClosedMsg{aborted: true},
+		dashboard.BackMsg{},
 	} {
+		if _, back := m.(dashboard.BackMsg); !back && !leavesScreen(m) {
+			t.Errorf("leavesScreen(%T) = false", m)
+		}
 		a.Update(m)
 		if a.run != first || a.screen != ScreenRun {
 			t.Fatalf("%#v left the run screen: screen %v", m, a.screen)
 		}
+	}
+	// The dashboard stopped itself before its BackMsg: it's gone, and
+	// closing the run returns to the landing.
+	if a.dash != nil {
+		t.Error("BackMsg kept the dashboard")
 	}
 	assertOneCommand(t, calls)
 	if len(inits) != 0 {

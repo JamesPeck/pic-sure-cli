@@ -187,7 +187,8 @@ type loadScreen struct {
 	// esc once any data has been collected, so a multi-step flow is not silently
 	// thrown away by a reflexive esc. A pristine screen closes immediately.
 	discarding bool
-	// done is set by dispatch and closeLoad.
+	// done is set once the screen has sent its result; update then drops
+	// every message.
 	done bool
 
 	// A picked phenotype file or directory is checked asynchronously: a file

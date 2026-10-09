@@ -211,7 +211,13 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a.openDashboard()
 
 	case dashboard.BackMsg:
+		// The dashboard has already stopped itself; with a run open (esc
+		// batched after a confirm) the run stays in front and closing it
+		// returns to the landing.
 		a.closeDashboard()
+		if a.run != nil {
+			return a, nil
+		}
 		return a.openLanding()
 
 	case dashboard.RunMsg:
@@ -261,12 +267,9 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.runCommand {
 			return a.actionClosed()
 		}
-		failed := false
-		if a.run != nil {
-			a.run.close()
-			failed = a.run.err != nil
-			a.run = nil
-		}
+		a.run.close()
+		failed := a.run.err != nil
+		a.run = nil
 		if failed && a.lastSetup != nil && detectStack(a.opts.Root) == noStack {
 			a.landing.result = "setup failed before creating the stack; Set up has your answers"
 		} else {
@@ -339,10 +342,11 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // leavesScreen reports whether msg asks the app to open another screen or
-// start a run.
+// start a run. A new case of that kind in Update belongs here too, or it
+// can hide an open run.
 func leavesScreen(msg tea.Msg) bool {
 	switch msg.(type) {
-	case openDashboardMsg, dashboard.BackMsg, dashboard.RunMsg, dashboard.LoadMsg,
+	case openDashboardMsg, dashboard.RunMsg, dashboard.LoadMsg,
 		openWizardMsg, wizardClosedMsg, wizardDoneMsg, resumeSetupMsg,
 		openLoadDataMsg, loadDataClosedMsg, loadRunMsg:
 		return true

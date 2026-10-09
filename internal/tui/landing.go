@@ -266,7 +266,6 @@ func (l *landing) choose(id string) (*landing, tea.Cmd) {
 	return l, nil
 }
 
-// leave sends cmd, which leaves the landing, and sets leaving.
 func (l *landing) leave(cmd tea.Cmd) (*landing, tea.Cmd) {
 	l.leaving = true
 	return l, cmd

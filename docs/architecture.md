@@ -2550,7 +2550,8 @@ load wizard, and 083 the landing's actions.
   the run screen is open the app drops every other screen's request to
   navigate or start a run (`leavesScreen`), so a run is never hidden or
   replaced and left running unseen, and a second `runClosedMsg` is a
-  no-op.
+  no-op. A dashboard `BackMsg` then still closes the dashboard, which has
+  already stopped itself, and the run returns to the landing.
 
 It runs on the Charm v2 modules (`charm.land/bubbletea/v2`, `bubbles/v2`,
 `huh/v2`, `lipgloss/v2`; ticket 002). The root model's `View` returns a
