@@ -292,7 +292,7 @@ func TestFindNotOwned(t *testing.T) {
 				if !errors.Is(err, ErrNotOwned) || exitcode.FromError(err) != exitcode.CodePrecondition {
 					t.Fatalf("Find from %s: err = %v, want ErrNotOwned with exit 3", cwd, err)
 				}
-				for _, want := range []string{p, "uid " + strconv.Itoa(me+1), "--stack \"" + planted + "\""} {
+				for _, want := range []string{p, "uid " + strconv.Itoa(me+1), "--stack DIR"} {
 					if !strings.Contains(err.Error(), want) {
 						t.Errorf("err = %q, want it to contain %q", err, want)
 					}
@@ -323,10 +323,22 @@ func TestFindNotOwned(t *testing.T) {
 				t.Errorf("InitDir(%q, %q) = %q, %v; an explicit directory is never restricted", args[0], args[1], got, err)
 			}
 		}
-		// /tmp itself is root's, but holds no pic-sure.yaml.
-		owned[base] = me + 1
-		if got, err := InitDir("", "", base); err != nil || got != base {
-			t.Errorf("InitDir in a directory without a config = %q, %v", got, err)
+		// Like /tmp: someone else's, but with nothing init would take over.
+		empty := filepath.Join(base, "empty")
+		mkdirs(t, empty)
+		owned[empty] = me + 1
+		if got, err := InitDir("", "", empty); err != nil || got != empty {
+			t.Errorf("InitDir in someone else's empty directory = %q, %v", got, err)
+		}
+		// Planted overrides or .pic-sure/ alone are enough to refuse it.
+		for _, name := range []string{"overrides", CLIDir} {
+			mkdirs(t, filepath.Join(empty, name))
+			if _, err := InitDir("", "", empty); !errors.Is(err, ErrNotOwned) {
+				t.Errorf("InitDir with a planted %s: err = %v, want ErrNotOwned", name, err)
+			}
+			if err := os.Remove(filepath.Join(empty, name)); err != nil {
+				t.Fatal(err)
+			}
 		}
 	})
 

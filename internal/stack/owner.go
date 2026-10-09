@@ -13,8 +13,8 @@ import (
 	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
 )
 
-// ErrNotOwned is wrapped by the error Find returns when the stack it found
-// without --stack belongs to another user (§6.1).
+// ErrNotOwned is wrapped by the error Find and InitDir return when the stack
+// they found without --stack belongs to another user (§6.1).
 var ErrNotOwned = errors.New("stack belongs to another user")
 
 // Seams for tests, which can't chown without root.
@@ -33,12 +33,28 @@ var (
 func checkOwner(dir string) error {
 	for _, p := range []string{dir, filepath.Join(dir, ConfigFile)} {
 		fi, err := os.Stat(p)
+		if errors.Is(err, fs.ErrNotExist) && p != dir {
+			continue
+		}
 		if err != nil {
 			return err
 		}
 		if uid := fileOwner(p, fi); !trustedUID(uid) {
-			return exitcode.Precondition("%w: %s is owned by %s, not you; pass --stack %q if you trust it",
-				ErrNotOwned, p, ownerName(uid), dir)
+			return exitcode.Precondition("%w: %s is owned by %s, not you; if you trust it, pass --stack DIR",
+				ErrNotOwned, p, ownerName(uid))
+		}
+	}
+	return nil
+}
+
+// checkInitOwner is checkOwner for the cwd init defaults to, when it holds
+// anything init would take over or compose would read: pic-sure.yaml,
+// .pic-sure/ or overrides/ (docker's overridesDir). A cwd with none of them,
+// such as /tmp, is fine to create a stack in.
+func checkInitOwner(dir string) error {
+	for _, name := range []string{ConfigFile, CLIDir, "overrides"} {
+		if _, err := os.Lstat(filepath.Join(dir, name)); err == nil {
+			return checkOwner(dir)
 		}
 	}
 	return nil

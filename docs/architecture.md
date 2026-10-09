@@ -564,8 +564,9 @@ A directory is a stack when it holds `pic-sure.yaml` and `.pic-sure/`.
   by the effective uid, or, for root under sudo, by `SUDO_UID` (as git
   does). Otherwise Find fails with exit 3 wrapping `ErrNotOwned`, naming the
   owner and suggesting `--stack DIR`; `--stack` is never checked.
-  `InitDir` applies the same check when it defaults to cwd and cwd holds a
-  `pic-sure.yaml`, because init would resume it. The TUI's landing shows
+  `InitDir` applies the same check when it defaults to cwd and cwd holds
+  `pic-sure.yaml`, `.pic-sure/` or `overrides/`, which init would take
+  over; an empty directory someone else owns, like `/tmp`, is fine. The TUI's landing shows
   that message (`tui.Options.Untrusted`) and offers only
   Preflight and Quit. Tests fake the owner through `fileOwner`, `euid` and
   `sudoUID` in `owner.go`. `InitDir(arg, stackFlag,
@@ -1971,9 +1972,10 @@ is ready to use.
   would count as a second Ctrl-C (compose's force-kill). A SIGINT from
   elsewhere (`kill -INT` from a script, 100) is forwarded to the child, and
   if the child is still running `WaitDelay` later, the usual escalation
-  follows. A sender that signals the whole process group without being the
-  terminal (`kill -INT %1`, GNU `timeout`), or Ctrl-C at a terminal with
-  stdin redirected, still gets its SIGINT forwarded, so the child sees two.
+  follows. Stdin is the only test, so a SIGINT sent to the whole process
+  group while the CLI isn't in a terminal's foreground with stdin on it
+  (`kill -INT %1`, GNU `timeout`, or Ctrl-C with stdin redirected) is
+  forwarded as well, and the child sees two.
   On any other cancellation it sends SIGTERM, then SIGKILL `WaitDelay`
   later. The call waits for the child, then returns ctx's error if ctx
   ended first.

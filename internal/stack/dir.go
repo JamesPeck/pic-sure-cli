@@ -76,8 +76,9 @@ func Find(dir, cwd string) (string, error) {
 // InitDir returns the directory `init [DIR]` creates its stack in (D14): the
 // DIR argument when given, else --stack, else cwd. Relative paths are taken
 // relative to cwd. A DIR and a --stack that name different directories are
-// an exit-2 usage error. When neither is given, a pic-sure.yaml in cwd that
-// another user owns is an exit-3 error wrapping ErrNotOwned, as in Find.
+// an exit-2 usage error. When neither is given, a cwd holding stack files
+// that another user owns is an exit-3 error wrapping ErrNotOwned, as in
+// Find (checkInitOwner).
 func InitDir(arg, stackFlag, cwd string) (string, error) {
 	switch {
 	case arg != "" && stackFlag != "":
@@ -91,12 +92,9 @@ func InitDir(arg, stackFlag, cwd string) (string, error) {
 	case stackFlag != "":
 		return absFrom(cwd, stackFlag), nil
 	default:
-		// init resumes a stack it finds here, so it is discovery too.
 		dir := filepath.Clean(cwd)
-		if _, err := os.Stat(filepath.Join(dir, ConfigFile)); err == nil {
-			if err := checkOwner(dir); err != nil {
-				return "", err
-			}
+		if err := checkInitOwner(dir); err != nil {
+			return "", err
 		}
 		return dir, nil
 	}
