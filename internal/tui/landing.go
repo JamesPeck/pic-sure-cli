@@ -65,9 +65,9 @@ type landing struct {
 	keepDB          bool
 	confirmText     string
 
-	// leaving is set once the landing has asked the app for another
-	// screen or a run; it drops input until the app shows the landing
-	// again, so keys that arrive together can't ask twice.
+	// leaving drops input from when the landing asks the app for another
+	// screen or a run until the app shows it again, so keys that arrive in
+	// one read can't ask twice.
 	leaving bool
 
 	result        string
@@ -266,8 +266,7 @@ func (l *landing) choose(id string) (*landing, tea.Cmd) {
 	return l, nil
 }
 
-// leave sends cmd, which asks the app for another screen or a run, and
-// drops input until the app shows the landing again.
+// leave sends cmd, which leaves the landing, and sets leaving.
 func (l *landing) leave(cmd tea.Cmd) (*landing, tea.Cmd) {
 	l.leaving = true
 	return l, cmd

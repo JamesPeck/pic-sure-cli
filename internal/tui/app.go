@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 	"path/filepath"
 
@@ -48,8 +47,6 @@ type Options struct {
 	// and the dashboard's actions and the load wizard's loads, sending its
 	// events to req.Sink.
 	Command func(ctx context.Context, req CommandRequest) (InitResult, error)
-	// Log receives the TUI's own debug records. Nil discards them.
-	Log *slog.Logger
 }
 
 // CommandRequest is a command the landing, the dashboard or the load
@@ -140,9 +137,6 @@ type app struct {
 }
 
 func newApp(ctx context.Context, o Options) *app {
-	if o.Log == nil {
-		o.Log = slog.New(slog.DiscardHandler)
-	}
 	a := &app{ctx: ctx, opts: o, screen: ScreenLanding}
 	a.landing = newLanding(o.Root, detectStack(o.Root), o.Animations)
 	if o.Start == ScreenDashboard {
@@ -182,6 +176,12 @@ func (a *app) Init() tea.Cmd {
 }
 
 func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if a.run != nil && leavesScreen(msg) {
+		// Sent by another screen before the run screen opened (keys that
+		// arrived in one read). Acting on it would hide the run, or replace
+		// it and leave its operation running unseen, holding the stack lock.
+		return a, nil
+	}
 	switch msg := msg.(type) {
 	case tea.BackgroundColorMsg:
 		// The palette and dialog.Theme read it on every render.
@@ -255,6 +255,9 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a.startInit(InitRequest{Dir: a.opts.Root})
 
 	case runClosedMsg:
+		if a.run == nil {
+			return a, nil // a second close of a run screen already closed
+		}
 		if a.runCommand {
 			return a.actionClosed()
 		}
@@ -335,6 +338,18 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 }
 
+// leavesScreen reports whether msg asks the app to open another screen or
+// start a run.
+func leavesScreen(msg tea.Msg) bool {
+	switch msg.(type) {
+	case openDashboardMsg, dashboard.BackMsg, dashboard.RunMsg, dashboard.LoadMsg,
+		openWizardMsg, wizardClosedMsg, wizardDoneMsg, resumeSetupMsg,
+		openLoadDataMsg, loadDataClosedMsg, loadRunMsg:
+		return true
+	}
+	return false
+}
+
 func (a *app) newDashboard() {
 	ctx, cancel := context.WithCancel(a.ctx)
 	b := a.opts.Dashboard
@@ -373,9 +388,6 @@ func (a *app) closeLoad() {
 // dashboard action, or a load. Closing it returns to the dashboard if one
 // is open, else to the landing.
 func (a *app) startAction(act dashboard.Action) (tea.Model, tea.Cmd) {
-	if a.runActive(act.Title) {
-		return a, nil
-	}
 	if a.opts.Command == nil {
 		if a.dash != nil {
 			a.screen = ScreenDashboard
@@ -434,9 +446,6 @@ func (a *app) openDashboard() (tea.Model, tea.Cmd) {
 
 // startInit opens the run screen on an init of req.
 func (a *app) startInit(req InitRequest) (tea.Model, tea.Cmd) {
-	if a.runActive("init") {
-		return a, nil
-	}
 	if a.opts.Init == nil {
 		a.landing.result = "setup failed: init isn't available here"
 		return a, a.openLandingCmd()
@@ -446,17 +455,6 @@ func (a *app) startInit(req InitRequest) (tea.Model, tea.Cmd) {
 	a.run.setSize(a.width, a.height)
 	a.screen = ScreenRun
 	return a, a.run.init()
-}
-
-// runActive reports whether the run screen is open, in which case a
-// request to start another run (title) is refused: replacing the screen
-// would leave its operation running unseen, holding the stack lock.
-func (a *app) runActive(title string) bool {
-	if a.run == nil {
-		return false
-	}
-	a.opts.Log.Debug("tui: a run is open; not starting another", "run", title)
-	return true
 }
 
 func (a *app) openLandingCmd() tea.Cmd {

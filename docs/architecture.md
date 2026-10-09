@@ -2546,10 +2546,11 @@ load wizard, and 083 the landing's actions.
   enters a terminal state first, so keys or huh ticks that arrive before
   the app acts can't send it again: the setup wizard's `wizardDone`, the
   load screen's `done` (set by `dispatch` and `closeLoad`), and the
-  landing's `leaving`, which `openLandingCmd` clears. Behind them,
-  `startAction` and `startInit` refuse to start while the run screen is
-  open (a debug record on `Options.Log`), so a run is never replaced and
-  left running unseen.
+  landing's `leaving`, which `openLandingCmd` clears. Behind them, while
+  the run screen is open the app drops every other screen's request to
+  navigate or start a run (`leavesScreen`), so a run is never hidden or
+  replaced and left running unseen, and a second `runClosedMsg` is a
+  no-op.
 
 It runs on the Charm v2 modules (`charm.land/bubbletea/v2`, `bubbles/v2`,
 `huh/v2`, `lipgloss/v2`; ticket 002). The root model's `View` returns a

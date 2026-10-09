@@ -81,19 +81,21 @@ func loadAtConfirm(t *testing.T, a *app, kind string) {
 func TestLoadConfirmDispatchesOnce(t *testing.T) {
 	for _, kind := range []string{kindFile, kindDemo, kindGenomic} {
 		t.Run(kind, func(t *testing.T) {
-			a, calls := countingApp(t, t.TempDir())
+			a, _ := countingApp(t, t.TempDir())
 			loadAtConfirm(t, a, kind)
-			a.load.confirmed = true
-			a.load.form.State = huh.StateCompleted
-			var cmds []tea.Cmd
-			for _, m := range []tea.Msg{struct{}{}, tea.KeyPressMsg{Code: 'y', Text: "y"}, enter, struct{}{}} {
-				_, cmd := a.Update(m)
-				cmds = append(cmds, cmd)
+			s := a.load
+			s.confirmed = true
+			s.form.State = huh.StateCompleted
+			if _, cmd := s.update(struct{}{}); cmd == nil {
+				t.Fatal("the confirm dispatched nothing")
+			} else if _, ok := cmd().(loadRunMsg); !ok {
+				t.Fatal("the confirm didn't send loadRunMsg")
 			}
-			for _, cmd := range cmds {
-				pumpApp(a, cmd, 0)
+			for _, m := range []tea.Msg{struct{}{}, tea.KeyPressMsg{Code: 'y', Text: "y"}, enter} {
+				if _, cmd := s.update(m); cmd != nil {
+					t.Errorf("%#v after the confirm sent another command", m)
+				}
 			}
-			assertOneCommand(t, calls)
 		})
 	}
 }
@@ -130,8 +132,8 @@ func TestLandingConfirmAsksOnce(t *testing.T) {
 	}
 }
 
-// The app never replaces an open run screen: a second request is refused,
-// and the first run keeps its screen.
+// While a run screen is open the app acts on no other screen's request: a
+// second run is refused, and the run screen stays in front.
 func TestAppStartsOneRunAtATime(t *testing.T) {
 	root := t.TempDir()
 	inits := make(chan struct{}, 4)
@@ -140,17 +142,30 @@ func TestAppStartsOneRunAtATime(t *testing.T) {
 		inits <- struct{}{}
 		return InitResult{}, nil
 	}
-	a.Update(dashboard.RunMsg{Action: preflightAction(true)})
+	a.Update(openDashboardMsg{})
+	a.Update(dashboard.RunMsg{Action: preflightAction(false)})
 	first := a.run
-	a.Update(dashboard.RunMsg{Action: preflightAction(true)})
-	a.Update(loadRunMsg{act: dashboard.Action{Title: "Loading", Args: []string{"data", "demo"}}})
-	a.Update(resumeSetupMsg{})
-	if a.run != first || a.screen != ScreenRun {
-		t.Fatal("a second request replaced the run screen")
+	for _, m := range []tea.Msg{
+		dashboard.RunMsg{Action: preflightAction(false)},
+		loadRunMsg{act: dashboard.Action{Title: "Loading", Args: []string{"data", "demo"}}},
+		resumeSetupMsg{}, dashboard.LoadMsg{}, openLoadDataMsg{}, dashboard.BackMsg{}, openWizardMsg{},
+	} {
+		a.Update(m)
+		if a.run != first || a.screen != ScreenRun {
+			t.Fatalf("%#v left the run screen: screen %v", m, a.screen)
+		}
 	}
 	assertOneCommand(t, calls)
 	if len(inits) != 0 {
 		t.Error("init started while a command ran")
+	}
+	// A second close of the same run screen changes nothing.
+	a.Update(runClosedMsg{})
+	screen, setup := a.screen, &wizardDoneMsg{}
+	a.lastSetup = setup
+	a.Update(runClosedMsg{})
+	if a.screen != screen || a.lastSetup != setup {
+		t.Errorf("a second close: screen %v, kept setup %v", a.screen, a.lastSetup == setup)
 	}
 }
 
