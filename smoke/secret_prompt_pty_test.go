@@ -20,7 +20,7 @@ func TestSecretPromptHidesInputUnderPTY(t *testing.T) {
 	skipUnlessPTYAllowed(t)
 	s := startPTY(t, t.TempDir(), initSecretArgs(t)...)
 	s.waitFor("Paste the Auth0 client secret and press Enter (input is hidden):")
-	s.send("Typed0Short\r")
+	s.send("Typed0Shortx\x7f\r")
 	s.waitExit(2)
 	out := s.text()
 	if !strings.Contains(out, "the client secret is 11 bytes") {
@@ -29,6 +29,16 @@ func TestSecretPromptHidesInputUnderPTY(t *testing.T) {
 	if strings.Contains(out, "Typed0Short") {
 		t.Errorf("the secret was echoed; output:\n%s", out)
 	}
+}
+
+// Ctrl-C at the prompt arrives as a byte (the terminal is raw), and still
+// interrupts.
+func TestSecretPromptCtrlCUnderPTY(t *testing.T) {
+	skipUnlessPTYAllowed(t)
+	s := startPTY(t, t.TempDir(), initSecretArgs(t)...)
+	s.waitFor("(input is hidden):")
+	s.send("abc\x03")
+	s.waitExit(130)
 }
 
 // --non-interactive can't prompt, so a terminal stdin is a usage error.

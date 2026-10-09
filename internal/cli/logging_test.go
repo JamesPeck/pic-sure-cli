@@ -268,4 +268,11 @@ func TestRunLogRedactsConfigSetValues(t *testing.T) {
 	if got := logArgs("config set", []string{"network.http_port", "8081"}); got[1] != "8081" {
 		t.Errorf("a non-secret value: %q", got)
 	}
+	if got := logArgs("config set", []string{"auth.consent_authorization", "true"}); got[1] != "true" {
+		t.Errorf("a field that is named like a secret but isn't one: %q", got)
+	}
+	// A boolean is redacted from the record but not registered.
+	if got := logArgs("config set", []string{"services.psama.env.API_TOKEN", "false"}); got[1] != log.Redacted || log.Redact("ok: false") != "ok: false" {
+		t.Errorf("a secret-named key's boolean: %q, %q", got, log.Redact("ok: false"))
+	}
 }

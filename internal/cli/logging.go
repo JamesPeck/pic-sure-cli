@@ -56,7 +56,7 @@ func (a *App) startRunLog(cmd *cobra.Command, args []string) {
 			for _, kv := range sv.GetSlice() {
 				key, v, _ := strings.Cut(kv, "=")
 				if privateConfigKey(key) {
-					log.RegisterSecrets(v)
+					registerConfigValue(v)
 				}
 			}
 		}
@@ -69,26 +69,39 @@ func (a *App) startRunLog(cmd *cobra.Command, args []string) {
 }
 
 // logArgs is args as the run log records them. `config set KEY VALUE` keeps
-// the key and redacts a private key's value, which config set may yet refuse,
-// so it never reaches secrets.yaml or the redactor's registry otherwise.
-// No other command takes a value as a positional argument.
+// the key and redacts a private key's value. It also registers the value
+// with the redactor, since config set may yet refuse it, and then it never
+// reaches secrets.yaml, where the registry would otherwise find it.
 func logArgs(path string, args []string) []string {
 	if path != "config set" || len(args) < 2 || !privateConfigKey(args[0]) {
 		return args
 	}
-	log.RegisterSecrets(args[1])
-	return append([]string{args[0], "[REDACTED]"}, args[2:]...)
+	registerConfigValue(args[1])
+	return append([]string{args[0], log.Redacted}, args[2:]...)
 }
 
 // privateConfigKey reports whether a config key's value is kept out of the
 // logs: a secret field, the admin email (personal data), or a secret-named
-// key such as an env var's (log.IsSecretName).
+// key such as an env var's (log.IsSecretName), unless it is a field that
+// isn't secret (auth.consent_authorization).
 func privateConfigKey(key string) bool {
-	field, _ := stack.LookupField(key)
+	field, ok := stack.LookupField(key)
 	if field.Secret || field.Flag == "admin-email" {
 		return true
 	}
+	if ok && !strings.HasSuffix(field.Key, ".*") {
+		return false
+	}
 	return log.IsSecretName(key)
+}
+
+// registerConfigValue registers a private key's value with the redactor,
+// unless it is a boolean: redacting every "true" and "false" would wreck the
+// logs.
+func registerConfigValue(v string) {
+	if !strings.EqualFold(v, "true") && !strings.EqualFold(v, "false") {
+		log.RegisterSecrets(v)
+	}
 }
 
 // openRunLog starts the run's log file in st's .pic-sure/logs. openStack

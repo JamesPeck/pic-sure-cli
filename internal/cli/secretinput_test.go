@@ -58,3 +58,25 @@ func TestReadUserSecret(t *testing.T) {
 		})
 	}
 }
+
+func TestReadRawLine(t *testing.T) {
+	for _, tc := range []struct {
+		in, want string
+		code     int
+	}{
+		{in: "secret\r", want: "secret"},
+		{in: "secret\n", want: "secret"},
+		{in: "secrex\x7ft\r", want: "secret"},
+		{in: "s\u00e9\x7f\x7fsecret\r", want: "secret"},
+		{in: "wrong\x15secret\r", want: "secret"},
+		{in: "sec\x03", code: exitcode.CodeInterrupted},
+	} {
+		got, err := readRawLine(strings.NewReader(tc.in))
+		if string(got) != tc.want || exitcode.FromError(err) != tc.code {
+			t.Errorf("%q: got %q, %v", tc.in, got, err)
+		}
+	}
+	if _, err := readRawLine(strings.NewReader("\x04")); err != io.EOF {
+		t.Errorf("Ctrl-D: %v", err)
+	}
+}

@@ -371,8 +371,9 @@ it.
   `--*-stdin` flags and `secrets rotate`. Piped stdin goes to
   `stack.ReadUserSecret` unchanged (to EOF). A terminal stdin gets a prompt
   on stderr ("Paste the ... and press Enter (input is hidden):") and one
-  line read with echo off (`charmbracelet/x/term`), restoring the terminal
-  if the context ends first; with `--json` or `--non-interactive` it is
+  line read in raw mode (`charmbracelet/x/term`), so nothing echoes:
+  Backspace and Ctrl-U edit, Ctrl-C (a byte in raw mode) is exit 130, and
+  the terminal is restored when the line ends or the context does; with `--json` or `--non-interactive` it is
   exit 2, asking for the secret to be piped. `stdinTerminal` and
   `readHidden` are the test seams; `smoke/secret_prompt_pty_test.go` runs it
   on a PTY.

@@ -477,7 +477,7 @@ func TestEventsAreRedactedForEveryRenderer(t *testing.T) {
 		var result events.Result
 		c := a.actionApp(tui.CommandRequest{Sink: &rec}, io.Discard, io.Discard, func(r events.Result) { result = r })
 		emit(c.newSink())
-		c.warnStderr("%s", text)
+		_, _ = io.WriteString(c.Stderr, "pic-sure: warning: "+text+"\n")
 		_, _ = io.WriteString(c.tuiLog.Load(), text+"\n")
 		b, err := json.Marshal(append(rec.Events(), result))
 		if err != nil {

@@ -3,9 +3,11 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/x/term"
 
@@ -55,29 +57,70 @@ func noPromptFlag(g GlobalOptions) string {
 	return "--non-interactive"
 }
 
-// readHiddenLine reads one line from the terminal stdin with echo off. If
-// ctx ends first (Ctrl-C), it puts the terminal back as it was, since the
-// read that turned echo off is still blocked, and returns ctx's cause.
+// readHiddenLine reads one line from the terminal stdin with echo off. It
+// puts the terminal in raw mode before it starts reading, so that restoring
+// it when ctx ends first can't race the read's own change; the read, still
+// blocked, then changes nothing.
 func readHiddenLine(ctx context.Context, stdin io.Reader) ([]byte, error) {
-	fd := stdin.(*os.File).Fd()
-	state, err := term.GetState(fd)
+	f, ok := stdin.(*os.File)
+	if !ok {
+		return nil, errors.New("stdin isn't a terminal")
+	}
+	state, err := term.MakeRaw(f.Fd())
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = term.Restore(f.Fd(), state) }()
 	type result struct {
 		line []byte
 		err  error
 	}
 	done := make(chan result, 1)
 	go func() {
-		line, err := term.ReadPassword(fd)
+		line, err := readRawLine(f)
 		done <- result{line, err}
 	}()
 	select {
 	case r := <-done:
 		return r.line, r.err
 	case <-ctx.Done():
-		_ = term.Restore(fd, state)
 		return nil, context.Cause(ctx)
+	}
+}
+
+// readRawLine reads a line typed on a terminal in raw mode, which neither
+// echoes nor edits: Enter ends it, Backspace and Ctrl-U edit it, Ctrl-C is
+// an interrupt (raw mode sends it as a byte, not SIGINT), and Ctrl-D on an
+// empty line is EOF.
+func readRawLine(r io.Reader) ([]byte, error) {
+	var line []byte
+	b := make([]byte, 1)
+	for {
+		n, err := r.Read(b)
+		if n == 0 {
+			if err == nil {
+				continue
+			}
+			return nil, err
+		}
+		switch b[0] {
+		case '\r', '\n':
+			return line, nil
+		case 3: // Ctrl-C
+			return nil, exitcode.Signaled(os.Interrupt)
+		case 4: // Ctrl-D
+			if len(line) == 0 {
+				return nil, io.EOF
+			}
+		case 0x15: // Ctrl-U
+			line = line[:0]
+		case 0x7f, '\b':
+			if len(line) > 0 {
+				_, size := utf8.DecodeLastRune(line)
+				line = line[:len(line)-size]
+			}
+		default:
+			line = append(line, b[0])
+		}
 	}
 }

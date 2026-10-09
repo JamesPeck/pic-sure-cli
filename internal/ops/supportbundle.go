@@ -537,7 +537,7 @@ func redactConfigKeys(data []byte) []byte {
 		return redactSecretKeyLines(data)
 	}
 	changed := false
-	walkSecretKeys(&doc, "", func(parent *yaml.Node, i int) {
+	walkSecretKeys(&doc, "", func(parent *yaml.Node, i int, _ bool) {
 		parent.Content[i] = &yaml.Node{Kind: yaml.ScalarNode, Value: log.Redacted}
 		changed = true
 	})
@@ -595,10 +595,11 @@ func configPlainField(p string) bool {
 
 // walkSecretKeys calls fn for every value under n, at dotted path prefix,
 // that redactConfigKeys blanks, unless it is an empty scalar:
-// parent.Content[i] is the value. A secret-named key's value must be a
-// scalar other than null, and a stack.Fields key that isn't secret is left
-// alone, so consent_authorization: false stays.
-func walkSecretKeys(n *yaml.Node, prefix string, fn func(parent *yaml.Node, i int)) {
+// parent.Content[i] is the value, and field says its key is one of
+// configSecretFields. A secret-named key's value must be a scalar other
+// than null, or a sequence, and a stack.Fields key that isn't secret is
+// left alone, so consent_authorization: false stays.
+func walkSecretKeys(n *yaml.Node, prefix string, fn func(parent *yaml.Node, i int, field bool)) {
 	if n.Kind != yaml.MappingNode {
 		for _, c := range n.Content {
 			walkSecretKeys(c, prefix, fn)
@@ -612,9 +613,9 @@ func walkSecretKeys(n *yaml.Node, prefix string, fn func(parent *yaml.Node, i in
 			p = prefix + "." + key
 		}
 		empty := v.Kind == yaml.ScalarNode && v.Value == ""
-		scalar := v.Kind == yaml.ScalarNode && v.ShortTag() != "!!null"
-		if !empty && (configSecretFields[p] || log.IsSecretName(key) && scalar && !configPlainField(p)) {
-			fn(n, i)
+		value := v.Kind == yaml.ScalarNode && v.ShortTag() != "!!null" || v.Kind == yaml.SequenceNode
+		if !empty && (configSecretFields[p] || log.IsSecretName(key) && value && !configPlainField(p)) {
+			fn(n, i, configSecretFields[p])
 			continue
 		}
 		walkSecretKeys(v, p, fn)
@@ -622,25 +623,27 @@ func walkSecretKeys(n *yaml.Node, prefix string, fn func(parent *yaml.Node, i in
 }
 
 // configSecretValues returns the values redactConfigKeys blanks, so they
-// are redacted wherever else they appear. A boolean is blanked but not
-// returned: redacting every "true" and "false" would wreck the bundle.
+// are redacted wherever else they appear. A boolean under a key that is
+// only secret-named is blanked but not returned: redacting every "true" and
+// "false" would wreck the bundle. A secret field's value counts whatever it
+// looks like, as in secrets.yaml.
 func configSecretValues(data []byte) []string {
 	var values []string
 	var doc yaml.Node
 	if yaml.Unmarshal(data, &doc) != nil {
 		for _, re := range []*regexp.Regexp{secretKeyLine, secretFlowKey} {
 			for _, m := range re.FindAllSubmatch(data, -1) {
-				if v, isBool, ok := secretLineValue(m); ok && !isBool {
+				if v, register, ok := secretLineValue(m); ok && register {
 					values = append(values, v)
 				}
 			}
 		}
 		return values
 	}
-	walkSecretKeys(&doc, "", func(parent *yaml.Node, i int) {
+	walkSecretKeys(&doc, "", func(parent *yaml.Node, i int, field bool) {
 		var collect func(n *yaml.Node)
 		collect = func(n *yaml.Node) {
-			if n.Kind == yaml.ScalarNode && n.ShortTag() != "!!bool" {
+			if n.Kind == yaml.ScalarNode && (field || n.ShortTag() != "!!bool") {
 				values = append(values, n.Value)
 			}
 			for _, c := range n.Content {
@@ -670,22 +673,26 @@ func redactSecretKeyLines(data []byte) []byte {
 // secretLineValue returns the value of a secretKeyLine or secretFlowKey
 // match whose key is the last part of a configSecretFields key, or is
 // secret-named and not configPlainLeaves', and whose value is a scalar other
-// than null or "", whatever its type; isBool says it is a boolean.
-func secretLineValue(m [][]byte) (value string, isBool, ok bool) {
-	if k := string(m[2]); !configSecretLeaves[k] && (!log.IsSecretName(k) || configPlainLeaves[k]) {
+// than null or "", whatever its type. register is configSecretValues' rule:
+// false for a boolean under a key that is only secret-named.
+func secretLineValue(m [][]byte) (value string, register, ok bool) {
+	k := string(m[2])
+	field := configSecretLeaves[k]
+	if !field && (!log.IsSecretName(k) || configPlainLeaves[k]) {
 		return "", false, false
 	}
-	var v any
-	if yaml.Unmarshal(m[3], &v) == nil {
-		switch v := v.(type) {
-		case string:
-			return v, false, v != ""
-		case nil, map[string]any, []any:
-			return "", false, false
-		case bool:
-			return strings.TrimSpace(string(m[3])), true, true
-		}
-		return strings.TrimSpace(string(m[3])), false, true
+	var doc yaml.Node
+	if yaml.Unmarshal(m[3], &doc) != nil {
+		v := strings.Trim(strings.TrimSpace(string(m[3])), `"'`)
+		return v, true, true
 	}
-	return strings.Trim(strings.TrimSpace(string(m[3])), `"'`), false, true
+	if len(doc.Content) != 1 || doc.Content[0].Kind != yaml.ScalarNode {
+		return "", false, false
+	}
+	// The node's value leaves out a trailing comment, which m[3] holds.
+	n := doc.Content[0]
+	if n.ShortTag() == "!!null" || n.Value == "" {
+		return "", false, false
+	}
+	return n.Value, field || n.ShortTag() != "!!bool", true
 }

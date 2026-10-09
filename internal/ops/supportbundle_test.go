@@ -530,8 +530,8 @@ func TestSupportBundleCancelled(t *testing.T) {
 // secret (consent_authorization) stays.
 func TestSupportBundleRedactsNonStringSecrets(t *testing.T) {
 	for name, cfg := range map[string]string{
-		"valid":     "schema: 1\nauth:\n  consent_authorization: false\nservices:\n  psama:\n    env:\n      SMTP_PASSWORD: 12345678\n      API_TOKEN: true\nemail:\n  password: 87654321\n",
-		"malformed": "schema: 1\nauth: {consent_authorization: false}\nservices: {psama: {env: {SMTP_PASSWORD: 12345678, API_TOKEN: true}}}\nemail: {password: 87654321}\nbroken: [\n",
+		"valid":     "schema: 1\nauth:\n  consent_authorization: false\nservices:\n  psama:\n    env:\n      SMTP_PASSWORD: 12345678\n      API_TOKEN: true\n      DB_PASSWORD: 13572468  # temp\n      API_TOKENS: [24681357]\nemail:\n  password: 87654321\n",
+		"malformed": "schema: 1\nauth: {consent_authorization: false}\nservices: {psama: {env: {SMTP_PASSWORD: 12345678, API_TOKEN: true}}}\nemail: {password: 87654321}\nextra:\n  DB_PASSWORD: 13572468  # temp\nbroken: [\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			st := newBundleStack(t)
@@ -539,22 +539,40 @@ func TestSupportBundleRedactsNonStringSecrets(t *testing.T) {
 			writeStackFile(t, st, stack.SecretsFile, "email_password: x\nfuture_api_token: 55556666\nfuture_password_flag: true\n")
 			f := fakerunner.New(t)
 			f.On(fakerunner.Glob("docker compose * ps --all --format json")).Stdout(`{"Name":"demo-gateway-1","Service":"gateway","State":"exited","ExitCode":2}` + "\n")
-			f.On(fakerunner.Glob("docker compose * logs --tail 500 gateway")).Stdout("smtp 12345678 email 87654321 token 55556666 ok true\n")
+			f.On(fakerunner.Glob("docker compose * logs --tail 500 gateway")).Stdout("smtp 12345678 email 87654321 token 55556666 db 13572468 ok true\n")
 			f.On(fakerunner.Glob("docker *")).Exit(1)
 			_, files := buildBundle(t, st, f)
 			for file, data := range files {
-				for _, v := range []string{"12345678", "87654321", "55556666", "API_TOKEN: true", "SMTP_PASSWORD: 1"} {
+				for _, v := range []string{"12345678", "87654321", "55556666", "13572468", "24681357", "API_TOKEN: true", "SMTP_PASSWORD: 1"} {
 					if strings.Contains(data, v) {
 						t.Errorf("%s holds %q:\n%s", file, v, data)
 					}
 				}
 			}
-			if got := files["compose/logs/gateway.log"]; got != "smtp [REDACTED] email [REDACTED] token [REDACTED] ok true\n" {
+			if got := files["compose/logs/gateway.log"]; got != "smtp [REDACTED] email [REDACTED] token [REDACTED] db [REDACTED] ok true\n" {
 				t.Errorf("gateway.log %q", got)
 			}
 			if got := files["stack/pic-sure.yaml"]; !strings.Contains(got, "consent_authorization: false") {
 				t.Errorf("pic-sure.yaml lost consent_authorization:\n%s", got)
 			}
 		})
+	}
+}
+
+// A secret field's boolean is redacted everywhere, as secrets.yaml's are;
+// only a key that is merely secret-named keeps its boolean out.
+func TestSupportBundleRedactsSecretFieldBooleans(t *testing.T) {
+	for _, cfg := range []string{"schema: 1\nemail:\n  password: false\n", "schema: 1\nemail: {password: false}\nbroken: [\n"} {
+		st := newBundleStack(t)
+		writeStackFile(t, st, stack.ConfigFile, cfg)
+		writeStackFile(t, st, stack.SecretsFile, "email_password: x\n")
+		f := fakerunner.New(t)
+		f.On(fakerunner.Glob("docker compose * ps --all --format json")).Stdout(`{"Name":"demo-gateway-1","Service":"gateway","State":"exited","ExitCode":2}` + "\n")
+		f.On(fakerunner.Glob("docker compose * logs --tail 500 gateway")).Stdout("email password false rejected\n")
+		f.On(fakerunner.Glob("docker *")).Exit(1)
+		_, files := buildBundle(t, st, f)
+		if got := files["compose/logs/gateway.log"]; got != "email password [REDACTED] rejected\n" {
+			t.Errorf("%q: gateway.log %q", cfg, got)
+		}
 	}
 }
