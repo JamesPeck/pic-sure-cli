@@ -32,9 +32,19 @@ type genomicFixture struct {
 	probes      [][]string
 	stageIn     []byte
 	backupExit  int
+	backups     int
 	promoteExit int
 	promotes    [][]string // each promote helper's argv
 	promoteFx   []string   // the promote helper's partition args
+	recovers    int        // genomic-recover helpers run
+	recoverExit int
+	onPromote   func() (docker.Result, error) // answers the promote helper
+	// h, if set, runs the list, move, backup, promote and recover helpers'
+	// scripts for real, and the split loader writes a contig into all/
+	// for them. shim is the environment of the backup and promote runs.
+	h         *helperScripts
+	shim      []string
+	partition string
 }
 
 func newGenomicFixture(t *testing.T) *genomicFixture {
@@ -83,29 +93,56 @@ func newGenomicFixture(t *testing.T) *genomicFixture {
 	})
 	for _, id := range []string{ops.GenomicSplitStepID, ops.GenomicMetadataStepID, ops.GenomicFinalizeStepID} {
 		f.On(fakerunner.Glob("docker run --rm --name demo-" + id + "-* --user 0:0 --network none *")).Do(func(context.Context, fakerunner.Call) (docker.Result, error) {
+			if fx.h != nil && id == ops.GenomicSplitStepID {
+				fx.h.seed("demo_genomic-staging", map[string]string{"all/chr21/variants": "new " + fx.partition})
+			}
 			return docker.Result{ExitCode: fx.exits[id]}, nil
 		})
 	}
-	f.On(fakerunner.Glob("docker run --rm --name demo-genomic-move-* *"))
-	f.On(fakerunner.Glob("docker run --rm --name demo-genomic-list-* *")).Do(func(_ context.Context, c fakerunner.Call) (docker.Result, error) {
+	f.On(fakerunner.Glob("docker run --rm --name demo-genomic-move-* *")).Do(func(ctx context.Context, c fakerunner.Call) (docker.Result, error) {
+		if fx.h != nil {
+			return fx.h.run(ctx, c)
+		}
+		return docker.Result{}, nil
+	})
+	f.On(fakerunner.Glob("docker run --rm --name demo-genomic-list-* *")).Do(func(ctx context.Context, c fakerunner.Call) (docker.Result, error) {
+		if fx.h != nil {
+			return fx.h.run(ctx, c)
+		}
 		if slices.Contains(c.Argv, "demo_genomic-staging:/data:ro") {
 			return docker.Result{Stdout: []byte(fx.staged)}, nil
 		}
 		return docker.Result{Stdout: []byte(fx.live)}, nil
 	})
-	f.On(fakerunner.Glob("docker run --rm --name demo-genomic-backup-* *")).Do(func(context.Context, fakerunner.Call) (docker.Result, error) {
-		return docker.Result{Stderr: []byte("cp: write error: No space left on device\n"), ExitCode: fx.backupExit}, nil
-	})
-	f.On(fakerunner.Glob("docker run --rm --name demo-genomic-promote-* *")).Do(func(_ context.Context, c fakerunner.Call) (docker.Result, error) {
-		fx.promotes = append(fx.promotes, c.Argv)
-		if len(fx.promotes) > 1 {
+	f.On(fakerunner.Glob("docker run --rm --name demo-genomic-backup-* *")).Do(func(ctx context.Context, c fakerunner.Call) (docker.Result, error) {
+		fx.backups++
+		if fx.h != nil {
+			return fx.h.run(ctx, c, fx.shim...)
+		}
+		if fx.backups > 1 { // the settle after a failure
 			return docker.Result{}, nil
 		}
-		if i := slices.Index(c.Argv, "sh"); i+4 <= len(c.Argv) {
-			fx.promoteFx = c.Argv[i+4:]
+		return docker.Result{Stderr: []byte("cp: write error: No space left on device\n"), ExitCode: fx.backupExit}, nil
+	})
+	f.On(fakerunner.Glob("docker run --rm --name demo-genomic-promote-* *")).Do(func(ctx context.Context, c fakerunner.Call) (docker.Result, error) {
+		fx.promotes = append(fx.promotes, c.Argv)
+		fx.promoteFx = c.Argv[slices.Index(c.Argv, "-c")+5:]
+		if fx.onPromote != nil {
+			return fx.onPromote()
+		}
+		if fx.h != nil {
+			return fx.h.run(ctx, c, fx.shim...)
 		}
 		return docker.Result{ExitCode: fx.promoteExit}, nil
 	})
+	f.On(fakerunner.Glob("docker run --rm --name demo-genomic-recover-* -v demo_hpds-genomic:/live alpine:* sh -c * sh /live")).Do(func(ctx context.Context, c fakerunner.Call) (docker.Result, error) {
+		fx.recovers++
+		if fx.h != nil {
+			return fx.h.run(ctx, c)
+		}
+		return docker.Result{ExitCode: fx.recoverExit}, nil
+	})
+	f.On(fakerunner.Glob("docker rm -v -f demo-genomic-*"))
 	return fx
 }
 
@@ -117,11 +154,16 @@ func (fx *genomicFixture) writeIndex(t *testing.T, data string) {
 }
 
 func (fx *genomicFixture) load(opts ops.GenomicLoadOptions) ([]string, error) {
+	return fx.loadCtx(context.Background(), opts)
+}
+
+func (fx *genomicFixture) loadCtx(ctx context.Context, opts ops.GenomicLoadOptions) ([]string, error) {
 	if opts.Partition == "" {
 		opts.Partition = "synth"
 	}
+	fx.partition = opts.Partition
 	opts.VCFIndex = fx.index
-	return ops.LoadGenomic(context.Background(), fx.d, fx.st, fx.cfg, fx.state, opts)
+	return ops.LoadGenomic(ctx, fx.d, fx.st, fx.cfg, fx.state, opts)
 }
 
 func TestLoadGenomicStagesWithoutTouchingHPDS(t *testing.T) {
@@ -137,7 +179,7 @@ func TestLoadGenomicStagesWithoutTouchingHPDS(t *testing.T) {
 		fakerunner.Glob("docker run * demo-genomic-split-* -e HEAPSIZE -e LOADER_NAME -v demo_genomic-staging:/opt/local/hpds "+vcfs+" hms-dbmi/pic-sure-hpds-etl:abc123abc123"),
 		fakerunner.Glob("docker run * demo-genomic-metadata-* -v demo_genomic-staging:/opt/local/hpds "+vcfs+" hms-dbmi/pic-sure-hpds-etl:abc123abc123"),
 		fakerunner.Glob("docker run * demo-genomic-finalize-* -v demo_genomic-staging:/opt/local/hpds hms-dbmi/pic-sure-hpds-etl:abc123abc123"),
-		fakerunner.Glob("docker run * demo-genomic-move-* -v demo_genomic-staging:/data alpine:* sh -c * sh synth"),
+		fakerunner.Glob("docker run * demo-genomic-move-* -v demo_genomic-staging:/data alpine:* sh -c * sh /data synth"),
 	)
 	for id, loader := range map[string]string{"demo-genomic-split-": "SplitChromosomeVcfLoader", "demo-genomic-metadata-": "VariantMetadataLoader", "demo-genomic-finalize-": "GenomicDatasetFinalizer"} {
 		if env := fx.spy.env(id); !slices.Contains(env, "LOADER_NAME="+loader) || !slices.Contains(env, "HEAPSIZE=16000") {
@@ -218,7 +260,7 @@ func TestLoadGenomicBackupFailureStopsThePromote(t *testing.T) {
 	fx := newGenomicFixture(t)
 	fx.backupExit = 1
 	_, err := fx.load(ops.GenomicLoadOptions{Promote: true, Backup: true})
-	if err == nil || !strings.Contains(err.Error(), "No space left on device") || !strings.Contains(err.Error(), "previous backup is kept") ||
+	if err == nil || !strings.Contains(err.Error(), "No space left on device") || !strings.Contains(err.Error(), "all-bak holds a whole backup") ||
 		!strings.Contains(err.Error(), "HPDS is stopped") {
 		t.Fatalf("err = %v", err)
 	}
@@ -233,8 +275,11 @@ func TestLoadGenomicPromoteFailureRemovesThePartialCopy(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "copying synth into volume demo_hpds-genomic") || !strings.Contains(err.Error(), "HPDS is stopped") {
 		t.Fatalf("err = %v", err)
 	}
-	if len(fx.promotes) != 2 || fx.promotes[1][len(fx.promotes[1])-1] != "set -eu; cd /live; rm -rf ./.promote-*" {
-		t.Errorf("promote helpers %q", fx.promotes)
+	if !strings.Contains(err.Error(), "every partition in demo_hpds-genomic is whole; not promoted: synth") {
+		t.Errorf("err = %v", err)
+	}
+	if len(fx.promotes) != 1 || fx.recovers != 1 {
+		t.Errorf("promote helpers %q, %d recover helpers", fx.promotes, fx.recovers)
 	}
 	if promoted != nil {
 		t.Errorf("promoted %q", promoted)

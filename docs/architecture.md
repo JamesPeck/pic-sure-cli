@@ -1501,7 +1501,7 @@ concatenate its step lists with their own and end with one `RefreshStep()`.
 **Genomic loader (049, `genomic.go`).** §9.6's genomic load.
 `LoadGenomic(ctx, d, st, cfg, state, GenomicLoadOptions{Partition,
 VCFIndex, VCFDir, HeapMB, Promote, AllPartitions, Backup, EnableProfile,
-Converge, MkdirTemp})` returns the partitions it promoted. The caller holds
+Converge, MkdirTemp, LockUse})` returns the partitions it promoted. The caller holds
 the stack lock and sets `d.Compose`. It shares the phenotype loader's
 helpers (`findImage`, `daemonSees`, `script`, `stop`, `start`). Steps, none
 skippable:
@@ -1510,11 +1510,18 @@ skippable:
   first tab-separated column), whose every VCF must be an absolute path to
   a file under `VCFDir` (exit 2 otherwise), since the loaders open them by
   the path in the index; and the daemon must see them with `VCFDir`
-  mounted at its own path, or they are copied (keeping their relative
-  paths) into a `MkdirTemp` dir that is mounted at that path instead. With
-  `Promote`, it works out what to promote and refuses (exit 3) to leave
-  more than `hpdsMaxPartitions` (10) in `hpds-genomic`, HPDS's limit; with
-  only `EnableProfile`, it warns if `hpds-genomic` holds no partition.
+  mounted at its own path (the probe sizes symlinks' targets, `stat -L`,
+  as the host does), or they are copied (keeping their relative paths)
+  into a `MkdirTemp` dir that is mounted at that path instead, under
+  `LockUse` until the copy is removed. A VCF that is a symlink to a file
+  outside `VCFDir` is copied without probing, since the container can't
+  follow it. With `Promote`, it works out what to promote and refuses
+  (exit 3) to leave more than `hpdsMaxPartitions` (10) in `hpds-genomic`,
+  HPDS's limit, counting an interrupted promote's `.old-<p>` as `<p>`; with
+  only `EnableProfile`, it warns if `hpds-genomic` holds no partition, or
+  holds an interrupted promote's leftovers, which only a `Promote` load
+  recovers. If it fails, nothing has changed but perhaps the creation of
+  an empty `hpds-genomic`.
 - `genomic-stage`: in the per-stack `genomic-staging` volume, clears `all/`
   and `merged/` and writes `vcfIndex.tsv` from stdin.
 - `genomic-split`, `genomic-metadata`, `genomic-finalize`:
@@ -1527,16 +1534,28 @@ skippable:
   `genomic/<partition>/`, replacing an earlier load of it. HPDS runs
   throughout, and a failure here leaves it and its data unchanged.
 - With `Promote` or `EnableProfile`, `hpds-stop`.
-- `genomic-promote` (`Promote`): with `Backup`, the live store is first
-  copied into `all-bak/` in the staging volume (via `all-bak.new`, so a
-  failed backup keeps the previous one), not into `hpds-genomic` as AIO
-  does: HPDS's `localPatientDistributed` processor reads every top-level
-  directory of `hpds-genomic`, hidden ones too, as a partition, so an
-  `all-bak` there gets loaded. Then this run's partition, or with
-  `AllPartitions` every staged one, is copied to `.promote-<p>` and renamed
-  over `<p>`, so a partition is replaced only once its copy is complete. A
-  failed or interrupted copy is removed by a second helper run without the
-  cancelled context. HPDS reads `<genomic dir>/<partition>/<contig>/`.
+- `genomic-promote` (`Promote`): HPDS's `localPatientDistributed`
+  processor reads every top-level directory of `hpds-genomic`, hidden ones
+  too, as a partition, so nothing may be left there half done. First, if
+  `genomic-input` found leftovers of an interrupted promote, the
+  `genomic-recover` helper settles them (below) and says what it did.
+  With `Backup`, the live store is then copied into `all-bak/` in the
+  staging volume, not into `hpds-genomic` as AIO does, where it would be
+  loaded. Then this run's partition, or with `AllPartitions` every staged
+  one, is copied to `.promote-<p>`; the live `<p>` is renamed to
+  `.old-<p>`, the copy to `<p>`, and `.old-<p>` removed. The backup goes
+  the same way through `all-bak.new` and `all-bak.old`. `settleScript`'s
+  `settle` puts an interrupted replacement right: `.old-<p>` exists only
+  once the copy is complete, so a missing `<p>` gets the copy, or failing
+  that `.old-<p>` back; then the leftovers are removed. Each run settles
+  its partition (and the backup) before copying, and after any failure,
+  even an interrupted one, `genomic-recover` runs again without the
+  cancelled context, so each partition is its old or its new copy. The
+  error names the partitions promoted (the script's output, settle's, and
+  any that are there now and weren't before) and those not; if the
+  recovery itself fails, it says not to start HPDS until a `Promote` load
+  has recovered the volume. HPDS reads
+  `<genomic dir>/<partition>/<contig>/`.
 - `hpds-profile` and `render` (`EnableProfile`): `hpds.profile` is set to
   `GenomicProfile` (`bch-dev`) in pic-sure.yaml and cfg, and up's render
   step, wrapped by `watchRender`, re-renders and marks the services whose
@@ -1544,6 +1563,11 @@ skippable:
 - `hpds-start`: `compose up -d --wait hpds` (which recreates it on the new
   profile) and the health check; hpds comes off `PendingRestarts`, since it
   was stopped, and any other pending service gets a warning to run `up`.
+
+A failed or interrupted load's error replaces `steps.Error`'s advice,
+since a re-run loads again from the start, with what state HPDS and its
+data are in. For an interrupted `genomic-promote` it keeps promote's own
+error, which `steps.Run` replaces with the context's cause.
 
 **Demo data (046, `demo.go`).** `DataDemo(ctx, d, st, cfg, sec, state,
 DemoOptions{Dataset, HeapMB, Cache, HTTP})` is `data demo` (§9.6).
@@ -1579,7 +1603,8 @@ and sets `d.Compose`. Steps, none skippable:
   helper probes both: the phenotype files (`encryption_key`,
   `allObservationsStore.javabin`, `columnMeta.javabin`, `columnMeta.csv`,
   non-empty), `.picsure-dataset`, and every top-level directory of
-  `hpds-genomic` except `all-bak` and `.promote-*` as a partition, each of
+  `hpds-genomic` except `all-bak` as a partition (exit 3 if an interrupted
+  promote left `.promote-*` or `.old-*` there), each of
   which must hold a `<contig>/` with `variantIndex_fbbis.javabin` and
   `BucketIndexBySample.javabin`, at most 10 partitions. Any gap is exit 3.
   It records whether hpds is running, and works out the labels.

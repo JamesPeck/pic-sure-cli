@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/JamesPeck/pic-sure-cli/internal/cache"
 	"github.com/JamesPeck/pic-sure-cli/internal/catalog"
 	"github.com/JamesPeck/pic-sure-cli/internal/docker"
 	"github.com/JamesPeck/pic-sure-cli/internal/events"
@@ -49,8 +50,10 @@ const (
 	// since shared-data publish skips it.
 	genomicBackup = "all-bak"
 	// promotePrefix names a partition's copy in hpds-genomic until it is
-	// complete.
+	// complete, and oldPrefix the live partition it replaces, moved aside
+	// until the copy is renamed into place.
 	promotePrefix = ".promote-"
+	oldPrefix     = ".old-"
 	// hpdsMaxPartitions is the most partitions HPDS's
 	// localPatientDistributed genomic processor starts with: it reads every
 	// top-level directory of its genomic dir as one.
@@ -88,6 +91,9 @@ type GenomicLoadOptions struct {
 	// MkdirTemp makes a directory the Docker daemon can see, for a copy of
 	// VCFs it can't: the cache's TempDir.
 	MkdirTemp func(pattern string) (string, error)
+	// LockUse, if set, takes the cache's use lock, held while the copy in
+	// the MkdirTemp directory exists, so `cache prune` leaves it alone.
+	LockUse func(context.Context) (*cache.Lock, error)
 }
 
 // Check returns a usage error for options no load can run with.
@@ -131,7 +137,8 @@ func LoadGenomic(ctx context.Context, d *Deps, st *stack.Stack, cfg *stack.Confi
 	if opts.HeapMB == 0 {
 		opts.HeapMB = DefaultGenomicHeapMB
 	}
-	g := &genomicLoad{loader: &loader{d: d, st: st, cfg: cfg, state: state}, opts: opts, vcfMount: opts.VCFDir}
+	l := &loader{d: d, st: st, cfg: cfg, state: state, opts: PhenotypeLoadOptions{MkdirTemp: opts.MkdirTemp, LockUse: opts.LockUse}}
+	g := &genomicLoad{loader: l, opts: opts, vcfMount: opts.VCFDir}
 	defer g.removeCopy()
 	plan := []steps.Step{
 		{ID: GenomicInputStepID, Title: "Check the VCF input", Apply: g.input},
@@ -161,21 +168,38 @@ func LoadGenomic(ctx context.Context, d *Deps, st *stack.Stack, cfg *stack.Confi
 	if err == nil {
 		return g.promoted, nil
 	}
-	// steps.Error's own advice, that a re-run skips the steps already done,
-	// doesn't hold here: a re-run loads again from the start.
+	// steps.Error's own advice, that a re-run resumes or skips the steps
+	// already done, doesn't hold here: a re-run loads again from the start.
 	var se *steps.Error
-	if !errors.As(err, &se) || se.Interrupted {
+	if !errors.As(err, &se) {
 		return nil, err
 	}
 	failed := fmt.Errorf("step %s failed: %w", se.Step, se.Err)
+	again := "fix the problem and run the load again"
+	if se.Interrupted {
+		again = "run the load again"
+	}
+	switch {
+	case se.Interrupted && se.Step == GenomicPromoteStepID && g.promoteErr != nil:
+		failed = fmt.Errorf("stopped at step %s: %w: %v", se.Step, se.Err, g.promoteErr)
+	case se.Interrupted:
+		failed = fmt.Errorf("stopped at step %s: %w", se.Step, se.Err)
+	}
 	switch se.Step {
-	case GenomicInputStepID, LoaderStopStepID:
+	case GenomicInputStepID:
+		return nil, failed
+	case LoaderStopStepID:
+		if se.Interrupted {
+			return nil, fmt.Errorf("%w. HPDS may be stopped: run the load again, or `pic-sure up` to start HPDS", failed)
+		}
 		return nil, failed
 	case GenomicStageStepID, GenomicSplitStepID, GenomicMetadataStepID, GenomicFinalizeStepID:
-		return nil, fmt.Errorf("%w. HPDS and its data are unchanged; fix the problem and run the load again", failed)
+		return nil, fmt.Errorf("%w. HPDS and its data are unchanged; %s", failed, again)
 	case GenomicPromoteStepID:
-		return nil, fmt.Errorf("%w. HPDS is stopped; each partition is replaced only once its copy is complete. "+
-			"Fix the problem and run the load again, or `pic-sure up` to start HPDS", failed)
+		if g.unrecovered {
+			return nil, fmt.Errorf("%w. HPDS is stopped; don't start it until a load with --promote has recovered %s", failed, g.vol(hpdsGenomicVolume))
+		}
+		return nil, fmt.Errorf("%w. HPDS is stopped: %s, or `pic-sure up` to start HPDS on the partitions it has", failed, again)
 	case LoaderStartStepID:
 		return g.promoted, fmt.Errorf("%w. See `pic-sure logs hpds`, then start HPDS with `pic-sure up`", failed)
 	default: // the profile and render steps
@@ -196,6 +220,16 @@ type genomicLoad struct {
 	// toPromote is what Promote copies, and promoted what it has copied.
 	toPromote []string
 	promoted  []string
+	// leftovers are the .promote- and .old- directories an interrupted
+	// promote left in hpds-genomic, which promote recovers first.
+	leftovers []string
+	// wasLive are the partitions hpds-genomic held before this load.
+	wasLive []string
+	// promoteErr is what promote returned, which steps.Run replaces with
+	// the context's cause when interrupted. unrecovered reports that
+	// settling hpds-genomic after it failed also failed.
+	promoteErr  error
+	unrecovered bool
 }
 
 func (g *genomicLoad) vol(name string) string {
@@ -204,7 +238,8 @@ func (g *genomicLoad) vol(name string) string {
 }
 
 // input finds the loader image, reads the index, and makes sure the daemon
-// sees every VCF it names. Nothing has changed yet if it fails.
+// sees every VCF it names. If it fails, nothing has changed but perhaps
+// the creation of an empty hpds-genomic.
 func (g *genomicLoad) input(ctx context.Context, sink events.Sink) error {
 	if err := g.findImage(ctx); err != nil {
 		return err
@@ -222,9 +257,30 @@ func (g *genomicLoad) input(ctx context.Context, sink events.Sink) error {
 	if !g.opts.Promote && !g.opts.EnableProfile {
 		return nil
 	}
-	live, err := g.livePartitions(ctx)
+	dirs, err := g.livePartitions(ctx)
 	if err != nil {
 		return err
+	}
+	var live []string
+	for _, d := range dirs {
+		switch p, old := strings.CutPrefix(d, oldPrefix); {
+		case old || strings.HasPrefix(d, promotePrefix):
+			g.leftovers = append(g.leftovers, d)
+			if old && !slices.Contains(live, p) {
+				live = append(live, p)
+			}
+		case !slices.Contains(live, d):
+			live = append(live, d)
+		}
+	}
+	g.wasLive = live
+	if len(g.leftovers) > 0 {
+		what := g.vol(hpdsGenomicVolume) + " holds what an interrupted promote left (" + strings.Join(g.leftovers, ", ") + ")"
+		if g.opts.Promote {
+			sink.Emit(events.Progress{ID: GenomicInputStepID, Text: what + "; it is recovered once HPDS stops"})
+		} else {
+			sink.Emit(events.Warning{ID: GenomicInputStepID, Text: what + ", which HPDS loads as partitions; a load with --promote recovers it"})
+		}
 	}
 	if !g.opts.Promote {
 		if len(live) == 0 {
@@ -245,7 +301,7 @@ func (g *genomicLoad) input(ctx context.Context, sink events.Sink) error {
 		}
 		g.toPromote = staged
 	}
-	after := slices.DeleteFunc(slices.Clone(live), func(p string) bool { return strings.HasPrefix(p, promotePrefix) })
+	after := live
 	for _, p := range g.toPromote {
 		if !slices.Contains(after, p) {
 			after = append(after, p)
@@ -308,19 +364,26 @@ func vcfIndexFiles(index string, data []byte, vcfDir string) ([]string, []int64,
 
 // checkVisible makes sure a container that mounts the VCF directory at its
 // own path sees every VCF. If the daemon doesn't share it (a directory
-// outside $HOME under Colima or Lima), the VCFs are copied into a MkdirTemp
-// dir, which is mounted at the same path instead.
+// outside $HOME under Colima or Lima), or a VCF is a symlink to a file
+// outside it, the VCFs are copied into a MkdirTemp dir, which is mounted at
+// the same path instead.
 func (g *genomicLoad) checkVisible(ctx context.Context, sink events.Sink) error {
 	mount := docker.Mount{Source: g.opts.VCFDir, Target: g.opts.VCFDir, ReadOnly: true}
-	if ok, err := g.daemonSees(ctx, "genomic-input", []docker.Mount{mount}, g.vcfs, g.sizes); ok || err != nil {
-		return err
+	out := g.linksOut()
+	if out == "" {
+		if ok, err := g.daemonSees(ctx, "genomic-input", []docker.Mount{mount}, g.vcfs, g.sizes); ok || err != nil {
+			return err
+		}
 	}
 	if g.opts.MkdirTemp == nil {
 		return exitcode.Precondition("the Docker daemon can't read the VCFs in %s; move them under your home directory", g.opts.VCFDir)
 	}
-	sink.Emit(events.Progress{ID: GenomicInputStepID, Text: "the Docker daemon can't read " + g.opts.VCFDir + "; copying the VCFs into the cache"})
-	var err error
-	if g.copyDir, err = g.opts.MkdirTemp("genomic-"); err != nil {
+	why := "the Docker daemon can't read " + g.opts.VCFDir
+	if out != "" {
+		why = out + " links to a file outside " + g.opts.VCFDir + ", which the loaders can't see"
+	}
+	sink.Emit(events.Progress{ID: GenomicInputStepID, Text: why + "; copying the VCFs into the cache"})
+	if err := g.makeCopyDir(ctx, "genomic-"); err != nil {
 		return err
 	}
 	for _, f := range g.vcfs {
@@ -346,6 +409,21 @@ func (g *genomicLoad) checkVisible(ctx context.Context, sink events.Sink) error 
 	}
 	g.vcfMount = g.copyDir
 	return nil
+}
+
+// linksOut returns the first VCF that is a symlink to a file outside
+// VCFDir, where a container that mounts only VCFDir can't follow it, or "".
+func (g *genomicLoad) linksOut() string {
+	dir, err := filepath.EvalSymlinks(g.opts.VCFDir)
+	if err != nil {
+		return ""
+	}
+	for _, f := range g.vcfs {
+		if real, err := filepath.EvalSymlinks(f); err == nil && !within(real, dir) {
+			return f
+		}
+	}
+	return ""
 }
 
 // stage clears the loaders' working directories in the staging volume,
@@ -409,47 +487,160 @@ func (g *genomicLoad) finalize(ctx context.Context, sink events.Sink) error {
 	if err := g.runLoader(GenomicFinalizeStepID, "GenomicDatasetFinalizer", false)(ctx, sink); err != nil {
 		return err
 	}
-	script := `rm -rf "/data/genomic/$1"; mkdir -p /data/genomic; mv /data/all "/data/genomic/$1"; rm -rf /data/merged`
+	script := `cd "$1"; rm -rf "./genomic/$2"; mkdir -p genomic; mv all "./genomic/$2"; rm -rf merged`
 	if err := g.script(ctx, "genomic-move", []docker.Mount{{Source: g.vol(genomicStagingVolume), Target: "/data"}},
-		script, []string{g.opts.Partition}, nil, nil); err != nil {
+		script, []string{"/data", g.opts.Partition}, nil, nil); err != nil {
 		return fmt.Errorf("moving partition %s into place in volume %s: %w", g.opts.Partition, g.vol(genomicStagingVolume), err)
 	}
 	return nil
 }
 
-// promote copies toPromote from the staging volume into hpds-genomic,
-// each partition replacing the live one only once its copy is complete. A
-// partial copy is removed even if the copy is interrupted, since HPDS would
-// load it as a partition. With Backup it first copies the live store into
-// the staging volume's all-bak, replacing the previous backup only once
-// the copy is complete.
-func (g *genomicLoad) promote(ctx context.Context, sink events.Sink) error {
+// settleScript defines `settle TARGET NEW OLD`, which finishes or undoes an
+// interrupted replacement of TARGET by a complete copy, NEW: TARGET is
+// moved aside to OLD, NEW renamed to TARGET, and OLD removed. OLD exists
+// only once NEW is complete, so if TARGET is missing, NEW (or failing that
+// OLD) is renamed to it. Then OLD and any partial NEW are removed. It
+// prints "completed T" if TARGET is NEW, and "restored T" if it renamed OLD
+// back. Paths start with ./ since a partition name may start with -.
+const settleScript = `settle() { if [ -e "$3" ]; then if [ -e "$1" ]; then printf 'completed %s\n' "${1#./}"; ` +
+	`elif [ -e "$2" ]; then mv "$2" "$1"; printf 'completed %s\n' "${1#./}"; else mv "$3" "$1"; printf 'restored %s\n' "${1#./}"; fi; ` +
+	`rm -rf "$3"; fi; rm -rf "$2"; }; `
+
+// recoverScript settles every partition of the hpds-genomic volume at $1
+// that an interrupted promote left a .promote- or .old- directory for.
+const recoverScript = `cd "$1"; for d in ./` + promotePrefix + `* ./` + oldPrefix + `*; do if [ -d "$d" ]; then ` +
+	`p=${d#./` + promotePrefix + `}; p=${p#./` + oldPrefix + `}; settle "./$p" "./` + promotePrefix + `$p" "./` + oldPrefix + `$p"; fi; done`
+
+// promote copies toPromote from the staging volume into hpds-genomic. Each
+// partition is copied to .promote-<p>, then the live one is renamed to
+// .old-<p>, the copy to <p>, and .old-<p> removed, so an interruption
+// leaves at most one partition part way, which settle puts right. It
+// prints "promoted <p>" before removing .old-<p>, so that a partition is
+// reported as promoted by it or, after an interruption, by settle. After any failure, even an interrupted one, a second helper run
+// without the cancelled context settles every partition, since HPDS would
+// load a leftover as a partition. With Backup it first copies the live
+// store into the staging volume's all-bak the same way.
+func (g *genomicLoad) promote(ctx context.Context, sink events.Sink) (err error) {
 	staging, live := g.vol(genomicStagingVolume), g.vol(hpdsGenomicVolume)
+	var out bytes.Buffer
+	defer func() {
+		if err != nil {
+			err = g.afterFailedPromote(context.WithoutCancel(ctx), err, out.String())
+		}
+		g.promoteErr = err
+	}()
+	if len(g.leftovers) > 0 {
+		if err := g.recoverLive(ctx, sink); err != nil {
+			return err
+		}
+	}
 	if g.opts.Backup {
-		sink.Emit(events.Progress{ID: GenomicPromoteStepID, Text: "backing up " + live + " into " + genomicBackup + " in " + staging})
-		mounts := []docker.Mount{{Source: live, Target: "/live", ReadOnly: true}, {Source: staging, Target: "/staged"}}
-		script := `cd /staged; rm -rf ` + genomicBackup + `.new; ` +
-			`if ! cp -a /live/. ` + genomicBackup + `.new/; then rm -rf ` + genomicBackup + `.new; exit 1; fi; ` +
-			`rm -rf ` + genomicBackup + `; mv ` + genomicBackup + `.new ` + genomicBackup
-		if err := g.script(ctx, "genomic-backup", mounts, script, nil, nil, nil); err != nil {
-			return fmt.Errorf("backing up volume %s into %s in volume %s (the previous backup is kept): %w", live, genomicBackup, staging, err)
+		if err := g.backup(ctx, sink); err != nil {
+			return err
 		}
 	}
 	sink.Emit(events.Progress{ID: GenomicPromoteStepID, Text: "promoting " + strings.Join(g.toPromote, ", ")})
 	mounts := []docker.Mount{{Source: live, Target: "/live"}, {Source: staging, Target: "/staged", ReadOnly: true}}
-	// Paths start with ./ since a partition name may start with -.
-	clean := `rm -rf ./` + promotePrefix + `*`
-	script := `cd /live; ` + clean + `; for p; do cp -a "/staged/genomic/$p" "./` + promotePrefix + `$p"; ` +
-		`rm -rf "./$p"; mv "./` + promotePrefix + `$p" "./$p"; done`
-	if err := g.script(ctx, "genomic-promote", mounts, script, g.toPromote, nil, nil); err != nil {
-		cleanup := []docker.Mount{{Source: live, Target: "/live"}}
-		if cerr := g.script(context.WithoutCancel(ctx), "genomic-promote", cleanup, "cd /live; "+clean, nil, nil, nil); cerr != nil {
-			err = errors.Join(err, fmt.Errorf("removing the partial copy (/%s* in volume %s, which HPDS would load): %w", promotePrefix, live, cerr))
-		}
+	script := settleScript + `live=$1; staged=$2; shift 2; cd "$live"; for p; do ` +
+		`settle "./$p" "./` + promotePrefix + `$p" "./` + oldPrefix + `$p"; cp -a "$staged/genomic/$p" "./` + promotePrefix + `$p"; ` +
+		`if [ -e "./$p" ]; then mv "./$p" "./` + oldPrefix + `$p"; fi; mv "./` + promotePrefix + `$p" "./$p"; ` +
+		`printf 'promoted %s\n' "$p"; rm -rf "./` + oldPrefix + `$p"; done`
+	args := append([]string{"/live", "/staged"}, g.toPromote...)
+	if err := g.script(ctx, "genomic-promote", mounts, script, args, nil, &out); err != nil {
 		return fmt.Errorf("copying %s into volume %s: %w", strings.Join(g.toPromote, ", "), live, err)
 	}
 	g.promoted = g.toPromote
 	return nil
+}
+
+// afterFailedPromote settles hpds-genomic after promote failed with err,
+// and says what state that left each partition in. out is the promote
+// script's output so far.
+func (g *genomicLoad) afterFailedPromote(ctx context.Context, err error, out string) error {
+	live := g.vol(hpdsGenomicVolume)
+	settled, rerr := g.settleLive(ctx)
+	if rerr != nil {
+		g.unrecovered = true
+		return errors.Join(err, fmt.Errorf("recovering volume %s: %w. HPDS would load its leftover %s* and %s* directories "+
+			"as partitions; the next load with --promote recovers them", live, rerr, promotePrefix, oldPrefix))
+	}
+	// A partition is promoted if the script or settle said so, or if it is
+	// there now and wasn't before.
+	var said []string
+	for line := range strings.Lines(out + settled) {
+		line = strings.TrimSuffix(line, "\n")
+		if p, ok := strings.CutPrefix(line, "promoted "); ok {
+			said = append(said, p)
+		} else if p, ok := strings.CutPrefix(line, "completed "); ok {
+			said = append(said, p)
+		}
+	}
+	now, lerr := g.dirs(ctx, live, "/data")
+	if lerr != nil {
+		return errors.Join(err, lerr)
+	}
+	var done, notDone []string
+	for _, p := range g.toPromote {
+		if slices.Contains(said, p) || slices.Contains(now, p) && !slices.Contains(g.wasLive, p) {
+			done = append(done, p)
+		} else {
+			notDone = append(notDone, p)
+		}
+	}
+	state := "every partition in " + live + " is whole"
+	if len(done) > 0 {
+		state += "; promoted: " + strings.Join(done, ", ")
+	}
+	if len(notDone) > 0 {
+		state += "; not promoted: " + strings.Join(notDone, ", ")
+	}
+	return fmt.Errorf("%w (%s)", err, state)
+}
+
+// recoverLive settles the leftovers an interrupted promote left in
+// hpds-genomic, before this load's backup and promote.
+func (g *genomicLoad) recoverLive(ctx context.Context, sink events.Sink) error {
+	live := g.vol(hpdsGenomicVolume)
+	sink.Emit(events.Progress{ID: GenomicPromoteStepID, Text: "recovering what an interrupted promote left in " + live +
+		" (" + strings.Join(g.leftovers, ", ") + ")"})
+	out, err := g.settleLive(ctx)
+	if err != nil {
+		return fmt.Errorf("recovering volume %s: %w", live, err)
+	}
+	if out = strings.TrimSpace(out); out != "" {
+		sink.Emit(events.Progress{ID: GenomicPromoteStepID, Text: strings.ReplaceAll(out, "\n", "; ")})
+	}
+	return nil
+}
+
+// settleLive runs recoverScript on hpds-genomic and returns its output.
+func (g *genomicLoad) settleLive(ctx context.Context) (string, error) {
+	var out bytes.Buffer
+	mounts := []docker.Mount{{Source: g.vol(hpdsGenomicVolume), Target: "/live"}}
+	err := g.script(ctx, "genomic-recover", mounts, settleScript+recoverScript, []string{"/live"}, nil, &out)
+	return out.String(), err
+}
+
+// backup copies the live store into all-bak in the staging volume, via
+// all-bak.new and all-bak.old as promote does a partition, so all-bak is
+// always a whole backup. A failed copy is settled even if interrupted.
+func (g *genomicLoad) backup(ctx context.Context, sink events.Sink) error {
+	staging, live := g.vol(genomicStagingVolume), g.vol(hpdsGenomicVolume)
+	sink.Emit(events.Progress{ID: GenomicPromoteStepID, Text: "backing up " + live + " into " + genomicBackup + " in " + staging})
+	mounts := []docker.Mount{{Source: live, Target: "/live", ReadOnly: true}, {Source: staging, Target: "/staged"}}
+	settle := `cd "$1"; settle ` + genomicBackup + ` ` + genomicBackup + `.new ` + genomicBackup + `.old`
+	script := settleScript + settle + `; cp -a "$2/." ` + genomicBackup + `.new/; ` +
+		`if [ -e ` + genomicBackup + ` ]; then mv ` + genomicBackup + ` ` + genomicBackup + `.old; fi; ` +
+		`mv ` + genomicBackup + `.new ` + genomicBackup + `; rm -rf ` + genomicBackup + `.old`
+	err := g.script(ctx, "genomic-backup", mounts, script, []string{"/staged", "/live"}, nil, nil)
+	if err == nil {
+		return nil
+	}
+	err = fmt.Errorf("backing up volume %s into %s in volume %s: %w", live, genomicBackup, staging, err)
+	if serr := g.script(context.WithoutCancel(ctx), "genomic-backup", mounts[1:], settleScript+settle, []string{"/staged"}, nil, nil); serr != nil {
+		return errors.Join(err, fmt.Errorf("removing the partial backup %s.new: %w", genomicBackup, serr))
+	}
+	return fmt.Errorf("%w (%s holds a whole backup, if it held one before)", err, genomicBackup)
 }
 
 // dirs lists the directories under dir in volume, hidden ones too.

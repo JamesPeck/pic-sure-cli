@@ -318,13 +318,15 @@ func (l *loader) visible(ctx context.Context, paths, names []string, sizes []int
 }
 
 // daemonSees reports whether a container with mounts sees each of files, a
-// path in the container, as a regular file of the matching size. A daemon
+// path in the container, as a regular file of the matching size, following
+// symlinks as the host's sizes did (busybox's stat without -L sizes the
+// link). A daemon
 // that refuses the mount (Docker Desktop's "Mounts denied: The path … is
 // not shared from the host") counts as not seeing them; any other docker
 // failure is an error.
 func (l *loader) daemonSees(ctx context.Context, prefix string, mounts []docker.Mount, files []string, sizes []int64) (bool, error) {
 	var out, stderr bytes.Buffer
-	script := `for f; do if test -f "$f"; then stat -c %s "$f"; else echo -1; fi; done`
+	script := `for f; do if test -f "$f"; then stat -L -c %s "$f"; else echo -1; fi; done`
 	code, err := l.container(ctx, prefix, mounts, append([]string{"sh", "-c", script, "sh"}, files...), nil, &out, &stderr)
 	if err != nil {
 		// docker's error quotes only the last line of its stderr, which on

@@ -223,6 +223,10 @@ func (p *publish) check(ctx context.Context, sink events.Sink) error {
 		return exitcode.Precondition("volume %s is missing %s; load phenotype data into this stack first "+
 			"(`pic-sure data load-phenotype` or `pic-sure data demo`)", p.srcData, strings.Join(probe.missing, ", "))
 	}
+	if len(probe.leftovers) > 0 {
+		return exitcode.Precondition("volume %s holds what an interrupted promote left (%s); "+
+			"recover it with `pic-sure data load-genomic --promote` first", p.srcGenomic, strings.Join(probe.leftovers, ", "))
+	}
 	for _, part := range probe.partitions {
 		if !slices.ContainsFunc(probe.contigs, func(c string) bool { return strings.HasPrefix(c, part+"/") }) {
 			return exitcode.Precondition("genomic partition %s in volume %s holds no <partition>/<contig>/ directory; "+
@@ -286,16 +290,17 @@ type publishProbe struct {
 	partitions []string // the genomic partitions to publish
 	contigs    []string // <partition>/<contig>
 	unindexed  []string // <partition>/<contig>/<index> files that are missing
+	leftovers  []string // what an interrupted promote left
 }
 
 // probe reads both source volumes in one helper container.
 func (p *publish) probe(ctx context.Context) (publishProbe, error) {
 	// Every top-level directory of the genomic volume is a partition to
-	// HPDS, hidden ones too, except a backup AIO left there and an
-	// unfinished promote's copy.
+	// HPDS, hidden ones too, except a backup AIO left there and what an
+	// interrupted promote left.
 	script := `cd "$1"; for f in ` + strings.Join(sharedPhenotypeFiles, " ") + `; do [ -s "$f" ] || printf 'missing %s\n' "$f"; done; ` +
 		`if [ -f ` + datasetMarker + ` ]; then printf 'dataset %s\n' "$(head -n 1 ` + datasetMarker + `)"; fi; ` +
-		`cd "$2"; for p in * .[!.]* ..?*; do [ -d "$p" ] || continue; case "$p" in ` + genomicBackup + `|` + promotePrefix + `*) continue;; esac; ` +
+		`cd "$2"; for p in * .[!.]* ..?*; do [ -d "$p" ] || continue; case "$p" in ` + genomicBackup + `) continue;; ` + promotePrefix + `*|` + oldPrefix + `*) printf 'leftover %s\n' "$p"; continue;; esac; ` +
 		`printf 'partition %s\n' "$p"; for c in "./$p"/*/; do [ -d "$c" ] || continue; c=${c#./}; printf 'contig %s\n' "${c%/}"; ` +
 		`for f in ` + strings.Join(sharedGenomicIndexes, " ") + `; do [ -s "$c$f" ] || printf 'unindexed %s\n' "$c$f"; done; done; done`
 	mounts := []docker.Mount{{Source: p.srcData, Target: "/d", ReadOnly: true}, {Source: p.srcGenomic, Target: "/g", ReadOnly: true}}
@@ -317,6 +322,8 @@ func (p *publish) probe(ctx context.Context) (publishProbe, error) {
 			r.contigs = append(r.contigs, value)
 		case "unindexed":
 			r.unindexed = append(r.unindexed, value)
+		case "leftover":
+			r.leftovers = append(r.leftovers, value)
 		}
 	}
 	return r, nil
@@ -366,17 +373,17 @@ func (p *publish) copy(ctx context.Context, sink events.Sink) (err error) {
 	// HPDS mounts the genomic volume at all/ inside the read-only data
 	// volume, so the mount point must exist in the copy. Paths start with
 	// ./ since a partition name may start with -.
-	script := `name=$1; created=$2; shift 2; ` +
-		`cd /sd; for f in ` + strings.Join(sharedDataFiles, " ") + `; do if [ -e "$f" ]; then cp -a "$f" /dd/; fi; done; mkdir -p /dd/all; ` +
-		`cd /sg; for p; do cp -a "./$p" /dg/; done; ` +
-		`for v in /dd /dg; do printf 'name=%s created=%s\n' "$name" "$created" > "$v/` + PublishedMarker + `"; done`
+	script := `sd=$1; sg=$2; dd=$3; dg=$4; name=$5; created=$6; shift 6; ` +
+		`cd "$sd"; for f in ` + strings.Join(sharedDataFiles, " ") + `; do if [ -e "$f" ]; then cp -a "$f" "$dd/"; fi; done; mkdir -p "$dd/all"; ` +
+		`cd "$sg"; for p; do cp -a "./$p" "$dg/"; done; ` +
+		`for v in "$dd" "$dg"; do printf 'name=%s created=%s\n' "$name" "$created" > "$v/` + PublishedMarker + `"; done`
 	mounts := []docker.Mount{
 		{Source: p.srcData, Target: "/sd", ReadOnly: true},
 		{Source: p.srcGenomic, Target: "/sg", ReadOnly: true},
 		{Source: p.dstData, Target: "/dd"},
 		{Source: p.dstGenomic, Target: "/dg"},
 	}
-	args := append([]string{p.set.Name, p.set.Created}, p.partitions...)
+	args := append([]string{"/sd", "/sg", "/dd", "/dg", p.set.Name, p.set.Created}, p.partitions...)
 	if err := p.script(ctx, "shared-copy", mounts, script, args, nil, nil); err != nil {
 		return fmt.Errorf("copying into data set %s: %w", p.opts.Name, err)
 	}

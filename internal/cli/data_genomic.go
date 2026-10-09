@@ -100,6 +100,7 @@ func (a *App) loadGenomic(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	opts.MkdirTemp = c.TempDir
+	opts.LockUse = c.WithEvents(d.Sink, ops.GenomicInputStepID).LockUse
 	opts.Converge = ops.ConvergeOptions{Cache: c, CLIVersion: a.Info.Version, Compose: a.upCompose(d, st, cfg, sec)}
 
 	state.StartOperation("data load-genomic", d.Clock.Now())

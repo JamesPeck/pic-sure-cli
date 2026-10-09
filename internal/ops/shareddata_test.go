@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -39,8 +40,8 @@ type sharedFixture struct {
 	probe    string // the probe helper's stdout
 	copyExit int
 	copies   [][]string
-	// probeFn, if set, answers the probe instead of probe.
-	probeFn func(ctx context.Context, argv []string) ([]byte, error)
+	// h, if set, runs the probe and copy scripts for real.
+	h *helperScripts
 	// inspectFail makes the next inspect of that volume fail.
 	inspectFail string
 	// onCreate runs before a volume is created, under mu.
@@ -140,14 +141,16 @@ func newSharedFixture(t *testing.T) *sharedFixture {
 	f.On(fakerunner.Glob("docker compose * stop hpds"))
 	f.On(fakerunner.Glob("docker compose * up -d --wait --wait-timeout 900 hpds"))
 	f.On(fakerunner.Glob("docker run --rm --name demo-shared-probe-* --network none *")).Do(func(ctx context.Context, c fakerunner.Call) (docker.Result, error) {
-		if fx.probeFn != nil {
-			out, err := fx.probeFn(ctx, c.Argv)
-			return docker.Result{Stdout: out}, err
+		if fx.h != nil {
+			return fx.h.run(ctx, c)
 		}
 		return docker.Result{Stdout: []byte(fx.probe)}, nil
 	})
-	f.On(fakerunner.Glob("docker run --rm --name demo-shared-copy-* --network none *")).Do(func(_ context.Context, c fakerunner.Call) (docker.Result, error) {
+	f.On(fakerunner.Glob("docker run --rm --name demo-shared-copy-* --network none *")).Do(func(ctx context.Context, c fakerunner.Call) (docker.Result, error) {
 		fx.copies = append(fx.copies, c.Argv)
+		if fx.h != nil {
+			return fx.h.run(ctx, c)
+		}
 		return docker.Result{Stderr: []byte("cp: write error: No space left on device\n"), ExitCode: fx.copyExit}, nil
 	})
 	fx.d = &ops.Deps{
@@ -173,7 +176,7 @@ func TestPublishSharedData(t *testing.T) {
 		fakerunner.Glob("docker volume create * nhanes-v2_hpds-data"),
 		fakerunner.Glob("docker volume create * nhanes-v2_hpds-genomic"),
 		fakerunner.Glob("docker run * demo-shared-copy-* -v demo_hpds-data:/sd:ro -v demo_hpds-genomic:/sg:ro "+
-			"-v nhanes-v2_hpds-data:/dd -v nhanes-v2_hpds-genomic:/dg alpine:* sh -c * sh nhanes-v2 2026-10-06T12:00:00Z synth -dash"),
+			"-v nhanes-v2_hpds-data:/dd -v nhanes-v2_hpds-genomic:/dg alpine:* sh -c * sh /sd /sg /dd /dg nhanes-v2 2026-10-06T12:00:00Z synth -dash"),
 		fakerunner.Glob("docker compose * up -d --wait --wait-timeout 900 hpds"),
 	)
 	want := ops.SharedDataSet{
@@ -204,11 +207,8 @@ func TestPublishSharedData(t *testing.T) {
 		}
 	}
 	script := fx.copies[0][slices.Index(fx.copies[0], "-c")+1]
-	for _, s := range []string{"for f in encryption_key allObservationsStore.javabin columnMeta.javabin columnMeta.csv columnMetaErrors.csv .picsure-dataset;",
-		"mkdir -p /dd/all", `cp -a "./$p" /dg/`, "/.picsure-published"} {
-		if !strings.Contains(script, s) {
-			t.Errorf("copy script lacks %q:\n%s", s, script)
-		}
+	if s := "for f in encryption_key allObservationsStore.javabin columnMeta.javabin columnMeta.csv columnMetaErrors.csv .picsure-dataset;"; !strings.Contains(script, s) {
+		t.Errorf("copy script lacks %q:\n%s", s, script)
 	}
 }
 
@@ -411,13 +411,12 @@ func TestPublishSharedDataRestartsARestartingHPDS(t *testing.T) {
 		fakerunner.Glob("docker compose * up -d --wait --wait-timeout 900 hpds"))
 }
 
-// TestPublishSharedDataProbeScript runs the probe's script with the local
-// sh over a directory tree standing in for the two volumes.
-func TestPublishSharedDataProbeScript(t *testing.T) {
-	if _, err := exec.LookPath("sh"); err != nil {
-		t.Skip("no sh")
-	}
-	data, genomic := t.TempDir(), t.TempDir()
+// TestPublishSharedDataScripts runs the probe and copy scripts with the
+// local sh over directory trees standing in for the volumes.
+func TestPublishSharedDataScripts(t *testing.T) {
+	fx := newSharedFixture(t)
+	fx.h = newLocalHelperScripts(t, "demo_hpds-data", "demo_hpds-genomic", "x_hpds-data", "x_hpds-genomic")
+	data, genomic := fx.h.vols["demo_hpds-data"], fx.h.vols["demo_hpds-genomic"]
 	files := map[string]string{
 		"encryption_key": "k", "allObservationsStore.javabin": "o", "columnMeta.javabin": "m", "columnMeta.csv": "",
 		".picsure-dataset":                       "demo:nhanes\n",
@@ -425,7 +424,7 @@ func TestPublishSharedDataProbeScript(t *testing.T) {
 		"synth/chr21/variantIndex_fbbis.javabin": "i", "synth/chr21/BucketIndexBySample.javabin": "b",
 		"-dash/chr22/variantIndex_fbbis.javabin":  "i",
 		".hidden/chr1/variantIndex_fbbis.javabin": "i", ".hidden/chr1/BucketIndexBySample.javabin": "b",
-		"all-bak/chr21/x": "", ".promote-synth/chr21/x": "",
+		"all-bak/chr21/x": "", ".promote-synth/chr21/x": "", ".old-x/chr1/x": "",
 	}
 	for name, content := range files {
 		dir := genomic
@@ -443,10 +442,6 @@ func TestPublishSharedDataProbeScript(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(genomic, "empty"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	fx := newSharedFixture(t)
-	fx.probeFn = func(ctx context.Context, argv []string) ([]byte, error) {
-		return exec.CommandContext(ctx, "sh", "-c", argv[slices.Index(argv, "-c")+1], "sh", data, genomic).Output()
-	}
 	write := func(path, content string) {
 		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 			t.Fatal(err)
@@ -457,6 +452,10 @@ func TestPublishSharedDataProbeScript(t *testing.T) {
 		fix  func()
 	}{
 		{"is missing columnMeta.csv", func() { write(filepath.Join(data, "columnMeta.csv"), "c") }},
+		{"what an interrupted promote left (.old-x, .promote-synth)", func() {
+			_ = os.RemoveAll(filepath.Join(genomic, ".old-x"))
+			_ = os.RemoveAll(filepath.Join(genomic, ".promote-synth"))
+		}},
 		{"genomic partition empty", func() { _ = os.Remove(filepath.Join(genomic, "empty")) }},
 		{"lacks the indexes HPDS writes on its first start: -dash/chr22/BucketIndexBySample.javabin",
 			func() { write(filepath.Join(genomic, "-dash/chr22/BucketIndexBySample.javabin"), "b") }},
@@ -471,12 +470,27 @@ func TestPublishSharedDataProbeScript(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// all-bak and the unfinished promote are left out; hidden partitions aren't.
+	// all-bak is left out; hidden partitions aren't.
 	if want := "phenotype=demo:nhanes genomic=-dash,synth,.hidden"; set.Contents != want {
 		t.Errorf("contents %q, want %q", set.Contents, want)
 	}
 	if args := fx.copies[0][len(fx.copies[0])-3:]; !slices.Equal(args, []string{"-dash", "synth", ".hidden"}) {
 		t.Errorf("copied partitions %q", args)
+	}
+	marker := "name=x created=2026-10-06T12:00:00Z\n"
+	wantData := map[string]string{"encryption_key": "k", "allObservationsStore.javabin": "o", "columnMeta.javabin": "m", "columnMeta.csv": "c",
+		".picsure-dataset": "demo:nhanes\n", "all/": "", ops.PublishedMarker: marker}
+	wantGenomic := map[string]string{ops.PublishedMarker: marker}
+	for name, content := range files {
+		if p, _, _ := strings.Cut(name, "/"); slices.Contains([]string{"synth", "-dash", ".hidden"}, p) {
+			wantGenomic[name] = content
+		}
+	}
+	wantGenomic["-dash/chr22/BucketIndexBySample.javabin"] = "b"
+	for vol, want := range map[string]map[string]string{"x_hpds-data": wantData, "x_hpds-genomic": wantGenomic} {
+		if got := fx.h.tree(vol); !maps.Equal(got, want) {
+			t.Errorf("%s holds %s, want %s", vol, treeString(got), treeString(want))
+		}
 	}
 }
 
