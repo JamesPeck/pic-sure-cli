@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -65,10 +66,13 @@ func TestClosedPipeExits141(t *testing.T) {
 }
 
 // SIGPIPE from elsewhere, such as a subprocess's stdin closing early, must
-// not cancel the run: only a write to stdout or stderr does. This guards
-// on Linux only: on macOS the Go runtime drops a SIGPIPE it didn't raise
-// itself (golang.org/issue/33384), whatever main asks for.
+// not cancel the run: only a write to stdout or stderr does.
 func TestStraySIGPIPEDoesNotCancel(t *testing.T) {
+	if runtime.GOOS == "darwin" {
+		// The Go runtime drops a SIGPIPE it didn't raise itself
+		// (golang.org/issue/33384), so the test would pass whatever main does.
+		t.Skip("guards nothing on macOS")
+	}
 	r, w, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)

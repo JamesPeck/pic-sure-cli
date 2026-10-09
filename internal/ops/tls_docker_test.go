@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/catalog"
-	"github.com/JamesPeck/pic-sure-cli/internal/docker"
 	"github.com/JamesPeck/pic-sure-cli/internal/events"
 	"github.com/JamesPeck/pic-sure-cli/internal/ops"
 	"github.com/JamesPeck/pic-sure-cli/internal/pki"
@@ -22,12 +21,7 @@ import (
 // TestTLSStepAgainstDocker fills a real certs volume, in generated mode and
 // then in provided mode, and checks what httpd's uid 2 would find there.
 func TestTLSStepAgainstDocker(t *testing.T) {
-	if testing.Short() {
-		t.Skip("needs docker")
-	}
-	if err := exec.Command("docker", "info").Run(); err != nil {
-		t.Skipf("docker is not available: %v", err)
-	}
+	requireDocker(t)
 	ctx := context.Background()
 	b := make([]byte, 4)
 	if _, err := rand.Read(b); err != nil {
@@ -37,12 +31,12 @@ func TestTLSStepAgainstDocker(t *testing.T) {
 	// only that.
 	name := "picsuretest-024-" + hex.EncodeToString(b)
 	volume := name + "_certs"
-	t.Cleanup(func() {
-		out, _ := exec.Command("docker", "ps", "-aq", "--filter", "label="+stack.LabelStack+"="+name).Output()
+	cleanupDocker(t, func(ctx context.Context) {
+		out, _ := exec.CommandContext(ctx, "docker", "ps", "-aq", "--filter", "label="+stack.LabelStack+"="+name).Output()
 		for _, id := range strings.Fields(string(out)) {
-			_ = exec.Command("docker", "rm", "-f", id).Run()
+			_ = exec.CommandContext(ctx, "docker", "rm", "-f", id).Run()
 		}
-		_ = exec.Command("docker", "volume", "rm", "-f", volume).Run()
+		_ = exec.CommandContext(ctx, "docker", "volume", "rm", "-f", volume).Run()
 	})
 
 	st, err := stack.Create(filepath.Join(t.TempDir(), "stack"))
@@ -52,7 +46,7 @@ func TestTLSStepAgainstDocker(t *testing.T) {
 	t.Cleanup(func() { _ = st.Close() })
 	cfg := stack.DefaultConfig()
 	cfg.Name = name
-	d := &ops.Deps{Docker: docker.NewEngine(&docker.ExecRunner{}), Rand: rand.Reader, Clock: ops.SystemClock{}, Sink: events.Discard}
+	d := &ops.Deps{Docker: newLabelEngine(), Rand: rand.Reader, Clock: ops.SystemClock{}, Sink: events.Discard}
 	applyAndCheck := func() {
 		t.Helper()
 		s := ops.TLSStep(d, st, &cfg)
@@ -69,7 +63,7 @@ func TestTLSStepAgainstDocker(t *testing.T) {
 	alpine, _ := catalog.LookupImage("alpine")
 	inVolume := func(user string, args ...string) string {
 		t.Helper()
-		argv := []string{"run", "--rm", "--network", "none", "--label", stack.LabelStack + "=" + name,
+		argv := []string{"run", "--rm", "--network", "none", "--label", stack.LabelStack + "=" + name, "--label", testLabel + "=1",
 			"--user", user, "-v", volume + ":/certs:ro", alpine.Ref}
 		out, err := exec.Command("docker", append(argv, args...)...).CombinedOutput()
 		if err != nil {

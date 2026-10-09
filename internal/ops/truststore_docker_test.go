@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -46,19 +45,11 @@ func keytoolList(t *testing.T, e docker.Engine, image, cacerts string, mounts ..
 // for the psama image: amazoncorretto:25-alpine with a certificate imported
 // as aws_cert, the way psama's Dockerfile does.
 func TestTruststoreStepWithDocker(t *testing.T) {
-	if testing.Short() {
-		t.Skip("-short")
-	}
-	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skip("no docker CLI")
-	}
+	requireDocker(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	if err := exec.CommandContext(ctx, "docker", "info").Run(); err != nil {
-		t.Skip("docker daemon unavailable")
-	}
 	r := &docker.ExecRunner{}
-	e := docker.NewEngine(r)
+	e := newLabelEngine()
 
 	// Everything the test creates is named with this prefix and removed.
 	var suffix [4]byte
@@ -73,7 +64,7 @@ COPY certificate.der /certificate.der
 RUN keytool -noprompt -import -alias aws_cert -keystore $JAVA_HOME/lib/security/cacerts -storepass changeit -file /certificate.der
 `))
 	var buildLog bytes.Buffer
-	t.Cleanup(func() { _ = e.RemoveImage(context.Background(), image) })
+	cleanupDocker(t, func(ctx context.Context) { _ = e.RemoveImage(ctx, image) })
 	if err := e.Build(ctx, docker.BuildOpts{Context: build, Tag: image, Stdout: &buildLog, Stderr: &buildLog}); err != nil {
 		t.Fatalf("building the stand-in psama image: %v\n%s", err, buildLog.String())
 	}
@@ -85,7 +76,7 @@ RUN keytool -noprompt -import -alias aws_cert -keystore $JAVA_HOME/lib/security/
 	st, cfg := newTrustStack(t)
 	cfg.Name = prefix
 	volume := prefix + "_truststore"
-	t.Cleanup(func() { _ = e.VolumeRemove(context.Background(), volume) })
+	cleanupDocker(t, func(ctx context.Context) { _ = e.VolumeRemove(ctx, volume) })
 	writeTestFile(t, st.Path("certs/trust/a.crt"), pemCerts(newCACert(t, "a1"), newCACert(t, "a2")))
 	writeTestFile(t, st.Path("certs/trust/b.der"), newCACert(t, "b"))
 

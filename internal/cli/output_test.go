@@ -284,7 +284,7 @@ func TestJSONSignalResult(t *testing.T) {
 	ctx, cancel := context.WithCancelCause(context.Background())
 	cancel(exitcode.Signaled(syscall.SIGINT))
 	a, stdout, _ := testApp(t)
-	if code := a.Run(ctx, []string{"up", "--json"}); code != 130 {
+	if code := a.Run(ctx, []string{"--stack", t.TempDir(), "up", "--json"}); code != 130 {
 		t.Errorf("exit = %d", code)
 	}
 	objs := jsonLines(t, stdout.String())

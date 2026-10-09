@@ -38,26 +38,23 @@ func testApp(t *testing.T) (*App, *bytes.Buffer, *bytes.Buffer) {
 	return a, &stdout, &stderr
 }
 
-// specCommands is every command path in spec §5, with the ticket that
-// implements it ("" for commands that already work).
-var specCommands = map[string]string{
-	"init": "", "up": "",
-	"down": "", "restart": "", "ps": "", "logs": "", "compose": "",
-	"status": "", "doctor": "", "update": "", "build": "", "migrate": "",
-	"config show": "", "config get": "", "config set": "", "config edit": "",
-	"secrets rotate":      "",
-	"data demo":           "",
-	"data load-phenotype": "",
-	"data load-genomic":   "",
-	"dictionary hydrate":  "", "dictionary load-csv": "", "dictionary load-facets": "", "dictionary weights": "",
-	"shared-data publish": "", "shared-data list": "", "shared-data remove": "",
-	"dev list": "", "dev on": "", "dev off": "",
-	"db bootstrap": "",
-	"reset":        "", "destroy": "",
-	"cache list": "", "cache prune": "",
-	"self-update":    "",
-	"support-bundle": "",
-	"version":        "",
+// specCommands is every command path in spec §5.
+var specCommands = []string{
+	"init", "up",
+	"down", "restart", "ps", "logs", "compose",
+	"status", "doctor", "update", "build", "migrate",
+	"config show", "config get", "config set", "config edit",
+	"secrets rotate",
+	"data demo", "data load-phenotype", "data load-genomic",
+	"dictionary hydrate", "dictionary load-csv", "dictionary load-facets", "dictionary weights",
+	"shared-data publish", "shared-data list", "shared-data remove",
+	"dev list", "dev on", "dev off",
+	"db bootstrap",
+	"reset", "destroy",
+	"cache list", "cache prune",
+	"self-update",
+	"support-bundle",
+	"version",
 }
 
 // specFlags is every command flag in spec §5.
@@ -106,13 +103,11 @@ func TestCommandTreeMatchesSpec(t *testing.T) {
 	a, _, _ := testApp(t)
 	leaves := leafCommands(newRootCmd(a))
 
-	var got, want []string
+	var got []string
 	for path := range leaves {
 		got = append(got, path)
 	}
-	for path := range specCommands {
-		want = append(want, path)
-	}
+	want := slices.Clone(specCommands)
 	slices.Sort(got)
 	slices.Sort(want)
 	if !slices.Equal(got, want) {
@@ -156,20 +151,6 @@ func TestGlobalFlags(t *testing.T) {
 		g.NonInteractive != want.NonInteractive || g.NoAnimations != want.NoAnimations ||
 		g.LogLevel != want.LogLevel || !slices.Equal(g.SkipSteps, want.SkipSteps) {
 		t.Errorf("Global = %+v, want %+v", g, want)
-	}
-}
-
-func TestEveryStubNamesItsTicket(t *testing.T) {
-	a, _, _ := testApp(t)
-	for path, c := range leafCommands(newRootCmd(a)) {
-		ticket := specCommands[path]
-		if ticket == "" {
-			continue
-		}
-		err := c.RunE(c, nil)
-		if exitcode.FromError(err) != exitcode.CodeFailed || !strings.Contains(err.Error(), "(ticket "+ticket+")") {
-			t.Errorf("%s: RunE = %v, want exit 1 naming ticket %s", path, err, ticket)
-		}
 	}
 }
 
@@ -232,7 +213,7 @@ func TestSignalDecidesExitCode(t *testing.T) {
 	cancel(exitcode.Signaled(syscall.SIGTERM))
 
 	a, _, stderr := testApp(t)
-	if code := a.Run(ctx, []string{"up"}); code != 143 {
+	if code := a.Run(ctx, []string{"--stack", t.TempDir(), "up"}); code != 143 {
 		t.Errorf("failed command: exit = %d, want 143", code)
 	}
 	if !strings.Contains(stderr.String(), "interrupted") {

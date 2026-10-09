@@ -425,8 +425,34 @@ Go 1.26. CI and releases build with the patch release on go.mod's
 | `make vulncheck` | govulncheck over the code and its dependencies; needs the network, and its standard-library findings depend on the Go that runs it |
 | `make docs` | regenerate the [command reference](docs/commands/README.md) from the cobra help; CI fails when it's stale (`make docs-check`) |
 | `make compose-check` | `docker compose config` over every render golden |
+| `make clean-test-docker` | remove what a killed test run left in Docker: everything labelled `org.hms-dbmi.picsure.test=1`, and nothing else |
 | `make snapshot` | a local, unsigned dry run of the release into `dist/` |
 | `make install-test` | `make snapshot`, then `install.sh` against it |
+
+A few tests in `internal/ops` build small images, create volumes and run
+short-lived containers on the local Docker engine. They run by default and
+skip under `go test -short` or when `docker info` fails. They label
+everything they create `org.hms-dbmi.picsure.test=1` and remove it when they
+finish; after a killed run, `make clean-test-docker` removes the leftovers.
+
+Other tests are opt-in, or change behaviour, through environment variables:
+
+| Variable | Effect |
+|---|---|
+| `PICSURE_PTY_TEST=1` | run the PTY smoke tests in `smoke/` under CI, which skips them otherwise |
+| `PICSURE_REQUIRE_COMPOSE=1` | fail, instead of skip, the render goldens' compose checks without `docker compose` (`make compose-check`) |
+| `PICSURE_AIO_DIR` | the All-in-One checkout the AIO drift tests in `internal/render` and `internal/catalog` read, when it isn't beside this repo; without either they skip |
+| `PICSURE_REAL_IMAGE_BUILD=1` | build the real frontend and dictionary-etl images from `main` into the user's cache, and keep them |
+| `PICSURE_REACTOR_SHA`, `PICSURE_REACTOR_FORCE=1` | build the pic-sure backend images at that commit into the user's cache; `FORCE` rebuilds up-to-date ones |
+| `PICSURE_HPDS_ETL_IMAGE` | load the genomic test fixture with this HPDS ETL image |
+| `PIC_SURE_TEST_DEMO_DOWNLOADS=1` | download the demo files (56 MB) and check them against their pins |
+| `PICSURE_IT_PROJECT`, `PICSURE_IT_KEEP`, `PICSURE_IT_RELEASE_COMMIT` | for the `-tags integration` database tests: the compose project, keep it afterwards, and the release-control commit |
+| `PICSURE_TUI_INIT_DIR`, `_PORTS`, `_BRANCH`, `_CAPTURE` | drive the setup wizard to a real stack in that directory |
+| `PICSURE_TUI_LANDING_DIR`, `_NAME`, `_CAPTURE` | drive the landing's actions on a throwaway stack, which it destroys |
+| `PICSURE_TUI_LOAD_DIR`, `_FLOW`, `_CAPTURE` | load data into a running stack through the load wizard |
+| `PICSURE_TUI_DASH_DIR`, `_CAPTURE`, `_DESTROY` | drive the dashboard on a running stack, and destroy it if `_DESTROY` names it |
+
+The `_CAPTURE` variables name a file the test writes the screens it saw to.
 
 End-to-end tests against real Docker stacks are the `scripts/e2e-*.sh`
 scripts, run nightly by `.github/workflows/e2e.yml`; `scripts/e2e-lib.sh`

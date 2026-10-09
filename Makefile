@@ -5,7 +5,7 @@ COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
 DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS := -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(DATE)
 
-.PHONY: build snapshot install-test test fmt-check vet lint print-lint-version check vulncheck compose-check docs docs-check clean
+.PHONY: build snapshot install-test test fmt-check vet lint print-lint-version check vulncheck compose-check docs docs-check clean clean-test-docker
 
 build:
 	$(GO) build -ldflags "$(LDFLAGS)" -o $(BIN) ./cmd/pic-sure
@@ -66,3 +66,17 @@ docs-check: docs
 
 clean:
 	rm -rf bin dist
+
+# Removes the containers, volumes and images the Docker tests label
+# org.hms-dbmi.picsure.test=1, which a killed test run leaves behind, and
+# nothing else. Pulled base images stay: they're an ordinary cache. Tagged
+# images go by reference, so an image that also carries another tag keeps it.
+TEST_LABEL := label=org.hms-dbmi.picsure.test=1
+
+clean-test-docker:
+	@ids="$$(docker ps -aq --filter '$(TEST_LABEL)')"; \
+	if [ -n "$$ids" ]; then docker rm -f -v $$ids; fi; \
+	vols="$$(docker volume ls -q --filter '$(TEST_LABEL)')"; \
+	if [ -n "$$vols" ]; then docker volume rm -f $$vols; fi; \
+	imgs="$$(docker image ls --filter '$(TEST_LABEL)' --format '{{if eq .Tag "<none>"}}{{.ID}}{{else}}{{.Repository}}:{{.Tag}}{{end}}' | sort -u)"; \
+	if [ -n "$$imgs" ]; then docker image rm $$imgs; fi

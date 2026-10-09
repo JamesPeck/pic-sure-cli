@@ -16,6 +16,9 @@ type screen struct {
 	last       rune
 	// top and bottom are the scrolling region's rows.
 	top, bottom int
+	// pending is the incomplete escape sequence or UTF-8 rune that ended
+	// the last write, kept for the next.
+	pending []byte
 }
 
 func newScreen(rows, cols int) *screen {
@@ -69,53 +72,84 @@ func (s *screen) lineFeed() {
 
 func clamp(v, lo, hi int) int { return max(lo, min(v, hi)) }
 
+// write feeds the screen output as read from the PTY, which may split an
+// escape sequence or a rune between reads.
 func (s *screen) write(b []byte) {
+	if len(s.pending) > 0 {
+		b = append(s.pending, b...)
+		s.pending = nil
+	}
 	for i := 0; i < len(b); {
-		ch := b[i]
-		switch {
-		case ch == 0x1b && i+1 < len(b) && b[i+1] == '[':
-			j := i + 2
-			for j < len(b) && (b[j] < 0x40 || b[j] > 0x7e) {
-				j++
+		n := s.step(b[i:])
+		if n == 0 {
+			s.pending = append([]byte(nil), b[i:]...)
+			return
+		}
+		i += n
+	}
+}
+
+// step interprets the control, escape sequence or rune that b starts with
+// and returns its length, or 0 if b ends before it does.
+func (s *screen) step(b []byte) int {
+	switch ch := b[0]; {
+	case ch == 0x1b:
+		return s.escape(b)
+	case ch == '\r':
+		s.c = 0
+	case ch == '\n':
+		s.lineFeed()
+	case ch == '\t':
+		s.c = min((s.c/8+1)*8, s.cols-1)
+	case ch == '\b':
+		s.c = max(s.c-1, 0)
+	case ch < 0x20:
+	default:
+		if !utf8.FullRune(b) {
+			return 0
+		}
+		r, n := utf8.DecodeRune(b)
+		s.put(r)
+		return n
+	}
+	return 1
+}
+
+// escape interprets the escape sequence b starts with, like step.
+func (s *screen) escape(b []byte) int {
+	if len(b) < 2 {
+		return 0
+	}
+	switch b[1] {
+	case '[':
+		for j := 2; j < len(b); j++ {
+			if b[j] >= 0x40 && b[j] <= 0x7e {
+				s.csi(string(b[2:j]), b[j])
+				return j + 1
 			}
-			if j >= len(b) {
-				return
+		}
+	case ']', 'P', '_':
+		// OSC, DCS, APC: up to BEL or ST.
+		for j := 2; j < len(b); j++ {
+			if b[j] == 0x07 {
+				return j + 1
 			}
-			s.csi(string(b[i+2:j]), b[j])
-			i = j + 1
-		case ch == 0x1b && i+1 < len(b) && (b[i+1] == ']' || b[i+1] == 'P' || b[i+1] == '_'):
-			// OSC, DCS, APC: up to BEL or ST.
-			j := i + 2
-			st := func(j int) bool { return b[j] == 0x1b && j+1 < len(b) && b[j+1] == '\\' }
-			for j < len(b) && b[j] != 0x07 && !st(j) {
-				j++
+			if b[j] == 0x1b && j+1 < len(b) && b[j+1] == '\\' {
+				return j + 2
 			}
-			if j < len(b) && b[j] == 0x1b {
-				j++
+		}
+	default:
+		// ESC, intermediate bytes, then the final byte, e.g. ESC ( B.
+		for j := 1; j < len(b); j++ {
+			if b[j] == 0x1b {
+				return j // a new sequence cancels this one
 			}
-			i = j + 1
-		case ch == 0x1b:
-			i += 2
-		case ch == '\r':
-			s.c = 0
-			i++
-		case ch == '\n':
-			s.lineFeed()
-			i++
-		case ch == '\t':
-			s.c = min((s.c/8+1)*8, s.cols-1)
-			i++
-		case ch == '\b':
-			s.c = max(s.c-1, 0)
-			i++
-		case ch < 0x20:
-			i++
-		default:
-			r, n := utf8.DecodeRune(b[i:])
-			s.put(r)
-			i += n
+			if b[j] < 0x20 || b[j] > 0x2f {
+				return j + 1
+			}
 		}
 	}
+	return 0
 }
 
 func (s *screen) csi(params string, final byte) {

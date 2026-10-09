@@ -6,7 +6,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -25,14 +24,9 @@ import (
 // keeps the generated .env, checks the image got it byte for byte, and
 // checks that the second build of each image is skipped.
 func TestImageBuildsWithDocker(t *testing.T) {
-	if testing.Short() {
-		t.Skip("needs docker")
-	}
-	if err := exec.Command("docker", "info").Run(); err != nil {
-		t.Skipf("docker is not available: %v", err)
-	}
+	requireDocker(t)
 	ctx := context.Background()
-	e := docker.NewEngine(&docker.ExecRunner{})
+	e := newLabelEngine()
 	b := make([]byte, 4)
 	if _, err := rand.Read(b); err != nil {
 		t.Fatal(err)
@@ -55,7 +49,7 @@ func TestImageBuildsWithDocker(t *testing.T) {
 	cfg.Frontend.Analytics.GoogleAnalyticsID = `it's $HOME`
 
 	for _, name := range []string{"pic-sure-httpd", "dictionary-etl"} {
-		t.Cleanup(func() { _ = e.RemoveImage(context.Background(), "hms-dbmi/"+name+":"+tag) })
+		cleanupDocker(t, func(ctx context.Context) { _ = e.RemoveImage(ctx, "hms-dbmi/"+name+":"+tag) })
 	}
 	for run, wantBuilt := range []bool{true, false} {
 		res, err := ops.BuildFrontend(ctx, d, &cfg, opts)
