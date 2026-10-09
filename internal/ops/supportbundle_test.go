@@ -522,3 +522,39 @@ func TestSupportBundleCancelled(t *testing.T) {
 		t.Errorf("err %v, wrote %d bytes", err, buf.Len())
 	}
 }
+
+// A secret-named key's number or boolean is a secret too, in a valid
+// pic-sure.yaml and one that doesn't parse: blanked in the file, and a
+// number redacted wherever else it appears. A boolean isn't redacted
+// elsewhere (every "true" would go), and a non-secret field named like a
+// secret (consent_authorization) stays.
+func TestSupportBundleRedactsNonStringSecrets(t *testing.T) {
+	for name, cfg := range map[string]string{
+		"valid":     "schema: 1\nauth:\n  consent_authorization: false\nservices:\n  psama:\n    env:\n      SMTP_PASSWORD: 12345678\n      API_TOKEN: true\nemail:\n  password: 87654321\n",
+		"malformed": "schema: 1\nauth: {consent_authorization: false}\nservices: {psama: {env: {SMTP_PASSWORD: 12345678, API_TOKEN: true}}}\nemail: {password: 87654321}\nbroken: [\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			st := newBundleStack(t)
+			writeStackFile(t, st, stack.ConfigFile, cfg)
+			writeStackFile(t, st, stack.SecretsFile, "email_password: x\nfuture_api_token: 55556666\nfuture_password_flag: true\n")
+			f := fakerunner.New(t)
+			f.On(fakerunner.Glob("docker compose * ps --all --format json")).Stdout(`{"Name":"demo-gateway-1","Service":"gateway","State":"exited","ExitCode":2}` + "\n")
+			f.On(fakerunner.Glob("docker compose * logs --tail 500 gateway")).Stdout("smtp 12345678 email 87654321 token 55556666 ok true\n")
+			f.On(fakerunner.Glob("docker *")).Exit(1)
+			_, files := buildBundle(t, st, f)
+			for file, data := range files {
+				for _, v := range []string{"12345678", "87654321", "55556666", "API_TOKEN: true", "SMTP_PASSWORD: 1"} {
+					if strings.Contains(data, v) {
+						t.Errorf("%s holds %q:\n%s", file, v, data)
+					}
+				}
+			}
+			if got := files["compose/logs/gateway.log"]; got != "smtp [REDACTED] email [REDACTED] token [REDACTED] ok true\n" {
+				t.Errorf("gateway.log %q", got)
+			}
+			if got := files["stack/pic-sure.yaml"]; !strings.Contains(got, "consent_authorization: false") {
+				t.Errorf("pic-sure.yaml lost consent_authorization:\n%s", got)
+			}
+		})
+	}
+}

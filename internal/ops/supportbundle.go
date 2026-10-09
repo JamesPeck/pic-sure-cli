@@ -449,8 +449,9 @@ var secretsKeys = func() map[string]bool {
 
 // registerYAMLSecrets registers the scalars under n, whose top-level key in
 // secrets.yaml is key. A stack.Secret key's value counts whatever it looks
-// like (an unquoted false is still the password "false"); under any other
-// key only strings do, which a newer pic-sure's secrets are, and
+// like (an unquoted false is still the password "false"); under another
+// secret-named key (log.IsSecretName) any scalar but a boolean does; under
+// any other key only strings do, which a newer pic-sure's secrets are, and
 // bundleNotSecret's values don't.
 func registerYAMLSecrets(r *bundleRedactor, n *yaml.Node, key string) {
 	switch n.Kind {
@@ -469,7 +470,9 @@ func registerYAMLSecrets(r *bundleRedactor, n *yaml.Node, key string) {
 			}
 		}
 	case yaml.ScalarNode:
-		if secretsKeys[key] && n.ShortTag() != "!!null" || n.ShortTag() == "!!str" {
+		tag := n.ShortTag()
+		if secretsKeys[key] && tag != "!!null" || tag == "!!str" ||
+			log.IsSecretName(key) && tag != "!!null" && tag != "!!bool" {
 			r.register(n.Value)
 		}
 	}
@@ -523,7 +526,8 @@ var (
 )
 
 // redactConfigKeys blanks every configSecretFields key and every other
-// secret-named key (log.IsSecretName) with a string value in pic-sure.yaml.
+// secret-named key (log.IsSecretName) with a scalar value in pic-sure.yaml,
+// whatever its type.
 // A valid config has none but the admin email, since its secrets live in
 // secrets.yaml, but an operator may have pasted one in. A changed file is
 // re-encoded, which normalizes its layout.
@@ -569,10 +573,31 @@ var configSecretLeaves = func() map[string]bool {
 	return m
 }()
 
+// configPlainLeaves are the last parts of the other stack.Fields' keys,
+// which aren't secret even when secret-named (auth.consent_authorization).
+// A wildcard field, such as an env var, has none.
+var configPlainLeaves = func() map[string]bool {
+	m := map[string]bool{}
+	for _, f := range stack.Fields {
+		if leaf := f.Key[strings.LastIndex(f.Key, ".")+1:]; !configSecretFields[f.Key] && leaf != "*" {
+			m[leaf] = true
+		}
+	}
+	return m
+}()
+
+// configPlainField reports whether the dotted key p is a stack.Fields key
+// that isn't secret, such as auth.consent_authorization.
+func configPlainField(p string) bool {
+	f, ok := stack.LookupField(p)
+	return ok && !configSecretFields[f.Key] && !strings.HasSuffix(f.Key, ".*")
+}
+
 // walkSecretKeys calls fn for every value under n, at dotted path prefix,
 // that redactConfigKeys blanks, unless it is an empty scalar:
 // parent.Content[i] is the value. A secret-named key's value must be a
-// string, so consent_authorization: false is left alone.
+// scalar other than null, and a stack.Fields key that isn't secret is left
+// alone, so consent_authorization: false stays.
 func walkSecretKeys(n *yaml.Node, prefix string, fn func(parent *yaml.Node, i int)) {
 	if n.Kind != yaml.MappingNode {
 		for _, c := range n.Content {
@@ -587,8 +612,8 @@ func walkSecretKeys(n *yaml.Node, prefix string, fn func(parent *yaml.Node, i in
 			p = prefix + "." + key
 		}
 		empty := v.Kind == yaml.ScalarNode && v.Value == ""
-		str := v.Kind == yaml.ScalarNode && v.ShortTag() == "!!str"
-		if !empty && (configSecretFields[p] || log.IsSecretName(key) && str) {
+		scalar := v.Kind == yaml.ScalarNode && v.ShortTag() != "!!null"
+		if !empty && (configSecretFields[p] || log.IsSecretName(key) && scalar && !configPlainField(p)) {
 			fn(n, i)
 			continue
 		}
@@ -597,14 +622,15 @@ func walkSecretKeys(n *yaml.Node, prefix string, fn func(parent *yaml.Node, i in
 }
 
 // configSecretValues returns the values redactConfigKeys blanks, so they
-// are redacted wherever else they appear.
+// are redacted wherever else they appear. A boolean is blanked but not
+// returned: redacting every "true" and "false" would wreck the bundle.
 func configSecretValues(data []byte) []string {
 	var values []string
 	var doc yaml.Node
 	if yaml.Unmarshal(data, &doc) != nil {
 		for _, re := range []*regexp.Regexp{secretKeyLine, secretFlowKey} {
 			for _, m := range re.FindAllSubmatch(data, -1) {
-				if v, ok := secretLineValue(m); ok {
+				if v, isBool, ok := secretLineValue(m); ok && !isBool {
 					values = append(values, v)
 				}
 			}
@@ -614,7 +640,7 @@ func configSecretValues(data []byte) []string {
 	walkSecretKeys(&doc, "", func(parent *yaml.Node, i int) {
 		var collect func(n *yaml.Node)
 		collect = func(n *yaml.Node) {
-			if n.Kind == yaml.ScalarNode {
+			if n.Kind == yaml.ScalarNode && n.ShortTag() != "!!bool" {
 				values = append(values, n.Value)
 			}
 			for _, c := range n.Content {
@@ -632,7 +658,7 @@ func redactSecretKeyLines(data []byte) []byte {
 	for _, re := range []*regexp.Regexp{secretKeyLine, secretFlowKey} {
 		data = re.ReplaceAllFunc(data, func(match []byte) []byte {
 			m := re.FindSubmatch(match)
-			if _, ok := secretLineValue(m); !ok {
+			if _, _, ok := secretLineValue(m); !ok {
 				return match
 			}
 			return append(m[1][:len(m[1]):len(m[1])], log.Redacted...)
@@ -642,16 +668,24 @@ func redactSecretKeyLines(data []byte) []byte {
 }
 
 // secretLineValue returns the value of a secretKeyLine or secretFlowKey
-// match whose key is secret-named, or the last part of a
-// configSecretFields key, and whose value reads as a string.
-func secretLineValue(m [][]byte) (string, bool) {
-	if k := string(m[2]); !log.IsSecretName(k) && !configSecretLeaves[k] {
-		return "", false
+// match whose key is the last part of a configSecretFields key, or is
+// secret-named and not configPlainLeaves', and whose value is a scalar other
+// than null or "", whatever its type; isBool says it is a boolean.
+func secretLineValue(m [][]byte) (value string, isBool, ok bool) {
+	if k := string(m[2]); !configSecretLeaves[k] && (!log.IsSecretName(k) || configPlainLeaves[k]) {
+		return "", false, false
 	}
 	var v any
 	if yaml.Unmarshal(m[3], &v) == nil {
-		s, ok := v.(string)
-		return s, ok && s != ""
+		switch v := v.(type) {
+		case string:
+			return v, false, v != ""
+		case nil, map[string]any, []any:
+			return "", false, false
+		case bool:
+			return strings.TrimSpace(string(m[3])), true, true
+		}
+		return strings.TrimSpace(string(m[3])), false, true
 	}
-	return strings.Trim(strings.TrimSpace(string(m[3])), `"'`), true
+	return strings.Trim(strings.TrimSpace(string(m[3])), `"'`), false, true
 }

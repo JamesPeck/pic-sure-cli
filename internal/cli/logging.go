@@ -55,7 +55,7 @@ func (a *App) startRunLog(cmd *cobra.Command, args []string) {
 		if sv, ok := f.Value.(pflag.SliceValue); ok && f.Name == "set" {
 			for _, kv := range sv.GetSlice() {
 				key, v, _ := strings.Cut(kv, "=")
-				if field, _ := stack.LookupField(key); field.Secret || field.Flag == "admin-email" {
+				if privateConfigKey(key) {
 					log.RegisterSecrets(v)
 				}
 			}
@@ -65,7 +65,30 @@ func (a *App) startRunLog(cmd *cobra.Command, args []string) {
 	a.runLog.Logger().Debug("pic-sure run",
 		"version", a.Info.Version, "commit", a.Info.Commit,
 		"os", runtime.GOOS, "arch", runtime.GOARCH,
-		"command", cmd.CommandPath(), "flags", flags, "args", args)
+		"command", cmd.CommandPath(), "flags", flags, "args", logArgs(path, args))
+}
+
+// logArgs is args as the run log records them. `config set KEY VALUE` keeps
+// the key and redacts a private key's value, which config set may yet refuse,
+// so it never reaches secrets.yaml or the redactor's registry otherwise.
+// No other command takes a value as a positional argument.
+func logArgs(path string, args []string) []string {
+	if path != "config set" || len(args) < 2 || !privateConfigKey(args[0]) {
+		return args
+	}
+	log.RegisterSecrets(args[1])
+	return append([]string{args[0], "[REDACTED]"}, args[2:]...)
+}
+
+// privateConfigKey reports whether a config key's value is kept out of the
+// logs: a secret field, the admin email (personal data), or a secret-named
+// key such as an env var's (log.IsSecretName).
+func privateConfigKey(key string) bool {
+	field, _ := stack.LookupField(key)
+	if field.Secret || field.Flag == "admin-email" {
+		return true
+	}
+	return log.IsSecretName(key)
 }
 
 // openRunLog starts the run's log file in st's .pic-sure/logs. openStack

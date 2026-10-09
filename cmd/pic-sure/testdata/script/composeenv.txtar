@@ -66,6 +66,23 @@ exec sh -c 'cat leaky/.pic-sure/logs/*'
 stdout 'password \[REDACTED\] rejected'
 ! stdout 'rootpw-0123456789'
 
+# down and restart stream compose's output as Log events, which the sink
+# redacts in plain and NDJSON alike.
+exec pic-sure --stack leaky down
+stderr '\| password \[REDACTED\] rejected'
+! stderr 'rootpw-0123456789'
+! stdout 'rootpw-0123456789'
+exec pic-sure --stack leaky restart
+stderr '\| password \[REDACTED\] rejected'
+! stderr 'rootpw-0123456789'
+exec pic-sure --stack leaky --json down
+stdout '"type":"log",.*"line":"password \[REDACTED\] rejected"'
+! stdout 'rootpw-0123456789'
+! stderr 'rootpw-0123456789'
+exec pic-sure --stack leaky --json restart
+stdout '"line":"password \[REDACTED\] rejected"'
+! stdout 'rootpw-0123456789'
+
 -- bin/docker --
 #!/bin/sh
 if [ "$1" = compose ]; then
@@ -79,6 +96,7 @@ docker image inspect alpine:* => 0 stdout=image.json
 docker run * df -Pk / => 0 stdout=df.txt
 docker rm -v -f pic-sure-doctor-* => 0
 re:^docker compose .*/leaky .* (ps|config) => 1 stderr=leak.txt
+re:^docker compose .*/leaky .* (down|restart)( |$) => 0 stderr=leak.txt
 docker compose * => 0
 docker * => 1
 -- leak.txt --

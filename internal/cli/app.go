@@ -46,6 +46,10 @@ type App struct {
 	// stderrTerminal replaces the check that Stderr is a terminal in tests
 	// (canOfferSelfUpdate).
 	stderrTerminal func() bool
+	// stdinTerminal and readHidden replace, in tests, the check that Stdin
+	// is a terminal and the read of a hidden line from it (secretinput.go).
+	stdinTerminal func() bool
+	readHidden    func(ctx context.Context, stdin io.Reader) ([]byte, error)
 
 	// running is set when a command's RunE starts. An error from before
 	// that point came from cobra rejecting the command line, so Run reports

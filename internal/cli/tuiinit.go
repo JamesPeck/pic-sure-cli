@@ -45,7 +45,7 @@ func (a *App) initFromTUI(ctx context.Context, req tui.InitRequest) (tui.InitRes
 
 	saved := a.out
 	a.out = &output{mode: modeTUI, sink: &runSink{Sink: req.Sink}}
-	a.tuiLog.Store(&logEvents{req.Sink})
+	a.tuiLog.Store(&logEvents{redactingSink{req.Sink}})
 	defer func() {
 		a.out = saved
 		a.tuiLog.Store(nil)

@@ -14,6 +14,8 @@ import (
 
 	"github.com/JamesPeck/pic-sure-cli/internal/events"
 	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
+	"github.com/JamesPeck/pic-sure-cli/internal/log"
+	"github.com/JamesPeck/pic-sure-cli/internal/tui"
 )
 
 func env(vars map[string]string) func(string) string {
@@ -434,4 +436,53 @@ func TestUsageHint(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Every renderer a run can reach gets its events through the redaction:
+// plain, NDJSON, a TUI sink (the dashboard's), and the dashboard's warnings
+// and log records.
+func TestEventsAreRedactedForEveryRenderer(t *testing.T) {
+	const secret = "Rn4Tq8Wz2Lk6Hv9Bx3Mc7Pd"
+	log.RegisterSecrets(secret)
+	text := "password " + secret + " rejected"
+	emit := func(s events.Sink) {
+		s.Emit(events.StepStarted{ID: "s", Title: text})
+		s.Emit(events.Progress{ID: "s", Text: text})
+		s.Emit(events.Log{ID: "s", Stream: events.StreamStderr, Line: text})
+		s.Emit(events.Warning{ID: "s", Text: text})
+		s.Emit(events.Result{Error: &events.ErrorInfo{ExitCode: 1, Message: text}})
+	}
+	check := func(t *testing.T, got string) {
+		t.Helper()
+		if strings.Contains(got, secret) || !strings.Contains(got, "[REDACTED]") {
+			t.Errorf("output not redacted:\n%s", got)
+		}
+	}
+
+	t.Run("json", func(t *testing.T) {
+		a, stdout, _ := testApp(t)
+		a.Global.JSON = true
+		emit(a.newSink())
+		check(t, stdout.String())
+	})
+	t.Run("plain", func(t *testing.T) {
+		a, _, stderr := testApp(t)
+		a.Global.Plain = true
+		emit(a.newSink())
+		check(t, stderr.String())
+	})
+	t.Run("dashboard", func(t *testing.T) {
+		a, _, _ := testApp(t)
+		var rec events.Recorder
+		var result events.Result
+		c := a.actionApp(tui.CommandRequest{Sink: &rec}, io.Discard, io.Discard, func(r events.Result) { result = r })
+		emit(c.newSink())
+		c.warnStderr("%s", text)
+		_, _ = io.WriteString(c.tuiLog.Load(), text+"\n")
+		b, err := json.Marshal(append(rec.Events(), result))
+		if err != nil {
+			t.Fatal(err)
+		}
+		check(t, string(b))
+	})
 }

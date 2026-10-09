@@ -27,7 +27,10 @@ turns this page into a task-oriented guide; the README's
    `--db-root-password-stdin`, and `secrets rotate auth0-client-secret`
    (and `db-root` with a remote database). One trailing newline is
    stripped; any other CR or LF is a usage error. With both init flags,
-   give one secret per line, the client secret first.
+   give one secret per line, the client secret first. Pipe the secret in:
+   when stdin is a terminal, pic-sure asks for each secret on stderr and
+   reads one line with echo off, and with `--json` or `--non-interactive`
+   a terminal stdin is exit 2.
 6. **Name the stack.** Commands act on the stack containing the working
    directory. Pass `--stack DIR` when you aren't inside it; `init` takes
    DIR as its argument.

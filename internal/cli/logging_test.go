@@ -234,3 +234,38 @@ func TestRunLogPruningUsesTheManifest(t *testing.T) {
 		t.Errorf("manifest = %v", m)
 	}
 }
+
+// A rejected `config set` of a secret key never logs the value, in the run
+// log or on stderr; the key stays, and other keys' values stay too.
+func TestRunLogRedactsConfigSetValues(t *testing.T) {
+	for _, tc := range []struct{ key, value string }{
+		{"auth.auth0.client_secret", "SYNTHsecretVALUE123"},
+		{"auth.admin_email", "someone@example.org"},
+		{"services.psama.env.SMTP_PASSWORD", "SYNTHsmtpVALUE456"},
+	} {
+		t.Run(tc.key, func(t *testing.T) {
+			dir := newTestStack(t)
+			a, stdout, stderr := testApp(t)
+			a.Run(context.Background(), []string{"--stack", dir, "--log-level", "debug", "config", "set", tc.key, tc.value})
+			logs, _ := filepath.Glob(filepath.Join(dir, log.Dir, "*.log"))
+			if len(logs) != 1 {
+				t.Fatalf("run logs %q, want one", logs)
+			}
+			b, err := os.ReadFile(logs[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			for name, out := range map[string]string{"run log": string(b), "stderr": stderr.String(), "stdout": stdout.String()} {
+				if strings.Contains(out, tc.value) {
+					t.Errorf("%s has the value:\n%s", name, out)
+				}
+			}
+			if !strings.Contains(string(b), `"args":["`+tc.key+`","[REDACTED]"]`) {
+				t.Errorf("run log doesn't keep the key:\n%s", b)
+			}
+		})
+	}
+	if got := logArgs("config set", []string{"network.http_port", "8081"}); got[1] != "8081" {
+		t.Errorf("a non-secret value: %q", got)
+	}
+}

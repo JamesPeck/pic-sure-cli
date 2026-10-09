@@ -83,7 +83,11 @@ func (a *App) rotateSecret(cmd *cobra.Command, args []string) error {
 		if !a.Global.Yes {
 			return exitcode.ConfirmRequired("secrets rotate %s reads the new value from stdin, so it needs --yes. Nothing was changed.", name)
 		}
-		if opts.Value, err = stack.ReadUserSecret(a.Stdin, "stdin"); err != nil {
+		what := secretPromptNames["auth.auth0.client_secret"]
+		if name == ops.SecretDBRoot {
+			what = secretPromptNames["db.remote.root_password"]
+		}
+		if opts.Value, err = a.readUserSecret(cmd.Context(), what, "stdin"); err != nil {
 			return err
 		}
 	} else if err := a.confirmYes(cmd, fmt.Sprintf("This replaces stack %s's %s and recreates the running services that use it.", cfg.Name, name)); err != nil {

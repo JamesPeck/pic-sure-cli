@@ -157,7 +157,7 @@ func (a *App) commandFromTUI(ctx context.Context, req tui.CommandRequest) (tui.I
 // to stdout, its warnings, log records and other events to req.Sink, and
 // its error to rest and to onResult; the gate asks through req.Confirm.
 func (a *App) actionApp(req tui.CommandRequest, stdout, rest io.Writer, onResult func(events.Result)) *App {
-	c := a.child(stdout, &warnEvents{sink: req.Sink, rest: rest})
+	c := a.child(stdout, &warnEvents{sink: redactingSink{req.Sink}, rest: rest})
 	c.tuiSink = events.SinkFunc(func(e events.Event) {
 		if r, ok := e.(events.Result); ok {
 			onResult(r)
@@ -165,7 +165,7 @@ func (a *App) actionApp(req tui.CommandRequest, stdout, rest io.Writer, onResult
 		}
 		req.Sink.Emit(e)
 	})
-	c.tuiLog.Store(&logEvents{req.Sink})
+	c.tuiLog.Store(&logEvents{redactingSink{req.Sink}})
 	c.tuiConfirm = req.Confirm
 	return c
 }

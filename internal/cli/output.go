@@ -248,7 +248,9 @@ func jsonRequested(args []string) bool {
 }
 
 // runSink is the run's sink: the renderer, plus the first step that failed
-// (for the failed Result) and the renderer's write error.
+// (for the failed Result) and the renderer's write error. Every event's text
+// is redacted before the renderer sees it, since compose output and errors
+// can quote a secret.
 type runSink struct {
 	events.Sink
 
@@ -257,6 +259,7 @@ type runSink struct {
 }
 
 func (s *runSink) Emit(e events.Event) {
+	e = redactEvent(e)
 	if d, ok := e.(events.StepDone); ok && d.Status == events.StepFailed {
 		s.mu.Lock()
 		if s.failed == "" {
@@ -266,6 +269,39 @@ func (s *runSink) Emit(e events.Event) {
 	}
 	s.Sink.Emit(e)
 }
+
+// redactEvent returns e with every registered secret in its text replaced
+// (log.Redact).
+func redactEvent(e events.Event) events.Event {
+	switch e := e.(type) {
+	case events.StepStarted:
+		e.Title = log.Redact(e.Title)
+		return e
+	case events.Progress:
+		e.Text = log.Redact(e.Text)
+		return e
+	case events.Log:
+		e.Line = log.Redact(e.Line)
+		return e
+	case events.Warning:
+		e.Text = log.Redact(e.Text)
+		return e
+	case events.Result:
+		if e.Error != nil {
+			info := *e.Error
+			info.Message = log.Redact(info.Message)
+			e.Error = &info
+		}
+		return e
+	}
+	return e
+}
+
+// redactingSink redacts each event's text before passing it on, for a sink
+// that is reached without the runSink.
+type redactingSink struct{ events.Sink }
+
+func (s redactingSink) Emit(e events.Event) { s.Sink.Emit(redactEvent(e)) }
 
 func (s *runSink) failedStep() string {
 	s.mu.Lock()

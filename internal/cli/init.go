@@ -576,12 +576,17 @@ func (r *initRun) stdinFields() []stack.Field {
 }
 
 // readSecrets reads the --*-stdin secrets, and refuses a missing one the
-// config requires. With both flags, stdin holds the Auth0 client secret on
-// its first line and the remote root password on its second.
+// config requires. With both flags, piped stdin holds the Auth0 client
+// secret on its first line and the remote root password on its second; a
+// terminal is asked for each in turn (readUserSecret).
 func (r *initRun) readSecrets() error {
 	fields := r.stdinFields()
+	if selfUpdate, _ := r.cmd.Flags().GetBool("self-update"); selfUpdate && len(fields) > 0 {
+		return exitcode.Usage("--self-update re-runs init, which can't read --%s's stdin again; run pic-sure self-update first", fields[0].Flag)
+	}
 	inputs := []io.Reader{r.a.Stdin}
-	if len(fields) > 1 {
+	terminal := r.a.stdinIsTerminal()
+	if len(fields) > 1 && !terminal {
 		data, err := io.ReadAll(io.LimitReader(r.a.Stdin, 1<<20))
 		if err != nil {
 			return err
@@ -598,11 +603,14 @@ func (r *initRun) readSecrets() error {
 			inputs = append(inputs, strings.NewReader(l))
 		}
 	}
-	if selfUpdate, _ := r.cmd.Flags().GetBool("self-update"); selfUpdate && len(fields) > 0 {
-		return exitcode.Usage("--self-update re-runs init, which can't read --%s's stdin again; run pic-sure self-update first", fields[0].Flag)
-	}
 	for i, f := range fields {
-		v, err := stack.ReadUserSecret(inputs[i], "--"+f.Flag)
+		var v stack.Secret
+		var err error
+		if terminal {
+			v, err = r.a.readUserSecret(r.cmd.Context(), secretPromptNames[f.Key], "--"+f.Flag)
+		} else {
+			v, err = stack.ReadUserSecret(inputs[i], "--"+f.Flag)
+		}
 		if err != nil {
 			return err
 		}
@@ -628,6 +636,12 @@ func (r *initRun) readSecrets() error {
 		}
 	}
 	return nil
+}
+
+// secretPromptNames name the --*-stdin secrets in readUserSecret's prompt.
+var secretPromptNames = map[string]string{
+	"auth.auth0.client_secret": "Auth0 client secret",
+	"db.remote.root_password":  "remote database root password",
 }
 
 // preconditions is §9.1 step 1: everything is checked before anything is

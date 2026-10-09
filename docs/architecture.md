@@ -194,7 +194,12 @@ it.
   `CI=0` don't count); and TUI otherwise. TUI mode draws with
   `progress.Renderer` (038) when stderr is a terminal and `TERM` isn't
   `dumb`, and as plain otherwise. `newSink` returns the same sink for the
-  whole run. Only
+  whole run. That sink (`runSink`) redacts every event's text with
+  `log.Redact` before any renderer sees it: step titles, progress, log
+  lines, warnings and the error (093), since compose output and errors can
+  quote a secret. The dashboard's warnings and log records, which reach its
+  sink another way, go through `redactingSink`, and `warnStderr` redacts
+  too. Only
   `output.go` emits `Result`. A command ends in one of three ways:
   - a streaming command returns `a.finish(report, text)`. When the
     command returns nil, the run ends with a success `Result` (`--json`
@@ -263,9 +268,10 @@ it.
   the run log.
 
 - `init.go` (034): `init [DIR]`. Its flags come from `stack.Fields` (a
-  secret's is a bool that reads stdin through `ReadUserSecret`; with both
-  `--auth0-client-secret-stdin` and `--db-root-password-stdin`, stdin holds
-  one secret per line, in that order), plus `--auto-ports`, `--source
+  secret's is a bool that reads stdin through `readUserSecret`; with both
+  `--auth0-client-secret-stdin` and `--db-root-password-stdin`, piped stdin
+  holds one secret per line, in that order, and a terminal is asked for
+  each), plus `--auto-ports`, `--source
   COMPONENT=PATH`, the gate's `--self-update` and `--ignore-cli-version`,
   and `--set KEY=VALUE` (072) for any non-secret key, through
   `ConfigDoc.Set` after the flags; a key a flag also sets must get the same
@@ -361,6 +367,15 @@ it.
   `ops.ReservedPorts`. `startTUI` opens on the stack `stack.Find`
   finds, else on init's directory.
 
+- `secretinput.go` (093): `a.readUserSecret` reads a secret for init's
+  `--*-stdin` flags and `secrets rotate`. Piped stdin goes to
+  `stack.ReadUserSecret` unchanged (to EOF). A terminal stdin gets a prompt
+  on stderr ("Paste the ... and press Enter (input is hidden):") and one
+  line read with echo off (`charmbracelet/x/term`), restoring the terminal
+  if the context ends first; with `--json` or `--non-interactive` it is
+  exit 2, asking for the secret to be piped. `stdinTerminal` and
+  `readHidden` are the test seams; `smoke/secret_prompt_pty_test.go` runs it
+  on a PTY.
 - `secrets.go` (058): `secrets rotate NAME [--discard-data]`. Usage
   problems first: a NAME not in `ops.RotateNames()` (exit 2, listing them),
   `--discard-data` with another NAME (exit 2) or without `--yes` (exit 4).
@@ -1725,12 +1740,16 @@ failing to write w, or ctx ending, is an error. With no Stack it holds doctor al
 - **Redaction.** Every file, and every problem, passes through a redactor
   of: each scalar in secrets.yaml, read as plain YAML so a key a newer
   pic-sure added counts too (a `stack.Secret` key's value whatever it
-  looks like, another key's only when it is a string; the UUIDs, the token
-  expiry and the generated flag never); the HPDS key file; and in
-  pic-sure.yaml the secret fields of `stack.Fields`, the admin email (the
-  run logs redact it as personal data) and any other secret-named key
-  (`log.IsSecretName`) with a string value, all shown as `[REDACTED]` in
-  `stack/pic-sure.yaml`. Values of `log.MinSecret` (4) bytes or more go
+  looks like, another secret-named key's any scalar but a boolean, any
+  other key's only when it is a string; the UUIDs, the token expiry and
+  the generated flag never); the HPDS key file; and in pic-sure.yaml the
+  secret fields of `stack.Fields`, the admin email (the run logs redact it
+  as personal data) and any other secret-named key (`log.IsSecretName`,
+  env vars included) with a non-null scalar value of any type (093), all
+  shown as `[REDACTED]` in `stack/pic-sure.yaml`. A `stack.Fields` key
+  that isn't secret (`auth.consent_authorization`) stays. A boolean is
+  blanked in the file but not redacted elsewhere, where every `true` would
+  go. Values of `log.MinSecret` (4) bytes or more go
   through a `log.Redactor` (escaped forms, plus encoding/json's
   HTML-escaped one, and URL userinfo); a shorter one, which only an
   operator can supply, is replaced only where no ASCII letter or digit
@@ -2526,7 +2545,11 @@ Ticket 005. Debug logging that is safe to attach to a bug report (§6.1,
 **Wiring (`internal/cli/logging.go`).** `markRunning` starts the run's
 logging when a command's `RunE` starts, and `App.Run` closes it, writing
 the exit code and error as the last record. The first record has the
-version, OS, command, flags and arguments. `a.openStack` calls
+version, OS, command, flags and arguments. `config set` of a secret field,
+the admin email, or a secret-named key (`privateConfigKey`) logs the key
+with `[REDACTED]` for the value, and registers the value, since config set
+may refuse it before it reaches secrets.yaml (093); `--set` values are
+registered by the same rule. `a.openStack` calls
 `a.openRunLog(st)` once the stack passes the version gate; `init` (034)
 must call it once `.pic-sure/` exists. Until something
 calls it, nothing is written to disk. The read-only commands (`status`, `ps`,
