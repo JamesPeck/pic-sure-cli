@@ -13,23 +13,6 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// drainInit runs the cmd returned by Init (the filepicker's readDir) and feeds
-// the resulting msg through Update, so the model ends up with a populated entry
-// list — the state a real program reaches after the first paint. It returns the
-// advanced model. Driving the real readDir cmd (rather than fabricating the
-// filepicker's unexported readDirMsg) is the only way to load entries without
-// reaching into bubbles internals.
-func drainInit(t *testing.T, m Model) Model {
-	t.Helper()
-	cmd := m.Init()
-	if cmd == nil {
-		t.Fatal("Init returned nil cmd")
-	}
-	msg := cmd()
-	m, _ = m.Update(msg)
-	return m
-}
-
 func TestNewMapsAllowedExts(t *testing.T) {
 	m := New(Options{AllowedExts: []string{".csv", ".tsv"}})
 	got := m.fp.AllowedTypes
@@ -99,11 +82,9 @@ func TestSetSizeGrowsViewWithHeight(t *testing.T) {
 
 	small := New(Options{StartDir: dir, Title: "Pick", AllowedExts: []string{".csv"}})
 	small.SetSize(80, 10)
-	small = drainInit(t, small)
 
 	big := New(Options{StartDir: dir, Title: "Pick", AllowedExts: []string{".csv"}})
 	big.SetSize(80, 30)
-	big = drainInit(t, big)
 
 	if viewLines(big) <= viewLines(small) {
 		t.Errorf("taller SetSize did not grow the view: small=%d big=%d",
@@ -127,7 +108,6 @@ func TestSetSizeClampsTiny(t *testing.T) {
 	for _, h := range []int{0, 1, 2, -5} {
 		m := New(Options{StartDir: dir, Title: "x", AllowedExts: []string{".csv"}})
 		m.SetSize(0, h)
-		m = drainInit(t, m)
 		if viewLines(m) < 1 {
 			t.Errorf("SetSize(0,%d) -> %d view lines, want >=1", h, viewLines(m))
 		}
@@ -153,7 +133,6 @@ func TestSelectFileReturnsAbsPath(t *testing.T) {
 
 	m := New(Options{StartDir: dir, AllowedExts: []string{".csv"}})
 	m.SetSize(80, 20)
-	m = drainInit(t, m) // loads the single entry, cursor at index 0
 
 	// Enter both navigates/opens and selects in the filepicker; on a plain file
 	// it sets Path, which DidSelectFile then reports. Feed it through our Update.
@@ -183,7 +162,6 @@ func TestSelectDisabledFileSetsErr(t *testing.T) {
 
 	m := New(Options{StartDir: dir, AllowedExts: []string{".csv"}})
 	m.SetSize(80, 20)
-	m = drainInit(t, m)
 
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 
@@ -206,7 +184,6 @@ func TestHintNoMatchingFiles(t *testing.T) {
 
 	m := New(Options{StartDir: dir, AllowedExts: []string{".csv"}})
 	m.SetSize(80, 20)
-	m = drainInit(t, m)
 
 	if !strings.Contains(m.View(), "no matching files") {
 		t.Errorf("View() should warn about no matching files; got:\n%s", m.View())
@@ -221,7 +198,6 @@ func TestHintAbsentWhenSelectablePresent(t *testing.T) {
 
 	m := New(Options{StartDir: dir, AllowedExts: []string{".csv"}})
 	m.SetSize(80, 20)
-	m = drainInit(t, m)
 
 	if strings.Contains(m.View(), "no matching files") {
 		t.Errorf("View() should not warn when a .csv is present; got:\n%s", m.View())
@@ -236,7 +212,6 @@ func TestHintAbsentInDirMode(t *testing.T) {
 
 	m := New(Options{StartDir: dir, DirMode: true})
 	m.SetSize(80, 20)
-	m = drainInit(t, m)
 
 	if strings.Contains(m.View(), "no matching files") {
 		t.Errorf("dir mode should never show the no-matching-files hint; got:\n%s", m.View())
@@ -253,7 +228,6 @@ func TestViewNoPanicAtVariousSizes(t *testing.T) {
 	} {
 		m := New(Options{StartDir: dir, Title: "Pick", AllowedExts: []string{".csv"}})
 		m.SetSize(tc.w, tc.h)
-		m = drainInit(t, m)
 		_ = m.View() // must not panic
 	}
 }
@@ -272,7 +246,6 @@ func TestViewShowsCurrentDirectory(t *testing.T) {
 
 	m := New(Options{StartDir: dir, Title: "Pick", AllowedExts: []string{".csv"}})
 	m.SetSize(120, 20)
-	m = drainInit(t, m)
 
 	if !strings.Contains(m.View(), filepath.Base(dir)) {
 		t.Errorf("View() should show the current directory %q; got:\n%s", dir, m.View())
@@ -292,7 +265,6 @@ func TestViewHeaderReflectsNavigation(t *testing.T) {
 
 	m := New(Options{StartDir: root, DirMode: true})
 	m.SetSize(120, 20)
-	m = drainInit(t, m)
 
 	m, _ = m.Update(keyRight)
 
@@ -309,7 +281,6 @@ func TestNavHintShowsUpAffordance(t *testing.T) {
 
 	m := New(Options{StartDir: dir, AllowedExts: []string{".csv"}})
 	m.SetSize(120, 20)
-	m = drainInit(t, m)
 
 	view := m.View()
 	if !strings.Contains(view, "..") {
@@ -331,7 +302,6 @@ func TestNavHintDirModeWording(t *testing.T) {
 
 	m := New(Options{StartDir: dir, DirMode: true})
 	m.SetSize(120, 20)
-	m = drainInit(t, m)
 
 	view := m.View()
 	if !strings.Contains(view, "..") || !strings.Contains(view, "←/h") {
@@ -356,7 +326,6 @@ func TestPathHeaderLeftElidedToWidth(t *testing.T) {
 	const boxW = 30
 	m := New(Options{StartDir: root, DirMode: true})
 	m.SetSize(boxW, 20)
-	m = drainInit(t, m)
 	m.fp.CurrentDirectory = deep
 
 	header := strings.SplitN(m.View(), "\n", 2)[0]
@@ -394,7 +363,6 @@ func TestPathHeaderWideCharsFitWidth(t *testing.T) {
 	// header's rendered width must still be <= the box width.
 	root := t.TempDir()
 	m := New(Options{StartDir: root, DirMode: true})
-	m = drainInit(t, m)
 	// Point the picker at a wide-character path directly; the header reads
 	// CurrentDirectory, so the dir need not exist on disk for the layout assertion.
 	m.fp.CurrentDirectory = "/データ/ゲノム/フォルダ/末尾ディレクトリ"
@@ -417,7 +385,6 @@ func TestViewNeverOverflowsSmallBox(t *testing.T) {
 	for _, h := range []int{6, 8, 10, 12} {
 		m := New(Options{StartDir: dir, Title: "Pick", AllowedExts: []string{".csv"}})
 		m.SetSize(80, h)
-		m = drainInit(t, m)
 		if got := viewLines(m); got > h+1 {
 			t.Errorf("SetSize(80,%d) -> %d view lines, want <= %d (h + inclusive pad)", h, got, h+1)
 		}
@@ -473,7 +440,6 @@ func TestUnreadableDirStaysInParent(t *testing.T) {
 
 		m := New(Options{StartDir: root, AllowedExts: []string{".csv"}})
 		m.SetSize(200, 20)
-		m = drainInit(t, m)
 
 		m, cmd := m.Update(k)
 		if cmd != nil {
@@ -504,7 +470,6 @@ func TestUnreadableStartDir(t *testing.T) {
 
 	m := New(Options{StartDir: locked, DirMode: true})
 	m.SetSize(200, 20)
-	m = drainInit(t, m)
 	if m.Err() == nil {
 		t.Fatal("Err() = nil for an unreadable start dir")
 	}
@@ -525,7 +490,6 @@ func TestDirModeEnterSelectsCurrentDirWithOnlyFiles(t *testing.T) {
 
 	m := New(Options{StartDir: root, DirMode: true})
 	m.SetSize(80, 20)
-	m = drainInit(t, m)
 	m, _ = m.Update(keyEnter)
 
 	if path, ok := m.Selected(); !ok || path != root {
@@ -540,7 +504,6 @@ func TestDirModeEnterSelectsCurrentDirNotHighlighted(t *testing.T) {
 
 	m := New(Options{StartDir: root, DirMode: true})
 	m.SetSize(80, 20)
-	m = drainInit(t, m)
 
 	m, _ = m.Update(keyEnter)
 	if path, ok := m.Selected(); !ok || path != root {
@@ -549,15 +512,13 @@ func TestDirModeEnterSelectsCurrentDirNotHighlighted(t *testing.T) {
 
 	m = New(Options{StartDir: root, DirMode: true})
 	m.SetSize(80, 20)
-	m = drainInit(t, m)
-	m, cmd := m.Update(keyRight)
+	m, _ = m.Update(keyRight)
 	if m.Dir() != sub {
 		t.Fatalf("→ opened %q, want %q", m.Dir(), sub)
 	}
 	if _, ok := m.Selected(); ok {
 		t.Fatal("→ selected a dir, want it only to open")
 	}
-	m, _ = m.Update(cmd())
 	m, _ = m.Update(keyEnter)
 	if path, ok := m.Selected(); !ok || path != sub {
 		t.Errorf("Selected() = (%q, %v), want (%q, true)", path, ok, sub)
@@ -571,7 +532,6 @@ func TestSelectRemovedFileIsRefused(t *testing.T) {
 
 	m := New(Options{StartDir: root, AllowedExts: []string{".csv"}})
 	m.SetSize(80, 20)
-	m = drainInit(t, m)
 	if err := os.Remove(csv); err != nil {
 		t.Fatal(err)
 	}
@@ -582,7 +542,7 @@ func TestSelectRemovedFileIsRefused(t *testing.T) {
 	}
 }
 
-func TestNavigationKeysWaitForTheRead(t *testing.T) {
+func TestNavigationLoadsTheListingAtOnce(t *testing.T) {
 	root := t.TempDir()
 	child := filepath.Join(root, "child")
 	mkdirs(t, child)
@@ -590,32 +550,19 @@ func TestNavigationKeysWaitForTheRead(t *testing.T) {
 
 	m := New(Options{StartDir: child, AllowedExts: []string{".csv"}})
 	m.SetSize(80, 20)
-	m = drainInit(t, m)
 
-	// Back, then Enter before the parent's read lands: the listing still holds
-	// child's a.csv, which doesn't exist in root.
+	// The listing must be root's straight away, not child's a.csv, which
+	// doesn't exist in root.
 	m, cmd := m.Update(keyLeft)
+	if cmd != nil {
+		t.Error("navigation returned a cmd; the read should already be applied")
+	}
 	m, _ = m.Update(keyEnter)
 	if path, ok := m.Selected(); ok {
-		t.Fatalf("Enter during the read selected %q", path)
+		t.Fatalf("Enter after back selected %q", path)
 	}
-	m, _ = m.Update(cmd())
-	if m.Dir() != root {
-		t.Fatalf("Dir() = %q, want %q", m.Dir(), root)
-	}
-	m, _ = m.Update(keyEnter) // opens child, the only entry
 	if m.Dir() != child {
-		t.Errorf("after the read, Enter opened %q, want %q", m.Dir(), child)
-	}
-}
-
-func TestReadFromAnotherBrowserIgnored(t *testing.T) {
-	dir := t.TempDir()
-	other := New(Options{StartDir: dir})
-	m := New(Options{StartDir: dir})
-	m, _ = m.Update(other.Init()())
-	if !m.reading {
-		t.Error("another browser's read ended this one's")
+		t.Errorf("Enter on child in root opened %q, want %q", m.Dir(), child)
 	}
 }
 

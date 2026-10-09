@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync/atomic"
 	"syscall"
 
 	"charm.land/bubbles/v2/filepicker"
@@ -69,28 +68,6 @@ type Model struct {
 	// pick, from the read that let the user enter it. The filepicker keeps its
 	// entries private.
 	hasSelectable bool
-
-	// reading is set while a directory read is in flight. Until it lands the
-	// filepicker lists the previous directory under the new path, so keys
-	// that act on the listing would pick stale entries.
-	reading bool
-	id      int64
-}
-
-var lastID atomic.Int64
-
-// readDoneMsg carries the filepicker's directory read back through Update,
-// so the wrapper knows when the listing matches CurrentDirectory again.
-type readDoneMsg struct {
-	id  int64
-	msg tea.Msg
-}
-
-func (m Model) trackRead(cmd tea.Cmd) tea.Cmd {
-	if cmd == nil {
-		return nil
-	}
-	return func() tea.Msg { return readDoneMsg{id: m.id, msg: cmd()} }
 }
 
 // New builds a Model from opts. Call Init to start the filepicker's read.
@@ -121,18 +98,29 @@ func New(opts Options) Model {
 	fp.Styles.Cursor = fp.Styles.Cursor.Foreground(styles.Brand)
 	fp.Styles.Selected = lipgloss.NewStyle().Foreground(styles.Brand).Bold(true)
 
-	m := Model{fp: fp, title: opts.Title, dirMode: opts.DirMode, reading: true, id: lastID.Add(1)}
+	m := Model{fp: fp, title: opts.Title, dirMode: opts.DirMode}
 	if entries, err := os.ReadDir(start); err != nil {
 		m.err = &readError{path: start, err: err}
 	} else {
 		m.hasSelectable = m.anySelectable(entries)
 	}
+	m.fp = loadNow(m.fp, m.fp.Init())
 	return m
 }
 
-// Init starts the initial directory read.
+// loadNow runs the filepicker's directory read and applies it at once. Left
+// async, keys handled before it lands act on the previous directory's listing
+// under the new path, and a message the parent drops would leave it stale.
+func loadNow(fp filepicker.Model, read tea.Cmd) filepicker.Model {
+	if read != nil {
+		fp, _ = fp.Update(read())
+	}
+	return fp
+}
+
+// Init does nothing: New has already read the start directory.
 func (m Model) Init() tea.Cmd {
-	return m.trackRead(m.fp.Init())
+	return nil
 }
 
 // SetSize lays the picker out in a w×h box.
@@ -157,21 +145,10 @@ func (m *Model) SetSize(w, h int) {
 // silently keeps the old listing when the read fails, so Update reads the
 // target first and doesn't pass the key on when it can't be read.
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
-	if r, ok := msg.(readDoneMsg); ok {
-		if r.id != m.id {
-			return m, nil
-		}
-		m.reading = false
-		msg = r.msg
-	}
-
 	navigating := false
 	if k, ok := msg.(tea.KeyPressMsg); ok {
 		if m.dirMode && key.Matches(k, m.fp.KeyMap.Select) {
 			m.selectDir(m.fp.CurrentDirectory)
-			return m, nil
-		}
-		if m.reading && (key.Matches(k, m.fp.KeyMap.Back) || key.Matches(k, m.fp.KeyMap.Open)) {
 			return m, nil
 		}
 		if target, ok := m.navTarget(k); ok {
@@ -188,16 +165,16 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 
 	var cmd tea.Cmd
 	m.fp, cmd = m.fp.Update(msg)
-	if navigating && cmd != nil {
-		m.reading = true
-		cmd = m.trackRead(cmd)
+	if navigating {
+		m.fp = loadNow(m.fp, cmd)
+		return m, nil
 	}
 
 	if ok, path := m.fp.DidSelectFile(msg); ok {
 		if abs, err := filepath.Abs(path); err == nil {
 			path = abs
 		}
-		// A read that failed after navTarget's leaves a stale listing.
+		// The file may have gone since the listing was read.
 		if _, err := os.Stat(path); err != nil {
 			m.err = &readError{path: path, err: err}
 			return m, cmd

@@ -2708,8 +2708,9 @@ Bubbles filepicker plus a path header, a key hint and a status line. The
 parent calls `Update` and then polls `Selected`. The filepicker enters a
 directory before reading it and keeps the old listing when the read fails, so
 `Update` reads the target first and, if it can't, stays put and shows the
-error. Until the filepicker's own read lands, the list is the old directory's,
-so the back and open keys are ignored. In `DirMode`, Enter selects the directory in the header, → or `l` opens
+error. It then runs the filepicker's own read at once instead of returning it
+as a command, so the listing always matches the header and `Init` returns
+nil. In `DirMode`, Enter selects the directory in the header, → or `l` opens
 the highlighted one, and files are listed dimmed.
 
 ## internal/styles
