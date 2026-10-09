@@ -272,9 +272,11 @@ it.
   read-only ones run without the lock and on a newer stack, and write a run
   log file only at debug level, like `ps`; any other, an unknown one or
   none, and `wait --down-project`, holds the stack lock until compose
-  exits. `-p`/`--project-name` among compose's global flags is exit 2
-  (`composeProjectFlag`): the ownership check covers only the stack's own
-  project (084). The passthrough's output goes straight to the terminal, never to
+  exits. It passes `-p <name>`, which beats a `name:` in a file added
+  with `-f` and an `--env-file`'s `COMPOSE_PROJECT_NAME`, so compose acts
+  on the project the ownership check covered (084); the user's own
+  `-p`/`--project-name` is exit 2 (`composeProjectFlag`). The
+  passthrough's output goes straight to the terminal, never to
   the run log.
 
 - `init.go` (034): `init [DIR]`. Its flags come from `stack.Fields` (a
@@ -304,7 +306,8 @@ it.
   resources labelled with this directory are named as a deleted stack's
   leftovers with the `docker` commands that remove them, and the rest are
   listed with their directory but no commands, since one whose directory
-  holds no stack now may be a moved stack's (084); on a new stack `ops.ChoosePorts` and
+  holds no stack now may be a moved stack's (084); on a new stack
+  `ops.ChoosePorts` and
   `ChooseDevPortsBase`, on a resumed one its ports must be free or its own;
   a loopback remote `--db-host` warns), `release` (`release.Fetch` at a
   resumed stack's recorded commit, else the branch head, then `Gate` with
@@ -622,7 +625,8 @@ A directory is a stack when it holds `pic-sure.yaml` and `.pic-sure/`.
   `initialized_at` (034) when init finished.
   No secrets. `StartOperation` and
   `FinishOperation` take the time from the caller (`Deps.Clock`).
-  `LoadState` wraps `fs.ErrNotExist` before init saves it.
+  `LoadState` wraps `fs.ErrNotExist` before init saves it. `PeekState(dir)`
+  reads it without opening the stack (nil when there is none).
 - **Lock.** `Lock(ctx, LockOptions{Wait, Command, OnWait})` takes an flock
   on `.pic-sure/lock` for a mutating command's whole run. If another
   process holds it, Lock fails with `ErrLocked` naming the holder (command
@@ -1279,8 +1283,7 @@ init, and the parts `up` and `update` reuse.
   `Stack`: `memory` counts its HPDS heap once (a running hpds of a stack of
   that name is taken for it).
 - `Summary` is init's report (URL, Auth0 URLs, token expiry, next steps);
-  `stack.PeekState(dir)` (moved to stack in 084) reads state.json without
-  opening the stack.
+  `stack.PeekState(dir)` reads state.json without opening the stack.
 
 **Up (035, `up.go`).** §9.2. `UpSteps(d, st, cfg, sec, state,
 ConvergeOptions)` is init's plan with a `restart` step before `start`:
@@ -1772,13 +1775,14 @@ labelled `stack=<name>`, each a `Resource` with its labels and its
 stack init hasn't made, which owns nothing). `Published` holds the host
 ports of the stack's own containers. `CheckOwnership(ctx, d, st, name)` is
 the check every command that changes the stack's Docker resources makes:
-`NoteMoved` warns "stack moved from A; adopting its resources" while a
-container or network still carries A (volumes keep it for good, so they
-alone don't repeat the note), and any
+`NoteMoved` warns "stack moved from A; adopting its resources" until a
+container or network of the stack's own carries the new directory
+(volumes keep A for good), and any
 foreign resource is exit 3 (`Ownership.Err`) listing each with its owner
 (`ResourceList`). `ResourceRef` is a resource as `status`'s `foreign` and
 destroy's `left_alone` give it. `DevImages(ctx, d, name)` lists the
-`dev-<name>-*` images that carry stack labels, for init. Dev image builds carry the stack's labels
+`dev-<name>-*` images that carry stack labels, for init. Dev image builds
+carry the stack's labels
 (`StackLabels` on `ImageBuildOptions` and `ReactorOptions`), and
 `checkImageOwner` refuses to build over another stack's labelled image;
 one without stack labels predates them and is taken as the stack's.
@@ -1791,7 +1795,8 @@ own or adopted (084), selected by label, never by name. `Reset` makes the
 ownership check first, so in a copy it is exit 3 before anything changes.
 `Destroy` with any foreign resource (a copy, or another stack of the same
 name) runs only the `files` step, lists those resources in `LeftAlone`
-and warns with any of its own it therefore leaves; dev images labelled for another stack are left with a
+and warns with any of its own it therefore leaves; dev images labelled for
+another stack are left with a
 warning. A volume
 whose `com.docker.compose.volume` is a catalog `SharedData` or
 `HostScoped` volume is never removed, whatever its labels.

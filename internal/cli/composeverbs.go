@@ -233,8 +233,18 @@ the stack does.`,
 			if err != nil {
 				return err
 			}
+			// -p pins the project the ownership check covers: it beats a
+			// name: in a file added with -f and COMPOSE_PROJECT_NAME in an
+			// --env-file.
+			cfg, err := st.LoadConfig()
+			switch {
+			case err == nil:
+				args = append([]string{"-p", cfg.Name}, args...)
+			case commandClass(cmd) != stack.ReadOnly:
+				return configError(err)
+			}
 			if commandClass(cmd) != stack.ReadOnly {
-				if err := checkOwnedStack(cmd, d, st); err != nil {
+				if err := checkOwned(cmd, d, st, cfg); err != nil {
 					return err
 				}
 			}

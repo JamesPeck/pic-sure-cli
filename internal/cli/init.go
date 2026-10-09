@@ -751,7 +751,11 @@ func (r *initRun) checkName(ctx context.Context) (*ops.Ownership, error) {
 		msg = append(msg, fmt.Sprintf("the stack name %s is in use by other Docker resources, which pic-sure won't touch:\n%s",
 			r.cfg.Name, ops.ResourceList(ops.Refs(others))))
 	}
-	return nil, exitcode.Precondition("%s\nChoose another --name, or remove them", strings.Join(msg, "\n"))
+	closing := "Choose another --name"
+	if len(others) == 0 {
+		closing = "Or choose another --name"
+	}
+	return nil, exitcode.Precondition("%s\n%s", strings.Join(msg, "\n"), closing)
 }
 
 // removeCommands are the docker commands that remove resources: containers

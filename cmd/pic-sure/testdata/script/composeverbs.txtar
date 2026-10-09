@@ -100,12 +100,13 @@ stdout '"type":"step_done","id":"logs","status":"ok"'
 stdout '"type":"result","ok":true'
 grep '--env-file /dev/null logs --follow$' $WORK/docker.log
 
-# compose: passthrough with the stack's files and env; compose's exit code.
+# compose: passthrough with the stack's files and env, pinned to the
+# stack's project; compose's exit code.
 exec pic-sure compose -- ps -a
 stdout 'raw compose ps'
-grep '--env-file /dev/null ps -a$' $WORK/docker.log
+grep '--env-file /dev/null -p demo ps -a$' $WORK/docker.log
 exitcode 4 pic-sure compose -- top
-grep '--env-file /dev/null top$' $WORK/docker.log
+grep '--env-file /dev/null -p demo top$' $WORK/docker.log
 exitcode 2 pic-sure compose ps
 stderr 'put -- and then the docker compose arguments'
 exitcode 2 pic-sure compose --

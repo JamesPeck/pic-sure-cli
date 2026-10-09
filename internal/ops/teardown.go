@@ -53,6 +53,9 @@ type TeardownReport struct {
 	// LeftAlone lists another stack's resources that use this stack's
 	// name, which destroy in a copy of that stack leaves alone.
 	LeftAlone []ResourceRef `json:"left_alone,omitempty"`
+	// LeftOwn lists the stack's own resources destroy in a copy leaves
+	// with them, since compose down would reach the other stack's.
+	LeftOwn []ResourceRef `json:"left_own,omitempty"`
 	// Pruned is what --prune-images removed.
 	Pruned *PruneReport `json:"pruned,omitempty"`
 }
@@ -128,9 +131,10 @@ func Destroy(ctx context.Context, d *Deps, st *stack.Stack, opts TeardownOptions
 	if report.LeftAlone = Refs(owned.Foreign()); len(report.LeftAlone) > 0 {
 		d.Sink.Emit(events.Warning{ID: StepFiles, Text: fmt.Sprintf("the stack name %s is in use by another stack's Docker resources, so destroy removes only this directory's files and leaves these alone:\n%s",
 			opts.Name, ResourceList(report.LeftAlone))})
-		if own := Refs(slices.DeleteFunc(slices.Clone(owned.Resources), func(r Resource) bool { return r.Claim == stack.Foreign })); len(own) > 0 {
+		report.LeftOwn = Refs(slices.DeleteFunc(slices.Clone(owned.Resources), func(r Resource) bool { return r.Claim == stack.Foreign }))
+		if len(report.LeftOwn) > 0 {
 			d.Sink.Emit(events.Warning{ID: StepFiles, Text: fmt.Sprintf("this stack's own Docker resources are left too, since compose down would reach the other stack's; remove them with docker once that is sorted out:\n%s",
-				ResourceList(own))})
+				ResourceList(report.LeftOwn))})
 		}
 	} else {
 		plan = []steps.Step{

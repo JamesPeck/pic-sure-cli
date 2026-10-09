@@ -57,8 +57,11 @@ func Owner(id, dir string, labels map[string]string) Claim {
 // sameDir reports whether the labelled directory is dir, also through a
 // symlink left at the old path after a move.
 func sameDir(labelDir, dir string) bool {
-	if labelDir == "" || labelDir == dir {
-		return labelDir != ""
+	if labelDir == "" {
+		return false
+	}
+	if labelDir == dir {
+		return true
 	}
 	r, err := filepath.EvalSymlinks(labelDir)
 	return err == nil && r == dir

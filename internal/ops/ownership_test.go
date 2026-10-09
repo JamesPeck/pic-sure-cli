@@ -78,19 +78,21 @@ func TestStackResources(t *testing.T) {
 	}
 }
 
-func TestNoteMovedOnlyForContainersAndNetworks(t *testing.T) {
-	moved := func(kind string) ops.Resource {
-		return ops.Resource{ResourceRef: ops.ResourceRef{Kind: kind, StackDir: "/stacks/a"}, Claim: stack.Moved}
+func TestNoteMovedUntilTheStackRunsInItsNewDirectory(t *testing.T) {
+	res := func(kind string, claim stack.Claim) ops.Resource {
+		return ops.Resource{ResourceRef: ops.ResourceRef{Kind: kind, StackDir: "/stacks/a"}, Claim: claim}
 	}
 	var rec events.Recorder
-	// After the first up only the volumes keep the old directory.
-	ops.NoteMoved(&rec, &ops.Ownership{Resources: []ops.Resource{moved("volume"), moved("volume")}})
-	if n := len(rec.Events()); n != 0 {
-		t.Errorf("%d notes for moved volumes alone, want none", n)
-	}
-	ops.NoteMoved(&rec, &ops.Ownership{Resources: []ops.Resource{moved("container"), moved("network"), moved("volume")}})
+	// Moved after down: only the volumes are there, and they are noted.
+	ops.NoteMoved(&rec, &ops.Ownership{Resources: []ops.Resource{res("volume", stack.Moved), res("volume", stack.Moved)}})
 	if ev := rec.Events(); len(ev) != 1 || ev[0].(events.Warning).Text != "stack moved from /stacks/a; adopting its resources" {
 		t.Errorf("notes %v, want one", ev)
+	}
+	// After up the containers carry the new directory; the volumes keep
+	// the old one for good, and aren't noted again.
+	ops.NoteMoved(&rec, &ops.Ownership{Resources: []ops.Resource{res("container", stack.Own), res("volume", stack.Moved)}})
+	if n := len(rec.Events()); n != 1 {
+		t.Errorf("%d notes once the stack runs in its new directory, want none more", n-1)
 	}
 }
 

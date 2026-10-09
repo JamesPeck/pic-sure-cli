@@ -193,13 +193,16 @@ func CheckOwnership(ctx context.Context, d *Deps, st *stack.Stack, name string) 
 }
 
 // NoteMoved emits a note for each directory the stack moved from whose
-// containers or networks it adopts. Those are recreated with the new
-// directory on the next up; volumes keep the old one for good, so they
-// alone don't repeat the note on every command.
+// resources it adopts, until the stack runs in its new directory: volumes
+// keep the old directory for good, so once a container or network carries
+// the new one the note would only repeat on every command.
 func NoteMoved(sink events.Sink, o *Ownership) {
+	if slices.ContainsFunc(o.Resources, func(r Resource) bool { return r.Claim == stack.Own && r.Kind != "volume" }) {
+		return
+	}
 	var dirs []string
 	for _, r := range o.Moved() {
-		if dir := r.StackDir; r.Kind != "volume" && !slices.Contains(dirs, dir) {
+		if dir := r.StackDir; !slices.Contains(dirs, dir) {
 			dirs = append(dirs, dir)
 			sink.Emit(events.Warning{Text: "stack moved from " + dir + "; adopting its resources"})
 		}
