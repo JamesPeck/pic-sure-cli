@@ -38,6 +38,17 @@ stdout '"type":"step_done","id":"down","status":"ok"'
 stdout '^\{"type":"result","ok":true\}$'
 grep '--progress json down --remove-orphans$' $WORK/docker.log
 
+# A helper container a killed command left that can't be removed doesn't
+# stop compose down; the command still fails, naming it.
+exec sh -c 'sed "s|@DIR@|$(pwd -P)|g" $WORK/helpers.tmpl >$WORK/helpers.json'
+exec sh -c 'cat $WORK/helperfail.scenario $WORK/docker.scenario >$WORK/s && mv $WORK/s $WORK/docker.scenario'
+rm $WORK/docker.log
+exitcode 1 pic-sure --plain down
+stderr 'couldn''t remove container demo-dictionaryetl-0a1b2c3d, which an earlier run left'
+stderr 'couldn''t remove containers demo-dictionaryetl-0a1b2c3d'
+grep '^docker rm -v -f demo-dictionaryetl-0a1b2c3d$' $WORK/docker.log
+grep 'down --remove-orphans$' $WORK/docker.log
+
 # A compose failure is exit 1 with compose's message, and a failed step.
 exitcode 1 pic-sure --json restart nosuch
 stderr 'no such service: nosuch'
@@ -189,6 +200,13 @@ exec sh -c 'grep -rq "compose.* logs (1 more arguments)" stack/.pic-sure/logs'
 exec sh -c '! grep -rq nosuch stack/.pic-sure/logs'
 exec sh -c '! grep -rE "started|no such service" stack/.pic-sure/logs'
 
+-- helperfail.scenario --
+docker ps --all --no-trunc --filter label=org.hms-dbmi.picsure.stack=demo --format * => 0 stdout=helpers.json times=1
+docker rm -v -f demo-dictionaryetl-0a1b2c3d => 1 stderr=rmfail.txt times=1
+-- rmfail.txt --
+Error response from daemon: removal of container demo-dictionaryetl-0a1b2c3d is already in progress
+-- helpers.tmpl --
+{"Names":"demo-dictionaryetl-0a1b2c3d","Ports":"","Labels":{"org.hms-dbmi.picsure.stack":"demo","org.hms-dbmi.picsure.stack-dir":"@DIR@","org.hms-dbmi.picsure.stack-id":"","com.docker.compose.project":""}}
 -- docker.scenario --
 docker compose * --progress plain down --remove-orphans => 0 stderr=down.txt
 docker compose * --progress json down --remove-orphans => 0 stderr=down.json

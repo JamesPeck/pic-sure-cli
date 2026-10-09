@@ -1533,13 +1533,14 @@ concatenate its step lists with their own and end with one `RefreshStep()`.
   `concepts_*.csv` files, at any depth, in name order, split by exact
   `dataset_ref` into a temp dir, one pass per 200 datasets (`LoadCSVOptions.TempDir`; the cli
   uses the cache's), then one PUT per dataset, `datasetRef` URL-encoded. `FacetSteps`: `facets`, three PUTs in order.
-  It reads the files first (`checkFacetFiles`, 095) and streams them
-  afterwards, byte order mark dropped (`openWithoutBOM`):
-  the categories and facets files need dictionary-etl's columns
+  It checks the files first and keeps them open until `Close`
+  (`openFacetFiles`, 095), so what is sent is what was checked; each is
+  sent from the start, byte order mark dropped (`withoutBOM`). The
+  categories and facets files need dictionary-etl's columns
   (`name(unique)`, `facet_name(unique)`; AIO's custom fixtures predate
   them and the ETL answers 400) and at least one row, no row narrower
-  than its header (the ETL would skip it), and no file a column twice; otherwise exit 2 before
-  HPDS or the dictionary is touched.
+  than its header (the ETL would skip it), and no file a column twice;
+  otherwise exit 2 before HPDS or the dictionary is touched.
   `FacetConfigSteps(json)` (046): `facet-config`, POST
   `/api/facet/loader/load`; the answer must be the ETL's JSON result.
   `Preflight(ctx, WeightsOptions)` (046) checks what hydrate and weights

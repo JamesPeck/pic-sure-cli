@@ -801,3 +801,27 @@ func TestDictionaryRemovesALeftoverETLFirst(t *testing.T) {
 		}
 	}
 }
+
+func TestFacetStepsSendWhatTheyChecked(t *testing.T) {
+	x := newDictFixture(t)
+	x.stackUp()
+	opts := writeFacets(t, t.TempDir())
+	d := x.dict()
+	list, err := d.FacetSteps(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The file is replaced while HPDS loads.
+	if err := os.Remove(opts.Facets); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(opts.Facets, []byte("facet_name\nold\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.runSteps(context.Background(), list, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(x.curlCalls()[1].Stdin); got != facetsCSV {
+		t.Errorf("sent %q, want the checked %q", got, facetsCSV)
+	}
+}

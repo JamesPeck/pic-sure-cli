@@ -590,6 +590,10 @@ func TestResolveStopsWhenCanceledDuringExtraction(t *testing.T) {
 			if !errors.Is(err, context.Canceled) {
 				t.Fatalf("Resolve error = %v; want context.Canceled", err)
 			}
+			// An interrupt isn't a problem with the input.
+			if ie := (*phenoinput.InputError)(nil); errors.As(err, &ie) {
+				t.Fatalf("Resolve error = %v is an *InputError", err)
+			}
 			assertNoRunDirs(t, tempDir)
 		})
 	}

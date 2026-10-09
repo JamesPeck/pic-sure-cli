@@ -318,13 +318,23 @@ var (
 	facetColumns         = []string{"facet_category", "facet_name(unique)", "display_name", "description", "parent_name"}
 )
 
-// checkFacetFiles reads and checks the three facet files. The ETL answers
-// 400 to a categories or facets file without its columns (such as AIO's
-// fixtures from before name(unique)) or without rows, and skips a row
-// narrower than its header, which is refused here rather than lost.
-// Problems are usage errors.
-func checkFacetFiles(opts FacetOptions) error {
-	for _, f := range []struct {
+// openFacetFiles opens and checks the categories, facets and facet
+// concepts files, in that order, and returns them open, so what is sent
+// is what was checked even if a path changes during a long HPDS load. The
+// ETL answers 400 to a categories or facets file without its columns
+// (such as AIO's fixtures from before name(unique)) or without rows, and
+// skips a row narrower than its header, which is refused here rather than
+// lost. Problems are usage errors.
+func openFacetFiles(opts FacetOptions) (_ []*os.File, err error) {
+	var files []*os.File
+	defer func() {
+		if err != nil {
+			for _, f := range files {
+				_ = f.Close()
+			}
+		}
+	}()
+	for _, c := range []struct {
 		what, path string
 		columns    []string
 		needRows   bool
@@ -333,34 +343,33 @@ func checkFacetFiles(opts FacetOptions) error {
 		{"facets", opts.Facets, facetColumns, true},
 		{"facet concepts", opts.Concepts, nil, false},
 	} {
-		in, err := openWithoutBOM(f.path)
+		f, err := os.Open(c.path)
 		if err != nil {
-			return exitcode.Usage("%s: %w", f.what, err)
+			return nil, exitcode.Usage("%s: %w", c.what, err)
 		}
-		err = checkFacetCSV(in, f.columns, f.needRows)
-		_ = in.Close()
+		files = append(files, f)
+		in, err := withoutBOM(f)
+		if err == nil {
+			err = checkFacetCSV(in, c.columns, c.needRows)
+		}
 		if err != nil {
-			return exitcode.Usage("%s file %s: %w", f.what, f.path, err)
+			return nil, exitcode.Usage("%s file %s: %w", c.what, c.path, err)
 		}
 	}
-	return nil
+	return files, nil
 }
 
-// openWithoutBOM opens path, skipping a leading byte order mark, which the
-// ETL would take as part of the first header.
-func openWithoutBOM(path string) (io.ReadCloser, error) {
-	f, err := os.Open(path)
-	if err != nil {
+// withoutBOM rewinds f and returns a reader of it that skips a leading
+// byte order mark, which the ETL would take as part of the first header.
+func withoutBOM(f *os.File) (io.Reader, error) {
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		return nil, err
 	}
 	br := bufio.NewReader(f)
 	if head, _ := br.Peek(len(bom)); string(head) == bom {
 		_, _ = br.Discard(len(bom))
 	}
-	return struct {
-		io.Reader
-		io.Closer
-	}{br, f}, nil
+	return br, nil
 }
 
 // checkFacetCSV parses a facet file: its header must have columns and no
@@ -368,7 +377,6 @@ func openWithoutBOM(path string) (io.ReadCloser, error) {
 func checkFacetCSV(data io.Reader, columns []string, needRows bool) error {
 	r := csv.NewReader(data)
 	r.FieldsPerRecord = -1
-	r.ReuseRecord = true
 	header, err := r.Read()
 	if errors.Is(err, io.EOF) {
 		return errors.New("the file is empty")
