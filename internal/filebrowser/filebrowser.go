@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
+	"syscall"
 
 	"charm.land/bubbles/v2/filepicker"
 	"charm.land/bubbles/v2/key"
@@ -67,6 +69,28 @@ type Model struct {
 	// pick, from the read that let the user enter it. The filepicker keeps its
 	// entries private.
 	hasSelectable bool
+
+	// reading is set while a directory read is in flight. Until it lands the
+	// filepicker lists the previous directory under the new path, so keys
+	// that act on the listing would pick stale entries.
+	reading bool
+	id      int64
+}
+
+var lastID atomic.Int64
+
+// readDoneMsg carries the filepicker's directory read back through Update,
+// so the wrapper knows when the listing matches CurrentDirectory again.
+type readDoneMsg struct {
+	id  int64
+	msg tea.Msg
+}
+
+func (m Model) trackRead(cmd tea.Cmd) tea.Cmd {
+	if cmd == nil {
+		return nil
+	}
+	return func() tea.Msg { return readDoneMsg{id: m.id, msg: cmd()} }
 }
 
 // New builds a Model from opts. Call Init to start the filepicker's read.
@@ -86,7 +110,7 @@ func New(opts Options) Model {
 	if opts.DirMode {
 		fp.DirAllowed = true
 		fp.FileAllowed = false
-		// No file name ends in "/", so the filepicker draws every file dimmed.
+		// No file name ends in "/", so the filepicker draws files as disabled.
 		fp.AllowedTypes = []string{"/"}
 	} else {
 		fp.DirAllowed = false
@@ -97,9 +121,9 @@ func New(opts Options) Model {
 	fp.Styles.Cursor = fp.Styles.Cursor.Foreground(styles.Brand)
 	fp.Styles.Selected = lipgloss.NewStyle().Foreground(styles.Brand).Bold(true)
 
-	m := Model{fp: fp, title: opts.Title, dirMode: opts.DirMode}
+	m := Model{fp: fp, title: opts.Title, dirMode: opts.DirMode, reading: true, id: lastID.Add(1)}
 	if entries, err := os.ReadDir(start); err != nil {
-		m.err = &readError{dir: start, err: err}
+		m.err = &readError{path: start, err: err}
 	} else {
 		m.hasSelectable = m.anySelectable(entries)
 	}
@@ -108,7 +132,7 @@ func New(opts Options) Model {
 
 // Init starts the initial directory read.
 func (m Model) Init() tea.Cmd {
-	return m.fp.Init()
+	return m.trackRead(m.fp.Init())
 }
 
 // SetSize lays the picker out in a w×h box.
@@ -133,15 +157,28 @@ func (m *Model) SetSize(w, h int) {
 // silently keeps the old listing when the read fails, so Update reads the
 // target first and doesn't pass the key on when it can't be read.
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
+	if r, ok := msg.(readDoneMsg); ok {
+		if r.id != m.id {
+			return m, nil
+		}
+		m.reading = false
+		msg = r.msg
+	}
+
+	navigating := false
 	if k, ok := msg.(tea.KeyPressMsg); ok {
 		if m.dirMode && key.Matches(k, m.fp.KeyMap.Select) {
 			m.selectDir(m.fp.CurrentDirectory)
 			return m, nil
 		}
+		if m.reading && (key.Matches(k, m.fp.KeyMap.Back) || key.Matches(k, m.fp.KeyMap.Open)) {
+			return m, nil
+		}
 		if target, ok := m.navTarget(k); ok {
+			navigating = true
 			entries, err := os.ReadDir(target)
 			if err != nil {
-				m.err = &readError{dir: target, err: err}
+				m.err = &readError{path: target, err: err}
 				return m, nil
 			}
 			m.err = nil
@@ -151,10 +188,19 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 
 	var cmd tea.Cmd
 	m.fp, cmd = m.fp.Update(msg)
+	if navigating && cmd != nil {
+		m.reading = true
+		cmd = m.trackRead(cmd)
+	}
 
 	if ok, path := m.fp.DidSelectFile(msg); ok {
 		if abs, err := filepath.Abs(path); err == nil {
 			path = abs
+		}
+		// A read that failed after navTarget's leaves a stale listing.
+		if _, err := os.Stat(path); err != nil {
+			m.err = &readError{path: path, err: err}
+			return m, cmd
 		}
 		m.selectedPath = path
 		m.selected = true
@@ -189,7 +235,7 @@ func (m Model) navTarget(k tea.KeyPressMsg) (string, bool) {
 // selectDir selects dir if it can still be read.
 func (m *Model) selectDir(dir string) {
 	if _, err := os.ReadDir(dir); err != nil {
-		m.err = &readError{dir: dir, err: err}
+		m.err = &readError{path: dir, err: err}
 		return
 	}
 	if abs, err := filepath.Abs(dir); err == nil {
@@ -240,8 +286,6 @@ func (m Model) View() string {
 	return b.String()
 }
 
-// pathHeader renders the current directory, left-elided to the box width so
-// the end of a deep path stays visible.
 func (m Model) pathHeader() string {
 	path := m.fp.CurrentDirectory
 	if m.w > 0 {
@@ -261,8 +305,6 @@ func (m Model) navHint() string {
 	return hintStyle.Render(hint)
 }
 
-// statusLine is an error if there is one, otherwise a notice when a file-mode
-// directory holds nothing selectable.
 func (m Model) statusLine() string {
 	var line string
 	switch {
@@ -339,10 +381,10 @@ func (e *selectError) Error() string {
 	return "cannot select " + filepath.Base(e.path) + ": not an allowed file type"
 }
 
-// readError reports a directory the user can't read.
+// readError reports a path the user can't read.
 type readError struct {
-	dir string
-	err error
+	path string
+	err  error
 }
 
 func (e *readError) Error() string {
@@ -351,11 +393,12 @@ func (e *readError) Error() string {
 	if errors.As(e.err, &pe) {
 		reason = pe.Err
 	}
-	msg := "can't read " + filepath.Base(e.dir) + ": " + reason.Error()
-	if runtime.GOOS == "darwin" && errors.Is(e.err, fs.ErrPermission) {
-		msg += " (check the terminal's file access in macOS Privacy & Security)"
+	name := filepath.Base(e.path)
+	// macOS privacy protection (TCC) refuses with EPERM; mode bits give EACCES.
+	if runtime.GOOS == "darwin" && errors.Is(e.err, syscall.EPERM) {
+		return "can't read " + name + ": give the terminal access in Privacy & Security"
 	}
-	return msg
+	return "can't read " + name + ": " + reason.Error()
 }
 
 func (e *readError) Unwrap() error { return e.err }

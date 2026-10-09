@@ -1,9 +1,12 @@
 package filebrowser
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -56,7 +59,7 @@ func TestNewDirMode(t *testing.T) {
 	if m.fp.FileAllowed {
 		t.Error("FileAllowed should be false in dir mode")
 	}
-	if m.fp.AllowedTypes[0] != "/" || len(m.fp.AllowedTypes) != 1 {
+	if len(m.fp.AllowedTypes) != 1 || m.fp.AllowedTypes[0] != "/" {
 		t.Errorf("AllowedTypes = %v in dir mode, want [/] so files are dimmed", m.fp.AllowedTypes)
 	}
 }
@@ -256,8 +259,6 @@ func TestViewNoPanicAtVariousSizes(t *testing.T) {
 }
 
 func TestViewBeforeInitNoPanic(t *testing.T) {
-	// Exercises the un-warmed-cache fallback path in dirHasSelectable: View runs
-	// before any Update has scanned the directory.
 	dir := t.TempDir()
 	m := New(Options{StartDir: dir, Title: "Pick", AllowedExts: []string{".csv"}})
 	_ = m.View() // unsized, un-inited
@@ -293,9 +294,7 @@ func TestViewHeaderReflectsNavigation(t *testing.T) {
 	m.SetSize(120, 20)
 	m = drainInit(t, m)
 
-	// Simulate descending into the subdir the way the filepicker does on open.
-	m.fp.CurrentDirectory = sub
-	m, _ = m.Update(tea.KeyPressMsg{}) // re-warm caches against the new dir
+	m, _ = m.Update(keyRight)
 
 	if !strings.Contains(m.View(), "demo-data") {
 		t.Errorf("View() header should reflect navigation into %q; got:\n%s", sub, m.View())
@@ -359,7 +358,6 @@ func TestPathHeaderLeftElidedToWidth(t *testing.T) {
 	m.SetSize(boxW, 20)
 	m = drainInit(t, m)
 	m.fp.CurrentDirectory = deep
-	m, _ = m.Update(tea.KeyPressMsg{})
 
 	header := strings.SplitN(m.View(), "\n", 2)[0]
 	if w := lipgloss.Width(header); w > boxW {
@@ -581,5 +579,57 @@ func TestSelectRemovedFileIsRefused(t *testing.T) {
 
 	if path, ok := m.Selected(); ok {
 		t.Errorf("Selected() = %q for a removed file, want none", path)
+	}
+}
+
+func TestNavigationKeysWaitForTheRead(t *testing.T) {
+	root := t.TempDir()
+	child := filepath.Join(root, "child")
+	mkdirs(t, child)
+	writeFiles(t, filepath.Join(child, "a.csv"))
+
+	m := New(Options{StartDir: child, AllowedExts: []string{".csv"}})
+	m.SetSize(80, 20)
+	m = drainInit(t, m)
+
+	// Back, then Enter before the parent's read lands: the listing still holds
+	// child's a.csv, which doesn't exist in root.
+	m, cmd := m.Update(keyLeft)
+	m, _ = m.Update(keyEnter)
+	if path, ok := m.Selected(); ok {
+		t.Fatalf("Enter during the read selected %q", path)
+	}
+	m, _ = m.Update(cmd())
+	if m.Dir() != root {
+		t.Fatalf("Dir() = %q, want %q", m.Dir(), root)
+	}
+	m, _ = m.Update(keyEnter) // opens child, the only entry
+	if m.Dir() != child {
+		t.Errorf("after the read, Enter opened %q, want %q", m.Dir(), child)
+	}
+}
+
+func TestReadFromAnotherBrowserIgnored(t *testing.T) {
+	dir := t.TempDir()
+	other := New(Options{StartDir: dir})
+	m := New(Options{StartDir: dir})
+	m, _ = m.Update(other.Init()())
+	if !m.reading {
+		t.Error("another browser's read ended this one's")
+	}
+}
+
+func TestReadErrorMacOSPrivacyHint(t *testing.T) {
+	tcc := (&readError{path: "/Users/x/Documents", err: &fs.PathError{Op: "open", Path: "/Users/x/Documents", Err: syscall.EPERM}}).Error()
+	mode := (&readError{path: "/tmp/a-locked", err: &fs.PathError{Op: "open", Path: "/tmp/a-locked", Err: syscall.EACCES}}).Error()
+	if mode != "can't read a-locked: permission denied" {
+		t.Errorf("EACCES: %q", mode)
+	}
+	want := "can't read Documents: operation not permitted"
+	if runtime.GOOS == "darwin" {
+		want = "can't read Documents: give the terminal access in Privacy & Security"
+	}
+	if tcc != want {
+		t.Errorf("EPERM: %q, want %q", tcc, want)
 	}
 }

@@ -57,7 +57,7 @@ func TestLoadWizardOnARealStackUnderPTY(t *testing.T) {
 		s.send(keyDown + keyEnter)
 		w.wait(10*time.Second, "Select the directory of phenotype CSVs", "1-pheno-dir")
 		s.send(keyRight)
-		capture("directory browser", 10*time.Second, "1-pheno-dir", "enter use current dir")
+		capture("directory browser", 10*time.Second, "/1-pheno-dir", "enter use current dir")
 		s.send(keyEnter)
 		capture("heap", 30*time.Second, "JVM heap size (MB)", "8000")
 		s.send(keyEnter)
