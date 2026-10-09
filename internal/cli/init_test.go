@@ -185,6 +185,48 @@ func TestInitWritesTheConfigSecretsAndState(t *testing.T) {
 	}
 }
 
+func TestResumedInitRereadsTheConfigUnderTheLock(t *testing.T) {
+	r, err := newInitRun(t, "", "", "--name", "demo", "--admin-email", "admin@example.com", "--auth-mode", "open",
+		"--http-port", "8083", "--https-port", "8443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.rel = &release.Release{Repo: "https://example.com/release-control", Branch: "main", Commit: strings.Repeat("a", 40)}
+	if err := r.writeConfig(context.Background(), r.d.Sink); err != nil {
+		t.Fatal(err)
+	}
+	_ = r.lock.Unlock()
+	r.lock = nil
+
+	r2, err := newInitRun(t, r.dir, "", "--name", "demo")
+	if err != nil || !r2.resumed {
+		t.Fatalf("resume: err %v, resumed %v", err, r2.resumed)
+	}
+	// A config set lands after the resumed init read pic-sure.yaml, and
+	// before it takes the lock.
+	doc, err := r.st.ReadConfigDoc()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := doc.Set("hpds.java_opts", "-Xmx3g"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := doc.Bytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.st.WriteConfig(data); err != nil {
+		t.Fatal(err)
+	}
+	r2.rel = r.rel
+	if err := r2.writeConfig(context.Background(), r2.d.Sink); err != nil {
+		t.Fatal(err)
+	}
+	if r2.cfg.HPDS.JavaOpts != "-Xmx3g" {
+		t.Errorf("resumed init runs with java_opts %q, not the value set before the lock", r2.cfg.HPDS.JavaOpts)
+	}
+}
+
 func TestInitWritesTheSetValues(t *testing.T) {
 	r, err := newInitRun(t, "", "", "--name", "demo", "--admin-email", "admin@example.com", "--auth-mode", "open",
 		"--set", "hpds.java_opts=-Xmx2g", "--set", "network.dev_ports.base=16000", "--set", "dev.services=hpds,psama")

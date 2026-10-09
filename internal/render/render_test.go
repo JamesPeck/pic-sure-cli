@@ -342,16 +342,10 @@ func TestProxyCredentialsStayOutOfCompose(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var settings *File
-	for i, f := range files {
-		if f.Path == FilesDir+"/maven/settings.xml" {
-			settings = &files[i]
-		} else if bytes.Contains(f.Data, []byte("pr0xyPass")) {
+	for _, f := range files {
+		if bytes.Contains(f.Data, []byte("pr0xyPass")) {
 			t.Errorf("%s holds the proxy password", f.Path)
 		}
-	}
-	if settings == nil || settings.Perm != 0o600 || !bytes.Contains(settings.Data, []byte("pr0xyPass")) {
-		t.Errorf("settings.xml should be 0600 with the proxy credentials: %+v", settings)
 	}
 	compose := string(files[0].Data)
 	if !strings.Contains(compose, "-Dhttps.proxyHost=proxy.example.org") {
@@ -552,35 +546,30 @@ func TestWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	in := goldenInput(goldenCase{proxy: true})
+	in := goldenInput(goldenCase{})
 	in.StackDir = st.Dir
 	files, err := Render(in)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := Write(st, files); err != nil {
+	// Older versions rendered settings.xml; the next render removes it.
+	settings := FilesDir + "/maven/settings.xml"
+	if err := Write(st, append(slices.Clone(files), File{Path: settings, Data: []byte("<settings/>"), Perm: 0o600})); err != nil {
 		t.Fatal(err)
 	}
-	settings := FilesDir + "/maven/settings.xml"
-	fi, err := os.Stat(st.Path(settings))
-	if err != nil || fi.Mode().Perm() != 0o600 {
-		t.Fatalf("settings.xml: %v %v", fi, err)
+	if _, err := os.Stat(st.Path(settings)); err != nil {
+		t.Fatal(err)
 	}
 	// A file under render/ that pic-sure didn't create survives a re-render.
 	if err := os.WriteFile(st.Path(FilesDir+"/mine.txt"), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	in.Config.Proxy = stack.Proxy{}
-	files, err = Render(in)
-	if err != nil {
-		t.Fatal(err)
-	}
 	if err := Write(st, files); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(st.Path(settings)); !errors.Is(err, fs.ErrNotExist) {
-		t.Errorf("settings.xml should be gone without a proxy: %v", err)
+		t.Errorf("a file the last render didn't produce should be gone: %v", err)
 	}
 	if _, err := os.Stat(st.Path(FilesDir + "/mine.txt")); err != nil {
 		t.Errorf("an operator's file was removed: %v", err)

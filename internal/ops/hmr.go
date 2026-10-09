@@ -142,7 +142,11 @@ func HMRVolumeStep(d *Deps, st *stack.Stack, cfg *stack.Config, user string) ste
 				Args:    []string{"sh", "-c", hmrVolumeScript, "sh", user},
 				Stderr:  &stderr,
 			})
-			if err == nil && code != 0 {
+			if err != nil {
+				// docker run was interrupted or failed, but its container
+				// may still be there, and chowning the volume.
+				_ = d.Docker.Rm(context.WithoutCancel(ctx), name, true)
+			} else if code != 0 {
 				err = fmt.Errorf("the helper container exited %d: %s", code, strings.TrimSpace(stderr.String()))
 			}
 			if err != nil {

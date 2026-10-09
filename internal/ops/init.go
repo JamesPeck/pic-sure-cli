@@ -50,25 +50,66 @@ type ConvergeOptions struct {
 // InitStepIDs are the IDs of InitSteps for a stack with config cfg, in
 // order, so init can check --skip-step before it creates anything.
 func InitStepIDs(cfg *stack.Config) []string {
-	ids := []string{ResolveStepID, ImagesStepID, TLSStepID, TruststoreStepID, RenderStepID, StepDB}
-	if cfg.DB.Mode == stack.DBRemote {
-		ids = append(ids, StepDBBootstrap)
-	}
-	return append(ids, StepMigrate, StepSeed, HPDSKeyStepID, StartStepID)
+	return append([]string{ResolveStepID}, planStepIDs(cfg, false)...)
 }
 
 // InitSteps are §9.1 steps 4 to 12, for init once it has written the
-// config, secrets and state: resolve the component commits, build the
-// images, install TLS and the truststore, render, then ConvergeSteps.
-// state is updated in place as the steps record into state.json.
+// config, secrets and state: resolve the component commits, then planSteps
+// without up's restart step. state is updated in place as the steps record
+// into state.json.
 func InitSteps(d *Deps, st *stack.Stack, cfg *stack.Config, sec *stack.Secrets, state *stack.State, opts ConvergeOptions) []steps.Step {
-	return append([]steps.Step{
-		ResolveStep(d, st, cfg, state, opts.Cache),
-		ImagesStep(d, st, cfg, state, ImagesOptions{Cache: opts.Cache}),
-		TLSStep(d, st, cfg),
-		StackTruststoreStep(d, st, cfg, state),
-		RenderStep(d, st, cfg, state, opts),
-	}, ConvergeSteps(d, st, cfg, sec, opts)...)
+	images := ImagesStep(d, st, cfg, state, ImagesOptions{Cache: opts.Cache})
+	return append([]steps.Step{ResolveStep(d, st, cfg, state, opts.Cache)},
+		planSteps(d, st, cfg, sec, state, opts, images, nil)...)
+}
+
+// planStepIDs are the IDs of planSteps, with the restart step when restart
+// is set.
+func planStepIDs(cfg *stack.Config, restart bool) []string {
+	ids := []string{ImagesStepID}
+	if hmrOn(cfg) {
+		ids = append(ids, NodeImageStepID)
+	}
+	ids = append(ids, TLSStepID, TruststoreStepID, RenderStepID, StepDB)
+	if cfg.DB.Mode == stack.DBRemote {
+		ids = append(ids, StepDBBootstrap)
+	}
+	ids = append(ids, StepMigrate, StepSeed, HPDSKeyStepID)
+	if restart {
+		ids = append(ids, RestartStepID)
+	}
+	if hmrOn(cfg) && HostUser() != "" {
+		ids = append(ids, HMRVolumeStepID)
+	}
+	return append(ids, StartStepID)
+}
+
+// planSteps are the steps init, up and update share after resolving the
+// components, with images as the image step: the images (and httpd-hmr's
+// Node tag), TLS and the truststore, a fresh render, then ConvergeSteps,
+// with httpd-hmr's volume step before start. With r set (up and update),
+// the TLS, truststore and render steps record the restarts they call for
+// and r's restart step runs them before start.
+func planSteps(d *Deps, st *stack.Stack, cfg *stack.Config, sec *stack.Secrets, state *stack.State, opts ConvergeOptions, images steps.Step, r *upRestarts) []steps.Step {
+	tls, trust, rend := TLSStep(d, st, cfg), StackTruststoreStep(d, st, cfg, state), RenderStep(d, st, cfg, state, opts)
+	if r != nil {
+		tls, trust, rend = r.restartAfter(tls, httpd), r.restartAfter(trust, psama), r.watchRender(rend)
+	}
+	list := []steps.Step{images}
+	if hmrOn(cfg) {
+		list = append(list, NodeImageStep(st, cfg, state))
+	}
+	list = append(list, tls, trust, rend)
+	converge := ConvergeSteps(d, st, cfg, sec, opts)
+	last := len(converge) - 1
+	list = append(list, converge[:last]...)
+	if r != nil {
+		list = append(list, withCompose(d, opts, r.step()))
+	}
+	if user := HostUser(); hmrOn(cfg) && user != "" {
+		list = append(list, HMRVolumeStep(d, st, cfg, user))
+	}
+	return append(list, converge[last])
 }
 
 // ConvergeSteps are §9.1 steps 8 to 12, which init, up and update run on a

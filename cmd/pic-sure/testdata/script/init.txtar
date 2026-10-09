@@ -18,6 +18,14 @@ stdout 'admin-email: required'
 exitcode 2 pic-sure init new --name demo --admin-email admin@example.com --auth0-client-id abc
 stderr '^pic-sure: --auth0-client-secret-stdin is required when auth.mode is not open$'
 
+# A stack directory compose can't bind-mount is refused before anything is
+# written or docker is asked anything; render would refuse it only after the
+# image build.
+exitcode 2 pic-sure init a:b --name demo --admin-email admin@example.com --auth-mode open
+stderr 'the stack directory .*a:b.* contains a colon or line break'
+! exists a:b
+! exists docker.log
+
 # Bad values name their flag.
 exitcode 2 pic-sure init new --name demo --admin-email admin@example.com --auth-mode closed
 stderr '--auth-mode'

@@ -203,8 +203,8 @@ the same additive-only rule:
 
 | Command | `data` |
 |---|---|
-| `init`, `up` | `{"stack", "dir", "already_initialized" (omitted unless true), "url", "auth0", "token_expiry", "next_steps"}`; `auth0` is `status --json`'s object, and `up`'s `next_steps` is empty. |
-| `update` | The plan: `{"stack", "dry_run", "config": {"from", "to", "migrations"}, "release": {"repo", "branch", "from", "to"}, "components": [{"name", "from_ref", "from_commit", "to_ref", "to_commit", "source", "changed"}], "images": [{"name", "component", "from", "to", "action"}], "migrations": {"status", "detail", "started_db"}, "token": {"expiry", "renew"}, "restarts": [{"service", "action", "reasons"}]}`. `images[].action` is `build`, `pull`, `up_to_date`, or `keep` (with `--no-build`); `migrations.status` is `pending`, `up_to_date` or `unknown`; `restarts[].action` is `recreate` or `restart`. |
+| `init`, `up` | `{"stack", "dir", "already_initialized" (omitted unless true), "url", "auth0", "token_expiry" (omitted when the stack has no token), "next_steps"}`; `auth0` is `status --json`'s object, and `up`'s `next_steps` is empty. |
+| `update` | The plan: `{"stack", "dry_run", "config": {"from", "to", "migrations"}, "release": {"repo", "branch", "from", "to"}, "components": [{"name", "from_ref", "from_commit", "to_ref", "to_commit", "source", "changed"}] (`from_ref`, `to_ref` and `source` omitted when empty), "images": [{"name", "component", "from", "to", "action"}], "migrations": {"status", "detail" (omitted when empty), "started_db"}, "token": {"expiry" (omitted when there is no token), "renew"}, "restarts": [{"service", "action", "reasons"}]}`. `images[].action` is `build`, `pull`, `up_to_date`, or `keep` (with `--no-build`); `migrations.status` is `pending`, `up_to_date` or `unknown`; `restarts[].action` is `recreate` or `restart`. |
 | `data demo` | `{"dataset": "demo:<name>"}`, where `<name>` is the argument, `all` included. |
 | `data load-phenotype` | `{"dataset": "phenotype:<sha256>", "dictionary": "auto" or "custom", "weights": bool}` |
 | `data load-genomic` | `{"partition", "promoted": [...], "profile"}` |

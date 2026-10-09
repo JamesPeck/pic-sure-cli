@@ -731,25 +731,3 @@ PassEnv GATEWAY_DOCS_ENABLED
          nokeepalive ssl-unclean-shutdown \
          downgrade-1.0 force-response-1.0
 </VirtualHost>
--- files/maven/settings.xml --
-<?xml version="1.0" encoding="UTF-8"?>
-<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0">
-  <proxies>
-    <proxy>
-      <id>http-proxy</id>
-      <active>true</active>
-      <protocol>http</protocol>
-      <host>proxy.example.org</host>
-      <port>3128</port>
-      <nonProxyHosts>intranet.example.org|*.intranet.example.org|dictionary-api|*.dictionary-api|dictionary-db|*.dictionary-db|dictionary-dump|*.dictionary-dump|flyway-dictionary-init|*.flyway-dictionary-init|flyway-init|*.flyway-init|gateway|*.gateway|hpds|*.hpds|hpds-genomic-seed|*.hpds-genomic-seed|httpd|*.httpd|pic-sure-hpds-query-service|*.pic-sure-hpds-query-service|pic-sure-logging|*.pic-sure-logging|pic-sure-operations-service|*.pic-sure-operations-service|psama|*.psama|visualization|*.visualization|localhost|*.localhost|127.0.0.1|127.*</nonProxyHosts>
-    </proxy>
-    <proxy>
-      <id>https-proxy</id>
-      <active>true</active>
-      <protocol>https</protocol>
-      <host>proxy.example.org</host>
-      <port>3128</port>
-      <nonProxyHosts>intranet.example.org|*.intranet.example.org|dictionary-api|*.dictionary-api|dictionary-db|*.dictionary-db|dictionary-dump|*.dictionary-dump|flyway-dictionary-init|*.flyway-dictionary-init|flyway-init|*.flyway-init|gateway|*.gateway|hpds|*.hpds|hpds-genomic-seed|*.hpds-genomic-seed|httpd|*.httpd|pic-sure-hpds-query-service|*.pic-sure-hpds-query-service|pic-sure-logging|*.pic-sure-logging|pic-sure-operations-service|*.pic-sure-operations-service|psama|*.psama|visualization|*.visualization|localhost|*.localhost|127.0.0.1|127.*</nonProxyHosts>
-    </proxy>
-  </proxies>
-</settings>

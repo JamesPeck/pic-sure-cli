@@ -154,6 +154,10 @@ func (a *App) initStack(cmd *cobra.Command, args []string) error {
 // run creates and converges the stack, and returns its summary.
 func (r *initRun) run(ctx context.Context) (_ *ops.InitSummary, err error) {
 	a := r.a
+	// Render would refuse it, but only after the image build (§9.1).
+	if err := render.CheckBindSource("the stack directory", ops.CanonicalDir(r.dir)); err != nil {
+		return nil, exitcode.Usage("%v", err)
+	}
 	if r.prior, err = stack.PeekState(r.dir); err != nil {
 		return nil, err
 	}
@@ -907,7 +911,11 @@ func (r *initRun) writeConfig(ctx context.Context, sink events.Sink) error {
 	if prior != nil && !prior.InitializedAt.IsZero() {
 		return nil
 	}
-	if !r.resumed {
+	if r.resumed {
+		if err := r.rereadConfig(st); err != nil {
+			return err
+		}
+	} else {
 		if _, err := os.Stat(st.Path(stack.ConfigFile)); err == nil {
 			return exitcode.Failed("another pic-sure init wrote %s meanwhile; run init again to resume it", st.Path(stack.ConfigFile))
 		}
@@ -955,6 +963,31 @@ func (r *initRun) writeConfig(ctx context.Context, sink events.Sink) error {
 	}
 	r.state = state
 	return nil
+}
+
+// rereadConfig reads a resumed stack's pic-sure.yaml again under the lock,
+// as up does: a `config set` may have changed it since readConfig. The
+// flags must still agree with it, and --skip-step name its steps.
+func (r *initRun) rereadConfig(st *stack.Stack) error {
+	data, err := st.ReadFile(stack.ConfigFile)
+	if err != nil {
+		return err
+	}
+	if r.doc, err = stack.ParseConfigDoc(data); err != nil {
+		return configError(err)
+	}
+	if r.cfg, err = r.doc.Config(); err != nil {
+		return configError(err)
+	}
+	log.RegisterSecrets(r.cfg.Auth.AdminEmail)
+	given, err := r.configFlags()
+	if err != nil {
+		return err
+	}
+	if err := r.checkResumed(data, given); err != nil {
+		return err
+	}
+	return checkSkipSteps(r.cmd, ops.InitStepIDs(r.cfg), r.a.Global.SkipSteps)
 }
 
 // claimPorts chooses a new stack's ports again with choose, now with those

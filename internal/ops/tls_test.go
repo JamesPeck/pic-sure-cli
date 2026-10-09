@@ -42,6 +42,9 @@ type certsVolume struct {
 	runs      int
 	runExit   int
 	runStderr string
+	// interrupt, when set, is called by the helper run, which then fails
+	// as an interrupted docker run does.
+	interrupt func()
 }
 
 const helperRun = `^docker run -i --rm --name demo-tls-[0-9a-f]{8} --network none ` +
@@ -76,6 +79,10 @@ func newCertsVolume(t *testing.T) *certsVolume {
 		v.mu.Lock()
 		defer v.mu.Unlock()
 		v.runs++
+		if v.interrupt != nil {
+			v.interrupt()
+			return docker.Result{}, context.Canceled
+		}
 		if v.runExit != 0 {
 			return docker.Result{Stderr: []byte(v.runStderr), ExitCode: v.runExit}, nil
 		}
@@ -473,6 +480,19 @@ func TestTLSStepReportsAFailedCopy(t *testing.T) {
 	if fx.check(t) {
 		t.Error("Check after a failed copy = done")
 	}
+}
+
+func TestTLSStepRemovesAnInterruptedHelper(t *testing.T) {
+	fx := newTLSFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fx.vol.interrupt = cancel
+	rm := fakerunner.Glob("docker rm -v -f demo-tls-*")
+	fx.vol.f.On(rm)
+	if err := ops.TLSStep(fx.d, fx.st, fx.cfg).Apply(ctx, fx.rec); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Apply = %v, want it interrupted", err)
+	}
+	fx.vol.f.AssertCalled(rm)
 }
 
 // A copy that fails while replacing an install leaves it unrecorded, so

@@ -27,24 +27,7 @@ const httpd = "httpd"
 // UpStepIDs are the IDs of UpSteps for a stack with config cfg, in order,
 // so up can check --skip-step before it takes the lock.
 func UpStepIDs(cfg *stack.Config) []string {
-	return append([]string{ResolveStepID}, upStepIDs(cfg)...)
-}
-
-// upStepIDs are the IDs of upSteps.
-func upStepIDs(cfg *stack.Config) []string {
-	ids := []string{GenomicLeftoversStepID, ImagesStepID}
-	if hmrOn(cfg) {
-		ids = append(ids, NodeImageStepID)
-	}
-	ids = append(ids, TLSStepID, TruststoreStepID, RenderStepID, StepDB)
-	if cfg.DB.Mode == stack.DBRemote {
-		ids = append(ids, StepDBBootstrap)
-	}
-	ids = append(ids, StepMigrate, StepSeed, HPDSKeyStepID, RestartStepID)
-	if hmrOn(cfg) && HostUser() != "" {
-		ids = append(ids, HMRVolumeStepID)
-	}
-	return append(ids, StartStepID)
+	return append([]string{ResolveStepID, GenomicLeftoversStepID}, planStepIDs(cfg, true)...)
 }
 
 // UpSteps are §9.2 for an initialised stack: resolve the components whose
@@ -81,30 +64,8 @@ func UpSteps(d *Deps, st *stack.Stack, cfg *stack.Config, sec *stack.Secrets, st
 		return apply(ctx, sink)
 	}
 	images := ImagesStep(d, st, cfg, state, ImagesOptions{Cache: opts.Cache})
-	return append([]steps.Step{resolve}, upSteps(d, st, cfg, sec, state, opts, images)...)
-}
-
-// upSteps are UpSteps with images as the image step, which update
-// configures differently.
-func upSteps(d *Deps, st *stack.Stack, cfg *stack.Config, sec *stack.Secrets, state *stack.State, opts ConvergeOptions, images steps.Step) []steps.Step {
 	r := &upRestarts{d: d, st: st, cfg: cfg, opts: opts}
-	converge := ConvergeSteps(d, st, cfg, sec, opts)
-	last := len(converge) - 1
-	list := []steps.Step{genomicLeftoversStep(d, st, cfg), images}
-	if hmrOn(cfg) {
-		list = append(list, NodeImageStep(st, cfg, state))
-	}
-	list = append(list,
-		r.restartAfter(TLSStep(d, st, cfg), httpd),
-		r.restartAfter(StackTruststoreStep(d, st, cfg, state), psama),
-		r.watchRender(RenderStep(d, st, cfg, state, opts)),
-	)
-	list = append(list, converge[:last]...)
-	list = append(list, withCompose(d, opts, r.step()))
-	if user := HostUser(); hmrOn(cfg) && user != "" {
-		list = append(list, HMRVolumeStep(d, st, cfg, user))
-	}
-	return append(list, converge[last])
+	return append([]steps.Step{resolve, genomicLeftoversStep(d, st, cfg)}, planSteps(d, st, cfg, sec, state, opts, images, r)...)
 }
 
 // upRestarts records and runs the restarts up's steps call for.

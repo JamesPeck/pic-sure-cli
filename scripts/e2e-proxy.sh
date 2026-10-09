@@ -162,12 +162,11 @@ docker exec "$psama" sh -c 'set -f; java $(printf "%s\n" $JAVA_OPTS | grep -i pr
 	sh "https://$tenant.auth0.com/.well-known/openid-configuration"
 tunnelled "$m" "$tenant.auth0.com"
 
-say "Maven: the rendered settings.xml resolves into an empty repo with no direct egress"
-# The same MavenSettings() bytes the reactor build mounts, pointed at squid's
-# name on the internal network.
-sed -e "s#<host>$proxy_host</host>#<host>squid</host>#" -e "s#<port>$port</port>#<port>3128</port>#" \
-	"$dir/.pic-sure/render/files/maven/settings.xml" > "$E2E_WORK/settings.xml"
-grep -q '<host>squid</host>' "$E2E_WORK/settings.xml" || fail "settings.xml has no proxy host to rewrite"
+say "Maven: the reactor's settings.xml resolves into an empty repo with no direct egress"
+# The MavenSettings() bytes the reactor build mounts, for squid's name on the
+# internal network (the internal network can't reach the published port).
+(cd "$repo_root" && go run ./internal/testfixtures/maven-settings -http http://squid:3128 -https http://squid:3128) \
+	> "$E2E_WORK/settings.xml"
 # The reactor's Maven image (catalog "maven"); any Maven would do.
 mvn_get=(docker run --rm --network "$internal" -v "$E2E_WORK/settings.xml:/pic-sure/settings.xml:ro"
 	maven:3-amazoncorretto-25 mvn -B -q -Dmaven.repo.local=/tmp/m2 dependency:get

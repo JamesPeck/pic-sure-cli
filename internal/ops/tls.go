@@ -178,7 +178,11 @@ func (t *tlsStep) apply(ctx context.Context, sink events.Sink) error {
 		Stdin:   bytes.NewReader(archive),
 		Stderr:  &stderr,
 	})
-	if err == nil && code != 0 {
+	if err != nil {
+		// docker run was interrupted or failed, but its container may
+		// still be there, and writing the volume.
+		_ = t.d.Docker.Rm(context.WithoutCancel(ctx), name, true)
+	} else if code != 0 {
 		err = fmt.Errorf("the helper container exited %d", code)
 		if msg := strings.TrimSpace(stderr.String()); msg != "" {
 			err = fmt.Errorf("%w: %s", err, msg[strings.LastIndexByte(msg, '\n')+1:])

@@ -69,7 +69,7 @@ type File struct {
 // Render produces the stack's compose file, first, and its static files
 // (§6.4). It does no I/O; Write saves the result.
 func Render(in Input) ([]File, error) {
-	d, mode, p, err := buildData(in)
+	d, mode, _, err := buildData(in)
 	if err != nil {
 		return nil, err
 	}
@@ -85,12 +85,7 @@ func Render(in Input) ([]File, error) {
 	if err != nil {
 		return nil, err
 	}
-	out = append(out, files...)
-	if s := p.MavenSettings(); s != nil {
-		// It holds the proxy credentials.
-		out = append(out, File{Path: FilesDir + "/maven/settings.xml", Data: s, Perm: 0o600})
-	}
-	return out, nil
+	return append(out, files...), nil
 }
 
 // buildData fills in templateData from the input.
@@ -318,6 +313,13 @@ func absolute(stackDir, p string) string {
 // bindSource checks that p can be a bind mount's source: absolute, and
 // without a colon, which the short volume syntax would split on (§6.4), or a
 // line break. It returns p cleaned.
+// CheckBindSource is bindSource's check of a path such as the stack
+// directory, for init to make before it writes anything.
+func CheckBindSource(what, p string) error {
+	_, err := bindSource(what, p)
+	return err
+}
+
 func bindSource(what, p string) (string, error) {
 	switch {
 	case !filepath.IsAbs(p):
@@ -490,9 +492,9 @@ func ComposeEnv(cfg *stack.Config, sec *stack.Secrets) ([]string, error) {
 }
 
 // Write saves a render's files in the stack, then removes the files an
-// earlier render wrote that this one didn't produce, such as settings.xml
-// after the proxy is turned off. Files under render/ the CLI didn't create
-// are left alone.
+// earlier render wrote that this one didn't produce, such as the
+// files/maven/settings.xml older versions rendered. Files under render/
+// the CLI didn't create are left alone.
 func Write(st *stack.Stack, files []File) error {
 	want := map[string]bool{}
 	for _, f := range files {

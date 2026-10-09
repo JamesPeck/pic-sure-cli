@@ -53,13 +53,14 @@ const (
 	RestartRestart  = "restart"  // restarted in place to re-read files or data
 )
 
-// migrationsCheck is MigrationsUpToDate; tests replace it.
+// migrationsCheck is MigrationsUpToDate, for the plan and the migrate
+// step; tests replace it.
 var migrationsCheck = MigrationsUpToDate
 
 // UpdateStepIDs are the IDs of UpdateSteps for a stack with config cfg, in
 // order, so update can check --skip-step before it takes the lock.
 func UpdateStepIDs(cfg *stack.Config) []string {
-	return append([]string{UpdateConfigStepID, UpdateResolveStepID}, upStepIDs(cfg)...)
+	return append([]string{UpdateConfigStepID, UpdateResolveStepID, GenomicLeftoversStepID}, planStepIDs(cfg, true)...)
 }
 
 // UpdateOptions configure PlanUpdate and UpdateSteps.
@@ -160,10 +161,20 @@ type RestartPlan struct {
 	Reasons []string `json:"reasons"`
 }
 
-// Changes reports whether the plan changes anything at all.
+// reasonIfMigrationsRun is the reason for a restart that happens only if
+// migrations whose status is unknown turn out to be pending.
+const reasonIfMigrationsRun = "if the migrations run: they may change what it caches"
+
+// Changes reports whether the plan changes anything at all. Migrations
+// whose status is unknown (a database is stopped, and the plan didn't
+// start it) don't count, nor do the restarts they would bring: the
+// migrate step checks once the database is up.
 func (p *UpdatePlan) Changes() bool {
-	if len(p.Config.Migrations) > 0 || p.Release.From != p.Release.To || len(p.Restarts) > 0 ||
-		p.Migrations.Status != MigrationsStatusUpToDate || p.Token.Renew {
+	restarts := slices.ContainsFunc(p.Restarts, func(r RestartPlan) bool {
+		return slices.ContainsFunc(r.Reasons, func(s string) bool { return s != reasonIfMigrationsRun })
+	})
+	if len(p.Config.Migrations) > 0 || p.Release.From != p.Release.To || restarts ||
+		p.Migrations.Status == MigrationsStatusPending || p.Token.Renew {
 		return true
 	}
 	return slices.ContainsFunc(p.Components, func(c ComponentChange) bool { return c.Changed }) ||
@@ -455,7 +466,7 @@ func (p *UpdatePlan) planRestarts(ctx context.Context, d *Deps, st *stack.Stack,
 	if p.Migrations.Status != MigrationsStatusUpToDate {
 		reason := "the migrations change what it caches"
 		if p.Migrations.Status == MigrationsStatusUnknown {
-			reason = "if the migrations run: they may change what it caches"
+			reason = reasonIfMigrationsRun
 		}
 		for _, s := range catalog.Services() {
 			if s.RestartAfterMigrate {
@@ -633,7 +644,7 @@ func UpdateSteps(d *Deps, st *stack.Stack, plan *UpdatePlan, sec *stack.Secrets,
 		// A ref such as a branch can move, so pull mode always pulls.
 		images.Check = nil
 	}
-	return append([]steps.Step{config, resolve}, upSteps(d, st, cfg, sec, state, opts.ConvergeOptions, images)...)
+	return append([]steps.Step{config, resolve, genomicLeftoversStep(d, st, cfg)}, planSteps(d, st, cfg, sec, state, opts.ConvergeOptions, images, &upRestarts{d: d, st: st, cfg: cfg, opts: opts.ConvergeOptions})...)
 }
 
 // releaseComponents are state's components that aren't built from a local

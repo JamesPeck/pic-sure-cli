@@ -262,7 +262,7 @@ func MigrateStep(d *Deps, cfg *stack.Config, sec *stack.Secrets, opts MigrateOpt
 		s.Check = func(ctx context.Context) (bool, error) {
 			ctx, cancel := context.WithTimeout(ctx, checkTimeout)
 			defer cancel()
-			return MigrationsUpToDate(ctx, d, cfg, sec)
+			return migrationsCheck(ctx, d, cfg, sec)
 		}
 	} else {
 		s.Title = "Repair the Flyway history"

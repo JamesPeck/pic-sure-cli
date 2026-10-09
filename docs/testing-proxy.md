@@ -55,7 +55,7 @@ all of it for debugging.
 | CLI's own HTTP | `data demo nhanes` downloads and loads | CONNECT `raw.githubusercontent.com` |
 | CLI's own HTTP | `self-update --to 0.0.1`: the release lookup, which then fails (nothing is replaced) | CONNECT `api.github.com` |
 | JVM runtime (psama → Auth0) | `java` in the psama container, with only the proxy properties from its rendered `JAVA_OPTS`, GETs the tenant's `/.well-known/openid-configuration` | CONNECT `<tenant>.auth0.com` |
-| Maven reactor | `mvn dependency:get` of one artifact into an empty local repo, on the internal network, with the stack's rendered `settings.xml`; the same command without it must fail | CONNECT `repo.maven.apache.org` |
+| Maven reactor | `mvn dependency:get` of one artifact into an empty local repo, on the internal network, with the reactor's `settings.xml`; the same command without it must fail | CONNECT `repo.maven.apache.org` |
 | `docker build` (apk, npm/pnpm) | a probe image from the base image of the stack's frontend Dockerfile runs `apk add pnpm`, `pnpm add` and `npm view`, built `--no-cache` with the stack's proxy variables as `--build-arg` | CONNECT `dl-cdn.alpinelinux.org`, `registry.npmjs.org` |
 | Image pulls (D36) | doctor's test pull fails, and its detail gives the daemon proxy instructions | `network-docker-pull` is `fail`, and its detail names the proxy URL (and, on Docker Desktop, its settings page) |
 | no-proxy list | squid denied nothing, and saw no request for a single-label host (the stack's services, `localhost`) or `127.*` | the whole log |
@@ -66,11 +66,11 @@ A full image build through squid from an empty Maven repo takes a long time
 and proves nothing more, because each path's proxy wiring is one mechanism
 that a single download exercises:
 
-- **Maven.** The reactor build mounts `netproxy.MavenSettings()` and runs
-  `mvn -s` with it. The stack renders the same bytes to
-  `.pic-sure/render/files/maven/settings.xml`; the script uses that file,
-  with only the proxy's host and port rewritten to `squid:3128` (the
-  internal network can't reach the published port). From an empty repo,
+- **Maven.** The reactor build writes `netproxy.MavenSettings()` to a
+  temporary file, mounts it and runs `mvn -s` with it. The script gets the
+  same bytes from `go run ./internal/testfixtures/maven-settings`, for the
+  proxy `http://squid:3128` (the internal network can't reach the published
+  port). From an empty repo,
   `dependency:get` downloads a few hundred artifacts (the plugin and its
   dependencies), all through squid, and fails without the settings.
 - **docker build.** The image builds pass `netproxy.BuildArgs()` as bare
