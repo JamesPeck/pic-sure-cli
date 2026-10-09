@@ -3078,7 +3078,7 @@ and commit are dispatch inputs.
 
 ## scripts (e2e)
 
-Tickets 062 and 063, spec §11. `.github/workflows/e2e.yml` runs
+Spec §11. `.github/workflows/e2e.yml` runs
 `e2e-core.sh`, then `e2e-two-stacks.sh` and `e2e-genomic.sh` (one matrix
 job, `stacks`) on `ubuntu-latest` and `ubuntu-24.04-arm` (nightly, on pushes
 to `main`, and on PRs labelled `e2e`); all run locally as they are.
@@ -3088,20 +3088,20 @@ to `main`, and on PRs labelled `e2e`); all run locally as they are.
 or an INT/TERM, saves each stack's compose logs, `status --json`, run logs
 and support bundle to `E2E_ARTIFACTS`, then destroys every stack it made
 and calls the script's `e2e_teardown` for anything else it made.
-`e2e-two-stacks.sh` runs its two inits at once (077), so it also checks
+`e2e-two-stacks.sh` runs its two inits at once, so it also checks
 that concurrent `--auto-ports` inits get different ports. The
 assertions read `status --deep --json` and `update --json`'s plan
 (`docs/json-schemas.md`, `ops.UpdatePlan`), so changing those fields means
 changing the scripts.
 
-`e2e-genomic.sh` loads the 048 fixture (`genomic-fixture -abs`) into stack
+`e2e-genomic.sh` loads the genomic test fixture (`genomic-fixture -abs`) into stack
 A, one contig per partition: `chr21` into staging only, then `chr22` with
 `--promote --all-partitions`, so both go live. It then marks the live
 `chr21`, reloads it and promotes it over the live data with `--backup`:
 every file of the reloaded copy must be in the live `chr21` unchanged (md5;
 HPDS adds its `variantIndex_fbbis*` files when it starts) and the marker
 gone, `all-bak` in genomic-staging must match the previous live store,
-marker included, and neither volume may hold leftovers (094's `.promote-*`, `.old-*`, `all-bak.new`, `all-bak.old`).
+marker included, and neither volume may hold leftovers (`.promote-*`, `.old-*`, `all-bak.new`, `all-bak.old`).
 It publishes A's data as a shared set, destroys A, and mounts the set in
 stack B. After each promote on A, and on B, it runs every
 `testdata/genomic/expected.json` query against HPDS from an `alpine` container on the stack's `query` network: the patient
@@ -3116,13 +3116,13 @@ and the `pic-sure-m2` volume to and from tarballs that actions/cache keeps
 per architecture; the images key carries the release-control commit, and a
 new entry is saved only when init built something.
 
-`e2e-proxy.sh` (055) runs a stack whose proxy is a squid container and
+`e2e-proxy.sh` runs a stack whose proxy is a squid container and
 checks every §9.10 egress path against squid's access log. Its cleanup
 removes only the squid container and networks this run created, so a name
 already in use (another run's) fails the run without touching it;
 `docs/testing-proxy.md` describes the setup and what each check proves.
 
-The "e2e other" tier (064) adds `e2e-input-dir.sh` (the 043 fixture
+The "e2e other" tier adds `e2e-input-dir.sh` (the input-directory fixture
 directory, then HPDS counts that need each file's rows; then a
 `--dictionary custom` load with AIO's older facet headers, which must exit
 2 naming `name(unique)` without restarting HPDS, and the same load of
