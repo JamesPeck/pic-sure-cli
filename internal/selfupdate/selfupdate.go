@@ -323,8 +323,8 @@ func (e *CosignTooOldError) Error() string {
 	return fmt.Sprintf("cosign %s is older than %s and can't check this release's signature", e.Version, minCosign)
 }
 
-// cosignMajor matches `cosign version`'s GitVersion line.
-var cosignMajor = regexp.MustCompile(`(?m)^GitVersion:\s+v?([0-9]+)\.\S*`)
+// cosignVersion matches `cosign version`'s GitVersion line.
+var cosignVersion = regexp.MustCompile(`(?m)^GitVersion:\s+v?(([0-9]+)\.\S*)`)
 
 // CosignVerifier returns an Updater.VerifyBundle that runs `cosign
 // verify-blob` with runner, accepting only a keyless signature made by
@@ -340,9 +340,9 @@ func CosignVerifier(runner docker.Runner, repo string, lookPath func(string) (st
 	}
 	return func(ctx context.Context, tag, checksums, bundle string) error {
 		res, err := runner.Run(ctx, docker.Cmd{Argv: []string{"cosign", "version"}})
-		if m := cosignMajor.FindStringSubmatch(string(res.Stdout) + string(res.Stderr)); err == nil && m != nil {
-			if major, err := strconv.Atoi(m[1]); err == nil && major < 3 {
-				return &CosignTooOldError{Version: strings.TrimPrefix(strings.Fields(m[0])[1], "v")}
+		if m := cosignVersion.FindStringSubmatch(string(res.Stdout) + string(res.Stderr)); err == nil && m != nil {
+			if major, err := strconv.Atoi(m[2]); err == nil && major < 3 {
+				return &CosignTooOldError{Version: m[1]}
 			}
 		}
 		_, err = docker.RunChecked(ctx, runner, docker.Cmd{Argv: []string{

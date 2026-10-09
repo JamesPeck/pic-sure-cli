@@ -160,8 +160,11 @@ jobs:
           } >>"$GITHUB_STEP_SUMMARY"
           for v in $VERSIONS; do
             cosign="$RUNNER_TEMP/cosign-$v/cosign"
-            if [ ! -x "$cosign" ]; then
-              echo "| $v | not installed | |" >>"$GITHUB_STEP_SUMMARY"
+            # A failed install can leave cosign-installer's bootstrap cosign
+            # in place, so check which version is really there.
+            got="$("$cosign" version 2>&1 | awk '$1 == "GitVersion:" { print $2 }' || true)"
+            if [ "$got" != "$v" ]; then
+              echo "| $v | not installed (found ${got:-nothing}) | |" >>"$GITHUB_STEP_SUMMARY"
               continue
             fi
             result=ok

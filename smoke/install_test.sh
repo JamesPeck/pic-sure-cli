@@ -247,23 +247,49 @@ else
 fi
 
 # A download cut short must install nothing: feed bash every prefix of
-# install.sh that ends on a line boundary.
+# install.sh that ends on a line boundary, and every prefix of its last line
+# short of the whole line (without only the final newline, it is complete).
 total="$(wc -l <"$ROOT/install.sh")"
+size="$(wc -c <"$ROOT/install.sh")"
+last="$(tail -n 1 "$ROOT/install.sh" | wc -c)"
 truncated_ok=true
-for n in $(seq 1 $((total - 1))); do
+for n in $(seq 1 $((total - 1))) $(seq $((size - last + 1)) $((size - 2)) | sed 's/^/c/'); do
   BIN="$WORK/bin-truncated"
-  head -n "$n" "$ROOT/install.sh" \
+  case "$n" in
+    c*) cut=(-c "${n#c}") ;;
+    *) cut=(-n "$n") ;;
+  esac
+  head "${cut[@]}" "$ROOT/install.sh" \
     | env -i HOME="$WORK" PATH="$WORK/cosign:$WORK/tools" TMPDIR="$WORK" COSIGN_LOG=/dev/null \
       PIC_SURE_INSTALL_GITHUB_URL="http://127.0.0.1:$port/gh" PIC_SURE_INSTALL_API_URL="http://127.0.0.1:$port/api" \
       bash -s -- --repo "$REPO" --bin-dir "$BIN" --version "$TAG" >"$WORK/out" 2>&1 || true
   if [ -e "$BIN" ] || said "Downloading"; then
     truncated_ok=false
-    flunk truncated "the first $n lines of install.sh started an install"
+    flunk truncated "head ${cut[*]} of install.sh started an install"
     break
   fi
 done
 if [ "$truncated_ok" = true ]; then
   pass truncated
+fi
+
+release v1.9.0
+rm "$REL/v1.9.0/checksums.txt.sigstore.json"
+PIC_SURE_REQUIRE_SIGNATURE=1 run require-unsigned-v1 --cosign --version v1.9.0
+if [ "$status" -eq 0 ] || [ -e "$BIN/pic-sure" ] || ! said "has no checksums.txt.sigstore.json, and PIC_SURE_REQUIRE_SIGNATURE"; then
+  flunk require-unsigned-v1 "exit $status; PIC_SURE_REQUIRE_SIGNATURE must refuse a release without a bundle"
+else
+  pass require-unsigned-v1
+fi
+
+mkdir "$WORK/read-only"
+chmod 555 "$WORK/read-only"
+run unwritable-bin-dir --cosign --version "$TAG" --bin-dir "$WORK/read-only/bin"
+chmod 755 "$WORK/read-only"
+if [ "$status" -eq 0 ] || said "Installed:"; then
+  flunk unwritable-bin-dir "exit $status; a failed install must exit non-zero without claiming success"
+else
+  pass unwritable-bin-dir
 fi
 
 release v2.0.1

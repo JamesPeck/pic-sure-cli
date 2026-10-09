@@ -1,9 +1,17 @@
 package cli
 
 import (
+	"context"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/events"
+	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
 	"github.com/JamesPeck/pic-sure-cli/internal/selfupdate"
 	"github.com/JamesPeck/pic-sure-cli/internal/stack"
 )
@@ -60,6 +68,52 @@ func TestNewSelfUpdaterRequireSignature(t *testing.T) {
 		a, _, _ := testApp(t)
 		if got := a.newSelfUpdater(nil, &events.Recorder{}, "self-update").RequireSignature; got != want {
 			t.Errorf("%s=%q: RequireSignature = %v, want %v", selfupdate.RequireSignatureEnv, v, got, want)
+		}
+	}
+}
+
+// TestSelfUpdateRequireSignatureFlag runs self-update without cosign
+// against a release whose checksums.txt doesn't list the archive, so no
+// run gets as far as downloading or replacing anything.
+func TestSelfUpdateRequireSignatureFlag(t *testing.T) {
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/" + selfupdate.DefaultRepo + "/releases/tags/v9.9.9":
+			var assets []string
+			for _, name := range []string{selfupdate.ChecksumsName, selfupdate.BundleName, selfupdate.AssetName(runtime.GOOS, runtime.GOARCH)} {
+				assets = append(assets, fmt.Sprintf(`{"name":%q,"browser_download_url":%q}`, name, srv.URL+"/dl/"+name))
+			}
+			_, _ = fmt.Fprintf(w, `{"tag_name":"v9.9.9","assets":[%s]}`, strings.Join(assets, ","))
+		case "/dl/" + selfupdate.ChecksumsName:
+			_, _ = io.WriteString(w, "abc  other.tar.gz\n")
+		case "/dl/" + selfupdate.BundleName:
+			_, _ = io.WriteString(w, "{}")
+		default:
+			t.Errorf("unexpected request %s", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv(releaseAPIEnv, srv.URL)
+	t.Setenv(selfupdate.RequireSignatureEnv, "")
+	t.Setenv("PATH", t.TempDir()) // no cosign
+	t.Chdir(t.TempDir())
+	for _, tt := range []struct {
+		flag   bool
+		code   int
+		stderr string
+	}{
+		{flag: true, code: exitcode.CodePrecondition, stderr: "cosign isn't installed to check it, and a signature is required"},
+		{flag: false, code: exitcode.CodeFailed, stderr: "checksums.txt has no entry"},
+	} {
+		a, _, stderr := testApp(t)
+		args := []string{"self-update", "--to", "v9.9.9"}
+		if tt.flag {
+			args = append(args, "--require-signature")
+		}
+		if code := a.Run(context.Background(), args); code != tt.code || !strings.Contains(stderr.String(), tt.stderr) {
+			t.Errorf("%v: exit %d, stderr %q; want exit %d and %q", args, code, stderr, tt.code, tt.stderr)
 		}
 	}
 }

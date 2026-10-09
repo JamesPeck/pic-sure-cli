@@ -59,7 +59,7 @@ var _ release.SelfUpdater = (*selfupdate.Updater)(nil)
 // and the compatibility gate's (release.GateOptions.Updater), which init and
 // update are to build with their config's proxy. A nil or disabled proxy
 // means the environment's (HTTPS_PROXY and so on), for the downloads and
-// for cosign. PIC_SURE_REQUIRE_SIGNATURE sets RequireSignature.
+// for cosign.
 func (a *App) newSelfUpdater(proxy *netproxy.Proxy, sink events.Sink, step string) *selfupdate.Updater {
 	proxyURL := http.ProxyFromEnvironment
 	var cosignEnv []string

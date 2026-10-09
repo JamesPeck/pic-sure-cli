@@ -27,8 +27,10 @@
 #   PIC_SURE_INSTALL_API_URL     replaces https://api.github.com
 # =============================================================================
 
-# Everything runs from main, called on the last line, so a download cut
-# short anywhere installs nothing.
+set -euo pipefail
+
+# Everything runs from main, called on the last line inside braces, so a
+# download cut short anywhere, even within that line, installs nothing.
 
 REPO="JamesPeck/pic-sure-cli"
 BIN_DIR="$HOME/.local/bin"
@@ -200,7 +202,12 @@ main() {
         cat "$TMP/bundle.err" >&2
         fail "could not download $BUNDLE for $VERSION, and every v2 release is signed; aborting"
         ;;
-      *) say "Release $VERSION has no $BUNDLE; verifying the checksum only." ;;
+      *)
+        if [ "$REQUIRE_SIGNATURE" = true ]; then
+          fail "release $VERSION has no $BUNDLE, and PIC_SURE_REQUIRE_SIGNATURE requires a checked signature"
+        fi
+        say "Release $VERSION has no $BUNDLE; verifying the checksum only."
+        ;;
     esac
   elif ! command -v cosign >/dev/null 2>&1; then
     unchecked "cosign isn't installed" "install cosign 3.0 or newer"
@@ -279,4 +286,4 @@ main() {
   say "  https://github.com/$REPO#quick-start"
 }
 
-main "$@"
+{ main "$@"; }
