@@ -56,8 +56,8 @@ func TestNewDirMode(t *testing.T) {
 	if m.fp.FileAllowed {
 		t.Error("FileAllowed should be false in dir mode")
 	}
-	if len(m.fp.AllowedTypes) != 0 {
-		t.Errorf("AllowedTypes should be cleared in dir mode, got %v", m.fp.AllowedTypes)
+	if m.fp.AllowedTypes[0] != "/" || len(m.fp.AllowedTypes) != 1 {
+		t.Errorf("AllowedTypes = %v in dir mode, want [/] so files are dimmed", m.fp.AllowedTypes)
 	}
 }
 
@@ -322,8 +322,8 @@ func TestNavHintShowsUpAffordance(t *testing.T) {
 	if !strings.Contains(view, "select") {
 		t.Errorf("file-mode nav hint should say \"select\"; got:\n%s", view)
 	}
-	if strings.Contains(view, "use this dir") {
-		t.Errorf("file-mode nav hint must not say \"use this dir\"; got:\n%s", view)
+	if strings.Contains(view, "use current dir") {
+		t.Errorf("file-mode nav hint must not say \"use current dir\"; got:\n%s", view)
 	}
 }
 
@@ -338,8 +338,8 @@ func TestNavHintDirModeWording(t *testing.T) {
 	if !strings.Contains(view, "..") || !strings.Contains(view, "←/h") {
 		t.Errorf("dir-mode nav hint should show the \"..\" up affordance; got:\n%s", view)
 	}
-	if !strings.Contains(view, "use this dir") {
-		t.Errorf("dir-mode nav hint should say \"use this dir\"; got:\n%s", view)
+	if !strings.Contains(view, "use current dir") {
+		t.Errorf("dir-mode nav hint should say \"use current dir\"; got:\n%s", view)
 	}
 }
 
@@ -423,5 +423,163 @@ func TestViewNeverOverflowsSmallBox(t *testing.T) {
 		if got := viewLines(m); got > h+1 {
 			t.Errorf("SetSize(80,%d) -> %d view lines, want <= %d (h + inclusive pad)", h, got, h+1)
 		}
+	}
+}
+
+func mkdirs(t *testing.T, dirs ...string) {
+	t.Helper()
+	for _, d := range dirs {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func writeFiles(t *testing.T, files ...string) {
+	t.Helper()
+	for _, f := range files {
+		if err := os.WriteFile(f, []byte("a,b\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+var (
+	keyEnter = tea.KeyPressMsg{Code: tea.KeyEnter}
+	keyRight = tea.KeyPressMsg{Code: tea.KeyRight}
+	keyLeft  = tea.KeyPressMsg{Code: tea.KeyLeft}
+)
+
+// lockedDir makes root/a-locked unreadable (sorted before z.csv) and restores
+// it for TempDir's cleanup.
+func lockedDir(t *testing.T, root string) string {
+	t.Helper()
+	if os.Geteuid() == 0 {
+		t.Skip("root can read a mode-0000 directory")
+	}
+	locked := filepath.Join(root, "a-locked")
+	mkdirs(t, locked)
+	writeFiles(t, filepath.Join(locked, "inside.csv"))
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+	return locked
+}
+
+func TestUnreadableDirStaysInParent(t *testing.T) {
+	for _, k := range []tea.KeyPressMsg{keyEnter, keyRight} {
+		root := t.TempDir()
+		lockedDir(t, root)
+		writeFiles(t, filepath.Join(root, "z.csv"))
+
+		m := New(Options{StartDir: root, AllowedExts: []string{".csv"}})
+		m.SetSize(200, 20)
+		m = drainInit(t, m)
+
+		m, cmd := m.Update(k)
+		if cmd != nil {
+			t.Errorf("%s on an unreadable dir returned a cmd, want none", k)
+		}
+		if m.Dir() != root {
+			t.Errorf("%s: Dir() = %q, want to stay in %q", k, m.Dir(), root)
+		}
+		if m.Err() == nil || !strings.Contains(m.Err().Error(), "can't read a-locked") {
+			t.Fatalf("%s: Err() = %v, want can't read a-locked", k, m.Err())
+		}
+		if !strings.Contains(m.View(), "can't read a-locked") {
+			t.Errorf("%s: status line should show the error; got:\n%s", k, m.View())
+		}
+
+		// The listing is still the parent's, so moving to z.csv selects it.
+		m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+		m, _ = m.Update(keyEnter)
+		if path, ok := m.Selected(); !ok || path != filepath.Join(root, "z.csv") {
+			t.Errorf("Selected() = (%q, %v), want z.csv in %q", path, ok, root)
+		}
+	}
+}
+
+func TestUnreadableStartDir(t *testing.T) {
+	root := t.TempDir()
+	locked := lockedDir(t, root)
+
+	m := New(Options{StartDir: locked, DirMode: true})
+	m.SetSize(200, 20)
+	m = drainInit(t, m)
+	if m.Err() == nil {
+		t.Fatal("Err() = nil for an unreadable start dir")
+	}
+	m, _ = m.Update(keyEnter)
+	if path, ok := m.Selected(); ok {
+		t.Errorf("Selected() = %q for an unreadable dir, want none", path)
+	}
+
+	m, _ = m.Update(keyLeft)
+	if m.Dir() != root || m.Err() != nil {
+		t.Errorf("after back: Dir() = %q, Err() = %v; want %q and nil", m.Dir(), m.Err(), root)
+	}
+}
+
+func TestDirModeEnterSelectsCurrentDirWithOnlyFiles(t *testing.T) {
+	root := t.TempDir()
+	writeFiles(t, filepath.Join(root, "a.csv"), filepath.Join(root, "b.csv"))
+
+	m := New(Options{StartDir: root, DirMode: true})
+	m.SetSize(80, 20)
+	m = drainInit(t, m)
+	m, _ = m.Update(keyEnter)
+
+	if path, ok := m.Selected(); !ok || path != root {
+		t.Errorf("Selected() = (%q, %v), want (%q, true)", path, ok, root)
+	}
+}
+
+func TestDirModeEnterSelectsCurrentDirNotHighlighted(t *testing.T) {
+	root := t.TempDir()
+	sub := filepath.Join(root, "sub")
+	mkdirs(t, filepath.Join(sub, "deeper"))
+
+	m := New(Options{StartDir: root, DirMode: true})
+	m.SetSize(80, 20)
+	m = drainInit(t, m)
+
+	m, _ = m.Update(keyEnter)
+	if path, ok := m.Selected(); !ok || path != root {
+		t.Fatalf("Selected() = (%q, %v), want the header dir %q", path, ok, root)
+	}
+
+	m = New(Options{StartDir: root, DirMode: true})
+	m.SetSize(80, 20)
+	m = drainInit(t, m)
+	m, cmd := m.Update(keyRight)
+	if m.Dir() != sub {
+		t.Fatalf("→ opened %q, want %q", m.Dir(), sub)
+	}
+	if _, ok := m.Selected(); ok {
+		t.Fatal("→ selected a dir, want it only to open")
+	}
+	m, _ = m.Update(cmd())
+	m, _ = m.Update(keyEnter)
+	if path, ok := m.Selected(); !ok || path != sub {
+		t.Errorf("Selected() = (%q, %v), want (%q, true)", path, ok, sub)
+	}
+}
+
+func TestSelectRemovedFileIsRefused(t *testing.T) {
+	root := t.TempDir()
+	csv := filepath.Join(root, "gone.csv")
+	writeFiles(t, csv)
+
+	m := New(Options{StartDir: root, AllowedExts: []string{".csv"}})
+	m.SetSize(80, 20)
+	m = drainInit(t, m)
+	if err := os.Remove(csv); err != nil {
+		t.Fatal(err)
+	}
+	m, _ = m.Update(keyEnter)
+
+	if path, ok := m.Selected(); ok {
+		t.Errorf("Selected() = %q for a removed file, want none", path)
 	}
 }

@@ -295,6 +295,17 @@ func TestLoadWizardInspectingEsc(t *testing.T) {
 	}
 }
 
+func TestLoadWizardDirStepFooter(t *testing.T) {
+	s := chooseKind(t, newTestLoad(t, t.TempDir(), ""), kindDir)
+	if s.step != loadPhenoDir || !strings.Contains(loadView(s), "enter use current dir · esc cancel") {
+		t.Errorf("step %v, want the dir step's footer:\n%s", s.step, loadView(s))
+	}
+	s = chooseKind(t, newTestLoad(t, t.TempDir(), ""), kindFile)
+	if strings.Contains(loadView(s), "use current dir") {
+		t.Errorf("the file step's footer says use current dir:\n%s", loadView(s))
+	}
+}
+
 func TestLoadWizardInputDirFlow(t *testing.T) {
 	stubInspect(t, nil, nil)
 	s := chooseKind(t, newTestLoad(t, "/tmp/x", ""), kindDir)

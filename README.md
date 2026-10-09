@@ -214,7 +214,12 @@ and quit with `q`.
 - **Load wizard.** It loads a phenotype CSV file or directory
   (`data load-phenotype`), a demo dataset (`data demo`) or genomic VCFs
   (`data load-genomic`). It asks for what the command's flags would set,
-  with a file browser for paths, and asks before it starts.
+  with a file browser for paths, and asks before it starts. In the browser,
+  → or `l` opens the highlighted directory and ← or `h` goes up. Where the
+  wizard asks for a directory, Enter uses the one shown at the top. A
+  directory pic-sure can't read stays closed, with the error below the list;
+  on macOS, folders such as Documents or Downloads need the terminal to have
+  file access in System Settings, Privacy & Security.
 
 Commands run from the TUI show their steps on a run screen; Enter goes back
 when they finish. Run from a shell, long commands such as `init`, `up`,

@@ -984,6 +984,9 @@ func (s *loadScreen) view() string {
 		}
 		body = fbView
 		footer = loadFooterStyle.Render("enter select · esc cancel")
+		if s.step == loadPhenoDir || s.step == loadGenomicDir {
+			footer = loadFooterStyle.Render("enter use current dir · esc cancel")
+		}
 	default:
 		body = s.form.View()
 		footer = loadFooterStyle.Render("esc cancel")

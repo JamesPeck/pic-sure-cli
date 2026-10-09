@@ -1,17 +1,19 @@
-// Package filebrowser wraps the Bubbles filepicker into a small, self-contained
-// Bubble Tea component for the "Load your data" wizard's file/dir picker. The
-// wrapper exists so the wizard does not have to know the filepicker's
-// event-driven selection protocol (DidSelectFile must be called on every msg)
-// or replicate the absolute-path / "no matching files" handling — it just
-// drives Update and polls Selected().
+// Package filebrowser is the load wizard's file and directory picker: the
+// Bubbles filepicker plus a path header, a key hint, a status line, and checks
+// the filepicker leaves out (unreadable directories, selecting the current
+// directory in dir mode).
 package filebrowser
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"charm.land/bubbles/v2/filepicker"
+	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -19,13 +21,8 @@ import (
 	"github.com/JamesPeck/pic-sure-cli/internal/styles"
 )
 
-// fixedChrome is the number of fixed lines the wrapper draws around the
-// filepicker's own list: the current-directory path header, the navigation
-// key-hint line, and a status slot (the disabled-file error / "no matching
-// files" notice). The status slot is always reserved — rendered empty when
-// there is nothing to say — so the component's height is constant regardless of
-// error state and never overflows the box the parent reserved. SetSize adds the
-// optional title line on top of this.
+// fixedChrome is the lines drawn around the filepicker's list: the path
+// header, the key hint and the status line.
 const fixedChrome = 3
 
 // Options configures a Model. The zero value is valid: it browses the current
@@ -36,8 +33,8 @@ type Options struct {
 	// file is selectable. Ignored when DirMode is set.
 	AllowedExts []string
 
-	// DirMode makes directories selectable instead of files. AllowedExts is
-	// cleared in this mode (extension filtering is meaningless for dirs).
+	// DirMode selects a directory: Enter picks the one in the header, and
+	// files are listed dimmed.
 	DirMode bool
 
 	// StartDir is the directory the picker opens in. Empty defaults to the
@@ -51,53 +48,33 @@ type Options struct {
 
 // Model is the file browser component. Construct it with New.
 type Model struct {
-	fp    filepicker.Model
-	title string
-
-	// dirMode mirrors Options.DirMode so View can word the nav hint for the
-	// active mode ("use this dir" vs "select") without re-deriving it from the
-	// filepicker's DirAllowed/FileAllowed flags.
+	fp      filepicker.Model
+	title   string
 	dirMode bool
 
-	// w is the box width handed to SetSize. View needs it to left-elide a long
-	// current-directory path so the header never overflows the frame.
+	// w is the box width from SetSize, for eliding the header and status line.
 	w int
 
-	// selectedPath is the absolute path the user chose; selected reports whether
-	// a choice has been made. The parent learns of a selection by polling
-	// Selected() after each Update rather than via a custom tea.Msg: the
-	// filepicker's selection is itself only observable by calling DidSelectFile
-	// on the msg passed to Update (it is not a message the filepicker emits), so
-	// a poll on the same model the parent already holds is both simpler and
-	// avoids inventing a message that would have to round-trip through the
-	// program loop before the parent could act on it.
+	// The parent polls Selected after each Update: the filepicker reports a
+	// selection only through DidSelectFile on the same msg, not as a message.
 	selectedPath string
 	selected     bool
 
-	// err holds the most recent disabled-file or directory-read error so View
-	// can surface it inline. It is sticky until the next successful navigation
-	// clears it.
+	// err is shown in the status line until the next navigation or selection.
 	err error
 
-	// lastScanDir / hasSelectable cache a cheap directory scan keyed by the
-	// filepicker's CurrentDirectory. The filepicker keeps its entry list and
-	// its readDir messages unexported, so the wrapper cannot ask it whether the
-	// current directory holds anything selectable; we re-scan ourselves only
-	// when CurrentDirectory changes to drive the "no matching files" hint.
-	lastScanDir   string
+	// hasSelectable is whether the current directory holds a file the user can
+	// pick, from the read that let the user enter it. The filepicker keeps its
+	// entries private.
 	hasSelectable bool
 }
 
-// New builds a Model from opts. The filepicker is configured but not yet
-// reading the directory — call Init for that.
+// New builds a Model from opts. Call Init to start the filepicker's read.
 func New(opts Options) Model {
 	fp := filepicker.New()
 
 	start := opts.StartDir
 	if start == "" {
-		// Mirror filepicker's own "." fallback, but prefer an explicit cwd so the
-		// header and navigation start from a real, resolvable path rather than a
-		// relative "." that reads oddly once the user steps into a subdir.
 		if wd, err := os.Getwd(); err == nil {
 			start = wd
 		} else {
@@ -109,19 +86,24 @@ func New(opts Options) Model {
 	if opts.DirMode {
 		fp.DirAllowed = true
 		fp.FileAllowed = false
-		fp.AllowedTypes = []string{} // extension filtering is meaningless for dirs
+		// No file name ends in "/", so the filepicker draws every file dimmed.
+		fp.AllowedTypes = []string{"/"}
 	} else {
 		fp.DirAllowed = false
 		fp.FileAllowed = true
 		fp.AllowedTypes = append([]string{}, opts.AllowedExts...)
 	}
 
-	// Brand the selection cursor/row so the picker reads as part of the PIC-SURE
-	// palette; everything else keeps the filepicker defaults.
 	fp.Styles.Cursor = fp.Styles.Cursor.Foreground(styles.Brand)
 	fp.Styles.Selected = lipgloss.NewStyle().Foreground(styles.Brand).Bold(true)
 
-	return Model{fp: fp, title: opts.Title, dirMode: opts.DirMode}
+	m := Model{fp: fp, title: opts.Title, dirMode: opts.DirMode}
+	if entries, err := os.ReadDir(start); err != nil {
+		m.err = &readError{dir: start, err: err}
+	} else {
+		m.hasSelectable = m.anySelectable(entries)
+	}
+	return m
 }
 
 // Init starts the initial directory read.
@@ -129,12 +111,7 @@ func (m Model) Init() tea.Cmd {
 	return m.fp.Init()
 }
 
-// SetSize lays the picker out within a w×h box. The width is kept so View can
-// left-elide a long current-directory path to fit the frame; the height sets how
-// many rows the filepicker's list shows. The interior height is the box height
-// minus the wrapper's chrome (path header + nav hint + status slot, plus the
-// title line when present); a non-positive interior is clamped to 1 so the
-// filepicker never computes a negative window.
+// SetSize lays the picker out in a w×h box.
 func (m *Model) SetSize(w, h int) {
 	m.w = w
 	chrome := fixedChrome
@@ -145,29 +122,37 @@ func (m *Model) SetSize(w, h int) {
 	if interior < 1 {
 		interior = 1
 	}
-	// AutoHeight would otherwise overwrite Height from WindowSizeMsg; we own the
-	// sizing here, so disable it and set Height directly via SetHeight (which
-	// also reclamps the scroll window).
+	// AutoHeight would size the list to the whole window on WindowSizeMsg.
 	m.fp.AutoHeight = false
 	m.fp.SetHeight(interior)
 }
 
-// Update advances the filepicker and records a selection or error when one
-// occurs on this msg. The filepicker only sets its internal Path inside its own
-// Update, so we must Update first and *then* test the returned model for a
-// selection on the same msg — hence DidSelectFile is called on the post-Update
-// model.
+// Update advances the filepicker and records a selection or error.
+//
+// The filepicker sets CurrentDirectory before it reads the new directory and
+// silently keeps the old listing when the read fails, so Update reads the
+// target first and doesn't pass the key on when it can't be read.
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
-	prevDir := m.fp.CurrentDirectory
+	if k, ok := msg.(tea.KeyPressMsg); ok {
+		if m.dirMode && key.Matches(k, m.fp.KeyMap.Select) {
+			m.selectDir(m.fp.CurrentDirectory)
+			return m, nil
+		}
+		if target, ok := m.navTarget(k); ok {
+			entries, err := os.ReadDir(target)
+			if err != nil {
+				m.err = &readError{dir: target, err: err}
+				return m, nil
+			}
+			m.err = nil
+			m.hasSelectable = m.anySelectable(entries)
+		}
+	}
 
 	var cmd tea.Cmd
 	m.fp, cmd = m.fp.Update(msg)
 
 	if ok, path := m.fp.DidSelectFile(msg); ok {
-		// Resolve to absolute so the parent gets a path that is stable regardless
-		// of the process working directory — the filepicker joins entries onto
-		// CurrentDirectory, which may be relative (".") when StartDir was empty
-		// and Getwd failed.
 		if abs, err := filepath.Abs(path); err == nil {
 			path = abs
 		}
@@ -180,22 +165,39 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	if ok, path := m.fp.DidSelectDisabledFile(msg); ok {
 		m.err = &selectError{path: path}
 	}
-
-	// A directory change (navigation) clears any sticky disabled-file error.
-	if m.fp.CurrentDirectory != prevDir {
-		m.err = nil
-	}
-
-	// Re-warm the selectable-entry cache when the directory we last scanned no
-	// longer matches the picker's current one. Doing it here (where the model is
-	// mutable and returned) keeps View — which runs on a value receiver and
-	// cannot persist a cache — a pure read of pre-computed state.
-	if m.lastScanDir != m.fp.CurrentDirectory {
-		m.lastScanDir = m.fp.CurrentDirectory
-		m.hasSelectable = scanSelectable(m.fp.CurrentDirectory, m.fp.AllowedTypes, m.fp.ShowHidden)
-	}
-
 	return m, cmd
+}
+
+// navTarget is the directory key k would move the filepicker into: the parent
+// for a back key, or the highlighted directory for an open key.
+func (m Model) navTarget(k tea.KeyPressMsg) (string, bool) {
+	switch {
+	case key.Matches(k, m.fp.KeyMap.Back):
+		return filepath.Dir(m.fp.CurrentDirectory), true
+	case key.Matches(k, m.fp.KeyMap.Open):
+		path := m.fp.HighlightedPath()
+		if path == "" {
+			return "", false
+		}
+		if info, err := os.Stat(path); err == nil && info.IsDir() {
+			return path, true
+		}
+	}
+	return "", false
+}
+
+// selectDir selects dir if it can still be read.
+func (m *Model) selectDir(dir string) {
+	if _, err := os.ReadDir(dir); err != nil {
+		m.err = &readError{dir: dir, err: err}
+		return
+	}
+	if abs, err := filepath.Abs(dir); err == nil {
+		dir = abs
+	}
+	m.selectedPath = dir
+	m.selected = true
+	m.err = nil
 }
 
 // Selected reports the absolute path the user chose, if any. The parent polls
@@ -204,26 +206,19 @@ func (m Model) Selected() (path string, ok bool) {
 	return m.selectedPath, m.selected
 }
 
-// Err returns the most recent surfaced error (a disabled-file selection or a
-// directory read failure), or nil. It is cleared on the next navigation or
-// successful selection.
+// Err returns the error the status line shows, or nil.
 func (m Model) Err() error {
 	return m.err
 }
 
-// Dir returns the directory the picker is currently showing. This is the value
-// set at construction time (from Options.StartDir, or os.Getwd() if empty) and
-// is updated as the user navigates. Tests use it to assert that the browser
-// opens at the expected root rather than the process working directory.
+// Dir returns the directory the picker is showing.
 func (m Model) Dir() string {
 	return m.fp.CurrentDirectory
 }
 
-// View renders, top to bottom: an optional title, the current-directory path
-// header, the filepicker's list, the navigation key-hint line, and a status
-// slot (disabled-file error or "no matching files" notice). The status slot is
-// always present (empty when there is nothing to surface) so the rendered height
-// matches what SetSize reserved and the component never overflows its box.
+// View renders an optional title, the current directory, the list, the key
+// hint and a status line. The status line is always drawn, empty or not, so
+// the height matches what SetSize reserved.
 func (m Model) View() string {
 	var b strings.Builder
 
@@ -245,10 +240,8 @@ func (m Model) View() string {
 	return b.String()
 }
 
-// pathHeader renders the directory the picker is currently in, brand-styled and
-// left-elided to the box width so the tail (where the user is) stays visible
-// even for a deep path. With no width yet (View called before SetSize) the path
-// is shown untruncated.
+// pathHeader renders the current directory, left-elided to the box width so
+// the end of a deep path stays visible.
 func (m Model) pathHeader() string {
 	path := m.fp.CurrentDirectory
 	if m.w > 0 {
@@ -257,43 +250,37 @@ func (m Model) pathHeader() string {
 	return styles.Title.Render(path)
 }
 
-// navHint is the always-present key-hint line. It leads with the "←/h .." up
-// affordance the picker otherwise hides, then the descend and confirm keys; the
-// confirm verb reflects the mode ("use this dir" in dir mode, "select" for a
-// file). Dim so it reads as chrome, not content.
 func (m Model) navHint() string {
-	confirm := "enter select"
+	hint := "←/h ..  ·  →/l open  ·  enter select"
 	if m.dirMode {
-		confirm = "enter use this dir"
+		hint = "←/h ..  ·  →/l open  ·  enter use current dir"
 	}
-	hint := "←/h ..  ·  →/l open  ·  " + confirm
+	if m.w > 0 {
+		hint = ansi.Truncate(hint, m.w, "…")
+	}
 	return hintStyle.Render(hint)
 }
 
-// statusLine is the reserved bottom slot: a permission/disabled-file error if
-// one is pending, otherwise a "no matching files" notice when the current
-// directory holds nothing the user can select. The notice is suppressed in dir
-// mode (any directory is itself a valid place to be) and when an error is
-// already shown. Returns the empty string when there is nothing to surface — the
-// slot's line is still emitted by View so the layout height stays constant.
+// statusLine is an error if there is one, otherwise a notice when a file-mode
+// directory holds nothing selectable.
 func (m Model) statusLine() string {
-	if m.err != nil {
-		return styles.Bad.Render(m.err.Error())
+	var line string
+	switch {
+	case m.err != nil:
+		line = styles.Bad.Render(m.err.Error())
+	case !m.dirMode && !m.hasSelectable:
+		line = styles.Warn.Render("no matching files in this directory")
 	}
-	if !m.fp.DirAllowed && !m.dirHasSelectable() {
-		return styles.Warn.Render("no matching files in this directory")
+	if m.w > 0 {
+		line = ansi.Truncate(line, m.w, "…")
 	}
-	return ""
+	return line
 }
 
 // hintStyle dims the navigation key-hint so it reads as chrome.
 var hintStyle = lipgloss.NewStyle().Faint(true)
 
-// elideLeft truncates path from the left to fit width w, prefixing "…" so the
-// tail (the current directory) stays visible. It is rune/display-width aware
-// (via the ansi package, which also accounts for wide characters), so a path
-// with multibyte components is never split mid-grapheme or measured by byte
-// length. A path already within w is returned unchanged.
+// elideLeft cuts path from the left to display width w, prefixed with "…".
 func elideLeft(path string, w int) string {
 	if w <= 0 {
 		return path
@@ -303,15 +290,8 @@ func elideLeft(path string, w int) string {
 		return path
 	}
 	const prefix = "…"
-	// Drop just enough leading width that "…" + the remaining tail fits in w:
-	// the result width is 1 (prefix) + (width - drop), so drop = width - w + 1.
-	//
-	// TruncateLeft drops graphemes until the accumulated width *exceeds* drop, so
-	// a display-width-2 grapheme straddling the cut boundary is kept whole and the
-	// result can come back one column too wide. Re-truncate with a larger drop
-	// until the rendered width fits — each extra unit removes at least one column,
-	// so this converges in at most one extra step for a single straddling wide
-	// grapheme.
+	// TruncateLeft keeps a wide grapheme that straddles the cut, so the result
+	// can be a column too wide; drop one more until it fits.
 	for drop := width - w + 1; drop < width; drop++ {
 		out := ansi.TruncateLeft(path, drop, prefix)
 		if ansi.StringWidth(out) <= w {
@@ -322,33 +302,17 @@ func elideLeft(path string, w int) string {
 	return prefix
 }
 
-// dirHasSelectable reports whether CurrentDirectory contains at least one entry
-// the user could select. It reads the cache Update warms; if the cache is stale
-// (e.g. View is called before any Update — the unsized/un-inited path) it falls
-// back to a live scan so the hint is never wrong, just not memoized.
-func (m Model) dirHasSelectable() bool {
-	if m.lastScanDir == m.fp.CurrentDirectory {
-		return m.hasSelectable
-	}
-	return scanSelectable(m.fp.CurrentDirectory, m.fp.AllowedTypes, m.fp.ShowHidden)
-}
-
-// scanSelectable reports whether dir holds a non-hidden file matching one of
-// exts (empty exts means any file qualifies). It mirrors the filepicker's own
-// canSelect/hidden logic so the hint agrees with what the list actually offers.
-func scanSelectable(dir string, exts []string, showHidden bool) bool {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return false
-	}
+// anySelectable reports whether entries hold a file the filepicker would
+// list and let the user select.
+func (m Model) anySelectable(entries []os.DirEntry) bool {
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
 		}
-		if !showHidden && strings.HasPrefix(e.Name(), ".") {
+		if !m.fp.ShowHidden && strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
-		if matchesExt(e.Name(), exts) {
+		if matchesExt(e.Name(), m.fp.AllowedTypes) {
 			return true
 		}
 	}
@@ -374,3 +338,24 @@ type selectError struct{ path string }
 func (e *selectError) Error() string {
 	return "cannot select " + filepath.Base(e.path) + ": not an allowed file type"
 }
+
+// readError reports a directory the user can't read.
+type readError struct {
+	dir string
+	err error
+}
+
+func (e *readError) Error() string {
+	reason := e.err
+	var pe *fs.PathError
+	if errors.As(e.err, &pe) {
+		reason = pe.Err
+	}
+	msg := "can't read " + filepath.Base(e.dir) + ": " + reason.Error()
+	if runtime.GOOS == "darwin" && errors.Is(e.err, fs.ErrPermission) {
+		msg += " (check the terminal's file access in macOS Privacy & Security)"
+	}
+	return msg
+}
+
+func (e *readError) Unwrap() error { return e.err }

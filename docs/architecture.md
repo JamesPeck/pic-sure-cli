@@ -2703,7 +2703,13 @@ yes runs `Check` first. It writes nothing.
 
 ## internal/filebrowser
 
-The file and directory picker used by the load wizard, on Bubble Tea v2.
+The file and directory picker used by the load wizard, on Bubble Tea v2: the
+Bubbles filepicker plus a path header, a key hint and a status line. The
+parent calls `Update` and then polls `Selected`. The filepicker enters a
+directory before reading it and keeps the old listing when the read fails, so
+`Update` reads the target first and, if it can't, stays put and shows the
+error. In `DirMode`, Enter selects the directory in the header, → or `l` opens
+the highlighted one, and files are listed dimmed.
 
 ## internal/styles
 
