@@ -1,0 +1,73 @@
+# A stopped daemon (here, DOCKER_HOST pointing nowhere, as docker words it)
+# is exit 3 on every stack command, with the advice init's preflight gives.
+cd stack
+exitcode 3 pic-sure down
+stderr '^pic-sure: the Docker daemon isn''t reachable: .*failed to connect to the docker API at unix:///nonexistent'
+stderr '^Start Docker Desktop, Colima or OrbStack, or the docker service, and check `docker context ls`.$'
+exitcode 3 pic-sure restart
+stderr 'isn''t reachable'
+exitcode 3 pic-sure ps
+stderr 'isn''t reachable'
+exitcode 3 pic-sure logs
+stderr 'isn''t reachable'
+exitcode 3 pic-sure reset --yes
+stderr 'isn''t reachable'
+exitcode 3 pic-sure up
+stderr 'isn''t reachable'
+exitcode 3 pic-sure --json down
+stdout '"exit_code":3,"message":"the Docker daemon isn''t reachable: '
+
+# Without docker on PATH: exit 3, saying to install it.
+exitcode 3 sh $WORK/nodocker.sh down
+stderr '^pic-sure: docker is not on PATH: install Docker Desktop, Colima, OrbStack or Docker Engine \('
+exitcode 3 sh $WORK/nodocker.sh restart
+stderr 'docker is not on PATH'
+exitcode 3 sh $WORK/nodocker.sh ps
+stderr 'docker is not on PATH'
+exitcode 3 sh $WORK/nodocker.sh logs
+stderr 'docker is not on PATH'
+exitcode 3 sh $WORK/nodocker.sh reset --yes
+stderr 'docker is not on PATH'
+exitcode 3 sh $WORK/nodocker.sh up
+stderr 'docker is not on PATH'
+
+# doctor keeps its own contract: a failed check is exit 1.
+exitcode 1 pic-sure doctor
+stdout '^\[FAIL\] docker-daemon '
+
+# A hung daemon: doctor and support-bundle each give up on it after the
+# probe timeout (10 s), report it, and finish.
+cd $WORK
+cp hung.scenario docker.scenario
+exitcode 1 pic-sure doctor
+stdout '^\[FAIL\] docker-daemon +the Docker daemon didn''t answer within 10s$'
+exec pic-sure support-bundle -o hung.tar.gz
+exec tar -xzf hung.tar.gz
+exec sh -c 'cat */doctor.json'
+stdout '"name":"docker-daemon","status":"fail","message":"the Docker daemon didn''t answer within 10s"'
+
+-- hung.scenario --
+docker * => 0 sleep=1h
+-- docker.scenario --
+docker * => 1 stderr=unreachable.txt
+-- nodocker.sh --
+# Runs pic-sure with only itself on PATH.
+mkdir -p "$HOME/nodocker"
+ln -sf "$(command -v pic-sure)" "$HOME/nodocker/pic-sure"
+PATH=$HOME/nodocker exec pic-sure "$@"
+-- unreachable.txt --
+failed to connect to the docker API at unix:///nonexistent; check if the path is correct and if the daemon is running: dial unix /nonexistent: connect: no such file or directory
+-- stack/pic-sure.yaml --
+schema: 1
+name: demo
+auth: {mode: open, admin_email: admin@example.com}
+-- stack/.pic-sure/state.json --
+{"cli_version": "dev", "schema_version": 1, "initialized_at": "2026-10-07T12:00:00Z"}
+-- stack/.pic-sure/secrets.yaml --
+db_root_password: rootpw
+auth0_client_secret: synthetic-client-secret-0123456789abcdef
+auth0_client_secret_generated: true
+-- stack/.pic-sure/hpds/encryption_key --
+0123456789abcdef0123456789abcdef
+-- stack/.pic-sure/render/compose.yaml --
+services: {}

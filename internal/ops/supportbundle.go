@@ -32,9 +32,10 @@ const (
 	BundleRunLogs = 5
 	// BundleLogTail is how many lines of each service's log go in.
 	BundleLogTail = 500
-	// bundleLogsTimeout bounds each service's `compose logs`.
-	bundleLogsTimeout = 30 * time.Second
 )
+
+// bundleLogsTimeout bounds each service's `compose logs`. Tests shorten it.
+var bundleLogsTimeout = 30 * time.Second
 
 // SupportBundleOptions configures SupportBundle.
 type SupportBundleOptions struct {
@@ -227,16 +228,26 @@ func (b *bundle) compose(ctx context.Context, c docker.Composer, composeErr erro
 		}
 	}
 	slices.Sort(services)
-	for _, svc := range services {
+	for i, svc := range services {
 		var out, errOut bytes.Buffer
 		lctx, cancel := context.WithTimeout(ctx, bundleLogsTimeout)
 		err := c.Logs(lctx, docker.ComposeLogsOpts{Services: []string{svc}, Tail: BundleLogTail, Out: &out, Err: &errOut})
+		timedOut := err != nil && ctx.Err() == nil && lctx.Err() != nil
 		cancel()
+		if timedOut {
+			err = fmt.Errorf("no answer within %s", bundleLogsTimeout)
+		}
 		if err != nil {
 			b.problem("compose logs %s: %v", svc, err)
 		}
 		if out.Len() > 0 || err == nil {
 			b.add("compose/logs/"+svc+".log", out.Bytes(), false)
+		}
+		if timedOut && i+1 < len(services) {
+			// A daemon that stops answering would cost the timeout per
+			// service.
+			b.problem("compose logs: skipped %s after %s timed out", strings.Join(services[i+1:], ", "), svc)
+			break
 		}
 	}
 }

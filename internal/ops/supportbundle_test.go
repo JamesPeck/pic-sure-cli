@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/docker"
 	"github.com/JamesPeck/pic-sure-cli/internal/docker/fakerunner"
@@ -118,7 +119,11 @@ func leakyText() string {
 
 func bundleRunner(t *testing.T) *fakerunner.Runner {
 	t.Helper()
-	f := fakerunner.New(t)
+	return bundleRules(fakerunner.New(t))
+}
+
+// bundleRules adds a stack's docker answers to f, after any rules it has.
+func bundleRules(f *fakerunner.Runner) *fakerunner.Runner {
 	f.On(fakerunner.Glob("docker compose * ps --all --format json")).Stdout(
 		`{"Name":"demo-gateway-1","Service":"gateway","State":"exited","ExitCode":1}` + "\n" +
 			`{"Name":"demo-picsure-db-1","Service":"picsure-db","State":"exited","ExitCode":0}` + "\n" +
@@ -324,6 +329,49 @@ func TestSupportBundleWithoutAStack(t *testing.T) {
 	if !strings.Contains(strings.Join(r.Problems, "\n"), "no stack") {
 		t.Errorf("problems %q", r.Problems)
 	}
+}
+
+// A hung daemon fails doctor's probes in time, and the bundle records it.
+func TestSupportBundleHungDaemon(t *testing.T) {
+	shortProbeTimeout(t)
+	f := fakerunner.New(t)
+	f.On(fakerunner.Glob("docker *")).Do(hang)
+	d := &ops.Deps{Runner: f, Docker: docker.NewEngine(f), Clock: ops.FixedClock(statusNow), Sink: events.Discard}
+	var buf bytes.Buffer
+	start := time.Now()
+	_, err := ops.SupportBundle(context.Background(), d, &buf, ops.SupportBundleOptions{Doctor: ops.DoctorOptions{Host: &fakeHost{diskFree: 100 * gib}}, Prefix: "bundle"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Errorf("support-bundle took %s", d)
+	}
+	files := untarBundle(t, &buf)
+	if !strings.Contains(files["doctor.json"], `"name":"docker-daemon","status":"fail","message":"the Docker daemon didn't answer within 20ms"`) {
+		t.Errorf("doctor.json:\n%s", files["doctor.json"])
+	}
+}
+
+// compose logs that run out of time skip the services after them.
+func TestSupportBundleStopsCollectingLogsAfterATimeout(t *testing.T) {
+	old := *ops.BundleLogsTimeout
+	*ops.BundleLogsTimeout = 20 * time.Millisecond
+	t.Cleanup(func() { *ops.BundleLogsTimeout = old })
+	f := fakerunner.New(t)
+	f.On(fakerunner.Glob("docker compose * logs --tail 500 gateway")).Do(hang)
+	r, files := buildBundle(t, newBundleStack(t), bundleRules(f))
+	problems := strings.Join(r.Problems, "\n")
+	for _, want := range []string{"compose logs gateway: no answer within 20ms", "compose logs: skipped hpds, picsure-db after gateway timed out"} {
+		if !strings.Contains(problems, want) {
+			t.Errorf("problems %q, want %q", r.Problems, want)
+		}
+	}
+	for name := range files {
+		if strings.HasPrefix(name, "compose/logs/") {
+			t.Errorf("unexpected %s", name)
+		}
+	}
+	f.AssertNotCalled(fakerunner.Glob("docker compose * logs *picsure-db"))
 }
 
 func TestSupportBundleWriteFailure(t *testing.T) {

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/docker"
 	"github.com/JamesPeck/pic-sure-cli/internal/docker/fakerunner"
@@ -224,6 +225,59 @@ func TestDoctorDaemonUnreachable(t *testing.T) {
 	for _, name := range []string{"docker-runtime", "disk-docker", "memory", "arm64-images"} {
 		noCheck(t, r, name)
 	}
+}
+
+// hang is a docker call to a daemon that never answers.
+func hang(ctx context.Context, _ fakerunner.Call) (docker.Result, error) {
+	<-ctx.Done()
+	return docker.Result{ExitCode: -1}, ctx.Err()
+}
+
+func shortProbeTimeout(t *testing.T) {
+	t.Helper()
+	old := *ops.DockerProbeTimeout
+	*ops.DockerProbeTimeout = 20 * time.Millisecond
+	t.Cleanup(func() { *ops.DockerProbeTimeout = old })
+}
+
+func TestDoctorHungDaemon(t *testing.T) {
+	shortProbeTimeout(t)
+	e := newDoctorEnv(t)
+	e.f.On(fakerunner.Exact("docker", "info", "--format", "json")).Do(hang)
+	start := time.Now()
+	r := e.run()
+	if d := time.Since(start); d > 2*time.Second {
+		t.Errorf("doctor took %s", d)
+	}
+	c := wantCheck(t, r, "docker-daemon", ops.CheckFail, "the Docker daemon didn't answer within 20ms")
+	if c.Detail == "" {
+		t.Error("no detail on what to do")
+	}
+	wantCheck(t, r, "compose-version", ops.CheckWarn, "couldn't read")
+	for _, name := range []string{"docker-runtime", "disk-docker", "memory", "arm64-images"} {
+		noCheck(t, r, name)
+	}
+}
+
+// A daemon that answers docker info and then stops answering fails each
+// later probe within the timeout.
+func TestDoctorDaemonHangsAfterInfo(t *testing.T) {
+	shortProbeTimeout(t)
+	e := newDoctorEnv(t)
+	e.info.Architecture = "aarch64"
+	for _, m := range []string{"docker version *", "docker image inspect *", "docker ps *"} {
+		e.f.On(fakerunner.Glob(m)).Do(hang)
+	}
+	start := time.Now()
+	r := e.run()
+	if d := time.Since(start); d > 2*time.Second {
+		t.Errorf("doctor took %s", d)
+	}
+	wantCheck(t, r, "docker-daemon", ops.CheckOK, "answers")
+	wantCheck(t, r, "disk-docker", ops.CheckWarn, "didn't answer within 20ms")
+	wantCheck(t, r, "memory", ops.CheckWarn, "didn't answer within 20ms")
+	wantCheck(t, r, "arm64-images", ops.CheckWarn, "didn't answer within 20ms")
+	e.f.AssertNotCalled(fakerunner.Glob("docker run *"))
 }
 
 func TestDoctorPluginVersions(t *testing.T) {

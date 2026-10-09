@@ -138,7 +138,11 @@ it.
 - `app.go`: `App` (build info, global options, streams, and seams for the
   terminal check and the TUI), `Execute`, and the error-to-exit-code
   mapping. A signal received while a command runs decides the exit code,
-  even if the command then returns cleanly. With no arguments, pic-sure
+  even if the command then returns cleanly. An exit-1 error caused by a
+  missing `docker` or an unreachable daemon (`docker.IsMissing`,
+  `docker.IsUnreachable`) becomes exit 3 there, in `dockerPrecondition`
+  (`dockerexit.go`, 091), with doctor's install or start advice, so no
+  command maps these itself. With no arguments, pic-sure
   opens the TUI when stdin and stdout are terminals and none of `--json`,
   `--plain`, `--yes` or `--non-interactive` is given. Otherwise it prints
   help.
@@ -1012,6 +1016,12 @@ preconditions (034) can call it with no `Stack` and `Building: true`.
   stack's HPDS (`docker ps` by the stack label and compose service)
   against `docker info`'s `MemTotal` (fail when over), plus this stack's
   when it isn't running (only a warning, since `-Xmx` is a ceiling).
+- Every Docker request doctor makes (`docker info` and `version`, the
+  disk, memory and arm64 probes, `compose config`) has its own
+  `docker.ProbeTimeout` (10 s) deadline, through `dockerProbe` (091). A
+  request that runs out of it fails or warns its check with "the Docker
+  daemon didn't answer within 10s", so a hung daemon can't hang doctor or
+  support-bundle. `docker-daemon` failing skips the probes after it.
   `arm64-images` inspects only the pinned images already pulled.
 - With a `Stack`: `config` (including `CheckFiles`), `compose-config` (`d.Compose.Config(quiet)`;
   a warning before the first render, from `ComposeErr`), `overrides`
@@ -1704,7 +1714,8 @@ to w, every file under `Prefix/` with mode 0600: `status.json` (Status
 with the caller's options, `Deep` set by the cli) and `doctor.json`, as
 `--json` prints them; the newest `BundleRunLogs` (5) run logs, by name;
 `compose/ps.json` and `compose/logs/<service>.log` (`compose logs --tail
-500` per service compose ps lists, 30 s each); `stack/` with pic-sure.yaml,
+500` per service compose ps lists, 30 s each, and after one runs out of
+time the rest are skipped as a problem, 091); `stack/` with pic-sure.yaml,
 state.json and manifest.json; and `README.txt`. It only reads. Whatever it
 can't collect is a `Problems` line, in the report and README; only
 failing to write w, or ctx ending, is an error. With no Stack it holds doctor alone.
@@ -1803,6 +1814,12 @@ adapter.
 - `RunChecked` turns a non-zero exit into an `*ExitError`, whose message
   carries the argv and the last stderr line. `FormatArgv` renders argv for
   messages and logs.
+- **Docker unavailable** (091, `unavailable.go`). `IsMissing(err)` is
+  `docker` not found on PATH; `IsUnreachable(err)` is `ErrDaemonUnreachable`
+  or docker's or compose's own "Cannot connect to the Docker daemon",
+  "failed to connect to the docker API" or "error during connect".
+  `InstallHint` and `StartHint` are the advice doctor and the CLI's exit-3
+  mapping give.
 
 **fakerunner** (`internal/docker/fakerunner`) is the `Runner` for unit
 tests. `f := fakerunner.New(t)`; `f.On(matcher)` adds a rule, configured with
@@ -1910,8 +1927,8 @@ is ready to use.
 **WithTimeout** (`timeout.go`) wraps any `Runner` so each call is cancelled
 after d (over `ExecRunner`, it returns up to `WaitDelay` later):
 `docker.WithTimeout(d.Runner, 10*time.Second)` for `compose ps`, 5–10 s for
-probes (§10.2). Long operations take no timeout and end only with their
-context. A call that runs out of time returns a `*TimeoutError`
+probes (§10.2; `ProbeTimeout` is 10 s). Long operations take no timeout
+and end only with their context. A call that runs out of time returns a `*TimeoutError`
 (`"ARGV timed out after 10s"`), which matches `context.DeadlineExceeded`; a
 caller's own cancellation stays a plain context error.
 
@@ -2728,13 +2745,14 @@ directory. A lock file serializes choosing the rule, so concurrent calls
 keep the log in order and `times=N` exact. Rule syntax:
 
 ```
-PATTERN => EXIT [stdout=FILE] [stderr=FILE] [times=N]
+PATTERN => EXIT [stdout=FILE] [stderr=FILE] [times=N] [sleep=DURATION]
 ```
 
 PATTERN is a glob over the space-joined, unquoted argv (program name
 included), or a regex after `re:`. FILE is relative to the scenario's
-directory. `times=N` retires a rule after N matches. A call that no rule
-matches exits 97 with the reason on stderr.
+directory. `times=N` retires a rule after N matches. `sleep=DURATION` (a Go duration)
+waits before answering, so `sleep=1h` plays a hung daemon. A call that no
+rule matches exits 97 with the reason on stderr.
 `cmd/pic-sure/testdata/script/fakes.txtar` is a worked example.
 
 The fakes find their scenario through `HOME`, which the exec runner (003)

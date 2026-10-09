@@ -8,6 +8,11 @@ import (
 	"time"
 )
 
+// ProbeTimeout bounds one diagnostic request to the daemon, such as doctor's
+// `docker info` (spec §10.2: 5 to 10 s per probe), so a hung daemon fails
+// the probe instead of hanging the command.
+const ProbeTimeout = 10 * time.Second
+
 // WithTimeout returns a Runner that cancels each call to r after d. A call
 // that runs out of time is cancelled like any other, so over ExecRunner it
 // can return up to WaitDelay later, and it returns a *TimeoutError. Spec

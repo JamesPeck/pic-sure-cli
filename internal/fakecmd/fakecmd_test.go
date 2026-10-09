@@ -122,6 +122,7 @@ func TestParseScenarioErrors(t *testing.T) {
 		"docker version => 0 stdout",
 		"docker version => 0 colour=red",
 		"docker version => 0 times=0",
+		"docker version => 0 sleep=soon",
 		"re:docker ( => 0",
 	} {
 		if _, err := ParseScenario(strings.NewReader("# ok\n\n" + bad + "\n")); err == nil || !strings.Contains(err.Error(), "line 3") {

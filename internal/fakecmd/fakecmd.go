@@ -14,7 +14,7 @@
 // Scenario syntax, one rule per line; blank lines and # comments are
 // ignored:
 //
-//	PATTERN => EXIT [stdout=FILE] [stderr=FILE] [times=N]
+//	PATTERN => EXIT [stdout=FILE] [stderr=FILE] [times=N] [sleep=DURATION]
 //
 // PATTERN is matched against the whole argv, program name included, joined
 // with single spaces and unquoted: a glob in which * matches any run of
@@ -22,7 +22,9 @@
 // expression. EXIT is the exit code. FILE names a file (relative paths are
 // from the scenario's directory) whose contents the fake writes to that
 // stream. times=N retires the rule after N matches, so later calls fall
-// through to the next matching rule. For example:
+// through to the next matching rule. sleep=DURATION (a Go duration such as
+// 1h) waits that long before answering, as a hung daemon would. For
+// example:
 //
 //	docker version --format json => 0 stdout=version.json
 //	docker compose * ps --format json => 0 stdout=starting.json times=1
@@ -46,6 +48,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/docker"
 	"github.com/JamesPeck/pic-sure-cli/internal/docker/fakerunner"
@@ -62,6 +65,7 @@ type Rule struct {
 	Stdout string // file path; relative paths are from the scenario's directory
 	Stderr string
 	Times  int // 0 means unlimited
+	Sleep  time.Duration
 }
 
 // ParseScenario reads scenario rules from r.
@@ -85,7 +89,7 @@ func ParseScenario(r io.Reader) ([]Rule, error) {
 func parseRule(line string) (Rule, error) {
 	pattern, response, ok := strings.Cut(line, "=>")
 	if !ok {
-		return Rule{}, errors.New(`want "PATTERN => EXIT [stdout=FILE] [stderr=FILE] [times=N]"`)
+		return Rule{}, errors.New(`want "PATTERN => EXIT [stdout=FILE] [stderr=FILE] [times=N] [sleep=DURATION]"`)
 	}
 	var rule Rule
 	pattern = strings.TrimSpace(pattern)
@@ -121,6 +125,10 @@ func parseRule(line string) (Rule, error) {
 			if rule.Times, err = strconv.Atoi(value); err != nil || rule.Times < 1 {
 				return Rule{}, fmt.Errorf("times=%s is not a positive number", value)
 			}
+		case "sleep":
+			if rule.Sleep, err = time.ParseDuration(value); err != nil || rule.Sleep < 0 {
+				return Rule{}, fmt.Errorf("sleep=%s is not a duration", value)
+			}
 		default:
 			return Rule{}, fmt.Errorf("unknown option %q", opt)
 		}
@@ -151,6 +159,7 @@ func run(name string, args []string, home string, stdout, stderr io.Writer) int 
 	if err != nil {
 		return fail("%v", err)
 	}
+	time.Sleep(rule.Sleep)
 	for _, out := range []struct {
 		file string
 		w    io.Writer

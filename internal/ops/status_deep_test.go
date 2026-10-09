@@ -180,11 +180,20 @@ func TestStatusDeepGatewayDegraded(t *testing.T) {
 	}
 }
 
-func TestStatusDeepGatewayNoAnswer(t *testing.T) {
+func TestStatusDeepGatewayAnswersAnError(t *testing.T) {
 	f := deepRunner(t, "gateway")
 	f.On(fakerunner.Glob(execGateway)).Exit(1).Stderr(headers("HTTP/1.1 502 Bad Gateway") + "wget: server returned error: HTTP/1.1 502 Bad Gateway\n")
 	g := deepStatus(t, f).Gateway
-	if !g.Checked || g.Healthy == nil || *g.Healthy || !strings.Contains(g.Message, "HTTP 502") {
+	if !g.Checked || g.Healthy == nil || *g.Healthy || g.Message != "gateway /system/status answered HTTP 502" {
+		t.Errorf("gateway %+v", g)
+	}
+}
+
+func TestStatusDeepGatewayNoAnswer(t *testing.T) {
+	f := deepRunner(t, "gateway")
+	f.On(fakerunner.Glob(execGateway)).Exit(1).Stderr("wget: can't connect to remote host (127.0.0.1): Connection refused\n")
+	g := deepStatus(t, f).Gateway
+	if !g.Checked || g.Healthy == nil || *g.Healthy || g.Message != "gateway /system/status did not respond: wget: can't connect to remote host (127.0.0.1): Connection refused" {
 		t.Errorf("gateway %+v", g)
 	}
 }

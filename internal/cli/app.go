@@ -152,6 +152,7 @@ func (a *App) execute(ctx context.Context, root *cobra.Command, args []string) i
 	if err == nil {
 		return exitcode.CodeOK
 	}
+	err = dockerPrecondition(err)
 	a.reportError(cmd, err)
 	if a.pipeClosed() {
 		// Reporting the error was the first write to the closed pipe.
