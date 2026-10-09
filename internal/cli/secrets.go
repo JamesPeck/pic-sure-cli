@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
 	"io"
@@ -150,20 +149,20 @@ func (a *App) rotateSecret(cmd *cobra.Command, args []string) error {
 }
 
 // confirmYes asks the user to confirm with y. --yes answers for them.
-// Without a terminal to ask on, it is exit 4, before anything has changed.
+// Without terminals to ask on (canConfirm), it is exit 4, before anything
+// has changed.
 func (a *App) confirmYes(cmd *cobra.Command, what string) error {
 	if a.Global.Yes {
 		return nil
 	}
-	if !a.canPrompt() {
+	if !a.canConfirm() {
 		return exitcode.ConfirmRequired("%s needs confirmation: pass --yes, or run it on a terminal. Nothing was changed.", cmd.CommandPath())
 	}
-	_, _ = fmt.Fprintf(a.stderr(), "%s\nContinue? [y/N] ", what)
-	line, err := bufio.NewReader(a.Stdin).ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
+	yes, err := a.askYesNo(cmd.Context(), what+"\nContinue?")
+	if err != nil {
 		return err
 	}
-	if a := strings.ToLower(strings.TrimSpace(line)); a != "y" && a != "yes" {
+	if !yes {
 		return exitcode.ConfirmRequired("not confirmed; nothing was changed")
 	}
 	return nil

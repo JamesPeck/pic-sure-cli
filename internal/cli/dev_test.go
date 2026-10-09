@@ -1,10 +1,17 @@
 package cli
 
 import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/catalog"
+	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
+	"github.com/JamesPeck/pic-sure-cli/internal/stack"
 )
 
 func TestWriteDev(t *testing.T) {
@@ -37,5 +44,29 @@ func TestWriteDev(t *testing.T) {
 		if b.String() != c.want {
 			t.Errorf("%s:\n%s\nwant\n%s", c.name, b.String(), c.want)
 		}
+	}
+}
+
+// dev list is read-only (§10.6), so on a pic-sure.yaml in a schema this
+// pic-sure can't decode it warns and reads the keys it needs as written.
+func TestDevListOnANewerSchema(t *testing.T) {
+	dir := t.TempDir()
+	config := fmt.Sprintf("schema: %d\nname: demo\ndev: {services: [hpds]}\nnetwork: {dev_ports: {base: 16000}}\ncomponents: {pic-sure: {source: ../pic-sure}}\n", stack.ConfigSchema+1)
+	if err := os.MkdirAll(filepath.Join(dir, ".pic-sure"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, stack.ConfigFile), []byte(config), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a, stdout, stderr := testApp(t)
+	if code := a.Run(context.Background(), []string{"dev", "list", "--stack", dir}); code != exitcode.CodeOK {
+		t.Fatalf("exit = %d; stderr %q", code, stderr)
+	}
+	if !strings.Contains(stderr.String(), "pic-sure: warning: this pic-sure can't decode pic-sure.yaml schema") {
+		t.Errorf("stderr = %q", stderr)
+	}
+	want := regexp.MustCompile(`(?m)^hpds +on +127\.0\.0\.1:16002 +pic-sure +\.\./pic-sure$`)
+	if out := stdout.String(); !want.MatchString(out) || !regexp.MustCompile(`(?m)^gateway +off +127\.0\.0\.1:16003 `).MatchString(out) {
+		t.Errorf("stdout:\n%s", out)
 	}
 }

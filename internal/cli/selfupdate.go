@@ -1,15 +1,12 @@
 package cli
 
 import (
-	"bufio"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"os/exec"
-	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -85,11 +82,7 @@ func (a *App) newSelfUpdater(proxy *netproxy.Proxy, sink events.Sink, step strin
 // self-update (D12): the command may prompt, and stderr, where the question
 // goes, is a terminal too.
 func (a *App) canOfferSelfUpdate() bool {
-	stderrTerminal := a.stderrTerminal
-	if stderrTerminal == nil {
-		stderrTerminal = func() bool { return isTerminalWriter(a.Stderr) }
-	}
-	return a.canPrompt() && stderrTerminal()
+	return a.canPrompt() && a.stderrIsTerminal()
 }
 
 // gateConfirm returns the compatibility gate's Confirm for init and update
@@ -109,35 +102,6 @@ func (a *App) gateConfirm(step events.StepStarted) func(context.Context, string)
 			o.sink.Emit(step)
 		}
 		return yes, err
-	}
-}
-
-// askYesNo asks question on stderr and reads the answer from stdin.
-func (a *App) askYesNo(ctx context.Context, question string) (bool, error) {
-	_, _ = fmt.Fprintf(a.stderr(), "%s [y/N] ", question)
-	type answer struct {
-		line string
-		err  error
-	}
-	got := make(chan answer, 1)
-	go func() {
-		// On cancellation this read is left blocked until the process exits.
-		line, err := bufio.NewReader(a.Stdin).ReadString('\n')
-		got <- answer{line, err}
-	}()
-	select {
-	case <-ctx.Done():
-		_, _ = fmt.Fprintln(a.stderr())
-		return false, ctx.Err()
-	case ans := <-got:
-		if ans.err != nil && !errors.Is(ans.err, io.EOF) {
-			return false, ans.err
-		}
-		if ans.line == "" || !strings.HasSuffix(ans.line, "\n") {
-			_, _ = fmt.Fprintln(a.stderr())
-		}
-		v := strings.ToLower(strings.TrimSpace(ans.line))
-		return v == "y" || v == "yes", nil
 	}
 }
 

@@ -207,7 +207,8 @@ it.
   lines, warnings and the error (093), since compose output and errors can
   quote a secret. The dashboard's warnings and log records, which reach its
   sink another way, go through `redactingSink`, and `warnStderr` redacts
-  too. Only
+  too, and writes through the renderer like log records (`logStderr`),
+  so it doesn't draw over the frame. Only
   `output.go` emits `Result`. A command ends in one of three ways:
   - a streaming command returns `a.finish(report, text)`. When the
     command returns nil, the run ends with a success `Result` (`--json`
@@ -400,8 +401,8 @@ it.
   `--discard-data` with another NAME (exit 2) or without `--yes` (exit 4).
   A NAME `ops.RotateReadsStdin` (the Auth0 client secret; `db-root` with a
   remote database) needs `--yes`, since stdin holds the secret
-  (`ReadUserSecret`); any other asks `[y/N]` on a terminal (`confirmYes`)
-  or is exit 4. Then the run log, the stack lock, an initialised stack with
+  (`ReadUserSecret`); any other asks `[y/N]` (`confirmYes`) when
+  `canConfirm`, or is exit 4. Then the run log, the stack lock, an initialised stack with
   secrets.yaml (exit 3, pointing at init) and a render (exit 3, `up`), the
   Composer from `upCompose` (env computed per call from the `*Secrets` the
   rotation updates), and `ops.RotateSecret`, recording the `secrets rotate`
@@ -437,9 +438,11 @@ it.
   Both open the stack with `openStackUnlogged` (openStack without the run
   log, so a refusal writes nothing) and read the config (exit 2 if
   invalid), then `confirmName`: `--yes` consents; otherwise, when
-  `canPrompt`, the user types the stack name on stdin (anything else is
-  exit 4), and without a terminal it is exit 4 before anything changes.
-  `--json` and `--non-interactive` are no consent. Then the run log, and
+  `canConfirm` (stdin and stderr are terminals, and neither `--json` nor
+  `--non-interactive` is set), the user types the stack name on stdin
+  (anything else is exit 4), and otherwise it is exit 4 before anything
+  changes. Both confirmations ask through `ask` (`prompt.go`), as
+  `askYesNo` does, so a first Ctrl-C at the prompt is exit 130 at once. Then the run log, and
   under the stack lock the Composer from `teardownCompose`, which, unlike
   `stackCompose`, gives a never-rendered stack none (a nil
   `docker.Composer`) and a stack whose secrets.yaml is missing or
@@ -483,7 +486,10 @@ it.
 
 - `dev.go` (052): `dev list` (`ops.DevList`: every variant with its port
   on 127.0.0.1, whether it is on, and its component's source; `--json` is
-  `{"variants": [...]}`), and `dev on|off SERVICE`. Usage problems first:
+  `{"variants": [...]}`; it reads the config as `config show` does, and on
+  a schema this pic-sure can't decode warns and reads `dev.services`,
+  `network.dev_ports.base` and the components' sources as written,
+  `devListAsWritten`), and `dev on|off SERVICE`. Usage problems first:
   an unknown variant (`ops.LookupDev`, exit 2, listing them). Under the stack lock: `dev off` of a variant that isn't on
   changes nothing. Then an initialised stack, and for `on`
   `ops.CheckDevOn` (exit 3: the component's source, httpd-hmr's
@@ -2671,12 +2677,14 @@ the admin email, or a secret-named key that isn't a plain field
 (`privateConfigKey`) logs the key with `[REDACTED]` for the value, and
 registers the value unless it is `true` or `false`, since config set may
 refuse it before it reaches secrets.yaml (093); each `--set KEY=VALUE` is
-recorded by the same rule. `a.openStack` calls
+recorded by the same rule. `compose -- ARGS` records only the compose
+subcommand and how many arguments follow it (`compose_command`,
+`compose_args`), since a password can be typed there (098). `a.openStack` calls
 `a.openRunLog(st)` once the stack passes the version gate; `init` (034)
 must call it once `.pic-sure/` exists. Until something
-calls it, nothing is written to disk. The read-only commands (`status`, `ps`,
-`logs`, `doctor`, `config show/get`, `version`) get a file only at
-`--log-level debug`, so polling never fills the directory. A bad
+calls it, nothing is written to disk. The version gate's read-only
+commands (`commandClass`, so `compose`'s read-only subcommands too) get a
+file only at `--log-level debug`, so polling never fills the directory. A bad
 `--log-level` is a usage error.
 
 ## internal/tui

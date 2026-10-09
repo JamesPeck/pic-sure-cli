@@ -81,12 +81,14 @@ a missing required flag is exit 2 naming it. Its required flags are
 | 1 | The operation failed | A step failed (`result.error.step` names it); `doctor` with a failing check (doctor reports a missing Docker as a check, so it's 1, not 3); the stack lock is held (use `--wait-lock`); loading data into a stack that mounts shared data. |
 | 2 | Usage error | Unknown command or flag; missing required init flag; invalid config value or `pic-sure.yaml`; an `https://` proxy URL; a secret with a line break or (Auth0) under 32 bytes; a resumed `init` with a flag that would change the config. |
 | 3 | Precondition unmet | Docker or the compose plugin missing, or the daemon unreachable (any command that calls Docker; the message says to install or start Docker); compose too old (`init`); no stack found, or the one found without `--stack` belongs to another user (pass `--stack DIR` to use it); stack not initialised or not rendered (run `init` or `up`); ports busy; a generated open-mode client secret outside open mode (run `secrets rotate auth0-client-secret`); the stack's name in use by another stack's Docker resources, as in a copy of a stack directory (the message names the stack directory they belong to; `status --json` lists each as `foreign`), or by those a stack deleted without `destroy` left behind (`init` prints the `docker` commands that remove them). |
-| 4 | Confirmation required | A destructive command with no terminal and no `--yes`. Nothing was changed. |
-| 5 | Incompatible | The stack was rendered by a newer pic-sure (mutating commands); pending config migrations (run `update`); `release.cli_compat: strict` and the release names another pic-sure; the release needs a newer pic-sure and there is no terminal or `--self-update`. |
+| 4 | Confirmation required | A destructive command without `--yes`, where it can't ask: stdin or stderr isn't a terminal, or `--non-interactive` or `--json` is set. Nothing was changed. |
+| 5 | Incompatible | The stack was rendered by a newer pic-sure (mutating commands); pending config migrations (run `update`); `release.cli_compat: strict` and the release was validated with an older pic-sure; the release needs a newer pic-sure and there is no terminal or `--self-update`. |
 | 130, 143, 128+N | Interrupted by signal N | Ctrl-C is 130, SIGTERM 143; the command ran its cleanups first. 141 when stdout or stderr is a closed pipe (`pic-sure up --json \| head -1` stops `up`). |
 
-On a non-zero exit, stderr's last line is `pic-sure: MESSAGE`. With
-`--json`, stdout's last line is then the failed `result` with the same
+On a non-zero exit, stderr has a `pic-sure: MESSAGE` line. It is the last
+line, except that a usage error may add `Run 'pic-sure ... --help' for
+usage.` after it, and `--log-level debug` adds the `pic-sure exit` log
+record. With `--json`, stdout's last line is then the failed `result` with the same
 message and the exit code, unless the command already printed its report:
 `doctor` (exit 1), `migrate --check` and `db bootstrap --check` (exit 3)
 print their report with nothing after it. A report

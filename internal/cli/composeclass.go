@@ -31,17 +31,25 @@ var (
 	}
 )
 
-// composeClass classifies `compose -- args` by its compose subcommand, the
-// first argument after compose's global flags. Anything it can't place (no
-// subcommand, an unknown subcommand or global flag, a "--") is mutating.
+// composeClass classifies `compose -- args` by its compose subcommand
+// (composeSubcommand). Anything it can't place (no subcommand, an unknown
+// subcommand or global flag, a "--") is mutating.
 func composeClass(args []string) stack.CommandClass {
+	i := composeSubcommand(args)
+	if i < 0 || !composeReadOnly[args[i]] || args[i] == "wait" && downsProject(args[i+1:]) {
+		return stack.Mutating
+	}
+	return stack.ReadOnly
+}
+
+// composeSubcommand returns the index in args of the compose subcommand,
+// the first argument after compose's global flags, or -1 when there is
+// none or a global flag it doesn't know (or a "--") comes first.
+func composeSubcommand(args []string) int {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if !strings.HasPrefix(arg, "-") {
-			if !composeReadOnly[arg] || arg == "wait" && downsProject(args[i+1:]) {
-				return stack.Mutating
-			}
-			return stack.ReadOnly
+			return i
 		}
 		name, _, hasValue := strings.Cut(arg, "=")
 		switch {
@@ -53,10 +61,10 @@ func composeClass(args []string) stack.CommandClass {
 			// -fFILE, -pNAME
 		case composeBoolFlags[name]:
 		default:
-			return stack.Mutating
+			return -1
 		}
 	}
-	return stack.Mutating
+	return -1
 }
 
 func downsProject(args []string) bool {

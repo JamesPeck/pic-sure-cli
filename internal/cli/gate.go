@@ -104,7 +104,9 @@ func (a *App) gate(cmd *cobra.Command, st *stack.Stack) error {
 }
 
 // warnStderr goes to stderr because stdout may carry --json output. It is
-// redacted like events, since a warning can quote an error.
+// redacted like events, since a warning can quote an error. Like log
+// records, it goes through a running renderer (logStderr), so it doesn't
+// print over the renderer's frame.
 func (a *App) warnStderr(format string, args ...any) {
-	_, _ = io.WriteString(a.stderr(), "pic-sure: warning: "+log.Redact(fmt.Sprintf(format, args...))+"\n")
+	_, _ = io.WriteString(logStderr{a}, "pic-sure: warning: "+log.Redact(fmt.Sprintf(format, args...))+"\n")
 }

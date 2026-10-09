@@ -153,7 +153,7 @@ var Fields = []Field{
 	{Key: "release.branch", Kind: KindString, Flag: "release-branch", RequiredWhen: always,
 		Help: "Release-control branch or tag. A tag pins a release; a branch follows it."},
 	{Key: "release.cli_compat", Kind: KindString, Options: enumValues(CompatWarn, CompatStrict),
-		Help: "What happens when the release expects a newer pic-sure: warn and carry on, or refuse (strict)."},
+		Help: "What happens when the release was validated with an older pic-sure than this one: warn and carry on, or refuse (strict). A release that needs a newer pic-sure goes through the self-update gate in either mode."},
 
 	{Key: "components.pic-sure.ref", Kind: KindString, Help: componentRefHelp},
 	{Key: "components.pic-sure.source", Kind: KindString, Help: componentSourceHelp},

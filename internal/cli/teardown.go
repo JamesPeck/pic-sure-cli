@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bufio"
 	"bytes"
 	"errors"
 	"fmt"
@@ -139,21 +138,20 @@ func openTeardownCache(cmd *cobra.Command, create bool) (*cache.Cache, error) {
 }
 
 // confirmName asks the user to type the stack name (§9.8). --yes answers
-// for them. Without a terminal to ask on, it is exit 4, before anything
-// has changed.
+// for them. Without terminals to ask on (canConfirm), it is exit 4, before
+// anything has changed.
 func (a *App) confirmName(cmd *cobra.Command, name, what string) error {
 	if a.Global.Yes {
 		return nil
 	}
-	if !a.canPrompt() {
+	if !a.canConfirm() {
 		return exitcode.ConfirmRequired("%s needs confirmation: pass --yes, or run it on a terminal and type the stack name. Nothing was changed.", cmd.CommandPath())
 	}
-	_, _ = fmt.Fprintf(a.stderr(), "%s\nType the stack name (%s) to confirm: ", what, name)
-	line, err := bufio.NewReader(a.Stdin).ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
+	line, err := a.ask(cmd.Context(), fmt.Sprintf("%s\nType the stack name (%s) to confirm: ", what, name))
+	if err != nil {
 		return err
 	}
-	if strings.TrimSpace(line) != name {
+	if line != name {
 		return exitcode.ConfirmRequired("that isn't %s; nothing was changed", name)
 	}
 	return nil

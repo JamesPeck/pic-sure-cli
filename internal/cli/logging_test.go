@@ -49,7 +49,10 @@ func runWithStack(t *testing.T, dir, path string, err error, args ...string) (lo
 }
 
 func TestReadOnlyCommandsWriteARunLogOnlyAtDebug(t *testing.T) {
-	for path := range readOnlyCommands {
+	for path, class := range commandClasses {
+		if class != stack.ReadOnly {
+			continue
+		}
 		t.Run(path, func(t *testing.T) {
 			var args []string
 			if path == "config get" {
@@ -265,15 +268,46 @@ func TestRunLogRedactsConfigSetValues(t *testing.T) {
 			}
 		})
 	}
-	if got := logArgs("config set", []string{"network.http_port", "8081"}); got[1] != "8081" {
+	argsOf := func(args ...string) []string { return logArgs("config set", args)[1].([]string) }
+	if got := argsOf("network.http_port", "8081"); got[1] != "8081" {
 		t.Errorf("a non-secret value: %q", got)
 	}
-	if got := logArgs("config set", []string{"auth.consent_authorization", "true"}); got[1] != "true" {
+	if got := argsOf("auth.consent_authorization", "true"); got[1] != "true" {
 		t.Errorf("a field that is named like a secret but isn't one: %q", got)
 	}
 	// A boolean is redacted from the record but not registered.
-	if got := logArgs("config set", []string{"services.psama.env.API_TOKEN", "false"}); got[1] != log.Redacted || log.Redact("ok: false") != "ok: false" {
+	if got := argsOf("services.psama.env.API_TOKEN", "false"); got[1] != log.Redacted || log.Redact("ok: false") != "ok: false" {
 		t.Errorf("a secret-named key's boolean: %q, %q", got, log.Redact("ok: false"))
+	}
+}
+
+// compose's passthrough arguments may hold a password typed on the command
+// line, so the run log has only the compose subcommand and their count.
+func TestRunLogLeavesOutComposeArgs(t *testing.T) {
+	const password = "Hq4Zt8Lm2Wx6"
+	logs, _ := runWithStack(t, newTestStack(t), "compose", nil,
+		"--log-level", "debug", "--", "--env-file", "x.env", "exec", "db", "mysql", "-p"+password)
+	if len(logs) != 1 {
+		t.Fatalf("run logs %q, want one", logs)
+	}
+	b, err := os.ReadFile(logs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), password) || strings.Contains(string(b), "x.env") ||
+		!strings.Contains(string(b), `"compose_command":"exec","compose_args":3`) {
+		t.Errorf("run log:\n%s", b)
+	}
+	for _, tc := range []struct {
+		args []string
+		want []any
+	}{
+		{[]string{"ps"}, []any{"compose_command", "ps", "compose_args", 0}},
+		{[]string{"--unknown", "exec", "db"}, []any{"compose_command", "", "compose_args", 3}},
+	} {
+		if got := logArgs("compose", tc.args); fmt.Sprint(got) != fmt.Sprint(tc.want) {
+			t.Errorf("logArgs(compose, %q) = %v, want %v", tc.args, got, tc.want)
+		}
 	}
 }
 

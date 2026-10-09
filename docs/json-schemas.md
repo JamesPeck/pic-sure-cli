@@ -161,8 +161,8 @@ when parts couldn't be collected; 1 when it can't be written; 3 when
 
 ## NDJSON events
 
-Every command that doesn't print a report (above) and isn't `config` or
-`compose`, with `--json`, prints one JSON object per line on
+Every command that doesn't print a report (above) and isn't `config show`,
+`config get` or `compose`, with `--json`, prints one JSON object per line on
 stdout as it runs, each with `type` first, and ends with exactly one
 `result` line. Logs and warnings meant for people go to stderr, so stdout
 is only events. Read lines until `result`; don't rely on the events before
@@ -209,6 +209,7 @@ the same additive-only rule:
 | `data load-genomic` | `{"partition", "promoted": [...], "profile"}` |
 | `shared-data publish` | The data set, as one entry of `shared-data list`. |
 | `shared-data remove` | `{"name", "removed": [...]}` |
+| `config set` | `{"key", "value"}`: the key as given, and its value as now saved, typed as `config get KEY --json` prints it. |
 | `dev on`, `dev off` | `{"service", "on", "services", "port", "source"}` |
 | `reset`, `destroy` | `{"stack", "volumes": [...], "kept_volumes": [...], "images": [...], "files", "pruned"}`: the volumes removed, the volumes reset kept (`--keep-db`), destroy's dev images, and for destroy `files: {"removed", "kept", "remaining", "dir_removed"}` (`remaining` lists what you added, which destroy leaves). `pruned` is there with `--prune-images`. In a copy of another stack's directory, destroy removes only the copy's files and lists the original's resources in `left_alone` (`[{"kind", "name", "stack", "stack_dir"}]`), as `status` lists `foreign`, and in `left_own` any of the copy's own it therefore leaves. Empty lists may be omitted. |
 

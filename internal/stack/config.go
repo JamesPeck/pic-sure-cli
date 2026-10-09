@@ -152,8 +152,8 @@ type CLICompat string
 
 // CLI compatibility settings.
 const (
-	CompatWarn   CLICompat = "warn"   // warn about an older CLI and carry on
-	CompatStrict CLICompat = "strict" // refuse instead
+	CompatWarn   CLICompat = "warn"   // a release validated with an older CLI: warn and carry on
+	CompatStrict CLICompat = "strict" // refuse it instead
 )
 
 // ReleaseControl is the release-control repo whose build-spec pins the

@@ -18,17 +18,11 @@ import (
 // redactor before anything can log it (§6.3).
 func init() { stack.SetSecretRegistrar(log.RegisterSecrets) }
 
-// readOnlyCommands write a run log file only at --log-level debug, so that
-// polling them never fills .pic-sure/logs (spec §6.1). Keys are command
-// paths without "pic-sure ". compose's read-only subcommands do the same.
-var readOnlyCommands = map[string]bool{
-	"status": true, "ps": true, "logs": true, "doctor": true,
-	"config show": true, "config get": true, "version": true,
-	"support-bundle": true,
-}
-
-func quietRunLog(cmd *cobra.Command, path string) bool {
-	return readOnlyCommands[path] || path == "compose" && commandClass(cmd) == stack.ReadOnly
+// quietRunLog reports whether cmd writes a run log file only at
+// --log-level debug, so that polling it never fills .pic-sure/logs (spec
+// §6.1): the version gate's read-only commands (commandClass).
+func quietRunLog(cmd *cobra.Command) bool {
+	return commandClass(cmd) == stack.ReadOnly
 }
 
 // startRunLog starts the logging for a command run. markRunning calls it as
@@ -43,7 +37,7 @@ func (a *App) startRunLog(cmd *cobra.Command, args []string) {
 	a.runLog = log.New(log.Options{
 		Level:  level,
 		Stderr: logStderr{a},
-		File:   level <= slog.LevelDebug || !quietRunLog(cmd, path),
+		File:   level <= slog.LevelDebug || !quietRunLog(cmd),
 	})
 	var flags []string
 	cmd.Flags().Visit(func(f *pflag.Flag) {
@@ -66,21 +60,33 @@ func (a *App) startRunLog(cmd *cobra.Command, args []string) {
 		flags = append(flags, "--"+f.Name+"="+f.Value.String())
 	})
 	a.runLog.Logger().Debug("pic-sure run",
-		"version", a.Info.Version, "commit", a.Info.Commit,
-		"os", runtime.GOOS, "arch", runtime.GOARCH,
-		"command", cmd.CommandPath(), "flags", flags, "args", logArgs(path, args))
+		append([]any{
+			"version", a.Info.Version, "commit", a.Info.Commit,
+			"os", runtime.GOOS, "arch", runtime.GOARCH,
+			"command", cmd.CommandPath(), "flags", flags,
+		}, logArgs(path, args)...)...)
 }
 
-// logArgs is args as the run log records them. `config set KEY VALUE` keeps
-// the key and redacts a private key's value. It also registers the value
-// with the redactor, since config set may yet refuse it, and then it never
-// reaches secrets.yaml, where the registry would otherwise find it.
-func logArgs(path string, args []string) []string {
-	if path != "config set" || len(args) < 2 || !privateConfigKey(args[0]) {
-		return args
+// logArgs is the attrs that record args in the run log. `config set KEY
+// VALUE` keeps the key and redacts a private key's value. It also registers
+// the value with the redactor, since config set may yet refuse it, and then
+// it never reaches secrets.yaml, where the registry would otherwise find it.
+// `compose -- ARGS` records only the compose subcommand and how many
+// arguments follow it, since they may hold a password typed on the
+// command line.
+func logArgs(path string, args []string) []any {
+	switch {
+	case path == "compose":
+		sub, after := "", len(args)
+		if i := composeSubcommand(args); i >= 0 {
+			sub, after = args[i], len(args)-i-1
+		}
+		return []any{"compose_command", sub, "compose_args", after}
+	case path == "config set" && len(args) >= 2 && privateConfigKey(args[0]):
+		registerConfigValue(args[1])
+		return []any{"args", append([]string{args[0], log.Redacted}, args[2:]...)}
 	}
-	registerConfigValue(args[1])
-	return append([]string{args[0], log.Redacted}, args[2:]...)
+	return []any{"args", args}
 }
 
 // privateConfigKey reports whether a config key's value is kept out of the

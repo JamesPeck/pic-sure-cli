@@ -63,17 +63,47 @@ type devListReport struct {
 }
 
 func (a *App) devList(cmd *cobra.Command, _ []string) error {
-	st, err := a.openStack(cmd)
+	cfg, doc, err := a.readConfig(cmd, "dev.services, network.dev_ports.base and the components' sources are read as written, and the rest is defaults")
 	if err != nil {
 		return err
 	}
-	defer func() { _ = st.Close() }()
-	cfg, err := st.LoadConfig()
-	if err != nil {
-		return configError(err)
+	var variants []ops.DevVariantInfo
+	if cfg != nil {
+		variants = ops.DevList(cfg)
+	} else {
+		variants = devListAsWritten(doc)
 	}
-	report := devListReport{Variants: ops.DevList(cfg)}
+	report := devListReport{Variants: variants}
 	return a.printReport(report, func(w io.Writer) error { return writeDevList(w, report.Variants) })
+}
+
+// devListAsWritten is dev list for a pic-sure.yaml whose schema this
+// pic-sure can't decode: the default config's list, with each variant's
+// state, port and source taken from the keys that set them, where they
+// hold what this pic-sure would expect there.
+func devListAsWritten(doc *stack.ConfigDoc) []ops.DevVariantInfo {
+	def := stack.DefaultConfig()
+	vs := ops.DevList(&def)
+	var on []any
+	if v, err := doc.Raw("dev.services"); err == nil {
+		on, _ = v.([]any)
+	}
+	shift := 0
+	if v, err := doc.Raw("network.dev_ports.base"); err == nil {
+		if base, ok := v.(int); ok {
+			shift = base - def.Network.DevPorts.Base
+		}
+	}
+	for i := range vs {
+		vs[i].On = slices.Contains(on, any(vs[i].Name))
+		if vs[i].Port != 0 {
+			vs[i].Port += shift
+		}
+		if v, err := doc.Raw("components." + vs[i].Component + ".source"); err == nil {
+			vs[i].Source, _ = v.(string)
+		}
+	}
+	return vs
 }
 
 func writeDevList(w io.Writer, vs []ops.DevVariantInfo) error {
