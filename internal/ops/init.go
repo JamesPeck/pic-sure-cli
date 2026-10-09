@@ -225,42 +225,15 @@ func renderStack(ctx context.Context, d *Deps, st *stack.Stack, cfg *stack.Confi
 		return nil, err
 	}
 	return render.Render(render.Input{
-		StackDir:      st.Dir,
-		Config:        cfg,
-		State:         state,
-		Sources:       sources,
-		CustomTrust:   len(certs) > 0,
-		SharedProfile: sharedProfile,
-		HostUser:      HostUser(),
-		VolumeLabels:  volumeLabels,
+		StackDir:             st.Dir,
+		Config:               cfg,
+		State:                state,
+		Sources:              sources,
+		CustomTrust:          len(certs) > 0,
+		SharedProfile:        sharedProfile,
+		HostUser:             HostUser(),
+		ExistingVolumeLabels: volumeLabels,
 	})
-}
-
-// existingVolumeLabels returns render.Input.VolumeLabels: for each volume
-// compose made or adopted for this stack's project that is the stack's own
-// under the ownership rule (§6.1), its key and labels without compose's.
-// Another stack's volumes are left to the ownership check.
-func existingVolumeLabels(ctx context.Context, d *Deps, st *stack.Stack, name string) (map[string]map[string]string, error) {
-	vols, err := d.Docker.VolumeList(ctx, stack.LabelComposeProject+"="+name)
-	if err != nil {
-		return nil, err
-	}
-	dir := CanonicalDir(st.Dir)
-	out := map[string]map[string]string{}
-	for _, v := range vols {
-		key := v.Labels[stack.LabelComposeVolume]
-		if key == "" || stack.Owner(st.ID(), dir, v.Labels) == stack.Foreign {
-			continue
-		}
-		labels := map[string]string{}
-		for k, val := range v.Labels {
-			if !strings.HasPrefix(k, "com.docker.compose.") {
-				labels[k] = val
-			}
-		}
-		out[key] = labels
-	}
-	return out, nil
 }
 
 // StartStep is §9.1 step 12, ID "start": `compose up -d --wait` for the

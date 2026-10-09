@@ -796,7 +796,7 @@ func (c *doctor) overridesCheck() {
 		msgs = append(msgs, "ignored, because only .yaml overrides are read: "+strings.Join(ignored, ", "))
 	}
 	if len(named) > 0 {
-		msgs = append(msgs, fmt.Sprintf("name: in %s is ignored: pic-sure always runs compose as project %s", strings.Join(named, ", "), c.cfg.Name))
+		msgs = append(msgs, "name: in "+strings.Join(named, ", ")+" is ignored: pic-sure always runs compose as the stack's own project")
 	}
 	if len(msgs) > 0 {
 		c.add("overrides", CheckWarn, "%s", strings.Join(msgs, "; "))

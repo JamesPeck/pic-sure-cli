@@ -200,8 +200,8 @@ var _ Composer = (*Compose)(nil)
 // rendered compose file, then every *.yaml file in dir/overrides in lexical
 // order (dotfiles and directories are skipped). It fails with ErrNotRendered
 // if the stack has no rendered compose file. Its Project is the rendered
-// file's name:, the stack's name (render always writes one). Set Progress on the result to
-// match the output mode.
+// file's name:, the stack's name (render always writes one). Set Progress
+// on the result to match the output mode.
 func NewCompose(r Runner, dir string, env func() []string) (*Compose, error) {
 	dir, err := filepath.Abs(dir)
 	if err != nil {

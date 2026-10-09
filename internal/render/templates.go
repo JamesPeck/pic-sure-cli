@@ -115,9 +115,8 @@ type templateData struct {
 	// Labels are the stack labels (§6.1) put on every service, volume and
 	// network.
 	Labels map[string]string
-	// KeptLabels maps a volume's key to the labels the stack's existing
-	// volume has (Input.VolumeLabels); VolumeLabels uses them.
-	KeptLabels map[string]map[string]string
+	// ExistingVolumeLabels is Input.ExistingVolumeLabels.
+	ExistingVolumeLabels map[string]map[string]string
 	// FilesDir is the absolute directory render writes files/ to
 	// (.pic-sure/render/files). The compose file bind-mounts from it.
 	FilesDir  string
@@ -233,7 +232,7 @@ var templateFuncs = template.FuncMap{
 // VolumeLabels returns the labels for the volume key: the ones its existing
 // volume already has, if any, else Labels.
 func (d templateData) VolumeLabels(key string) map[string]string {
-	if l, ok := d.KeptLabels[key]; ok {
+	if l, ok := d.ExistingVolumeLabels[key]; ok {
 		return l
 	}
 	return d.Labels

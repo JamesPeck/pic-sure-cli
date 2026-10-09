@@ -275,9 +275,14 @@ it.
   read-only ones run without the lock and on a newer stack, and write a run
   log file only at debug level, like `ps`; any other, an unknown one or
   none, and `wait --down-project`, holds the stack lock until compose
-  exits. The adapter's `-p <name>` (107) beats a `name:` in a file added
-  with `-f` and an `--env-file`'s `COMPOSE_PROJECT_NAME`, so compose acts
-  on the project the ownership check covered (084); the user's own
+  exits. It sets the adapter's `Project` to the config's name, whose `-p`
+  beats a `name:` in a file added with `-f` or an override and an
+  `--env-file`'s `COMPOSE_PROJECT_NAME`, so compose acts on the project the
+  ownership check covered (084). A mutating one also runs
+  `ops.CheckVolumeLabels` on `config --no-interpolate` (107): exit 3, "run
+  `pic-sure up`", if the render would give an existing volume labels it
+  doesn't have, since compose would ask on the terminal whether to
+  recreate it. The user's own
   `-p`/`--project-name` is exit 2 (`composeProjectFlag`). The
   passthrough's output goes straight to the terminal, never to
   the run log.
@@ -828,7 +833,7 @@ each AIO source still exists in the AIO checkout beside this repo (or
   `HostUser` (httpd-hmr's `user:`, `ops.HostUser()`'s `UID:GID`) and
   `CustomTrust` (the trust dir holds certs) and `SharedProfile` (the shared
   data set's recorded HPDS profile, used when `hpds.profile` is empty).
-  `VolumeLabels` (107) maps the key of each existing volume of the stack
+  `ExistingVolumeLabels` (107) maps the key of each existing volume of the stack
   to its labels (compose's own left out); render gives it those instead of
   the current labels, so compose's config hash for it is unchanged and
   compose never offers to recreate it ("data will be lost"). Volumes made

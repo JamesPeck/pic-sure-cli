@@ -236,19 +236,26 @@ the stack does.`,
 				}
 				defer func() { _ = lock.Unlock() }()
 			}
-			c, err := a.stackCompose(cmd, a.newForegroundRunner(d.Log, args), st)
+			c, cfg, _, err := a.stackComposeConfig(cmd, a.newForegroundRunner(d.Log, args), st)
 			if err != nil {
 				return err
 			}
-			// The adapter's -p pins the project the ownership check covers:
-			// it beats a name: in a file added with -f and
+			// -p pins the project the ownership check covers: it beats a
+			// name: in a file added with -f or an override, and
 			// COMPOSE_PROJECT_NAME in an --env-file.
+			c.Project = cfg.Name
 			if commandClass(cmd) != stack.ReadOnly {
-				cfg, err := st.LoadConfig()
-				if err != nil {
-					return configError(err)
-				}
 				if err := checkOwned(cmd, d, st, cfg); err != nil {
+					return err
+				}
+				// Only up re-renders, and this compose may reach a terminal,
+				// where compose's "Recreate (data will be lost)?" is a real
+				// question.
+				merged, err := c.Config(cmd.Context(), false)
+				if err != nil {
+					return err
+				}
+				if err := ops.CheckVolumeLabels(cmd.Context(), d, st, cfg.Name, merged); err != nil {
 					return err
 				}
 			}

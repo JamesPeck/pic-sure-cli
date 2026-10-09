@@ -401,23 +401,41 @@ func TestRenderValues(t *testing.T) {
 }
 
 // A volume that already exists keeps its labels, so its compose config hash
-// doesn't change and compose doesn't offer to recreate it.
+// doesn't change and compose doesn't offer to recreate it. Every volume the
+// templates declare takes them.
 func TestExistingVolumesKeepTheirLabels(t *testing.T) {
-	in := goldenInput(goldenCase{})
-	kept := map[string]string{stack.LabelStack: "golden", stack.LabelStackDir: "/old/golden"}
-	in.VolumeLabels = map[string]map[string]string{"hpds-data": kept}
-	files, err := Render(in)
-	if err != nil {
-		t.Fatal(err)
+	c := goldenCase{dev: allDev(), sharedHPDS: true, trust: true}
+	parse := func(in Input) composeFile {
+		t.Helper()
+		files, err := Render(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var f composeFile
+		if err := yaml.Unmarshal(files[0].Data, &f); err != nil {
+			t.Fatal(err)
+		}
+		return f
 	}
-	var f composeFile
-	if err := yaml.Unmarshal(files[0].Data, &f); err != nil {
-		t.Fatal(err)
+	in := goldenInput(c)
+	in.ExistingVolumeLabels = map[string]map[string]string{}
+	for key, v := range parse(goldenInput(c)).Volumes {
+		if !v.External {
+			in.ExistingVolumeLabels[key] = map[string]string{stack.LabelStack: "golden", stack.LabelStackDir: "/old/" + key}
+		}
 	}
-	if got := f.Volumes["hpds-data"].Labels; !maps.Equal(got, kept) {
-		t.Errorf("hpds-data labels %v, want its existing %v", got, kept)
+	if len(in.ExistingVolumeLabels) < 10 {
+		t.Fatalf("only %d volumes", len(in.ExistingVolumeLabels))
 	}
-	if got := f.Volumes["hpds-csv"].Labels[stack.LabelStackDir]; got != goldenDir {
+	for key, v := range parse(in).Volumes {
+		if want, ok := in.ExistingVolumeLabels[key]; ok && !maps.Equal(v.Labels, want) {
+			t.Errorf("%s labels %v, want its existing %v", key, v.Labels, want)
+		}
+	}
+
+	in = goldenInput(c)
+	in.ExistingVolumeLabels = map[string]map[string]string{"hpds-data": {stack.LabelStack: "golden"}}
+	if got := parse(in).Volumes["hpds-csv"].Labels[stack.LabelStackDir]; got != goldenDir {
 		t.Errorf("a new volume's stack-dir %q, want %q", got, goldenDir)
 	}
 }

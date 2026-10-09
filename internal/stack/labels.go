@@ -27,8 +27,9 @@ func StackLabels(name, dir, id string) map[string]string {
 // Compose's labels on the volumes it creates. A volume without the project
 // label makes compose warn, on every up, that it didn't create it.
 const (
-	LabelComposeProject = "com.docker.compose.project"
-	LabelComposeVolume  = "com.docker.compose.volume"
+	LabelComposePrefix  = "com.docker.compose."
+	LabelComposeProject = LabelComposePrefix + "project"
+	LabelComposeVolume  = LabelComposePrefix + "volume"
 )
 
 // VolumeLabels returns the labels for a stack volume the CLI creates before

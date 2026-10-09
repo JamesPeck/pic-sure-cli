@@ -218,6 +218,7 @@ docker compose * logs* => 0 stdout=logs.txt
 docker compose * ps -a => 0 stdout=raw.txt
 docker compose * top => 4
 docker compose * up -d => 0
+docker compose * config --no-interpolate => 0
 docker ps --all --no-trunc --filter label=com.docker.compose.project=* --format * => 0
 docker ps --all --no-trunc --filter label=org.hms-dbmi.picsure.stack=* --format * => 0
 docker volume ls -q --filter label=com.docker.compose.project=* => 0
