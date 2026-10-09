@@ -27,7 +27,7 @@ func (a *App) canConfirm() bool {
 }
 
 // ask writes prompt to stderr and reads one line of answer from stdin,
-// without its line ending. A cancelled ctx (Ctrl-C) stops waiting and
+// trimmed of surrounding space. A cancelled ctx (Ctrl-C) stops waiting and
 // returns ctx's cause.
 func (a *App) ask(ctx context.Context, prompt string) (string, error) {
 	_, _ = io.WriteString(a.stderr(), prompt)

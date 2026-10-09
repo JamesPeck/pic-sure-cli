@@ -170,7 +170,8 @@ grep '^0$' wait.code
 grep 'up -d$' docker.log
 
 # The passthrough's output, and the logs that logs streams, reach the
-# terminal only, never the run log. (A failed command's error, such as
+# terminal only, never the run log, which has only the passthrough's
+# subcommand and how many arguments follow it. (A failed command's error, such as
 # restart's above, carries compose's last lines there, redacted.) Like ps,
 # a read-only compose writes a run log only at debug level.
 rm stack/.pic-sure/logs
@@ -182,7 +183,8 @@ stdout started
 stderr 'no such service'
 exec pic-sure --log-level debug --stack stack logs hpds
 stdout started
-exec sh -c 'grep -rq "compose.*logs nosuch" stack/.pic-sure/logs'
+exec sh -c 'grep -rq "compose.* logs (1 more arguments)" stack/.pic-sure/logs'
+exec sh -c '! grep -rq nosuch stack/.pic-sure/logs'
 exec sh -c '! grep -rE "started|no such service" stack/.pic-sure/logs'
 
 -- docker.scenario --

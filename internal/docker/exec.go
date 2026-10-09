@@ -92,12 +92,23 @@ type ExecRunner struct {
 	// later. The call waits for the child to exit, then reports ctx's error
 	// if ctx ended first.
 	Foreground bool
+	// LogArgv is how argv appears in the debug records and errors, for a
+	// command line that may hold a secret the user typed; nil is
+	// FormatArgv.
+	LogArgv func(argv []string) string
 
 	// terminalSignaled replaces terminalSignaledChild in tests.
 	terminalSignaled func() bool
 }
 
 var _ Runner = (*ExecRunner)(nil)
+
+func (r *ExecRunner) formatArgv(argv []string) string {
+	if r.LogArgv != nil {
+		return r.LogArgv(argv)
+	}
+	return FormatArgv(argv)
+}
 
 // Run implements Runner. ExitCode is -1 when the process never started.
 func (r *ExecRunner) Run(ctx context.Context, c Cmd) (Result, error) {
@@ -123,7 +134,7 @@ func (r *ExecRunner) Stream(ctx context.Context, c Cmd, stdout, stderr io.Writer
 	code, err := r.run(ctx, c, outW, errW)
 	for _, lw := range []*lineWriter{out, errOut} {
 		if werr := lw.flush(); werr != nil && err == nil {
-			err = fmt.Errorf("%s: writing output: %w", FormatArgv(c.Argv), werr)
+			err = fmt.Errorf("%s: writing output: %w", r.formatArgv(c.Argv), werr)
 		}
 	}
 	return code, err
@@ -133,7 +144,7 @@ func (r *ExecRunner) run(ctx context.Context, c Cmd, stdout, stderr io.Writer) (
 	if len(c.Argv) == 0 {
 		return -1, errors.New("exec: empty argv")
 	}
-	argv := FormatArgv(c.Argv)
+	argv := r.formatArgv(c.Argv)
 	delay := r.WaitDelay
 	if delay <= 0 {
 		delay = DefaultWaitDelay

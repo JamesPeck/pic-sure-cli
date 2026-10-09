@@ -88,8 +88,8 @@ a missing required flag is exit 2 naming it. Its required flags are
 On a non-zero exit, stderr has a `pic-sure: MESSAGE` line. It is the last
 line, except that a usage error may add `Run 'pic-sure ... --help' for
 usage.` after it, and `--log-level debug` adds the `pic-sure exit` log
-record. With `--json`, stdout's last line is then the failed `result` with the same
-message and the exit code, unless the command already printed its report:
+record. With `--json`, stdout's last line on a non-zero exit is the
+failed `result` with the same message and the exit code, unless the command already printed its report:
 `doctor` (exit 1), `migrate --check` and `db bootstrap --check` (exit 3)
 print their report with nothing after it. A report
 command that fails before it has a report (`status` with no stack, exit 3)

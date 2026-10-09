@@ -207,8 +207,8 @@ it.
   lines, warnings and the error (093), since compose output and errors can
   quote a secret. The dashboard's warnings and log records, which reach its
   sink another way, go through `redactingSink`, and `warnStderr` redacts
-  too, and writes through the renderer like log records (`logStderr`),
-  so it doesn't draw over the frame. Only
+  too, and writes through the TUI renderer while there is one, so it
+  doesn't draw over the frame. Only
   `output.go` emits `Result`. A command ends in one of three ways:
   - a streaming command returns `a.finish(report, text)`. When the
     command returns nil, the run ends with a success `Result` (`--json`
@@ -402,7 +402,8 @@ it.
   A NAME `ops.RotateReadsStdin` (the Auth0 client secret; `db-root` with a
   remote database) needs `--yes`, since stdin holds the secret
   (`ReadUserSecret`); any other asks `[y/N]` (`confirmYes`) when
-  `canConfirm`, or is exit 4. Then the run log, the stack lock, an initialised stack with
+  `canConfirm`, or is exit 4. Then the run log, the stack lock, an
+  initialised stack with
   secrets.yaml (exit 3, pointing at init) and a render (exit 3, `up`), the
   Composer from `upCompose` (env computed per call from the `*Secrets` the
   rotation updates), and `ops.RotateSecret`, recording the `secrets rotate`
@@ -2679,7 +2680,9 @@ registers the value unless it is `true` or `false`, since config set may
 refuse it before it reaches secrets.yaml (093); each `--set KEY=VALUE` is
 recorded by the same rule. `compose -- ARGS` records only the compose
 subcommand and how many arguments follow it (`compose_command`,
-`compose_args`), since a password can be typed there (098). `a.openStack` calls
+`compose_args`), since a password can be typed there (098); its runner's
+`docker.ExecRunner.LogArgv` does the same for the exec records.
+`a.openStack` calls
 `a.openRunLog(st)` once the stack passes the version gate; `init` (034)
 must call it once `.pic-sure/` exists. Until something
 calls it, nothing is written to disk. The version gate's read-only

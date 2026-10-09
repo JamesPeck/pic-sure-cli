@@ -298,6 +298,30 @@ func TestRunLogLeavesOutComposeArgs(t *testing.T) {
 		!strings.Contains(string(b), `"compose_command":"exec","compose_args":3`) {
 		t.Errorf("run log:\n%s", b)
 	}
+	// The runner's exec records leave them out too.
+	fakeDocker(t)
+	dir := renderedStack(t)
+	for _, sub := range []string{"exec", "run"} {
+		a, _, stderr := testApp(t)
+		a.Run(context.Background(), []string{"--log-level", "debug", "--stack", dir, "compose", "--", sub, "db", "mysql", "-p" + password})
+		// The fake docker echoes its argv to stderr, as compose would print
+		// its own output; only the log records count.
+		var records strings.Builder
+		for _, line := range strings.Split(stderr.String(), "\n") {
+			if strings.Contains(line, " level=") {
+				records.WriteString(line + "\n")
+			}
+		}
+		if strings.Contains(records.String(), password) || !strings.Contains(records.String(), " "+sub+" (3 more arguments)") {
+			t.Errorf("compose %s: log records:\n%s", sub, records.String())
+		}
+		entries, _ := os.ReadDir(filepath.Join(dir, log.Dir))
+		for _, e := range entries {
+			if b, _ := os.ReadFile(filepath.Join(dir, log.Dir, e.Name())); strings.Contains(string(b), password) {
+				t.Errorf("compose %s: run log %s has the password:\n%s", sub, e.Name(), b)
+			}
+		}
+	}
 	for _, tc := range []struct {
 		args []string
 		want []any

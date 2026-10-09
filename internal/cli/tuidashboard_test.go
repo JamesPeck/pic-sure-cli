@@ -221,6 +221,15 @@ func TestWarnEvents(t *testing.T) {
 	if rest.String() != "pic-sure: the stack is locked\n" {
 		t.Errorf("rest = %q", rest.String())
 	}
+
+	// A dashboard action's warnStderr is a Warning event too.
+	a, _, _ := testApp(t)
+	var actionRec events.Recorder
+	c := a.actionApp(tui.CommandRequest{Sink: &actionRec}, io.Discard, io.Discard, func(events.Result) {})
+	c.warnStderr("can't open the cache: %s", "boom")
+	if got := actionRec.Events(); len(got) != 1 || got[0] != (events.Warning{Text: "can't open the cache: boom"}) {
+		t.Errorf("action events = %#v", got)
+	}
 }
 
 // update on the dashboard's child App (actionApp) offers the gate's

@@ -229,7 +229,7 @@ the stack does.`,
 				}
 				defer func() { _ = lock.Unlock() }()
 			}
-			c, err := a.stackCompose(cmd, a.newForegroundRunner(d.Log), st)
+			c, err := a.stackCompose(cmd, a.newForegroundRunner(d.Log, args), st)
 			if err != nil {
 				return err
 			}
