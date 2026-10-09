@@ -211,3 +211,66 @@ func TestBatchedKeysStartOneRun(t *testing.T) {
 		})
 	}
 }
+
+// A key handled between a dashboard confirm's RunMsg and the run screen
+// (the order a paste, SSH batching or tmux send-keys can produce) used to
+// quit the program, closing the run the confirm had just started, or
+// leave the dashboard.
+func TestKeyBeforeDashboardRunOpens(t *testing.T) {
+	for _, key := range []tea.KeyPressMsg{
+		{Code: 'q', Text: "q"}, {Code: 'c', Mod: tea.ModCtrl}, {Code: tea.KeyEscape}, {Code: 'l', Text: "l"},
+	} {
+		t.Run(key.String(), func(t *testing.T) {
+			a, calls := countingApp(t, t.TempDir())
+			a.Update(openDashboardMsg{})
+			var held []tea.Msg
+			var pump func(tea.Cmd, int)
+			pump = func(cmd tea.Cmd, depth int) {
+				for _, msg := range runCmd(cmd) {
+					if _, ok := msg.(dashboard.RunMsg); ok || depth > 10 {
+						held = append(held, msg)
+						continue
+					}
+					_, next := a.Update(msg)
+					pump(next, depth+1)
+				}
+			}
+			for _, k := range []tea.KeyPressMsg{{Code: 'm', Text: "m"}, {Code: 'y', Text: "y"}} {
+				_, cmd := a.Update(k)
+				pump(cmd, 0)
+			}
+			if len(held) != 1 {
+				t.Fatalf("the confirm sent %d RunMsgs", len(held))
+			}
+			if _, cmd := a.Update(key); cmd != nil {
+				t.Fatalf("%s before the run screen sent %#v", key, cmd())
+			}
+			a.Update(held[0])
+			if a.screen != ScreenRun || a.dash == nil {
+				t.Fatalf("screen %v, dashboard kept %v", a.screen, a.dash != nil)
+			}
+			assertOneCommand(t, calls)
+		})
+	}
+}
+
+// Without Options.Command a dashboard action runs nothing, and the
+// dashboard takes keys again.
+func TestDashboardActionWithoutCommand(t *testing.T) {
+	a := newApp(context.Background(), Options{Root: t.TempDir()})
+	a.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	a.Update(openDashboardMsg{})
+	for _, k := range []tea.KeyPressMsg{{Code: 'm', Text: "m"}, {Code: 'y', Text: "y"}} {
+		pressApp(a, k)
+	}
+	if a.screen != ScreenDashboard || a.run != nil {
+		t.Fatalf("screen %v, run %v", a.screen, a.run != nil)
+	}
+	_, cmd := a.Update(tea.KeyPressMsg{Code: 'l', Text: "l"})
+	if cmd == nil {
+		t.Fatal("l after the action sent nothing")
+	}
+	if _, ok := cmd().(dashboard.LoadMsg); !ok {
+		t.Error("l after the action didn't ask for the load wizard")
+	}
+}

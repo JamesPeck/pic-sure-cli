@@ -108,11 +108,13 @@ func (m *model) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if !m.confirmOK {
 				return m, nil
 			}
+			m.sent = true
 			return m, run(act)
 		case m.confirmText != m.teardownName:
 			// The form's own validation gates real input.
 			return m, nil
 		default:
+			m.sent = true
 			return m, run(TeardownAction(m.teardownDestroy, m.keepDB))
 		}
 	case huh.StateAborted:

@@ -2746,8 +2746,9 @@ load wizard, and 083 the landing's actions.
 - **One run at a time (087).** A screen that hands the app its result
   enters a terminal state first, so keys or huh ticks that arrive before
   the app acts can't send it again: the setup wizard's `wizardDone`, the
-  load screen's `done` (set by `dispatch` and `closeLoad`), and the
-  landing's `leaving`, which `openLandingCmd` clears. Behind them, while
+  load screen's `done` (set by `dispatch` and `closeLoad`), the
+  landing's `leaving`, which `openLandingCmd` clears, and the dashboard's
+  `sent` (104), which `ActionDoneMsg` clears. Behind them, while
   the run screen is open the app drops every other screen's request to
   navigate or start a run (`leavesScreen`), so a run is never hidden or
   replaced and left running unseen, and a second `runClosedMsg` is a
@@ -2792,6 +2793,10 @@ Ticket 040. The dashboard screen, embedded in the TUI (alt-screen).
   `LoadMsg`, and the embedder opens its load wizard (047). The dashboard sends
   `RunMsg`; the embedder runs it and sends `ActionDoneMsg` back, which drops
   the deep check, polls again and restarts an ended log follower at once.
+  Between the two the dashboard ignores keys (104): one in the same read as
+  the confirm could otherwise quit, which Bubble Tea handles before the
+  embedder sees it, and close the run that just started. An embedder that
+  can't run the action still sends `ActionDoneMsg`.
 - `Owns(msg)` names the dashboard's own messages (ticks, poll results, log
   lines), which the embedder routes to it while another screen shows. They
   carry the dashboard's id, so a closed dashboard's late ones are dropped

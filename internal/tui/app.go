@@ -402,8 +402,11 @@ func (a *app) closeLoad() {
 func (a *app) startAction(act dashboard.Action) (tea.Model, tea.Cmd) {
 	if a.opts.Command == nil {
 		if a.dash != nil {
+			// Nothing ran; ActionDoneMsg gives the dashboard its keys back.
 			a.screen = ScreenDashboard
-			return a, nil
+			var cmd tea.Cmd
+			a.dash, cmd = a.dash.Update(dashboard.ActionDoneMsg{})
+			return a, cmd
 		}
 		a.landing.result = act.Title + ": not available here"
 		return a, a.openLandingCmd()

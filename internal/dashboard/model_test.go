@@ -641,6 +641,55 @@ func TestQuitKeyQuits(t *testing.T) {
 	}
 }
 
+// Keys that arrive in the same read as a confirm reach the dashboard
+// before the embedder opens the run screen: they do nothing until it
+// hands back ActionDoneMsg.
+func TestNoKeyActsAfterAConfirmIsSent(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		confirm func(*testing.T, *model) (*model, *RunMsg)
+	}{
+		{"update", func(t *testing.T, m *model) (*model, *RunMsg) {
+			m, _ = press(t, m, "u")
+			m, _ = press(t, m, "left")
+			return press(t, m, "enter")
+		}},
+		{"destroy", func(t *testing.T, m *model) (*model, *RunMsg) {
+			m, _ = press(t, m, "X")
+			for _, r := range m.stackName() {
+				m, _ = press(t, m, string(r))
+			}
+			return press(t, m, "enter")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, _ := testModel(t)
+			m, run := tc.confirm(t, m)
+			if run == nil {
+				t.Fatal("the confirm sent no RunMsg")
+			}
+			for _, key := range []string{"q", "ctrl+c", "esc", "l", "u", "X"} {
+				var cmd tea.Cmd
+				m, cmd = update(t, m, keyMsg(key))
+				if cmd != nil || m.form != nil {
+					t.Errorf("%s after the confirm: cmd %v, form %v", key, cmd != nil, m.form != nil)
+				}
+			}
+			if m.ctx.Err() != nil {
+				t.Error("a key after the confirm closed the dashboard")
+			}
+			m, _ = update(t, m, ActionDoneMsg{})
+			_, cmd := update(t, m, keyMsg("l"))
+			if cmd == nil {
+				t.Fatal("l after ActionDoneMsg sent nothing")
+			}
+			if _, ok := cmd().(LoadMsg); !ok {
+				t.Errorf("l after ActionDoneMsg sent %#v, want LoadMsg", cmd())
+			}
+		})
+	}
+}
+
 func TestActionDoneRefreshes(t *testing.T) {
 	m, _ := testModel(t)
 	m, cmd := update(t, m, ActionDoneMsg{})

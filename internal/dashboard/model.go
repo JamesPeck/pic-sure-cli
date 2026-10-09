@@ -75,6 +75,11 @@ type model struct {
 	teardownDestroy bool
 	keepDB          bool
 	lastResult      string
+
+	// sent drops keys from when a confirmed action's RunMsg goes out until
+	// the embedder's ActionDoneMsg, so a key that arrived in the same read
+	// can't quit, leave or load before the run screen opens.
+	sent bool
 }
 
 func newModel(ctx context.Context, root string, b Backend) *model {
@@ -178,6 +183,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case ActionDoneMsg:
+		m.sent = false
 		m.invalidateDeep()
 		// The action may have restarted the followed service: follow it
 		// again now rather than after the backoff.
@@ -265,6 +271,9 @@ func (m *model) invalidateDeep() {
 }
 
 func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.sent {
+		return m, nil
+	}
 	if m.form != nil {
 		// huh ships its esc binding disabled; the help line advertises
 		// "esc cancel".
