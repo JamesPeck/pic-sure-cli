@@ -302,3 +302,33 @@ func TestLoadPhenotypeDirProvenanceIgnoresOtherFiles(t *testing.T) {
 		t.Errorf("datasets differ: %q, %q", da, db)
 	}
 }
+
+func TestLoadPhenotypeDirSkipsMacMetadata(t *testing.T) {
+	a, b := newDirFixture(t), newDirFixture(t)
+	for _, name := range []string{"._a.csv", "._config.json", "._dump.sql"} {
+		if err := os.WriteFile(filepath.Join(b.dir, name), []byte("\x00\x05\x16\x07"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	da, err := a.loadDir(context.Background(), ops.PhenotypeLoadOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := b.loadDir(context.Background(), ops.PhenotypeLoadOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if da != db {
+		t.Errorf("datasets differ: %q, %q", da, db)
+	}
+	for _, e := range b.rec.Events() {
+		if w, ok := e.(events.Warning); ok && strings.Contains(w.Text, "._") {
+			t.Errorf("warning names macOS metadata: %s", w.Text)
+		}
+	}
+	for _, c := range b.f.Calls() {
+		if strings.Contains(strings.Join(c.Argv, " "), "._") {
+			t.Errorf("docker saw macOS metadata: %q", c.Argv)
+		}
+	}
+}

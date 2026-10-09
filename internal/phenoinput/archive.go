@@ -71,7 +71,7 @@ func walkZip(ctx context.Context, file string, f *os.File, fn func(string, func(
 	}
 	zr, err := zip.NewReader(f, st.Size())
 	if err != nil && !errors.Is(err, zip.ErrInsecurePath) {
-		return fmt.Errorf("reading %s as zip: %w", file, err)
+		return inputErr("reading %s as zip: %w", file, err)
 	}
 	for _, zf := range zr.File {
 		if err := context.Cause(ctx); err != nil {
@@ -124,9 +124,9 @@ func extract(ctx context.Context, file string, format Format, entry, dir string)
 	case err != nil:
 		return "", err
 	case len(head) == 0:
-		return "", fmt.Errorf("entry %s in %s is empty", entry, file)
+		return "", inputErr("entry %s in %s is empty", entry, file)
 	case isBinary(head):
-		return "", fmt.Errorf("entry %s in %s is binary data, not a CSV", entry, file)
+		return "", inputErr("entry %s in %s is binary data, not a CSV", entry, file)
 	}
 	return out, nil
 }

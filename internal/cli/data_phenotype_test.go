@@ -54,6 +54,12 @@ func TestPhenotypeRerunHint(t *testing.T) {
 		{"refresh without weights", noWeights, dictErr(ops.StepDictionaryRefresh),
 			"dictionary step dictionary-refresh failed: boom. HPDS has the new data (phenotype:abc); to finish the load, run: " +
 				pic + "dictionary load-csv --datasets /d/datasets.csv --concepts /d/c.zip --clear"},
+		{"hpds start", auto, &ops.HPDSStartError{Err: errors.New("boom")},
+			"step hpds-start failed: boom. The data is loaded; see `pic-sure logs hpds`, then start HPDS with `pic-sure up`"},
+		{"hydrate and hpds start", auto, &ops.PhenotypeDictionaryError{Step: ops.StepHydrate, Err: errors.New("boom"), HPDSStart: &ops.HPDSStartError{Err: errors.New("bang")}},
+			"dictionary step hydrate failed: boom; before that, step hpds-start failed: bang. The data is loaded; see `pic-sure logs hpds`, " +
+				"then start HPDS with `pic-sure up`. HPDS has the new data (phenotype:abc); to finish the load, run: " +
+				pic + "dictionary hydrate --clear --heap 1024 && " + pic + "dictionary weights"},
 		{"unknown step", auto, dictErr("new-step"),
 			"dictionary step new-step failed: boom. HPDS has the new data (phenotype:abc); to finish the load, run: " +
 				pic + "dictionary hydrate --clear --heap 1024 && " + pic + "dictionary weights"},

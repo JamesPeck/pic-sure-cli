@@ -42,10 +42,10 @@ func detect(ctx context.Context, file string) (Format, error) {
 		return "", err
 	}
 	if !st.Mode().IsRegular() {
-		return "", fmt.Errorf("%s is not a regular file", file)
+		return "", inputErr("%s is not a regular file", file)
 	}
 	if st.Size() == 0 {
-		return "", fmt.Errorf("%s is empty", file)
+		return "", inputErr("%s is empty", file)
 	}
 	f, err := os.Open(file)
 	if err != nil {
@@ -66,10 +66,10 @@ func detect(ctx context.Context, file string) (Format, error) {
 		return Tar, nil
 	}
 	if name := unsupportedFormat(head); name != "" {
-		return "", fmt.Errorf("%s is %s-compressed, which isn't supported; use a CSV, gzip, tar or zip file", file, name)
+		return "", inputErr("%s is %s-compressed, which isn't supported; use a CSV, gzip, tar or zip file", file, name)
 	}
 	if isBinary(head) {
-		return "", fmt.Errorf("%s is neither a CSV nor a gzip, tar or zip archive", file)
+		return "", inputErr("%s is neither a CSV nor a gzip, tar or zip archive", file)
 	}
 	return CSV, nil
 }
@@ -82,19 +82,19 @@ func detectGzip(ctx context.Context, file string, f *os.File) (Format, error) {
 	}
 	gz, err := newGzipReader(ctxReader{ctx, f})
 	if err != nil {
-		return "", fmt.Errorf("reading %s as gzip: %w", file, err)
+		return "", inputErr("reading %s as gzip: %w", file, err)
 	}
 	defer func() { _ = gz.Close() }()
 	head, err := sniff(gz)
 	switch {
 	case err != nil:
-		return "", fmt.Errorf("decompressing %s: %w", file, err)
+		return "", inputErr("decompressing %s: %w", file, err)
 	case len(head) == 0:
-		return "", fmt.Errorf("%s decompresses to an empty file", file)
+		return "", inputErr("%s decompresses to an empty file", file)
 	case looksLikeTar(head):
 		return TarGz, nil
 	case isBinary(head):
-		return "", fmt.Errorf("%s decompresses to binary data, not a CSV or a tar archive", file)
+		return "", inputErr("%s decompresses to binary data, not a CSV or a tar archive", file)
 	}
 	return Gzip, nil
 }

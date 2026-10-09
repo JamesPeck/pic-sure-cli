@@ -146,17 +146,26 @@ func DataDemo(ctx context.Context, d *Deps, st *stack.Stack, cfg *stack.Config, 
 	if err := x.Preflight(ctx, WeightsOptions{Cache: opts.Cache}); err != nil {
 		return "", err
 	}
+	// The dictionary reads only the data volume, so HPDS failing to start
+	// doesn't stop it.
 	dataset, err := demoLoad(ctx, d, st, cfg, state, opts, files)
-	if err != nil {
+	var startErr *HPDSStartError
+	if err != nil && !errors.As(err, &startErr) {
 		return "", err
 	}
 	if err := steps.Run(ctx, d.Sink, demoDictionarySteps(x, opts, facets), steps.Options{}); err != nil {
 		var se *steps.Error
 		if errors.As(err, &se) && !se.Interrupted {
-			return dataset, fmt.Errorf("step %s failed: %w. HPDS has the %s data; run `pic-sure data demo %s` again to rebuild the dictionary",
+			err = fmt.Errorf("step %s failed: %w. HPDS has the %s data; run `pic-sure data demo %s` again to rebuild the dictionary",
 				se.Step, se.Err, opts.Dataset, opts.Dataset)
 		}
+		if startErr != nil {
+			err = fmt.Errorf("%w; before that, %w", err, startErr)
+		}
 		return dataset, err
+	}
+	if startErr != nil {
+		return dataset, startErr
 	}
 	return dataset, nil
 }

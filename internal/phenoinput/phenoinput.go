@@ -66,6 +66,18 @@ type EntryError struct {
 	Entries []string // the archive's CSV entries, sorted
 }
 
+// InputError is a problem with the file itself: empty, binary, an
+// unsupported or corrupt archive, or an archive without a usable CSV. The
+// command treats it as a usage error, as it does an *EntryError.
+type InputError struct{ Err error }
+
+func (e *InputError) Error() string { return e.Err.Error() }
+func (e *InputError) Unwrap() error { return e.Err }
+
+func inputErr(format string, a ...any) error {
+	return &InputError{Err: fmt.Errorf(format, a...)}
+}
+
 func (e *EntryError) Error() string {
 	var b strings.Builder
 	if e.Entry == "" {
@@ -87,8 +99,8 @@ func (e *EntryError) Error() string {
 //
 // Resolve rejects an empty file, binary data that isn't a supported
 // archive, an archive with no .csv entries, an archive entry whose path
-// would land outside the extraction directory, and a missing or unknown
-// --entry (as an *EntryError).
+// would land outside the extraction directory (each an *InputError), and a
+// missing or unknown --entry (an *EntryError).
 func Resolve(ctx context.Context, file string, opts Options) (Input, func() error, error) {
 	noop := func() error { return nil }
 	if opts.MkdirTemp == nil {
@@ -154,16 +166,20 @@ func ListCSVEntries(ctx context.Context, file string) ([]string, error) {
 }
 
 // csvEntryName cleans an archive entry name and reports whether the entry
-// is a CSV to offer. macOS metadata (AppleDouble "._" files, and the
-// __MACOSX directory Finder adds to zips) is not.
+// is a CSV to offer, which macOS metadata is not.
 func csvEntryName(raw string) (string, bool) {
 	name := path.Clean(raw)
-	if !strings.EqualFold(path.Ext(name), ".csv") ||
-		strings.HasPrefix(path.Base(name), "._") ||
-		slices.Contains(strings.Split(name, "/"), "__MACOSX") {
+	if !strings.EqualFold(path.Ext(name), ".csv") || MacMetadata(name) {
 		return "", false
 	}
 	return name, true
+}
+
+// MacMetadata reports whether the slash-separated path name is macOS
+// metadata rather than data: an AppleDouble "._" file, or anything under
+// the __MACOSX directory Finder adds to zips.
+func MacMetadata(name string) bool {
+	return strings.HasPrefix(path.Base(name), "._") || slices.Contains(strings.Split(name, "/"), "__MACOSX")
 }
 
 // listEntries returns the archive's CSV entries, sorted. An archive with
@@ -178,10 +194,10 @@ func listEntries(ctx context.Context, file string, format Format) ([]string, err
 			return nil
 		}
 		if !filepath.IsLocal(name) {
-			return fmt.Errorf("%s has an entry outside the archive's own directory: %q", file, raw)
+			return inputErr("%s has an entry outside the archive's own directory: %q", file, raw)
 		}
 		if seen[name] {
-			return fmt.Errorf("%s has more than one entry named %q", file, name)
+			return inputErr("%s has more than one entry named %q", file, name)
 		}
 		seen[name] = true
 		names = append(names, name)
@@ -191,7 +207,7 @@ func listEntries(ctx context.Context, file string, format Format) ([]string, err
 		return nil, err
 	}
 	if len(names) == 0 {
-		return nil, fmt.Errorf("%s has no .csv entries", file)
+		return nil, inputErr("%s has no .csv entries", file)
 	}
 	slices.Sort(names)
 	return names, nil

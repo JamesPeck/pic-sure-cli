@@ -169,8 +169,9 @@ func (a *App) loadPhenotype(cmd *cobra.Command, args []string) error {
 	if p.file != "" {
 		in, cleanup, err := phenoinput.Resolve(ctx, p.file, phenoinput.Options{Entry: p.entry, MkdirTemp: c.TempDir})
 		var entryErr *phenoinput.EntryError
+		var inputErr *phenoinput.InputError
 		switch {
-		case errors.As(err, &entryErr), errors.Is(err, fs.ErrNotExist):
+		case errors.As(err, &entryErr), errors.As(err, &inputErr), errors.Is(err, fs.ErrNotExist), errors.Is(err, fs.ErrPermission):
 			return exitcode.Usage("%w", err)
 		case err != nil:
 			return err
@@ -220,13 +221,18 @@ func (a *App) loadPhenotype(cmd *cobra.Command, args []string) error {
 
 // rerunHint adds to a failed load's error the commands that retry it: the
 // dictionary commands from the failed step on, when HPDS already has the
-// new data, or else the whole load. Usage errors get none.
+// new data, or else the whole load. Usage errors get none, and neither does
+// HPDS failing to start after a complete load, whose error says to run up.
 func (p phenotypeArgs) rerunHint(dir, dataset string, err error) error {
 	if exitcode.FromError(err) == exitcode.CodeUsage {
 		return err
 	}
 	pic := "pic-sure --stack " + shellQuote(dir) + " "
 	var de *ops.PhenotypeDictionaryError
+	var startErr *ops.HPDSStartError
+	if errors.As(err, &startErr) && !errors.As(err, &de) {
+		return err
+	}
 	if !errors.As(err, &de) {
 		return fmt.Errorf("%w; to retry the load, run: %s", err, pic+p.command())
 	}

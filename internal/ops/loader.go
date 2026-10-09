@@ -116,7 +116,9 @@ func RefuseSharedHPDS(cfg *stack.Config) error {
 // load's files from hpds-data, installs the HPDS key, runs the hpds-etl
 // loader, writes the provenance marker, then starts hpds and waits until it
 // is healthy. If a step after the stop fails, hpds stays stopped and the
-// error says how to recover. It returns the provenance marker's content.
+// error says how to recover; when only the start failed, the error is an
+// *HPDSStartError returned with the provenance, since the data is loaded.
+// It returns the provenance marker's content.
 //
 // With InputDir, the sequential loader runs before hpds stops, into a
 // temporary volume that is removed afterwards, and its output replaces the
@@ -182,11 +184,22 @@ func LoadPhenotype(ctx context.Context, d *Deps, st *stack.Stack, cfg *stack.Con
 	case LoaderWipeStepID:
 		return "", fmt.Errorf("%w. HPDS is stopped: fix the problem and run the load again, or `pic-sure up` to start HPDS", failed)
 	case LoaderStartStepID:
-		return l.opts.Dataset, fmt.Errorf("%w. The data is loaded; see `pic-sure logs hpds`, then start HPDS with `pic-sure up`", failed)
+		return l.opts.Dataset, &HPDSStartError{Err: se.Err}
 	}
 	return "", fmt.Errorf("%w. HPDS is stopped and its phenotype data was removed: fix the problem and run the load again, "+
 		"or `pic-sure up` to start HPDS with no data", failed)
 }
+
+// HPDSStartError is a load whose data is in hpds-data but whose HPDS
+// didn't start (step hpds-start). The dictionary needs only the data
+// volume, so the phenotype and demo loads still rebuild it.
+type HPDSStartError struct{ Err error }
+
+func (e *HPDSStartError) Error() string {
+	return fmt.Sprintf("step %s failed: %v. The data is loaded; see `pic-sure logs hpds`, then start HPDS with `pic-sure up`", LoaderStartStepID, e.Err)
+}
+
+func (e *HPDSStartError) Unwrap() error { return e.Err }
 
 type loader struct {
 	d     *Deps

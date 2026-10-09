@@ -433,6 +433,8 @@ type demoFixture struct {
 	marker []byte
 	// duringLoad runs inside the fake loader container.
 	duringLoad func()
+	// hpdsStartExit is compose up hpds's exit code.
+	hpdsStartExit int
 }
 
 func newDemoFixture(t *testing.T, files map[string][]byte) *demoFixture {
@@ -499,7 +501,9 @@ func newDemoFixture(t *testing.T, files map[string][]byte) *demoFixture {
 		x.marker = c.Stdin
 		return docker.Result{}, nil
 	})
-	f.On(fakerunner.Glob("docker compose * up -d --wait --wait-timeout 900 hpds"))
+	f.On(fakerunner.Glob("docker compose * up -d --wait --wait-timeout 900 hpds")).Do(func(context.Context, fakerunner.Call) (docker.Result, error) {
+		return docker.Result{ExitCode: x.hpdsStartExit}, nil
+	})
 	f.On(fakerunner.Glob("docker compose * ps --all --format json hpds")).Stdout(dictPs("hpds", "running", "healthy"))
 	f.On(fakerunner.Glob("docker run * --name demo-columnmeta-* *"))
 	f.On(fakerunner.Glob("docker run * --name demo-dictionary-weights-* *"))
@@ -594,5 +598,35 @@ func TestDataDemoMergeFailureLeavesHPDSAlone(t *testing.T) {
 	}
 	if tmp, _ := os.ReadDir(filepath.Join(filepath.Dir(x.opts.Cache.DownloadsDir()), "tmp")); len(tmp) != 0 {
 		t.Errorf("tmp/ not cleaned: %d entries", len(tmp))
+	}
+}
+
+func TestDataDemoRebuildsTheDictionaryWhenHPDSDoesntStart(t *testing.T) {
+	x := newDemoFixture(t, map[string][]byte{"a.csv": []byte("PATIENT_NUM,CONCEPT_PATH\n1,\\a\\\n")})
+	x.hpdsStartExit = 1
+	dataset, err := x.run("a")
+	var se *HPDSStartError
+	if !errors.As(err, &se) || !strings.Contains(err.Error(), "`pic-sure up`") {
+		t.Fatalf("err = %v", err)
+	}
+	if dataset != "demo:a" {
+		t.Errorf("dataset = %q", dataset)
+	}
+	x.f.AssertOrder(
+		fakerunner.Glob("docker compose * up -d --wait --wait-timeout 900 hpds"),
+		fakerunner.Glob("docker run * --name demo-columnmeta-* *"),
+		fakerunner.Glob("docker run * --name demo-dictionary-weights-* *"),
+		fakerunner.Glob("docker compose * restart dictionary-api"),
+	)
+}
+
+func TestDataDemoDictionaryFailureAfterHPDSDidntStartSaysBoth(t *testing.T) {
+	x := newDemoFixture(t, map[string][]byte{"a.csv": []byte("PATIENT_NUM,CONCEPT_PATH\n1,\\a\\\n")})
+	x.hpdsStartExit = 1
+	x.curl = []docker.Result{{Stdout: []byte("Already running")}}
+	_, err := x.run("a")
+	var se *HPDSStartError
+	if !errors.As(err, &se) || !strings.Contains(err.Error(), "step hydrate failed") || !strings.Contains(err.Error(), "`pic-sure data demo a` again") {
+		t.Fatalf("err = %v", err)
 	}
 }

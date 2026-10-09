@@ -21,11 +21,13 @@ stdout '"exit_code":3'
 
 cd stack
 
-# down: compose down with the stack's files, its output as step logs.
+# down: compose down with the stack's files, its output as step logs,
+# after looking for helper containers a killed command left.
 exec pic-sure --plain down
 stderr 'Stop the stack'
 stderr '\|  Container demo-hpds-1  Removed'
 ! stdout .
+grep '^docker ps --all --no-trunc --filter label=org.hms-dbmi.picsure.stack=demo --format ' $WORK/docker.log
 grep '^docker compose -f .*/stack/.pic-sure/render/compose.yaml -f .*/stack/overrides/10-local.yaml --project-directory .*/stack --env-file /dev/null --progress plain down --remove-orphans$' $WORK/docker.log
 
 # --json: compose's progress as JSON, relayed as log events, then the result.
@@ -199,6 +201,7 @@ docker compose * ps -a => 0 stdout=raw.txt
 docker compose * top => 4
 docker compose * up -d => 0
 docker ps --all --no-trunc --filter label=com.docker.compose.project=* --format * => 0
+docker ps --all --no-trunc --filter label=org.hms-dbmi.picsure.stack=* --format * => 0
 docker volume ls -q --filter label=com.docker.compose.project=* => 0
 docker volume ls -q --filter label=org.hms-dbmi.picsure.stack=* => 0
 docker network ls -q --no-trunc --filter label=com.docker.compose.project=* => 0

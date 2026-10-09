@@ -216,20 +216,33 @@ type psContainer struct {
 	Labels map[string]string
 }
 
-// psFormat has docker ps print each container's name, ports and stack
-// labels exactly: its {{.Labels}} column joins them with commas, which
-// cuts a directory with a comma short.
+// psFormat has docker ps print each container's name, ports, stack labels
+// and compose project exactly: its {{.Labels}} column joins them with
+// commas, which cuts a directory with a comma short.
 var psFormat = `{"Names":{{json .Names}},"Ports":{{json .Ports}},"Labels":{` +
 	`"` + stack.LabelStack + `":{{json (.Label "` + stack.LabelStack + `")}},` +
 	`"` + stack.LabelStackDir + `":{{json (.Label "` + stack.LabelStackDir + `")}},` +
-	`"` + stack.LabelStackID + `":{{json (.Label "` + stack.LabelStackID + `")}}}}`
+	`"` + stack.LabelStackID + `":{{json (.Label "` + stack.LabelStackID + `")}},` +
+	`"` + stack.LabelComposeProject + `":{{json (.Label "` + stack.LabelComposeProject + `")}}}}`
 
 // composeContainers returns every container, running or not, of compose
 // project name.
 func composeContainers(ctx context.Context, d *Deps, name string) ([]psContainer, error) {
+	return psContainers(ctx, d, stack.LabelComposeProject+"="+name)
+}
+
+// helperContainers returns every container, running or not, labelled for
+// stack name that compose didn't start: the CLI's docker run helpers.
+func helperContainers(ctx context.Context, d *Deps, name string) ([]psContainer, error) {
+	cs, err := psContainers(ctx, d, stack.LabelStack+"="+name)
+	return slices.DeleteFunc(cs, func(c psContainer) bool { return c.Labels[stack.LabelComposeProject] != "" }), err
+}
+
+// psContainers returns every container, running or not, with label.
+func psContainers(ctx context.Context, d *Deps, label string) ([]psContainer, error) {
 	res, err := docker.RunChecked(ctx, docker.WithTimeout(d.Runner, docker.PsTimeout), docker.Cmd{Argv: []string{
 		"docker", "ps", "--all", "--no-trunc",
-		"--filter", "label=" + stack.LabelComposeProject + "=" + name,
+		"--filter", "label=" + label,
 		"--format", psFormat,
 	}})
 	if err != nil {

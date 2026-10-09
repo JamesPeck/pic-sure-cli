@@ -14,6 +14,7 @@ import (
 	"github.com/JamesPeck/pic-sure-cli/internal/docker"
 	"github.com/JamesPeck/pic-sure-cli/internal/events"
 	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
+	"github.com/JamesPeck/pic-sure-cli/internal/phenoinput"
 )
 
 const (
@@ -36,8 +37,9 @@ var dirLoaderOutput = []string{
 // dirInputs returns the top-level files of dir the sequential loader reads,
 // sorted: every *.csv and config.json, following symlinks. It refuses a
 // directory with no CSV, and SQL inputs: the loader runs with no network,
-// and SQL loading was dropped (D26). It also returns the other top-level
-// entries, which the loader never sees.
+// and SQL loading was dropped (D26). macOS metadata (phenoinput.MacMetadata)
+// is skipped silently. It also returns the other top-level entries, which
+// the loader never sees.
 func dirInputs(dir string) (files, ignored []string, err error) {
 	if dir == "" {
 		return nil, nil, exitcode.Usage("--input-dir needs a directory")
@@ -56,6 +58,9 @@ func dirInputs(dir string) (files, ignored []string, err error) {
 	csvs := 0
 	for _, e := range entries {
 		name := e.Name()
+		if phenoinput.MacMetadata(name) {
+			continue
+		}
 		lower := strings.ToLower(name)
 		if strings.HasSuffix(lower, ".sql") || lower == "sql.properties" {
 			return nil, nil, exitcode.Usage("--input-dir: %s is an SQL input, which pic-sure doesn't load; export the data as CSV", filepath.Join(dir, name))

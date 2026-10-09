@@ -47,6 +47,7 @@ grep '^docker volume rm demo_hpds-data$' docker.log
 
 -- docker.scenario --
 docker ps --all --no-trunc --filter label=com.docker.compose.project=demo --format * => 0 stdout=ps.json
+docker ps --all --no-trunc --filter label=org.hms-dbmi.picsure.stack=* --format * => 0
 docker volume ls -q --filter label=com.docker.compose.project=demo => 0 stdout=vols.txt
 docker volume ls -q --filter label=org.hms-dbmi.picsure.stack=demo => 0 stdout=vols.txt
 docker volume inspect * => 0 stdout=vols.json

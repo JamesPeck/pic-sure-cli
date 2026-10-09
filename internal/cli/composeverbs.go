@@ -24,7 +24,16 @@ func newDownCmd(a *App) *cobra.Command {
 		Short: "Stop the stack's containers (volumes are kept)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return a.composeVerb(cmd, "down", "Stop the stack", func(d *ops.Deps, out io.Writer) error {
+			return a.composeVerb(cmd, "down", "Stop the stack", func(d *ops.Deps, st *stack.Stack, out io.Writer) error {
+				// A helper a killed command left would keep the data
+				// network, which compose down removes.
+				cfg, err := st.LoadConfig()
+				if err != nil {
+					return configError(err)
+				}
+				if err := ops.RemoveHelperContainers(cmd.Context(), d, d.Sink, "down", st, cfg.Name, nil); err != nil {
+					return err
+				}
 				return d.Compose.Down(cmd.Context(), docker.ComposeDownOpts{Out: out})
 			})
 		},
@@ -40,7 +49,7 @@ func newRestartCmd(a *App) *cobra.Command {
 			if len(args) > 0 {
 				title = "Restart " + strings.Join(args, ", ")
 			}
-			return a.composeVerb(cmd, "restart", title, func(d *ops.Deps, out io.Writer) error {
+			return a.composeVerb(cmd, "restart", title, func(d *ops.Deps, _ *stack.Stack, out io.Writer) error {
 				return d.Compose.Restart(cmd.Context(), out, args...)
 			})
 		},
@@ -50,7 +59,7 @@ func newRestartCmd(a *App) *cobra.Command {
 // composeVerb runs a mutating compose verb under the stack lock, as step id
 // with title, compose's output (mostly progress, on stderr) becoming the
 // step's Log events.
-func (a *App) composeVerb(cmd *cobra.Command, id, title string, verb func(*ops.Deps, io.Writer) error) error {
+func (a *App) composeVerb(cmd *cobra.Command, id, title string, verb func(*ops.Deps, *stack.Stack, io.Writer) error) error {
 	st, err := a.openStack(cmd)
 	if err != nil {
 		return err
@@ -69,7 +78,7 @@ func (a *App) composeVerb(cmd *cobra.Command, id, title string, verb func(*ops.D
 		return err
 	}
 
-	err = sinkStep(d.Sink, id, title, func(_, errOut io.Writer) error { return verb(d, errOut) })
+	err = sinkStep(d.Sink, id, title, func(_, errOut io.Writer) error { return verb(d, st, errOut) })
 	if err != nil {
 		return err
 	}

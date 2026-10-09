@@ -29,10 +29,15 @@ stderr '^pic-sure: --skip-step: reset has no steps to skip; only build, db boots
 
 # The volumes are labelled with the stack's directory.
 exec sh -c 'sed "s|@DIR@|$(pwd -P)|g" $WORK/vols.tmpl >$WORK/vols.json'
+exec sh -c 'sed "s|@DIR@|$(pwd -P)|g" $WORK/helpers.tmpl >$WORK/helpers.json'
 
-# reset --yes: compose down, then the stack's labelled data volumes; the
-# logs volume, the config and the secrets stay.
+# reset --yes: the dictionary-etl a killed load left (it holds the data
+# network and hpds-data), compose down, then the stack's labelled data
+# volumes; the logs volume, the config and the secrets stay.
 exec pic-sure --plain --yes reset
+stderr '\[WARN\] removed container demo-dictionaryetl-0a1b2c3d, which an earlier run left'
+grep '^docker rm -v -f demo-dictionaryetl-0a1b2c3d$' $WORK/docker.log
+! grep 'docker rm -v -f demo-hpds-1' $WORK/docker.log
 grep 'down --remove-orphans$' $WORK/docker.log
 grep '^docker volume ls -q --filter label=org.hms-dbmi.picsure.stack=demo$' $WORK/docker.log
 grep '^docker volume rm demo_hpds-data$' $WORK/docker.log
@@ -96,6 +101,9 @@ docker image ls --filter reference=hms-dbmi/* * => 0 stdout=images.txt
 docker image inspect * => 0 stdout=images.json
 docker image rm * => 0
 docker ps --all --no-trunc --filter label=com.docker.compose.project=* --format * => 0
+docker ps --all --no-trunc --filter label=org.hms-dbmi.picsure.stack=demo --format * => 0 stdout=helpers.json times=1
+docker ps --all --no-trunc --filter label=org.hms-dbmi.picsure.stack=* --format * => 0
+docker rm -v -f demo-dictionaryetl-* => 0
 docker volume ls -q --filter label=com.docker.compose.project=* => 0
 docker volume ls -q --filter label=org.hms-dbmi.picsure.stack=* => 0
 docker network ls -q --no-trunc --filter label=com.docker.compose.project=* => 0
@@ -103,6 +111,9 @@ docker network ls -q --no-trunc --filter label=com.docker.compose.project=* => 0
 demo_hpds-data
 demo_hpds-logs
 demo_picsure-db-data
+-- helpers.tmpl --
+{"Names":"demo-dictionaryetl-0a1b2c3d","Ports":"","Labels":{"org.hms-dbmi.picsure.stack":"demo","org.hms-dbmi.picsure.stack-dir":"@DIR@","org.hms-dbmi.picsure.stack-id":"","com.docker.compose.project":""}}
+{"Names":"demo-hpds-1","Ports":"","Labels":{"org.hms-dbmi.picsure.stack":"demo","org.hms-dbmi.picsure.stack-dir":"@DIR@","org.hms-dbmi.picsure.stack-id":"","com.docker.compose.project":"demo"}}
 -- vols.tmpl --
 [{"Name":"demo_hpds-data","Labels":{"com.docker.compose.volume":"hpds-data","org.hms-dbmi.picsure.stack":"demo","org.hms-dbmi.picsure.stack-dir":"@DIR@"}},{"Name":"demo_hpds-logs","Labels":{"com.docker.compose.volume":"hpds-logs","org.hms-dbmi.picsure.stack":"demo","org.hms-dbmi.picsure.stack-dir":"@DIR@"}},{"Name":"demo_picsure-db-data","Labels":{"com.docker.compose.volume":"picsure-db-data","org.hms-dbmi.picsure.stack":"demo","org.hms-dbmi.picsure.stack-dir":"@DIR@"}}]
 -- images.txt --

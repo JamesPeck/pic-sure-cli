@@ -308,3 +308,83 @@ func (in *csvLoad) Close() error {
 	in.zf = nil
 	return err
 }
+
+// The columns the ETL requires of the facet files (FacetCategoryService,
+// FacetService). The facet concepts file has one column per facet.
+var (
+	facetCategoryColumns = []string{"name(unique)", "display name", "description"}
+	facetColumns         = []string{"facet_category", "facet_name(unique)", "display_name", "description", "parent_name"}
+)
+
+// facetLoad is the input of `dictionary load-facets`, each file without a
+// byte order mark.
+type facetLoad struct {
+	categories, facets, concepts []byte
+}
+
+// openFacetLoad reads and checks the three facet files. The ETL answers
+// 400 to a categories or facets file without its columns (such as AIO's
+// fixtures from before name(unique)) or without rows, and skips a row
+// narrower than its header. Problems are usage errors.
+func openFacetLoad(opts FacetOptions) (*facetLoad, error) {
+	in := &facetLoad{}
+	for _, f := range []struct {
+		what, path string
+		columns    []string
+		needRows   bool
+		data       *[]byte
+	}{
+		{"facet categories", opts.Categories, facetCategoryColumns, true, &in.categories},
+		{"facets", opts.Facets, facetColumns, true, &in.facets},
+		{"facet concepts", opts.Concepts, nil, false, &in.concepts},
+	} {
+		data, err := os.ReadFile(f.path)
+		if err != nil {
+			return nil, exitcode.Usage("%s: %w", f.what, err)
+		}
+		data = bytes.TrimPrefix(data, []byte(bom))
+		if err := checkFacetCSV(data, f.columns, f.needRows); err != nil {
+			return nil, exitcode.Usage("%s file %s: %w", f.what, f.path, err)
+		}
+		*f.data = data
+	}
+	return in, nil
+}
+
+// checkFacetCSV parses a facet file: its header must have columns and no
+// column twice, and with columns no row may be narrower than the header.
+func checkFacetCSV(data []byte, columns []string, needRows bool) error {
+	r := csv.NewReader(bytes.NewReader(data))
+	r.FieldsPerRecord = -1
+	header, err := r.Read()
+	if errors.Is(err, io.EOF) {
+		return errors.New("the file is empty")
+	}
+	if err != nil {
+		return err
+	}
+	if err := requireColumns(header, columns); err != nil {
+		return err
+	}
+	rows := 0
+	for {
+		rec, err := r.Read()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		if columns != nil {
+			line, _ := r.FieldPos(0)
+			if err := checkWidth(rec, header, line); err != nil {
+				return err
+			}
+		}
+		rows++
+	}
+	if needRows && rows == 0 {
+		return errors.New("the file has no rows")
+	}
+	return nil
+}

@@ -301,25 +301,34 @@ type FacetOptions struct {
 }
 
 // FacetSteps loads facet categories, facets and facet concepts, in that
-// order, as one step, `facets`.
-func (x *Dictionary) FacetSteps(opts FacetOptions) []steps.Step {
+// order, as one step, `facets`. It reads and checks the three files first
+// (openFacetLoad), so a file the ETL would reject is a usage error before
+// anything changes.
+func (x *Dictionary) FacetSteps(opts FacetOptions) ([]steps.Step, error) {
+	in, err := openFacetLoad(opts)
+	if err != nil {
+		return nil, err
+	}
 	return []steps.Step{{
 		ID:    StepFacets,
 		Title: "Load the facets",
 		Apply: func(ctx context.Context, sink events.Sink) error {
-			for _, put := range []struct{ file, path string }{
-				{opts.Categories, "/api/facet/category/csv"},
-				{opts.Facets, "/api/facet/csv"},
-				{opts.Concepts, "/api/facet/concept/csv"},
+			for _, put := range []struct {
+				file, path string
+				data       []byte
+			}{
+				{opts.Categories, "/api/facet/category/csv", in.categories},
+				{opts.Facets, "/api/facet/csv", in.facets},
+				{opts.Concepts, "/api/facet/concept/csv", in.concepts},
 			} {
 				sink.Emit(events.Progress{ID: StepFacets, Text: "loading " + filepath.Base(put.file)})
-				if err := x.putFile(ctx, sink, StepFacets, put.path, put.file); err != nil {
+				if _, err := x.request(ctx, sink, StepFacets, "PUT", put.path, "text/plain", bytes.NewReader(put.data)); err != nil {
 					return err
 				}
 			}
 			return nil
 		},
-	}}
+	}}, nil
 }
 
 // FacetConfigSteps posts a facet loader configuration (JSON, as AIO's
@@ -516,7 +525,11 @@ func DictionaryLoadCSV(ctx context.Context, d *Deps, st *stack.Stack, cfg *stack
 // DictionaryLoadFacets is `dictionary load-facets`.
 func DictionaryLoadFacets(ctx context.Context, d *Deps, st *stack.Stack, cfg *stack.Config, sec *stack.Secrets, state *stack.State, opts FacetOptions, skip []string) error {
 	x := NewDictionary(d, st, cfg, sec, state)
-	return x.runSteps(ctx, x.FacetSteps(opts), skip)
+	list, err := x.FacetSteps(opts)
+	if err != nil {
+		return err
+	}
+	return x.runSteps(ctx, list, skip)
 }
 
 // DictionaryWeights is `dictionary weights`.
@@ -578,7 +591,9 @@ func (x *Dictionary) request(ctx context.Context, sink events.Sink, step, method
 
 // startETL starts the dictionary-etl container on the data network, as
 // dictionaryetl, unless it is running, and waits until its actuator
-// health is UP. It marks dictionary-api for a restart, since every
+// health is UP. It first removes any ETL container of this stack an
+// earlier run left (killed, or whose removal failed), which would answer
+// to the same alias. It marks dictionary-api for a restart, since every
 // operation that starts the ETL writes the dictionary.
 func (x *Dictionary) startETL(ctx context.Context, sink events.Sink, step string) error {
 	if x.etl != "" {
@@ -601,7 +616,12 @@ func (x *Dictionary) startETL(ctx context.Context, sink events.Sink, step string
 	if err := x.markRestart(); err != nil {
 		return err
 	}
-	name, err := docker.UniqueName(x.cfg.Name+"-dictionaryetl", x.d.Rand)
+	prefix := x.cfg.Name + "-dictionaryetl"
+	leftover := func(c string) bool { return strings.HasPrefix(c, prefix+"-") }
+	if err := RemoveHelperContainers(ctx, x.d, sink, step, x.st, x.cfg.Name, leftover); err != nil {
+		return err
+	}
+	name, err := docker.UniqueName(prefix, x.d.Rand)
 	if err != nil {
 		return err
 	}

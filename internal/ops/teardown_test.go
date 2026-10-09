@@ -395,3 +395,41 @@ func TestDestroyAfterAMoveAdoptsTheResources(t *testing.T) {
 		t.Errorf("no note of the move in %v", rec.Events())
 	}
 }
+
+func TestResetRemovesLeftHelperContainersFirst(t *testing.T) {
+	cx := newCopyFixture(t)
+	// The original's leaked dictionary-etl, a helper of another stack
+	// named alpha (the copy's), and one compose started.
+	etl := cx.st.Labels("alpha")
+	cx.fx.daemon.containers = []fakeContainer{
+		{name: "alpha-dictionaryetl-0a1b2c3d", labels: etl},
+		{name: "alpha-hpds-load-11223344", labels: cx.copied.Labels("alpha")},
+		{name: "alpha-hpds-1", labels: withLabel(etl, "com.docker.compose.project", "alpha")},
+	}
+	f := teardownRunner(t, cx.fx.daemon)
+	comp := &downComposer{}
+	var rec events.Recorder
+	d := &ops.Deps{Runner: f, Docker: docker.NewEngine(f), Compose: comp, Clock: ops.FixedClock(cacheNow), Sink: &rec}
+
+	if _, err := ops.Reset(context.Background(), d, cx.st, ops.TeardownOptions{Name: "alpha"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.CallsMatching(fakerunner.Glob("docker rm *")); len(got) != 1 || got[0].Argv[4] != "alpha-dictionaryetl-0a1b2c3d" {
+		t.Errorf("removed %v, want only alpha's dictionary-etl", got)
+	}
+	if !slices.ContainsFunc(rec.Events(), func(e events.Event) bool {
+		w, ok := e.(events.Warning)
+		return ok && w.Text == "removed container alpha-dictionaryetl-0a1b2c3d, which an earlier run left"
+	}) {
+		t.Errorf("no warning naming the removed container in %v", rec.Events())
+	}
+	if comp.downs != 1 {
+		t.Errorf("compose down ran %d times", comp.downs)
+	}
+}
+
+func withLabel(labels map[string]string, k, v string) map[string]string {
+	l := maps.Clone(labels)
+	l[k] = v
+	return l
+}

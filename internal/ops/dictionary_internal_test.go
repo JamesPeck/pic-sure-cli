@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -37,6 +38,8 @@ type dictFixture struct {
 	curl []docker.Result
 	// concepts is the dictionary's concept count after a hydrate.
 	concepts string
+	// helpers is docker ps's answer for the stack's labelled containers.
+	helpers string
 }
 
 func dictPs(service, state, health string) string {
@@ -76,6 +79,9 @@ func newDictFixture(t *testing.T) *dictFixture {
 	x.f.On(fakerunner.Glob("docker ps --all --no-trunc --filter label=com.docker.compose.project=demo --format *"))
 	x.f.On(fakerunner.Glob("docker volume ls -q --filter label=*"))
 	x.f.On(fakerunner.Glob("docker network ls -q --no-trunc --filter label=com.docker.compose.project=demo"))
+	x.f.On(fakerunner.Glob("docker ps --all --no-trunc --filter label=org.hms-dbmi.picsure.stack=demo --format *")).Do(func(context.Context, fakerunner.Call) (docker.Result, error) {
+		return docker.Result{Stdout: []byte(x.helpers)}, nil
+	})
 	return x
 }
 
@@ -441,20 +447,34 @@ func TestDictionaryLoadCSVBadInputClearsNothing(t *testing.T) {
 	}
 }
 
+// Facet files in the format dictionary-etl requires.
+const (
+	facetCategoriesCSV = "name(unique),display name,description\nsyn,Syn,s\n"
+	facetsCSV          = "facet_category,facet_name(unique),display_name,description,parent_name\nsyn,smoker,Smoker,s,\n"
+	facetConceptsCSV   = "smoker\n\"\\a\\\"\n"
+)
+
+// writeFacets writes the three facet files into dir, the categories file
+// with a byte order mark.
+func writeFacets(t *testing.T, dir string) FacetOptions {
+	t.Helper()
+	opts := FacetOptions{
+		Categories: filepath.Join(dir, "categories.csv"),
+		Facets:     filepath.Join(dir, "facets.csv"),
+		Concepts:   filepath.Join(dir, "facet_concepts.csv"),
+	}
+	for p, data := range map[string]string{opts.Categories: bom + facetCategoriesCSV, opts.Facets: facetsCSV, opts.Concepts: facetConceptsCSV} {
+		if err := os.WriteFile(p, []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return opts
+}
+
 func TestDictionaryLoadFacets(t *testing.T) {
 	x := newDictFixture(t)
 	x.stackUp()
-	dir := t.TempDir()
-	var files []string
-	for _, n := range []string{"categories", "facets", "concepts"} {
-		p := filepath.Join(dir, n+".csv")
-		if err := os.WriteFile(p, []byte(n+" body\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		files = append(files, p)
-	}
-	err := DictionaryLoadFacets(context.Background(), x.d, x.st, x.cfg, x.sec, x.state,
-		FacetOptions{Categories: files[0], Facets: files[1], Concepts: files[2]}, nil)
+	err := DictionaryLoadFacets(context.Background(), x.d, x.st, x.cfg, x.sec, x.state, writeFacets(t, t.TempDir()), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -463,9 +483,9 @@ func TestDictionaryLoadFacets(t *testing.T) {
 		got = append(got, c.Argv[len(c.Argv)-1]+" "+string(c.Stdin))
 	}
 	want := []string{
-		"http://dictionaryetl:8086/api/facet/category/csv categories body\n",
-		"http://dictionaryetl:8086/api/facet/csv facets body\n",
-		"http://dictionaryetl:8086/api/facet/concept/csv concepts body\n",
+		"http://dictionaryetl:8086/api/facet/category/csv " + facetCategoriesCSV,
+		"http://dictionaryetl:8086/api/facet/csv " + facetsCSV,
+		"http://dictionaryetl:8086/api/facet/concept/csv " + facetConceptsCSV,
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("requests = %q, want %q", got, want)
@@ -477,12 +497,7 @@ func TestDictionaryLoadFacetsStopsAtFirstFailure(t *testing.T) {
 	x := newDictFixture(t)
 	x.curl = []docker.Result{{Stdout: []byte("Success")}, {Stderr: []byte("curl: (22) The requested URL returned error: 400"), ExitCode: 22}}
 	x.stackUp()
-	dir := t.TempDir()
-	p := filepath.Join(dir, "f.csv")
-	if err := os.WriteFile(p, []byte("x\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	err := DictionaryLoadFacets(context.Background(), x.d, x.st, x.cfg, x.sec, x.state, FacetOptions{Categories: p, Facets: p, Concepts: p}, nil)
+	err := DictionaryLoadFacets(context.Background(), x.d, x.st, x.cfg, x.sec, x.state, writeFacets(t, t.TempDir()), nil)
 	if err == nil || !strings.Contains(err.Error(), "PUT /api/facet/csv") {
 		t.Fatalf("err = %v", err)
 	}
@@ -715,6 +730,74 @@ func TestDictionaryQuietETLLog(t *testing.T) {
 	for _, e := range x.rec.Events() {
 		if w, ok := e.(events.Warning); ok {
 			t.Errorf("warning: %s", w.Text)
+		}
+	}
+}
+
+func TestDictionaryLoadFacetsChecksTheFilesFirst(t *testing.T) {
+	for _, tc := range []struct {
+		name, file, data, want string
+	}{
+		// AIO's fixtures/etl/custom, from before name(unique).
+		{"old categories", "categories", "\"name\",\"display name\",\"description\"\n\"domain\",\"Domain\",\"d\"\n",
+			"facet categories file .*categories.csv: the header lacks the name\\(unique\\) column"},
+		{"old facets", "facets", "\"facet_category\",\"facet_name\",\"display_name\",\"description\",\"parent_name\"\n\"domain\",\"d\",\"D\",\"d\",\"\"\n",
+			"facets file .*facets.csv: the header lacks the facet_name\\(unique\\) column"},
+		{"no rows", "facets", "facet_category,facet_name(unique),display_name,description,parent_name\n", "facets file .*: the file has no rows"},
+		{"narrow row", "categories", "name(unique),display name,description\nsyn,Syn\n", "line 2 has 2 fields; the header has 3"},
+		{"empty concepts", "facet_concepts", "", "facet concepts file .*: the file is empty"},
+		{"repeated facet", "facet_concepts", "a,a\n", "the header has the a column twice"},
+		{"bad quoting", "facet_concepts", "a\n\"x\n", "facet concepts file .*extraneous or missing"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			x := newDictFixture(t)
+			x.stackUp()
+			dir := t.TempDir()
+			opts := writeFacets(t, dir)
+			if err := os.WriteFile(filepath.Join(dir, tc.file+".csv"), []byte(tc.data), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			err := DictionaryLoadFacets(context.Background(), x.d, x.st, x.cfg, x.sec, x.state, opts, nil)
+			if exitcode.FromError(err) != exitcode.CodeUsage || !regexp.MustCompile(tc.want).MatchString(err.Error()) {
+				t.Fatalf("err = %v, want exit 2 matching %s", err, tc.want)
+			}
+			if len(x.f.Calls()) != 0 {
+				t.Errorf("docker was called: %q", x.f.Calls()[0].Argv)
+			}
+		})
+	}
+}
+
+func TestDictionaryRemovesALeftoverETLFirst(t *testing.T) {
+	x := newDictFixture(t)
+	ps := func(name string, labels map[string]string) string {
+		b, err := json.Marshal(map[string]any{"Names": name, "Ports": "", "Labels": labels})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b) + "\n"
+	}
+	copied := x.st.Labels("demo")
+	copied[stack.LabelStackDir] = x.st.Dir + "-copy"
+	compose := x.st.Labels("demo")
+	compose[stack.LabelComposeProject] = "demo"
+	x.helpers = ps("demo-dictionaryetl-0a1b2c3d", x.st.Labels("demo")) + // this stack's leftover
+		ps("demo-dictionaryetl-44556677", copied) + // a copy's
+		ps("demo-hpds-load-8899aabb", x.st.Labels("demo")) + // not an ETL
+		ps("demo-dictionary-api-1", compose)
+	x.stackUp()
+	x.f.On(fakerunner.Glob("docker run * --name demo-columnmeta-* *"))
+
+	if err := DictionaryHydrate(context.Background(), x.d, x.st, x.cfg, x.sec, x.state, HydrateOptions{Clear: true}, nil); err != nil {
+		t.Fatal(err)
+	}
+	x.f.AssertOrder(
+		fakerunner.Exact("docker", "rm", "-v", "-f", "demo-dictionaryetl-0a1b2c3d"),
+		fakerunner.Glob("docker run -d --name demo-dictionaryetl-* *"),
+	)
+	for _, c := range x.f.CallsMatching(fakerunner.Glob("docker rm *")) {
+		if n := c.Argv[len(c.Argv)-1]; n == "demo-dictionaryetl-44556677" || n == "demo-hpds-load-8899aabb" {
+			t.Errorf("removed %s", n)
 		}
 	}
 }

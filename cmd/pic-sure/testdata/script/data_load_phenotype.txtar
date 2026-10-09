@@ -74,16 +74,23 @@ stderr 'run `pic-sure up`'
 exitcode 3 pic-sure data load-phenotype --input-dir indir
 stderr 'no pic-sure stack found'
 
-# A missing file is exit 2.
+# A missing, empty or unreadable file is exit 2, as for the other inputs.
 mkdir stack/.pic-sure/render
 cp compose.yaml stack/.pic-sure/render/compose.yaml
 exitcode 2 pic-sure --stack stack data load-phenotype --file missing.csv
 stderr 'missing.csv'
+exitcode 2 pic-sure --stack stack data load-phenotype --file empty.csv
+stderr 'empty.csv is empty'
+exitcode 2 pic-sure --stack stack data load-phenotype --file broken.zip
+stderr 'reading .*broken.zip as zip'
 ! exists docker.log
 
 -- pheno.csv --
 PATIENT_NUM,CONCEPT_PATH,NUMERIC_VALUE,TEXT_VALUE
 1,\demo\age\,42,
+-- empty.csv --
+-- broken.zip --
+PK not really a zip
 -- indir/a.csv --
 PATIENT_NUM,CONCEPT_PATH,NUMERIC_VALUE,TEXT_VALUE
 1,\demo\age\,42,

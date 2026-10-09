@@ -69,6 +69,9 @@ func (fd *fakeDaemon) answer(argv []string) (docker.Result, error) {
 			ids = append(ids, "id-"+c.name)
 		}
 		return docker.Result{Stdout: []byte(strings.Join(ids, "\n"))}, nil
+	case "rm -v":
+		fd.containers = slices.DeleteFunc(fd.containers, func(c fakeContainer) bool { return c.name == argv[len(argv)-1] })
+		return docker.Result{}, nil
 	case "container inspect":
 		var res []any
 		for _, id := range argv[3:] {

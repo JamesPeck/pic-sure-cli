@@ -41,11 +41,7 @@ func (x *phenotypeFixture) custom(t *testing.T) {
 	x.opts.Concepts = writeZip(t, dir, "concepts.zip", map[string]string{
 		"concepts_1.csv": "dataset_ref,name,display,concept_type,concept_path,parent_concept_path,values\nsyn,a,a,categorical,\\a\\,,\n",
 	}, "concepts_1.csv")
-	x.opts.Facets = FacetOptions{
-		Categories: writeDemoFile(t, filepath.Join(dir, "cat.csv"), []byte("name(unique),display,description\n")),
-		Facets:     writeDemoFile(t, filepath.Join(dir, "facets.csv"), []byte("facet_name(unique)\n")),
-		Concepts:   writeDemoFile(t, filepath.Join(dir, "fc.csv"), []byte("facet_name,concept_path\n")),
-	}
+	x.opts.Facets = writeFacets(t, dir)
 	x.curl = []docker.Result{{Stdout: []byte("ok")}}
 }
 
@@ -131,6 +127,10 @@ func TestDataLoadPhenotypeChecksBeforeTouchingHPDS(t *testing.T) {
 			x.custom(t)
 			writeDemoFile(t, x.opts.Datasets, []byte("name\nsyn\n"))
 		}, exitcode.CodeUsage, "ref"},
+		{"old facets", func(t *testing.T, x *phenotypeFixture) {
+			x.custom(t)
+			writeDemoFile(t, x.opts.Facets.Facets, []byte("facet_category,facet_name,display_name,description,parent_name\nsyn,a,A,a,\n"))
+		}, exitcode.CodeUsage, "facet_name(unique)"},
 		{"no weights image", func(_ *testing.T, x *phenotypeFixture) {
 			delete(x.state.Images, "dictionary-weights")
 		}, exitcode.CodePrecondition, "no dictionary-weights image"},
@@ -186,4 +186,38 @@ func TestDataLoadPhenotypeDictionaryFailureKeepsHPDS(t *testing.T) {
 	}
 	x.f.AssertNotCalled(fakerunner.Glob("docker run * --name demo-dictionary-weights-* *"))
 	x.f.AssertCalled(fakerunner.Glob("docker rm -v -f demo-dictionaryetl-*"))
+}
+
+func TestDataLoadPhenotypeRebuildsTheDictionaryWhenHPDSDoesntStart(t *testing.T) {
+	x := newPhenotypeFixture(t)
+	x.hpdsStartExit = 1
+	dataset, err := x.run()
+	var se *HPDSStartError
+	if !errors.As(err, &se) || !strings.Contains(err.Error(), "`pic-sure up`") {
+		t.Fatalf("err = %v", err)
+	}
+	var de *PhenotypeDictionaryError
+	if errors.As(err, &de) {
+		t.Errorf("err is a dictionary error: %v", err)
+	}
+	if !strings.HasPrefix(dataset, "phenotype:") {
+		t.Errorf("dataset = %q", dataset)
+	}
+	x.f.AssertOrder(
+		fakerunner.Glob("docker compose * up -d --wait --wait-timeout 900 hpds"),
+		fakerunner.Glob("docker run * --name demo-columnmeta-* *"),
+		fakerunner.Glob("docker run * --name demo-dictionary-weights-* *"),
+		fakerunner.Glob("docker compose * restart dictionary-api"),
+	)
+}
+
+func TestDataLoadPhenotypeDictionaryFailureAfterHPDSDidntStart(t *testing.T) {
+	x := newPhenotypeFixture(t)
+	x.hpdsStartExit = 1
+	x.curl = []docker.Result{{Stdout: []byte("Already running")}}
+	_, err := x.run()
+	var de *PhenotypeDictionaryError
+	if !errors.As(err, &de) || de.Step != StepHydrate || de.HPDSStart == nil || !strings.Contains(err.Error(), "`pic-sure up`") {
+		t.Fatalf("err = %v", err)
+	}
 }

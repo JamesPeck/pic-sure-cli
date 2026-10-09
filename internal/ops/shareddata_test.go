@@ -262,6 +262,9 @@ func TestPublishSharedDataRefusals(t *testing.T) {
 		{"phenotype missing", "x", func(fx *sharedFixture) {
 			fx.probe = "missing allObservationsStore.javabin\nmissing columnMeta.csv\n"
 		}, exitcode.CodePrecondition, "missing allObservationsStore.javabin, columnMeta.csv"},
+		{"columnMeta.csv missing", "x", func(fx *sharedFixture) {
+			fx.probe = "missing columnMeta.csv\n"
+		}, exitcode.CodePrecondition, "make it with `pic-sure dictionary hydrate --skip-step hydrate`"},
 		{"no contig", "x", func(fx *sharedFixture) { fx.probe = goodProbe + "partition empty\n" }, exitcode.CodePrecondition, "partition empty in volume"},
 		{"unindexed", "x", func(fx *sharedFixture) {
 			fx.probe = goodProbe + "unindexed synth/chr21/variantIndex_fbbis.javabin\n"
@@ -451,7 +454,7 @@ func TestPublishSharedDataScripts(t *testing.T) {
 		want string
 		fix  func()
 	}{
-		{"is missing columnMeta.csv", func() { write(filepath.Join(data, "columnMeta.csv"), "c") }},
+		{"has no columnMeta.csv", func() { write(filepath.Join(data, "columnMeta.csv"), "c") }},
 		{"what an interrupted promote left (.old-x, .promote-synth)", func() {
 			_ = os.RemoveAll(filepath.Join(genomic, ".old-x"))
 			_ = os.RemoveAll(filepath.Join(genomic, ".promote-synth"))

@@ -85,7 +85,7 @@ func Reset(ctx context.Context, d *Deps, st *stack.Stack, opts TeardownOptions) 
 		}
 	}
 	plan := []steps.Step{
-		downStep(d),
+		downStep(d, st, opts.Name),
 		volumesStep(d, owned, report, func(v catalog.Volume) bool {
 			switch v.Kind {
 			case catalog.KindData, catalog.KindTLS:
@@ -138,7 +138,7 @@ func Destroy(ctx context.Context, d *Deps, st *stack.Stack, opts TeardownOptions
 		}
 	} else {
 		plan = []steps.Step{
-			downStep(d),
+			downStep(d, st, opts.Name),
 			volumesStep(d, owned, report, func(catalog.Volume) bool { return true }),
 			{
 				ID:    StepDevImages,
@@ -184,13 +184,17 @@ func Destroy(ctx context.Context, d *Deps, st *stack.Stack, opts TeardownOptions
 	return report, steps.Run(ctx, d.Sink, plan, steps.Options{})
 }
 
-// downStep runs compose down. A stack that was never rendered has no
-// compose file, and no containers compose started.
-func downStep(d *Deps) steps.Step {
+// downStep removes the stack's helper containers, then runs compose down.
+// A stack that was never rendered has no compose file, and no containers
+// compose started.
+func downStep(d *Deps, st *stack.Stack, name string) steps.Step {
 	return steps.Step{
 		ID:    StepTeardownDown,
 		Title: "Stop and remove the stack's containers",
 		Apply: func(ctx context.Context, sink events.Sink) error {
+			if err := RemoveHelperContainers(ctx, d, sink, StepTeardownDown, st, name, nil); err != nil {
+				return err
+			}
 			if d.Compose == nil {
 				sink.Emit(events.Progress{ID: StepTeardownDown, Text: "the stack was never rendered, so compose started nothing"})
 				return nil
@@ -201,6 +205,36 @@ func downStep(d *Deps) steps.Step {
 			return err
 		},
 	}
+}
+
+// RemoveHelperContainers removes, with a warning each, the containers
+// labelled for stack name that compose didn't start and the ownership rule
+// calls st's (or adopts): helpers that a killed or interrupted command
+// left, such as a dictionary-etl, which holds the data network and
+// hpds-data. With match, only those whose name it accepts. Another stack's
+// (a copy's original) are never touched.
+func RemoveHelperContainers(ctx context.Context, d *Deps, sink events.Sink, step string, st *stack.Stack, name string, match func(container string) bool) error {
+	cs, err := helperContainers(ctx, d, name)
+	if err != nil {
+		return err
+	}
+	dir := CanonicalDir(st.Dir)
+	var failed []string
+	for _, c := range cs {
+		if match != nil && !match(c.Names) || stack.Owner(st.ID(), dir, c.Labels) == stack.Foreign {
+			continue
+		}
+		if err := d.Docker.Rm(ctx, c.Names, true); err != nil {
+			failed = append(failed, c.Names)
+			sink.Emit(events.Warning{ID: step, Text: fmt.Sprintf("couldn't remove container %s, which an earlier run left: %v", c.Names, err)})
+			continue
+		}
+		sink.Emit(events.Warning{ID: step, Text: "removed container " + c.Names + ", which an earlier run left"})
+	}
+	if len(failed) > 0 {
+		return fmt.Errorf("couldn't remove containers %s", strings.Join(failed, ", "))
+	}
+	return nil
 }
 
 // volumesStep removes the stack's volumes in owned that remove selects.

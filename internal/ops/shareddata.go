@@ -219,6 +219,10 @@ func (p *publish) check(ctx context.Context, sink events.Sink) error {
 	if err != nil {
 		return err
 	}
+	if slices.Equal(probe.missing, []string{"columnMeta.csv"}) {
+		return exitcode.Precondition("volume %s has no columnMeta.csv, which only the dictionary's %s step makes (a custom-dictionary load skips it); "+
+			"make it with `pic-sure dictionary hydrate --skip-step %s`", p.srcData, StepColumnMeta, StepHydrate)
+	}
 	if len(probe.missing) > 0 {
 		return exitcode.Precondition("volume %s is missing %s; load phenotype data into this stack first "+
 			"(`pic-sure data load-phenotype` or `pic-sure data demo`)", p.srcData, strings.Join(probe.missing, ", "))
