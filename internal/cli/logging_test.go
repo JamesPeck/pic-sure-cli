@@ -12,6 +12,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/JamesPeck/pic-sure-cli/internal/docker"
 	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
 	"github.com/JamesPeck/pic-sure-cli/internal/log"
 	"github.com/JamesPeck/pic-sure-cli/internal/stack"
@@ -321,6 +322,11 @@ func TestRunLogLeavesOutComposeArgs(t *testing.T) {
 				t.Errorf("compose %s: run log %s has the password:\n%s", sub, e.Name(), b)
 			}
 		}
+	}
+	// An argv that doesn't end in the passthrough's args shows none of it.
+	r := (&App{}).newForegroundRunner(nil, []string{"exec", "db"}).(*docker.ExecRunner)
+	if got := r.LogArgv([]string{"docker", "compose", "exec", "hpds"}); got != "docker (3 arguments)" {
+		t.Errorf("LogArgv of another argv = %q", got)
 	}
 	for _, tc := range []struct {
 		args []string

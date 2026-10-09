@@ -403,8 +403,7 @@ it.
   remote database) needs `--yes`, since stdin holds the secret
   (`ReadUserSecret`); any other asks `[y/N]` (`confirmYes`) when
   `canConfirm`, or is exit 4. Then the run log, the stack lock, an
-  initialised stack with
-  secrets.yaml (exit 3, pointing at init) and a render (exit 3, `up`), the
+  initialised stack with secrets.yaml (exit 3, pointing at init) and a render (exit 3, `up`), the
   Composer from `upCompose` (env computed per call from the `*Secrets` the
   rotation updates), and `ops.RotateSecret`, recording the `secrets rotate`
   operation in state.json.
@@ -2056,7 +2055,9 @@ is ready to use.
   never calls its two writers at once, so they can be the same writer. A
   writer error ends the copy and is returned.
 - **Logging.** Argv, dir and env names at debug level, then the exit code
-  and duration. Never env values or stdin.
+  and duration. Never env values or stdin. `LogArgv`, when set, formats
+  the argv in those records and in errors, for a command line that may
+  hold a secret (098, the `compose --` passthrough).
 
 **WithTimeout** (`timeout.go`) wraps any `Runner` so each call is cancelled
 after d (over `ExecRunner`, it returns up to `WaitDelay` later):
@@ -2682,8 +2683,7 @@ recorded by the same rule. `compose -- ARGS` records only the compose
 subcommand and how many arguments follow it (`compose_command`,
 `compose_args`), since a password can be typed there (098); its runner's
 `docker.ExecRunner.LogArgv` does the same for the exec records.
-`a.openStack` calls
-`a.openRunLog(st)` once the stack passes the version gate; `init` (034)
+`a.openStack` calls `a.openRunLog(st)` once the stack passes the version gate; `init` (034)
 must call it once `.pic-sure/` exists. Until something
 calls it, nothing is written to disk. The version gate's read-only
 commands (`commandClass`, so `compose`'s read-only subcommands too) get a

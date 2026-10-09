@@ -14,6 +14,7 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
+	"github.com/JamesPeck/pic-sure-cli/internal/progress"
 	"github.com/JamesPeck/pic-sure-cli/internal/stack"
 )
 
@@ -209,5 +210,18 @@ func TestConfigOnAnUnmigratableSchemaShowsTheFile(t *testing.T) {
 	if code := a.Run(context.Background(), []string{"--stack", dir, "config", "set", "name", "x"}); code != exitcode.CodeIncompatible ||
 		!strings.Contains(errBuf.String(), "pic-sure.yaml is schema 0, but this pic-sure reads schema 1") {
 		t.Errorf("config set: exit %d, stderr %q; want exit 5", code, errBuf)
+	}
+}
+
+// While the run has a TUI renderer (a --wait-lock wait may have started
+// it), a warning goes through it, which prints it above its frame, not on
+// stderr over the frame.
+func TestWarnStderrGoesThroughTheRenderer(t *testing.T) {
+	a, _, stderr := testApp(t)
+	var drawn strings.Builder
+	a.tuiOut.Store(progress.NewRenderer(progress.RendererOptions{Output: &drawn}))
+	a.warnStderr("can't open the cache: %s", "boom")
+	if drawn.String() != "pic-sure: warning: can't open the cache: boom\n" || stderr.Len() != 0 {
+		t.Errorf("renderer got %q, stderr %q", drawn.String(), stderr)
 	}
 }

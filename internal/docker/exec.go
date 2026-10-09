@@ -63,8 +63,9 @@ const DefaultWaitDelay = 5 * time.Second
 // stopped by SIGTTIN until ctx ends. Callers must turn such prompts off,
 // for example with GIT_TERMINAL_PROMPT=0, or use Foreground.
 //
-// Logging. Each call logs its argv, dir and env names at debug level, and
-// then its exit code and duration. Env values and stdin are never logged.
+// Logging. Each call logs its argv (as LogArgv formats it), dir and env
+// names at debug level, and then its exit code and duration. Env values
+// and stdin are never logged.
 type ExecRunner struct {
 	// Log receives the debug records; nil logs nothing.
 	Log *slog.Logger
