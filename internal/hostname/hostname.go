@@ -1,6 +1,6 @@
 // Package hostname is the one rule for the host names pic-sure accepts:
-// network.hostname, auth.auth0.tenant, db.remote.host, a proxy's host and
-// the no-proxy list's names.
+// network.hostname, auth.auth0.tenant, db.remote.host and a proxy's host,
+// plus a variant that allows underscores for the no-proxy list's names.
 package hostname
 
 import (
@@ -52,7 +52,9 @@ func validName(s string, underscore bool) bool {
 			return false
 		}
 		for _, c := range label {
-			if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' && (!underscore || c != '_') {
+			switch {
+			case 'a' <= c && c <= 'z', '0' <= c && c <= '9', c == '-', c == '_' && underscore:
+			default:
 				return false
 			}
 		}
