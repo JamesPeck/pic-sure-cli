@@ -55,6 +55,7 @@ type genomicFixture struct {
 func newGenomicFixture(t *testing.T) *genomicFixture {
 	fx := &genomicFixture{loaderFixture: newLoaderFixture(t), exits: map[string]int{}}
 	fx.vcfDir = t.TempDir()
+	fx.f.On(fakerunner.Glob("docker volume ls -q --filter label=com.docker.compose.project=*")) // render keeps existing volumes' labels
 	for _, name := range []string{"chr21.vcf.gz", "sub/chr22.vcf"} {
 		p := filepath.Join(fx.vcfDir, name)
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {

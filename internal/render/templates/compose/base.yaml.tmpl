@@ -490,26 +490,26 @@ networks:
 
 volumes:
   dictionary-db-data:
-    labels: {{ flow .Labels }}
+    labels: {{ flow (.VolumeLabels "dictionary-db-data") }}
   hpds-csv:
-    labels: {{ flow .Labels }}
+    labels: {{ flow (.VolumeLabels "hpds-csv") }}
   # Query result files for GIC file sharing.
   hpds-query-results:
-    labels: {{ flow .Labels }}
+    labels: {{ flow (.VolumeLabels "hpds-query-results") }}
   # VCFs and loader output staged by data load-genomic.
   genomic-staging:
-    labels: {{ flow .Labels }}
+    labels: {{ flow (.VolumeLabels "genomic-staging") }}
   certs:
-    labels: {{ flow .Labels }}
+    labels: {{ flow (.VolumeLabels "certs") }}
   httpd-logs:
-    labels: {{ flow .Labels }}
+    labels: {{ flow (.VolumeLabels "httpd-logs") }}
   psama-logs:
-    labels: {{ flow .Labels }}
+    labels: {{ flow (.VolumeLabels "psama-logs") }}
   hpds-logs:
-    labels: {{ flow .Labels }}
+    labels: {{ flow (.VolumeLabels "hpds-logs") }}
   visualization-logs:
-    labels: {{ flow .Labels }}
+    labels: {{ flow (.VolumeLabels "visualization-logs") }}
   dictionary-logs:
-    labels: {{ flow .Labels }}
+    labels: {{ flow (.VolumeLabels "dictionary-logs") }}
   logging-logs:
-    labels: {{ flow .Labels }}
+    labels: {{ flow (.VolumeLabels "logging-logs") }}

@@ -115,6 +115,9 @@ type templateData struct {
 	// Labels are the stack labels (§6.1) put on every service, volume and
 	// network.
 	Labels map[string]string
+	// KeptLabels maps a volume's key to the labels the stack's existing
+	// volume has (Input.VolumeLabels); VolumeLabels uses them.
+	KeptLabels map[string]map[string]string
 	// FilesDir is the absolute directory render writes files/ to
 	// (.pic-sure/render/files). The compose file bind-mounts from it.
 	FilesDir  string
@@ -225,6 +228,15 @@ var templateFuncs = template.FuncMap{
 	"flow": flow,
 	// path joins host path elements with "/" (macOS and Linux only, D4).
 	"path": path.Join,
+}
+
+// VolumeLabels returns the labels for the volume key: the ones its existing
+// volume already has, if any, else Labels.
+func (d templateData) VolumeLabels(key string) map[string]string {
+	if l, ok := d.KeptLabels[key]; ok {
+		return l
+	}
+	return d.Labels
 }
 
 // quote renders v as a double-quoted YAML scalar that compose won't

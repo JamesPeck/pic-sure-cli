@@ -53,4 +53,4 @@ volumes:
     external: true
     name: {{ q (printf "%s_hpds-genomic" .SharedHPDS) }}
   hpds-genomic-copy:
-    labels: {{ flow .Labels }}
+    labels: {{ flow (.VolumeLabels "hpds-genomic-copy") }}

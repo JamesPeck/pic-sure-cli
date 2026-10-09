@@ -48,6 +48,15 @@ type Input struct {
 	// files Vite writes into the frontend checkout are the operator's (§6.4).
 	// Empty runs it as the image's user.
 	HostUser string
+	// VolumeLabels maps the key of each of the stack's volumes that already
+	// exists (under the compose file's volumes:) to the labels it has,
+	// compose's own (com.docker.compose.*) left out. Render gives such a
+	// volume those labels instead of the current ones: compose keeps a hash
+	// of a volume's config, labels included, and offers to recreate a
+	// volume whose config changed, deleting its data. Docker can't relabel
+	// a volume, so one made before a move or before the stack-id label
+	// keeps its labels for good.
+	VolumeLabels map[string]map[string]string
 }
 
 // File is one file render produces. Path is relative to the stack dir.
@@ -103,6 +112,7 @@ func buildData(in Input) (templateData, catalog.Mode, *netproxy.Proxy, error) {
 	d := templateData{
 		Name:              cfg.Name,
 		Labels:            stack.StackLabels(cfg.Name, stackDir, st.StackID),
+		KeptLabels:        in.VolumeLabels,
 		FilesDir:          path.Join(stackDir, FilesDir),
 		HTTPPort:          cfg.Network.HTTPPort,
 		HTTPSPort:         cfg.Network.HTTPSPort,

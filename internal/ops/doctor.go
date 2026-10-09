@@ -16,6 +16,8 @@ import (
 	"strings"
 	"time"
 
+	"go.yaml.in/yaml/v3"
+
 	"github.com/JamesPeck/pic-sure-cli/internal/catalog"
 	"github.com/JamesPeck/pic-sure-cli/internal/docker"
 	"github.com/JamesPeck/pic-sure-cli/internal/netproxy"
@@ -762,20 +764,42 @@ func (c *doctor) composeCheck(ctx context.Context) {
 }
 
 // overridesCheck warns about overrides/*.yml, which compose never sees: the
-// adapter takes only *.yaml.
+// adapter takes only *.yaml. It also warns about a .yaml override that sets
+// a top-level name:, which the adapter's -p overrules.
 func (c *doctor) overridesCheck() {
-	entries, err := fs.ReadDir(c.opts.Stack.FS(), "overrides")
+	fsys := c.opts.Stack.FS()
+	entries, err := fs.ReadDir(fsys, "overrides")
 	if err != nil {
 		return // none, or unreadable: the compose check reports that
 	}
-	var ignored []string
+	var ignored, named []string
 	for _, e := range entries {
-		if !e.IsDir() && path.Ext(e.Name()) == ".yml" && !strings.HasPrefix(e.Name(), ".") {
-			ignored = append(ignored, "overrides/"+e.Name())
+		if e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		f := "overrides/" + e.Name()
+		switch path.Ext(e.Name()) {
+		case ".yml":
+			ignored = append(ignored, f)
+		case ".yaml":
+			var top struct {
+				Name string `yaml:"name"`
+			}
+			// An unreadable or invalid file is the compose check's to report.
+			if data, err := fs.ReadFile(fsys, f); err == nil && yaml.Unmarshal(data, &top) == nil && top.Name != "" {
+				named = append(named, f)
+			}
 		}
 	}
+	var msgs []string
 	if len(ignored) > 0 {
-		c.add("overrides", CheckWarn, "ignored, because only .yaml overrides are read: %s", strings.Join(ignored, ", "))
+		msgs = append(msgs, "ignored, because only .yaml overrides are read: "+strings.Join(ignored, ", "))
+	}
+	if len(named) > 0 {
+		msgs = append(msgs, fmt.Sprintf("name: in %s is ignored: pic-sure always runs compose as project %s", strings.Join(named, ", "), c.cfg.Name))
+	}
+	if len(msgs) > 0 {
+		c.add("overrides", CheckWarn, "%s", strings.Join(msgs, "; "))
 	}
 }
 

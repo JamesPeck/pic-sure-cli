@@ -47,6 +47,7 @@ func newUpdateFixture(t *testing.T) *updateFixture {
 	t.Helper()
 	x := &updateFixture{buildFixture: newBuildFixture(t), migrations: true, stale: map[string]bool{}}
 	x.d.Clock = ops.FixedClock(t0)
+	x.f.On(fakerunner.Glob("docker volume ls -q --filter label=com.docker.compose.project=*")) // render keeps existing volumes' labels
 	x.sec = &stack.Secrets{IntrospectionToken: tokenVar, IntrospectionTokenExpiry: t0.Add(300 * 24 * time.Hour)}
 	x.state.Release = stack.Release{Repo: "https://example.com/rc.git", Branch: "main", Commit: relSHA}
 	x.state.Images = map[string]string{"pic-sure-httpd": x.feTag(), "dictionary-etl": etlSHA[:12]}

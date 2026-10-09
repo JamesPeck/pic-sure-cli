@@ -391,9 +391,12 @@ with exit 3, naming `a`; `status`, `ps`, `logs` and `doctor` say so too.
 stacks, `init` a second one with another `--name`. A moved stack
 (`mv a c`) adopts the resources labelled with its old directory, with a
 note, once nothing at `a` holds a stack with its ID. Docker can't relabel
-a volume, so compose then says each volume "doesn't match configuration"
-and asks whether to recreate it; pic-sure gives it no input, which keeps
-the volume and its data (answer no yourself under `pic-sure compose --`).
+a volume, so the moved stack's volumes keep `a` in their labels for good:
+pic-sure renders each existing volume with the labels it has, so compose
+never asks to recreate it, under `up` or `pic-sure compose -- up` alike.
+`pic-sure compose --` always runs on the stack's own project: it refuses
+`-p`, and a top-level `name:` in a file added with `-f` or in
+`overrides/*.yaml` doesn't change it (`doctor` warns about the latter).
 A stack directory
 deleted without `destroy` leaves its containers and volumes behind;
 `init` at the same path and name refuses until you remove them, and

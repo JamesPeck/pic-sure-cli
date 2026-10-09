@@ -71,4 +71,4 @@ services:
 
 volumes:
   frontend-node-modules:
-    labels: {{ flow .Labels }}
+    labels: {{ flow (.VolumeLabels "frontend-node-modules") }}

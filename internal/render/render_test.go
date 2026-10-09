@@ -400,6 +400,28 @@ func TestRenderValues(t *testing.T) {
 	}
 }
 
+// A volume that already exists keeps its labels, so its compose config hash
+// doesn't change and compose doesn't offer to recreate it.
+func TestExistingVolumesKeepTheirLabels(t *testing.T) {
+	in := goldenInput(goldenCase{})
+	kept := map[string]string{stack.LabelStack: "golden", stack.LabelStackDir: "/old/golden"}
+	in.VolumeLabels = map[string]map[string]string{"hpds-data": kept}
+	files, err := Render(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var f composeFile
+	if err := yaml.Unmarshal(files[0].Data, &f); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.Volumes["hpds-data"].Labels; !maps.Equal(got, kept) {
+		t.Errorf("hpds-data labels %v, want its existing %v", got, kept)
+	}
+	if got := f.Volumes["hpds-csv"].Labels[stack.LabelStackDir]; got != goldenDir {
+		t.Errorf("a new volume's stack-dir %q, want %q", got, goldenDir)
+	}
+}
+
 // busybox wget ignores no_proxy, so a wget healthcheck in a container that
 // has the proxy variables must turn the proxy off, or the probe goes to the
 // proxy and the service never becomes healthy.

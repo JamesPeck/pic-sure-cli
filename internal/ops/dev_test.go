@@ -27,6 +27,7 @@ func devFixture(t *testing.T) (*buildFixture, string) {
 	t.Helper()
 	x := newBuildFixture(t)
 	x.cfg.Components.PicSure.Source = x.checkout(false)
+	x.f.On(fakerunner.Glob("docker volume ls -q --filter label=com.docker.compose.project=*")) // render keeps existing volumes' labels
 	x.state.Images = map[string]string{}
 	for _, img := range catalog.Images() {
 		if img.Component != "" {

@@ -620,6 +620,22 @@ func TestDoctorStackCompose(t *testing.T) {
 			t.Errorf("message %q", c.Message)
 		}
 	})
+	t.Run("override sets name", func(t *testing.T) {
+		e := newDoctorEnv(t)
+		st := e.stack(t, nil)
+		if err := st.MkdirAll("overrides", 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for f, data := range map[string]string{"overrides/a.yaml": "services: {}\n", "overrides/b.yaml": "name: other\n"} {
+			if err := st.WriteFile(f, []byte(data), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		c := wantCheck(t, e.run(), "overrides", ops.CheckWarn, "name: in overrides/b.yaml is ignored")
+		if strings.Contains(c.Message, "a.yaml") {
+			t.Errorf("message %q", c.Message)
+		}
+	})
 }
 
 func TestDoctorStackPorts(t *testing.T) {

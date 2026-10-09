@@ -240,17 +240,14 @@ the stack does.`,
 			if err != nil {
 				return err
 			}
-			// -p pins the project the ownership check covers: it beats a
-			// name: in a file added with -f and COMPOSE_PROJECT_NAME in an
-			// --env-file.
-			cfg, err := st.LoadConfig()
-			switch {
-			case err == nil:
-				args = append([]string{"-p", cfg.Name}, args...)
-			case commandClass(cmd) != stack.ReadOnly:
-				return configError(err)
-			}
+			// The adapter's -p pins the project the ownership check covers:
+			// it beats a name: in a file added with -f and
+			// COMPOSE_PROJECT_NAME in an --env-file.
 			if commandClass(cmd) != stack.ReadOnly {
+				cfg, err := st.LoadConfig()
+				if err != nil {
+					return configError(err)
+				}
 				if err := checkOwned(cmd, d, st, cfg); err != nil {
 					return err
 				}

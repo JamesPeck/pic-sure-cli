@@ -15,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"go.yaml.in/yaml/v3"
 )
 
 // Composer runs `docker compose` against one rendered stack: it owns the -f
@@ -176,6 +178,10 @@ type Compose struct {
 	// against, and each call's working directory. Empty leaves both at
 	// their defaults.
 	ProjectDir string
+	// Project is the compose project, passed as -p on every call so a
+	// top-level name: in an override can't switch pic-sure to another
+	// project. Empty leaves it to compose.
+	Project string
 	// Env returns the NAME=value entries each call gets in Cmd.Env: every
 	// value the compose files' ${VAR} references need, secrets included.
 	// It is called once per call; nil means none. A call fails if an entry
@@ -193,7 +199,8 @@ var _ Composer = (*Compose)(nil)
 // NewCompose returns the Compose for the stack in dir. Its Files are the
 // rendered compose file, then every *.yaml file in dir/overrides in lexical
 // order (dotfiles and directories are skipped). It fails with ErrNotRendered
-// if the stack has no rendered compose file. Set Progress on the result to
+// if the stack has no rendered compose file. Its Project is the rendered
+// file's name:, the stack's name (render always writes one). Set Progress on the result to
 // match the output mode.
 func NewCompose(r Runner, dir string, env func() []string) (*Compose, error) {
 	dir, err := filepath.Abs(dir)
@@ -201,11 +208,18 @@ func NewCompose(r Runner, dir string, env func() []string) (*Compose, error) {
 		return nil, err
 	}
 	rendered := filepath.Join(dir, filepath.FromSlash(renderedComposeFile))
-	if _, err := os.Stat(rendered); err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil, fmt.Errorf("%w: %s does not exist", ErrNotRendered, rendered)
-		}
+	data, err := os.ReadFile(rendered)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("%w: %s does not exist", ErrNotRendered, rendered)
+	}
+	if err != nil {
 		return nil, err
+	}
+	var top struct {
+		Name string `yaml:"name"`
+	}
+	if err := yaml.Unmarshal(data, &top); err != nil {
+		return nil, fmt.Errorf("reading %s: %w", rendered, err)
 	}
 	overrides, err := overrideFiles(filepath.Join(dir, overridesDir))
 	if err != nil {
@@ -215,6 +229,7 @@ func NewCompose(r Runner, dir string, env func() []string) (*Compose, error) {
 		Runner:     r,
 		Files:      append([]string{rendered}, overrides...),
 		ProjectDir: dir,
+		Project:    top.Name,
 		Env:        env,
 	}, nil
 }
@@ -424,6 +439,9 @@ func (c *Compose) cmd(progress bool, args []string) (Cmd, error) {
 	// a stray one there could rename the project or supply values. The
 	// runner keeps the user's COMPOSE_* variables out for the same reason.
 	argv = append(argv, "--env-file", os.DevNull)
+	if c.Project != "" {
+		argv = append(argv, "-p", c.Project)
+	}
 	if progress {
 		argv = append(argv, "--progress", string(c.progress()))
 	}

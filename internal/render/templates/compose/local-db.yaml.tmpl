@@ -47,4 +47,4 @@ services:
 
 volumes:
   picsure-db-data:
-    labels: {{ flow .Labels }}
+    labels: {{ flow (.VolumeLabels "picsure-db-data") }}

@@ -275,7 +275,7 @@ it.
   read-only ones run without the lock and on a newer stack, and write a run
   log file only at debug level, like `ps`; any other, an unknown one or
   none, and `wait --down-project`, holds the stack lock until compose
-  exits. It passes `-p <name>`, which beats a `name:` in a file added
+  exits. The adapter's `-p <name>` (107) beats a `name:` in a file added
   with `-f` and an `--env-file`'s `COMPOSE_PROJECT_NAME`, so compose acts
   on the project the ownership check covered (084); the user's own
   `-p`/`--project-name` is exit 2 (`composeProjectFlag`). The
@@ -828,7 +828,13 @@ each AIO source still exists in the AIO checkout beside this repo (or
   `HostUser` (httpd-hmr's `user:`, `ops.HostUser()`'s `UID:GID`) and
   `CustomTrust` (the trust dir holds certs) and `SharedProfile` (the shared
   data set's recorded HPDS profile, used when `hpds.profile` is empty).
-  Render does no I/O, so the caller resolves those.
+  `VolumeLabels` (107) maps the key of each existing volume of the stack
+  to its labels (compose's own left out); render gives it those instead of
+  the current labels, so compose's config hash for it is unchanged and
+  compose never offers to recreate it ("data will be lost"). Volumes made
+  before a move or before the stack-id label keep their labels for good.
+  Render does no I/O, so the caller resolves those (`ops.renderStack` lists
+  the project's volumes the ownership rule gives this stack).
 - Bind sources (the stack dir, sources, a relative `source` resolved
   against the stack dir) must be absolute without `:` or line breaks; the
   rendered file is checked again after the merge. A service override for a
@@ -2134,9 +2140,12 @@ argv. `Compose` implements it over a `Runner`.
   rendered, the error wraps `ErrNotRendered`, which a command reports as
   "run `pic-sure up`".
 - Every call adds `--project-directory <stack> --env-file /dev/null` after
-  the `-f` list, runs in the stack directory, and gets `Env()`'s entries in
-  `Cmd.Env`. `--env-file /dev/null` stops a stray `.env` in the stack
-  directory from renaming the project or supplying values. The adapter also
+  the `-f` list, then `-p <Project>`, runs in the stack directory, and gets
+  `Env()`'s entries in `Cmd.Env`. `--env-file /dev/null` stops a stray
+  `.env` in the stack directory from renaming the project or supplying
+  values. `NewCompose` sets `Project` to the rendered file's `name:` (107),
+  so a top-level `name:` in an override can't move pic-sure to another
+  project; `doctor`'s `overrides` check warns about one. The adapter also
   relies on the runner not passing the user's `COMPOSE_*` variables through.
 - `Progress` sets `--progress` on up, down, stop, restart, pull and run. The
   command picks it by output mode: `ProgressJSON` under `--json`, otherwise

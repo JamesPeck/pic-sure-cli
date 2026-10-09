@@ -25,6 +25,7 @@ func newTestCompose(f *fakerunner.Runner) *docker.Compose {
 		Runner:     f,
 		Files:      []string{"/stack/.pic-sure/render/compose.yaml", "/stack/overrides/a.yaml"},
 		ProjectDir: "/stack",
+		Project:    "demo",
 		Env: func() []string {
 			return []string{"PICSURE_DB_PASSWORD=" + secretValue, "HPDS_TAG=abc123"}
 		},
@@ -40,6 +41,7 @@ func composeArgv(progress bool, args ...string) []string {
 		"-f", "/stack/overrides/a.yaml",
 		"--project-directory", "/stack",
 		"--env-file", os.DevNull,
+		"-p", "demo",
 	}
 	if progress {
 		argv = append(argv, "--progress", "plain")
@@ -587,7 +589,7 @@ func TestNewComposeFiles(t *testing.T) {
 	if !slices.Equal(c.Files, want) {
 		t.Errorf("files = %q\nwant %q", c.Files, want)
 	}
-	if c.ProjectDir != dir || c.Env == nil || c.Runner == nil {
+	if c.ProjectDir != dir || c.Project != "demo" || c.Env == nil || c.Runner == nil {
 		t.Errorf("compose = %+v", c)
 	}
 }
@@ -654,6 +656,8 @@ services:
 `)
 	writeFile(t, filepath.Join(dir, "overrides", "b.yaml"), "services:\n  web:\n    environment:\n      SHARED: b\n")
 	writeFile(t, filepath.Join(dir, "overrides", "a.yaml"), "services:\n  web:\n    environment:\n      SHARED: a\n      FROM_A: a\n")
+	// An override's name: doesn't switch the project.
+	writeFile(t, filepath.Join(dir, "overrides", "c.yaml"), "name: renamed\n")
 	// A stray .env in the stack directory must not change the project or
 	// supply values.
 	writeFile(t, filepath.Join(dir, ".env"), "COMPOSE_PROJECT_NAME=hijacked\nTAG=from-dotenv\n")
@@ -676,7 +680,7 @@ services:
 			t.Errorf("merged model lacks %q:\n%s", want, model)
 		}
 	}
-	for _, unwanted := range []string{"hijacked", "from-env", "from-dotenv"} {
+	for _, unwanted := range []string{"hijacked", "renamed", "from-env", "from-dotenv"} {
 		if strings.Contains(model, unwanted) {
 			t.Errorf("merged model contains %q:\n%s", unwanted, model)
 		}

@@ -13,6 +13,6 @@ services:
 volumes:
   # The phenotype store and its encryption key.
   hpds-data:
-    labels: {{ flow .Labels }}
+    labels: {{ flow (.VolumeLabels "hpds-data") }}
   hpds-genomic:
-    labels: {{ flow .Labels }}
+    labels: {{ flow (.VolumeLabels "hpds-genomic") }}

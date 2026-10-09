@@ -28,7 +28,7 @@ stderr 'Stop the stack'
 stderr '\|  Container demo-hpds-1  Removed'
 ! stdout .
 grep '^docker ps --all --no-trunc --filter label=org.hms-dbmi.picsure.stack=demo --format ' $WORK/docker.log
-grep '^docker compose -f .*/stack/.pic-sure/render/compose.yaml -f .*/stack/overrides/10-local.yaml --project-directory .*/stack --env-file /dev/null --progress plain down --remove-orphans$' $WORK/docker.log
+grep '^docker compose -f .*/stack/.pic-sure/render/compose.yaml -f .*/stack/overrides/10-local.yaml --project-directory .*/stack --env-file /dev/null -p demo --progress plain down --remove-orphans$' $WORK/docker.log
 
 # --json: compose's progress as JSON, relayed as log events, then the result.
 exec pic-sure --json down
@@ -95,14 +95,14 @@ stdout '^psama +exited +- +Exited \(1\) 1 minute ago$'
 exec pic-sure --json ps
 stdout '^\{"schema_version":2,"services":\[\{"service":"hpds","container":"demo-hpds-1","state":"running","health":"healthy","status":"Up 2 minutes \(healthy\)","exit_code":0\},\{"service":"psama",'
 ! stdout '"type"'
-grep '--env-file /dev/null ps --all --format json$' $WORK/docker.log
+grep '--env-file /dev/null -p demo ps --all --format json$' $WORK/docker.log
 
 # logs: the logs on stdout and compose's own messages on stderr, or log
 # events of step logs with --json.
 exec pic-sure logs hpds
 stdout '^hpds-1  \| started$'
 ! stderr .
-grep '--env-file /dev/null logs hpds$' $WORK/docker.log
+grep '--env-file /dev/null -p demo logs hpds$' $WORK/docker.log
 exitcode 1 pic-sure logs nosuch
 ! stdout .
 stderr '^no such service: nosuch$'
@@ -111,7 +111,7 @@ stdout '"type":"step_started","id":"logs"'
 stdout '"type":"log","id":"logs","stream":"stdout","line":"hpds-1  \| started"'
 stdout '"type":"step_done","id":"logs","status":"ok"'
 stdout '"type":"result","ok":true'
-grep '--env-file /dev/null logs --follow$' $WORK/docker.log
+grep '--env-file /dev/null -p demo logs --follow$' $WORK/docker.log
 
 # compose: passthrough with the stack's files and env, pinned to the
 # stack's project; compose's exit code.
@@ -258,6 +258,7 @@ auth: {mode: open, admin_email: admin@example.com}
 -- stack/.pic-sure/secrets.yaml --
 db_root_password: rootpw
 -- stack/.pic-sure/render/compose.yaml --
+name: demo
 services: {}
 -- stack/overrides/10-local.yaml --
 services: {}
@@ -276,6 +277,7 @@ auth: {mode: open, admin_email: admin@example.com}
 -- nosecrets/.pic-sure/state.json --
 {"cli_version": "dev", "schema_version": 1}
 -- nosecrets/.pic-sure/render/compose.yaml --
+name: nosecrets
 services: {}
 -- newer/pic-sure.yaml --
 schema: 2
@@ -284,4 +286,5 @@ auth: {mode: open, admin_email: admin@example.com}
 -- newer/.pic-sure/state.json --
 {"cli_version": "v9.0.0", "schema_version": 2}
 -- newer/.pic-sure/render/compose.yaml --
+name: newer
 services: {}
