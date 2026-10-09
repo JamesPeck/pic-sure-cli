@@ -4,10 +4,11 @@ name: e2e
 # core sequence, then scripts/e2e-two-stacks.sh runs two stacks side by
 # side and scripts/e2e-genomic.sh loads genomic data and shares it between
 # two stacks. Nightly, by hand and on labelled PRs (not on pushes), the
-# "e2e other" suites run too: the --input-dir loader, dev on/off, remote
-# MySQL, custom trust certs and the proxy. No images are published for the
-# release's commits yet, so the stacks build from source; the images and the
-# Maven repository are cached per architecture (scripts/e2e-cache.sh).
+# "e2e other" suites run too: the --input-dir loader and a custom
+# dictionary, dev on/off, remote MySQL, custom trust certs and the proxy. No
+# images are published for the release's commits yet, so the stacks build
+# from source; the images and the Maven repository are cached per
+# architecture (scripts/e2e-cache.sh).
 
 on:
   schedule:

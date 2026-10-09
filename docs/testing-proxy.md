@@ -15,9 +15,9 @@ It needs docker, git, go, jq and curl, and takes about 3 minutes when the
 stack's images are already built. It sources `scripts/e2e-lib.sh`, so the
 `E2E_*` settings documented there apply (stack name, heap sizes, artifacts
 on failure, `E2E_KEEP`). Its own settings are at the top of the script.
-It stops before making anything if `<name>-squid`, `<name>-egress` or
-`<name>-internal` already exists (another run's, say), so its cleanup only
-ever removes its own.
+If `<name>-squid`, `<name>-egress` or `<name>-internal` already exists
+(another run's, say), creating it fails the run, and cleanup removes only
+what this run created.
 
 ## Setup
 

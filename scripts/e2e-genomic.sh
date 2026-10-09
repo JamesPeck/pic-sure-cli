@@ -4,8 +4,8 @@
 # partition, promotes both with --all-partitions, then reloads one and
 # promotes it over the live data with --backup, answering the fixture's
 # expected.json queries after each promote. It then publishes its data as a
-# shared set and is destroyed. Stack B mounts the set read-only, hydrates its dictionary and
-# must answer the same queries. Needs docker, git, go and jq; settings are
+# shared set and is destroyed. Stack B mounts the set read-only, hydrates
+# its dictionary and must answer the same queries. Needs docker, git, go and jq; settings are
 # in scripts/e2e-lib.sh, plus E2E_SHARED_SET (the set's name, default
 # ci-genomic-<time>-<pid>).
 
@@ -44,6 +44,12 @@ entries() {
 	docker run --rm -v "$1_$2:/v:ro" "$helper" sh -c 'cd "/v/$1" && ls -A | sort | xargs' sh "$3" < /dev/null
 }
 
+# files NAME VOLUME DIR prints the checksum and path of every file under DIR
+# of the stack's VOLUME, sorted by path.
+files() {
+	docker run --rm -v "$1_$2:/v:ro" "$helper" sh -c 'cd "/v/$1" && find . -type f -exec md5sum {} + | sort -k 2' sh "$3" < /dev/null
+}
+
 # check_queries NAME runs every expected.json query against the stack's HPDS,
 # as a patient list (DATAFRAME) and as a COUNT, and fails on any difference.
 check_queries() {
@@ -77,14 +83,12 @@ check_queries() {
 say "genomic fixture"
 (cd "$repo_root" && go run ./internal/testfixtures/genomic/cmd/genomic-fixture -abs "$fixture")
 
-# One index per contig, so each contig can be its own partition.
 for c in chr21 chr22; do
 	awk -F '\t' -v f="$c.vcf" 'NR == 1 || index($1, f)' "$fixture/vcfIndex.tsv" > "$fixture/$c.tsv"
 	[ "$(wc -l < "$fixture/$c.tsv")" -eq 2 ] || fail "vcfIndex.tsv has no single $c line"
 done
 load_genomic() {
-	pic --stack "$dir_a" data load-genomic --partition "$1" --vcf-index "$fixture/$1.tsv" --vcf-dir "$fixture" \
-		--heap "$E2E_LOAD_HEAP_MB" "${@:2}"
+	pic --stack "$dir_a" data load-genomic --partition "$1" --vcf-index "$fixture/$1.tsv" --heap "$E2E_LOAD_HEAP_MB" "${@:2}"
 }
 
 init_stack "$a" "$dir_a"
@@ -98,19 +102,17 @@ live="$(entries "$a" hpds-genomic .)"
 check_queries "$a"
 
 say "$a: reload chr21 and promote it over the live data, after a --backup"
-# Only the live chr21 has the marker: the promote must replace that copy,
-# and the backup must keep it.
+# Only the live chr21 has the marker, so the reloaded chr21 differs from it.
 docker run --rm -v "${a}_hpds-genomic:/v" "$helper" touch /v/chr21/e2e-marker < /dev/null
+before="$(files "$a" hpds-genomic .)"
 load_genomic chr21 --promote --backup
 live="$(entries "$a" hpds-genomic .)"
 [ "$live" = "chr21 chr22" ] || fail "$a: the replace left the live store holding: $live"
-live="$(entries "$a" hpds-genomic chr21)"
-staged="$(entries "$a" genomic-staging genomic/chr21)"
-if [ -z "$live" ] || [ "$live" != "$staged" ]; then fail "$a: the live chr21 holds $live, the reloaded one $staged"; fi
-bak="$(entries "$a" genomic-staging all-bak)"
-[ "$bak" = "chr21 chr22" ] || fail "$a: all-bak holds $bak, not the previous live store"
-grep -qw e2e-marker <<< "$(entries "$a" genomic-staging all-bak/chr21)" ||
-	fail "$a: all-bak/chr21 isn't the previous live chr21"
+live="$(files "$a" hpds-genomic chr21)"
+staged="$(files "$a" genomic-staging genomic/chr21)"
+if [ -z "$live" ] || [ "$live" != "$staged" ]; then fail "$a: the live chr21 isn't the reloaded one"; fi
+bak="$(files "$a" genomic-staging all-bak)"
+[ "$bak" = "$before" ] || fail "$a: all-bak isn't the previous live store: $(diff <(echo "$before") <(echo "$bak"))"
 staged="$(entries "$a" genomic-staging .)"
 if grep -q 'all-bak\.' <<< "$staged"; then fail "$a: the backup left $staged in genomic-staging"; fi
 check_queries "$a"

@@ -3116,12 +3116,12 @@ changing the scripts.
 A, one contig per partition: `chr21` into staging only, then `chr22` with
 `--promote --all-partitions`, so both go live. It then marks the live
 `chr21`, reloads it and promotes it over the live data with `--backup`:
-the live `chr21` must be the reloaded copy, `all-bak` in genomic-staging
-must hold both partitions with the marker, and neither volume may hold
-leftovers (094's `.promote-*`, `.old-*`, `all-bak.new`, `all-bak.old`).
+the live `chr21` must match the reloaded copy file for file (md5), `all-bak`
+in genomic-staging must match the previous live store, marker included,
+and neither volume may hold leftovers (094's `.promote-*`, `.old-*`, `all-bak.new`, `all-bak.old`).
 It publishes A's data as a shared set, destroys A, and mounts the set in
-stack B. After each promote on A, and on B, it runs every `testdata/genomic/expected.json` query against
-HPDS from an `alpine` container on the stack's `query` network: the patient
+stack B. After each promote on A, and on B, it runs every
+`testdata/genomic/expected.json` query against HPDS from an `alpine` container on the stack's `query` network: the patient
 list through the asynchronous `/v3/query` (this release's `/v3/query/sync`
 answers DATAFRAME with HTTP 400) and the count through `/v3/query/sync`. The query JSON it builds
 handles at most one phenotype filter per query; a fixture query with more
@@ -3134,9 +3134,9 @@ per architecture; the images key carries the release-control commit, and a
 new entry is saved only when init built something.
 
 `e2e-proxy.sh` (055) runs a stack whose proxy is a squid container and
-checks every §9.10 egress path against squid's access log. It refuses to
-start if its squid container or networks already exist, so its cleanup
-removes only what it made;
+checks every §9.10 egress path against squid's access log. Its cleanup
+removes only the squid container and networks this run created, so a name
+already in use (another run's) fails the run without touching it;
 `docs/testing-proxy.md` describes the setup and what each check proves.
 
 The "e2e other" tier (064) adds `e2e-input-dir.sh` (the 043 fixture

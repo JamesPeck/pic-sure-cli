@@ -79,7 +79,7 @@ started="$(docker inspect -f '{{.State.StartedAt}}' "$(container "$name" hpds)")
 rc=0
 out="$(custom_load "$old_facets/facet_categories.csv" "$old_facets/facets.csv" 2>&1)" || rc=$?
 [ "$rc" -eq 2 ] || fail "old facet headers: exit $rc, want 2: $out"
-grep -qF 'name(unique)' <<< "$out" || fail "old facet headers: the error doesn't name name(unique): $out"
+grep -qF 'lacks the name(unique)' <<< "$out" || fail "old facet headers: the categories file wasn't refused for name(unique): $out"
 [ "$(docker inspect -f '{{.State.StartedAt}}' "$(container "$name" hpds)")" = "$started" ] ||
 	fail "old facet headers: HPDS was restarted"
 no_etl "the refused load"

@@ -34,9 +34,9 @@ proxy_cleanup() {
 	local rc=$?
 	set +e
 	if [ "$rc" -ne 0 ] && [ -n "$E2E_KEEP" ]; then
-		echo "e2e: E2E_KEEP set; left $squid, $internal, $egress and the cache $proxy_cache" >&2
+		echo "e2e: E2E_KEEP set; left what it made of $squid, $internal and $egress, and the cache $proxy_cache" >&2
 	else
-		# Only what this run made: the names were free when it made them.
+		# Only what this run created: a name in use is another run's.
 		if [ -n "$made_squid" ]; then docker rm -f "$squid" > /dev/null 2>&1; fi
 		if [ -n "$made_internal" ]; then docker network rm "$internal" > /dev/null 2>&1; fi
 		if [ -n "$made_egress" ]; then docker network rm "$egress" > /dev/null 2>&1; fi
@@ -77,19 +77,17 @@ tunnelled() {
 }
 
 say "squid on $egress, dual-homed onto the internal network $internal"
-if docker container inspect "$squid" > /dev/null 2>&1; then fail "a container named $squid exists; set E2E_NAME"; fi
-for net in "$egress" "$internal"; do
-	if docker network inspect "$net" > /dev/null 2>&1; then fail "a network named $net exists; set E2E_NAME"; fi
-done
-made_egress=1
+# Each create fails if the name is taken, so a flag set after it is ours.
 docker network create "$egress" > /dev/null
-made_internal=1
+made_egress=1
 docker network create --internal "$internal" > /dev/null
-made_squid=1
+made_internal=1
 # Published on the proxy address only. squid allows any private-range
 # client, so on macOS, where that is the LAN address, the LAN can use it
 # while the script runs.
-docker run -d --name "$squid" --network "$egress" -p "$proxy_host::3128" "$squid_image" > /dev/null
+docker create --name "$squid" --network "$egress" -p "$proxy_host::3128" "$squid_image" > /dev/null
+made_squid=1
+docker start "$squid" > /dev/null
 docker network connect --alias squid "$internal" "$squid"
 port="$(docker port "$squid" 3128 | head -n 1 | sed 's/.*://')"
 proxy="http://$proxy_host:$port"
