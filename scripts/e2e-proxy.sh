@@ -29,14 +29,17 @@ mkdir -p "$HOME/.cache"
 proxy_cache="$(mktemp -d "$HOME/.cache/pic-sure-e2e-proxy.XXXXXX")"
 export XDG_CACHE_HOME="$proxy_cache"
 
+made_squid='' made_internal='' made_egress=''
 proxy_cleanup() {
 	local rc=$?
 	set +e
 	if [ "$rc" -ne 0 ] && [ -n "$E2E_KEEP" ]; then
 		echo "e2e: E2E_KEEP set; left $squid, $internal, $egress and the cache $proxy_cache" >&2
 	else
-		docker rm -f "$squid" > /dev/null 2>&1
-		docker network rm "$internal" "$egress" > /dev/null 2>&1
+		# Only what this run made: the names were free when it made them.
+		if [ -n "$made_squid" ]; then docker rm -f "$squid" > /dev/null 2>&1; fi
+		if [ -n "$made_internal" ]; then docker network rm "$internal" > /dev/null 2>&1; fi
+		if [ -n "$made_egress" ]; then docker network rm "$egress" > /dev/null 2>&1; fi
 		rm -rf "$proxy_cache"
 	fi
 	(exit "$rc")
@@ -74,8 +77,15 @@ tunnelled() {
 }
 
 say "squid on $egress, dual-homed onto the internal network $internal"
+if docker container inspect "$squid" > /dev/null 2>&1; then fail "a container named $squid exists; set E2E_NAME"; fi
+for net in "$egress" "$internal"; do
+	if docker network inspect "$net" > /dev/null 2>&1; then fail "a network named $net exists; set E2E_NAME"; fi
+done
+made_egress=1
 docker network create "$egress" > /dev/null
+made_internal=1
 docker network create --internal "$internal" > /dev/null
+made_squid=1
 # Published on the proxy address only. squid allows any private-range
 # client, so on macOS, where that is the LAN address, the LAN can use it
 # while the script runs.

@@ -3113,8 +3113,14 @@ assertions read `status --deep --json` and `update --json`'s plan
 changing the scripts.
 
 `e2e-genomic.sh` loads the 048 fixture (`genomic-fixture -abs`) into stack
-A, publishes it as a shared set, destroys A, and mounts the set in stack B.
-On each stack it runs every `testdata/genomic/expected.json` query against
+A, one contig per partition: `chr21` into staging only, then `chr22` with
+`--promote --all-partitions`, so both go live. It then marks the live
+`chr21`, reloads it and promotes it over the live data with `--backup`:
+the live `chr21` must be the reloaded copy, `all-bak` in genomic-staging
+must hold both partitions with the marker, and neither volume may hold
+leftovers (094's `.promote-*`, `.old-*`, `all-bak.new`, `all-bak.old`).
+It publishes A's data as a shared set, destroys A, and mounts the set in
+stack B. After each promote on A, and on B, it runs every `testdata/genomic/expected.json` query against
 HPDS from an `alpine` container on the stack's `query` network: the patient
 list through the asynchronous `/v3/query` (this release's `/v3/query/sync`
 answers DATAFRAME with HTTP 400) and the count through `/v3/query/sync`. The query JSON it builds
@@ -3128,11 +3134,18 @@ per architecture; the images key carries the release-control commit, and a
 new entry is saved only when init built something.
 
 `e2e-proxy.sh` (055) runs a stack whose proxy is a squid container and
-checks every §9.10 egress path against squid's access log;
+checks every §9.10 egress path against squid's access log. It refuses to
+start if its squid container or networks already exist, so its cleanup
+removes only what it made;
 `docs/testing-proxy.md` describes the setup and what each check proves.
 
 The "e2e other" tier (064) adds `e2e-input-dir.sh` (the 043 fixture
-directory, then HPDS counts that need each file's rows), `e2e-dev.sh` (a
+directory, then HPDS counts that need each file's rows; then a
+`--dictionary custom` load with AIO's older facet headers, which must exit
+2 naming `name(unique)` without restarting HPDS, and the same load of
+`testdata/dictionary`, whose concept and facet the dictionary API must
+find by search and by facet filter; neither may leave a dictionary-etl
+container), `e2e-dev.sh` (a
 checkout of the stack's pic-sure commit as its source, `dev on psama`, the
 JDWP handshake on the debug port, `dev off psama`), `e2e-remote-db.sh` (a
 `mysql` container published on the host plays the remote server; the stack
