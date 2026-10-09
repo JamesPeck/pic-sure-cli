@@ -330,6 +330,17 @@ func TestInstallFailures(t *testing.T) {
 	}
 }
 
+func TestInstallRejectsAnotherTag(t *testing.T) {
+	g := newFakeGitHub(t, newFakeRelease(t, "v2.1.0"))
+	g.releases["v2.2.0"] = g.releases["v2.1.0"] // a mirror that answers with the wrong release
+	exe := installed(t, "")
+	_, err := newUpdater(g, exe, nil).Install(context.Background(), "2.2.0")
+	wantCode(t, err, exitcode.CodeFailed, "looking up pic-sure release v2.2.0: GitHub answered with release v2.1.0 instead")
+	if got := readFile(t, exe); got != "old" {
+		t.Errorf("binary = %q, want it untouched", got)
+	}
+}
+
 func TestInstallNothingToDo(t *testing.T) {
 	for _, tt := range []struct{ name, current, to string }{
 		{name: "already the newest", current: "v2.1.0"},
@@ -528,6 +539,14 @@ func TestInstallSignature(t *testing.T) {
 			code: exitcode.CodeFailed, substr: "the signature of checksums.txt doesn't verify: bad signature"},
 		{name: "no cosign", want: SignatureUnverified},
 		{name: "no cosign, required", require: true, code: exitcode.CodePrecondition, substr: "cosign isn't installed"},
+		{name: "cosign too old", verify: func(context.Context, string, string, string) error { return &CosignTooOldError{Version: "2.4.1"} },
+			want: SignatureUnverified},
+		{name: "cosign too old, required", require: true,
+			verify: func(context.Context, string, string, string) error { return &CosignTooOldError{Version: "2.4.1"} },
+			code:   exitcode.CodePrecondition, substr: "cosign 2.4.1 is older than 3.0 and can't check this release's signature, and a signature is required"},
+		{name: "no trust root", verify: func(context.Context, string, string, string) error {
+			return errors.New("getting trusted root from TUF: proxyconnect tcp: connection refused")
+		}, code: exitcode.CodeFailed, substr: "network or proxy problem, not a bad signature"},
 		{name: "unsigned", unsigned: true, verify: func(context.Context, string, string, string) error { return nil },
 			code: exitcode.CodeFailed, substr: "isn't signed (no checksums.txt.sigstore.json)"},
 		{name: "unsigned, no cosign", unsigned: true, code: exitcode.CodeFailed, substr: "isn't signed"},
@@ -627,16 +646,62 @@ func TestSelfUpdateRefusals(t *testing.T) {
 }
 
 func TestCosignVerifier(t *testing.T) {
-	if v := CosignVerifier(fakerunner.New(t), DefaultRepo, func(string) (string, error) { return "", exec.ErrNotFound }); v != nil {
+	onPath := func(string) (string, error) { return "/usr/local/bin/cosign", nil }
+	if v := CosignVerifier(fakerunner.New(t), DefaultRepo, func(string) (string, error) { return "", exec.ErrNotFound }, nil); v != nil {
 		t.Error("CosignVerifier without cosign on PATH isn't nil")
 	}
-	f := fakerunner.New(t)
-	f.On(fakerunner.Exact("cosign", "verify-blob", "--bundle", "/tmp/b.json",
+	verifyBlob := fakerunner.Exact("cosign", "verify-blob", "--bundle", "/tmp/b.json",
 		"--certificate-identity", "https://github.com/JamesPeck/pic-sure-cli/.github/workflows/release.yml@refs/tags/v2.1.0",
-		"--certificate-oidc-issuer", "https://token.actions.githubusercontent.com", "/tmp/checksums.txt")).Exit(1).Stderr("no matching signatures")
-	v := CosignVerifier(f, DefaultRepo, func(string) (string, error) { return "/usr/local/bin/cosign", nil })
-	if err := v(context.Background(), "v2.1.0", "/tmp/checksums.txt", "/tmp/b.json"); err == nil || !strings.Contains(err.Error(), "no matching signatures") {
-		t.Errorf("verify = %v, want cosign's failure", err)
+		"--certificate-oidc-issuer", "https://token.actions.githubusercontent.com", "/tmp/checksums.txt")
+	version := fakerunner.Exact("cosign", "version")
+
+	t.Run("runs verify-blob with the proxy", func(t *testing.T) {
+		f := fakerunner.New(t)
+		f.On(version).Stdout("GitVersion:    v3.1.3\nGitCommit:     abc\n")
+		f.On(verifyBlob).Exit(1).Stderr("no matching signatures")
+		v := CosignVerifier(f, DefaultRepo, onPath, []string{"HTTPS_PROXY=http://proxy:3128"})
+		if err := v(context.Background(), "v2.1.0", "/tmp/checksums.txt", "/tmp/b.json"); err == nil || !strings.Contains(err.Error(), "no matching signatures") {
+			t.Errorf("verify = %v, want cosign's failure", err)
+		}
+		if calls := f.CallsMatching(verifyBlob); len(calls) != 1 || !calls[0].HasEnv("HTTPS_PROXY") {
+			t.Errorf("verify-blob calls = %v, want one with HTTPS_PROXY", calls)
+		}
+	})
+	for _, tt := range []struct{ name, out, old string }{
+		{name: "cosign 2.4.1", out: "GitVersion:    v2.4.1\n", old: "2.4.1"},
+		{name: "cosign 2.6.5 on stderr", out: "", old: "2.6.5"},
+		{name: "cosign 3.0.0", out: "GitVersion:    v3.0.0\n"},
+		{name: "unreadable version", out: "devel\n"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			f := fakerunner.New(t)
+			rule := f.On(version).Stdout(tt.out)
+			if tt.out == "" {
+				rule.Stderr("GitVersion:    v" + tt.old + "\n")
+			}
+			f.On(verifyBlob)
+			v := CosignVerifier(f, DefaultRepo, onPath, nil)
+			err := v(context.Background(), "v2.1.0", "/tmp/checksums.txt", "/tmp/b.json")
+			var tooOld *CosignTooOldError
+			if tt.old == "" {
+				if err != nil {
+					t.Errorf("verify = %v, want verify-blob's success", err)
+				}
+				return
+			}
+			if !errors.As(err, &tooOld) || tooOld.Version != tt.old {
+				t.Errorf("verify = %v, want CosignTooOldError for %s", err, tt.old)
+			}
+			f.AssertNotCalled(verifyBlob)
+		})
+	}
+}
+
+func TestRequireSignatureSet(t *testing.T) {
+	for v, want := range map[string]bool{"": false, "0": false, "false": false, "1": true, "true": true, "yes": true} {
+		if got := RequireSignatureSet(v); got != want {
+			t.Errorf("RequireSignatureSet(%q) = %v, want %v", v, got, want)
+		}
 	}
 }
 

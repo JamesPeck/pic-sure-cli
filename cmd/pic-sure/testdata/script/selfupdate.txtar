@@ -11,7 +11,7 @@ exitcode 1 pic-sure self-update --to 2.0.1
 stderr '^pic-sure: looking up pic-sure release v2.0.1: .*connection refused'
 ! stderr http:
 
-exitcode 1 pic-sure --json self-update --to v2.0.1
+exitcode 1 pic-sure --json self-update --to v2.0.1 --require-signature
 stdout '"exit_code":1'
 
 exitcode 2 pic-sure self-update extra

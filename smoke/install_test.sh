@@ -35,12 +35,22 @@ for cmd in bash sh curl tar gzip install mkdir mktemp rm cp mv chmod awk sed gre
   if p="$(command -v "$cmd")"; then ln -s "$p" "$WORK/tools/$cmd"; fi
 done
 
-# A stub cosign that records its arguments; COSIGN_FAIL makes it reject.
+# A stub cosign that records verify-blob's arguments. `cosign version`
+# reports COSIGN_VERSION (default 3.1.3) the way cosign does; COSIGN_FAIL
+# makes verify-blob reject (1) or fail to fetch the trust root (tuf).
 mkdir "$WORK/cosign"
 cat >"$WORK/cosign/cosign" <<'EOF'
 #!/bin/sh
+if [ "$1" = version ]; then
+  printf '  ______\nGitVersion:    v%s\nGitCommit:     0000000\n' "${COSIGN_VERSION:-3.1.3}"
+  exit 0
+fi
 printf '%s\n' "$@" >"$COSIGN_LOG"
-[ -z "${COSIGN_FAIL:-}" ] || { echo "error: none of the expected identities matched" >&2; exit 1; }
+case "${COSIGN_FAIL:-}" in
+  "") ;;
+  tuf) echo 'Error: getting trusted root from TUF: tuf refresh failed: proxyconnect tcp: connection refused' >&2; exit 1 ;;
+  *) echo "error: none of the expected identities matched" >&2; exit 1 ;;
+esac
 EOF
 chmod +x "$WORK/cosign/cosign"
 
@@ -50,15 +60,52 @@ WWW="$WORK/www"
 REL="$WWW/gh/$REPO/releases/download"
 API="$WWW/api/repos/$REPO"
 mkdir -p "$API"
-# A full first page of v3 releases, so the v2 ones are on page 2. Compact,
-# like the API, with nested objects; v2.11.0 is marked prerelease.
+# A full first page of v3 releases, so the v2 ones are on page 2. Indented
+# like the API's answers, with nested objects; v2.11.0 is marked prerelease.
 {
-  printf '['
-  for i in $(seq 0 99); do printf '{"tag_name":"v3.0.%s","prerelease":false},' "$i"; done
-  printf '{"tag_name":"v3.1.0","prerelease":false}]\n'
+  printf '[\n'
+  for i in $(seq 0 99); do printf '  {\n    "tag_name": "v3.0.%s",\n    "prerelease": false\n  },\n' "$i"; done
+  printf '  {\n    "tag_name": "v3.1.0",\n    "prerelease": false\n  }\n]\n'
 } >"$API/releases.1"
 cat >"$API/releases.2" <<'EOF'
-[{"author":{"login":"x"},"tag_name":"v3.0.0","draft":false,"prerelease":false,"assets":[{"uploader":{"login":"x"}}]},{"tag_name":"v2.11.0","prerelease":true,"assets":[]},{"tag_name":"v2.10.0-rc.1","prerelease":true},{"tag_name":"v2.9.1","prerelease":false},{"tag_name":"v2.10.0","prerelease":false},{"tag_name":"v1.4.0","prerelease":false}]
+[
+  {
+    "author": {
+      "login": "x"
+    },
+    "tag_name": "v3.0.0",
+    "draft": false,
+    "prerelease": false,
+    "assets": [
+      {
+        "uploader": {
+          "login": "x"
+        }
+      }
+    ]
+  },
+  {
+    "tag_name": "v2.11.0",
+    "prerelease": true,
+    "assets": []
+  },
+  {
+    "tag_name": "v2.10.0-rc.1",
+    "prerelease": true
+  },
+  {
+    "tag_name": "v2.9.1",
+    "prerelease": false
+  },
+  {
+    "tag_name": "v2.10.0",
+    "prerelease": false
+  },
+  {
+    "tag_name": "v1.4.0",
+    "prerelease": false
+  }
+]
 EOF
 
 # release TAG: a release holding the snapshot's archive, checksums and a
@@ -113,6 +160,7 @@ run() {
   COSIGN_LOG="$WORK/cosign-$name.log"
   status=0
   env -i HOME="$WORK" PATH="$path" TMPDIR="$WORK" COSIGN_LOG="$COSIGN_LOG" COSIGN_FAIL="${COSIGN_FAIL:-}" \
+    COSIGN_VERSION="${COSIGN_VERSION:-}" PIC_SURE_REQUIRE_SIGNATURE="${PIC_SURE_REQUIRE_SIGNATURE:-}" \
     PIC_SURE_INSTALL_GITHUB_URL="http://127.0.0.1:$port/gh" \
     PIC_SURE_INSTALL_API_URL="http://127.0.0.1:$port/api" \
     bash "$ROOT/install.sh" --repo "$REPO" --bin-dir "$BIN" "$@" >"$WORK/out" 2>&1 || status=$?
@@ -139,7 +187,7 @@ fi
 run no-cosign --version "${TAG#v}"
 if [ "$status" -ne 0 ] || ! installed; then
   flunk no-cosign "exit $status, or no working binary"
-elif ! said "WARNING: cosign not found"; then
+elif ! said "WARNING: cosign isn't installed"; then
   flunk no-cosign "no warning that the signature went unchecked"
 else
   pass no-cosign
@@ -159,6 +207,63 @@ if [ "$status" -eq 0 ] || [ -e "$BIN/pic-sure" ] || ! said "signature verificati
   flunk bad-signature "exit $status; a bad signature must abort before installing"
 else
   pass bad-signature
+fi
+
+COSIGN_VERSION=2.4.1 run old-cosign --cosign --version "$TAG"
+if [ "$status" -ne 0 ] || ! installed; then
+  flunk old-cosign "exit $status, or no working binary"
+elif [ -e "$COSIGN_LOG" ] || said "FAILED" || ! said "cosign 2.4.1 is older than 3.0"; then
+  flunk old-cosign "a cosign older than 3.0 must be skipped with a warning, never reported as a failed signature"
+else
+  pass old-cosign
+fi
+
+PIC_SURE_REQUIRE_SIGNATURE=1 run require-no-cosign --version "$TAG"
+if [ "$status" -eq 0 ] || [ -e "$BIN/pic-sure" ] || ! said "PIC_SURE_REQUIRE_SIGNATURE requires a checked signature"; then
+  flunk require-no-cosign "exit $status; PIC_SURE_REQUIRE_SIGNATURE without cosign must abort before installing"
+else
+  pass require-no-cosign
+fi
+
+PIC_SURE_REQUIRE_SIGNATURE=1 COSIGN_VERSION=2.6.5 run require-old-cosign --cosign --version "$TAG"
+if [ "$status" -eq 0 ] || [ -e "$BIN/pic-sure" ] || ! said "cosign 2.6.5 is older than 3.0"; then
+  flunk require-old-cosign "exit $status; PIC_SURE_REQUIRE_SIGNATURE with a too-old cosign must abort before installing"
+else
+  pass require-old-cosign
+fi
+
+PIC_SURE_REQUIRE_SIGNATURE=1 run require-verified --cosign --version "$TAG"
+if [ "$status" -ne 0 ] || ! installed; then
+  flunk require-verified "exit $status, or no working binary"
+else
+  pass require-verified
+fi
+
+COSIGN_FAIL=tuf run no-trust-root --cosign --version "$TAG"
+if [ "$status" -eq 0 ] || [ -e "$BIN/pic-sure" ] || said "signature verification FAILED" || ! said "network or proxy problem"; then
+  flunk no-trust-root "exit $status; cosign failing to reach Sigstore must abort, as a network problem"
+else
+  pass no-trust-root
+fi
+
+# A download cut short must install nothing: feed bash every prefix of
+# install.sh that ends on a line boundary.
+total="$(wc -l <"$ROOT/install.sh")"
+truncated_ok=true
+for n in $(seq 1 $((total - 1))); do
+  BIN="$WORK/bin-truncated"
+  head -n "$n" "$ROOT/install.sh" \
+    | env -i HOME="$WORK" PATH="$WORK/cosign:$WORK/tools" TMPDIR="$WORK" COSIGN_LOG=/dev/null \
+      PIC_SURE_INSTALL_GITHUB_URL="http://127.0.0.1:$port/gh" PIC_SURE_INSTALL_API_URL="http://127.0.0.1:$port/api" \
+      bash -s -- --repo "$REPO" --bin-dir "$BIN" --version "$TAG" >"$WORK/out" 2>&1 || true
+  if [ -e "$BIN" ] || said "Downloading"; then
+    truncated_ok=false
+    flunk truncated "the first $n lines of install.sh started an install"
+    break
+  fi
+done
+if [ "$truncated_ok" = true ]; then
+  pass truncated
 fi
 
 release v2.0.1

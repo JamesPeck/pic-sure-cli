@@ -2331,12 +2331,24 @@ GitHub API root (mirrors, tests).
   downgrades.
 - Signatures: every v2 release carries `checksums.txt.sigstore.json`
   (`.goreleaser.yaml`), so a release without it is refused (exit 1). With
-  cosign on PATH, `CosignVerifier` runs `cosign verify-blob`, accepting only
-  a keyless signature from the repo's `release.yml` for the release's own
-  tag, so an older release's signed assets can't pass for a newer one;
-  failure is exit 1. Without cosign the update warns and relies on the
-  checksum, as `install.sh` does; `RequireSignature` makes that an error
-  too (exit 3).
+  cosign on PATH, `CosignVerifier` runs `cosign version` and then `cosign
+  verify-blob`, accepting only a keyless signature from the repo's
+  `release.yml` for the release's own tag, so an older release's signed
+  assets can't pass for a newer one; failure is exit 1. cosign fetches
+  Sigstore's trust root on every run, so it gets the stack's proxy (the
+  `netproxy` env) when the stack sets one, and a failure to fetch the
+  trust root is reported as a network problem, not a bad signature. A
+  cosign older than 3.0 can't read the release's bundle (cosign 3's
+  format): `CosignVerifier` returns a `*CosignTooOldError` without running
+  verify-blob, and the update treats it like no cosign. Without a usable
+  cosign the update warns and relies on the checksum, as `install.sh`
+  does. `RequireSignature` makes that an error (exit 3); the cli sets it
+  from `PIC_SURE_REQUIRE_SIGNATURE` (anything but empty, `0` or `false`)
+  for self-update and the gate, and from `self-update
+  --require-signature`. `install.sh` reads the same variable.
+- `resolve` with `--to` refuses a release whose `tag_name` isn't the
+  requested tag (exit 1), so a `PIC_SURE_RELEASE_API` mirror that answers
+  with another release can't install it.
 - `SelfUpdate(ctx, version)` (`release.SelfUpdater`, the gate's action):
   `Install`, then `syscall.Exec` the new binary with the process's argv and
   environment plus `PIC_SURE_SELF_UPDATED=<version>`, so it doesn't

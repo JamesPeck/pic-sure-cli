@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/events"
+	"github.com/JamesPeck/pic-sure-cli/internal/selfupdate"
 	"github.com/JamesPeck/pic-sure-cli/internal/stack"
 )
 
@@ -50,5 +51,15 @@ func TestSelfUpdateProxy(t *testing.T) {
 				t.Errorf("events = %v, want a warning: %v", rec.Events(), tt.warn)
 			}
 		})
+	}
+}
+
+func TestNewSelfUpdaterRequireSignature(t *testing.T) {
+	for v, want := range map[string]bool{"": false, "0": false, "1": true} {
+		t.Setenv(selfupdate.RequireSignatureEnv, v)
+		a, _, _ := testApp(t)
+		if got := a.newSelfUpdater(nil, &events.Recorder{}, "self-update").RequireSignature; got != want {
+			t.Errorf("%s=%q: RequireSignature = %v, want %v", selfupdate.RequireSignatureEnv, v, got, want)
+		}
 	}
 }

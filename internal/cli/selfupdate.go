@@ -35,7 +35,12 @@ func newSelfUpdateCmd(a *App) *cobra.Command {
 				return err
 			}
 			sink := a.newSink()
+			require, err := cmd.Flags().GetBool("require-signature")
+			if err != nil {
+				return err
+			}
 			u := a.newSelfUpdater(a.selfUpdateProxy(sink), sink, "self-update")
+			u.RequireSignature = u.RequireSignature || require
 			res, err := u.Install(cmd.Context(), to)
 			if err != nil {
 				return err
@@ -44,6 +49,7 @@ func newSelfUpdateCmd(a *App) *cobra.Command {
 		},
 	}
 	c.Flags().String("to", "", "install this `VERSION` instead of the newest stable v2 release")
+	c.Flags().Bool("require-signature", false, "fail, rather than warn, when cosign 3.0 or newer isn't installed to check the signature (also "+selfupdate.RequireSignatureEnv+"=1)")
 	return c
 }
 
@@ -52,19 +58,23 @@ var _ release.SelfUpdater = (*selfupdate.Updater)(nil)
 // newSelfUpdater returns the Updater for this run: the self-update command's,
 // and the compatibility gate's (release.GateOptions.Updater), which init and
 // update are to build with their config's proxy. A nil or disabled proxy
-// means the environment's (HTTPS_PROXY and so on).
+// means the environment's (HTTPS_PROXY and so on), for the downloads and
+// for cosign. PIC_SURE_REQUIRE_SIGNATURE sets RequireSignature.
 func (a *App) newSelfUpdater(proxy *netproxy.Proxy, sink events.Sink, step string) *selfupdate.Updater {
 	proxyURL := http.ProxyFromEnvironment
+	var cosignEnv []string
 	if proxy != nil && proxy.Enabled() {
 		proxyURL = proxy.ProxyURL
+		cosignEnv = proxy.Env()
 	}
 	return &selfupdate.Updater{
-		Current:      a.Info.Version,
-		APIBase:      os.Getenv(releaseAPIEnv),
-		Proxy:        proxyURL,
-		VerifyBundle: selfupdate.CosignVerifier(a.newRunner(a.newLogger()), selfupdate.DefaultRepo, exec.LookPath),
-		Sink:         sink,
-		Step:         step,
+		Current:          a.Info.Version,
+		APIBase:          os.Getenv(releaseAPIEnv),
+		Proxy:            proxyURL,
+		VerifyBundle:     selfupdate.CosignVerifier(a.newRunner(a.newLogger()), selfupdate.DefaultRepo, exec.LookPath, cosignEnv),
+		RequireSignature: selfupdate.RequireSignatureSet(os.Getenv(selfupdate.RequireSignatureEnv)),
+		Sink:             sink,
+		Step:             step,
 		// The new binary starts its own renderer on a terminal this one must
 		// have restored first.
 		BeforeExec: func() { a.output().endTUI() },

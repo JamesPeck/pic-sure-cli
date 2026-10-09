@@ -9,7 +9,8 @@ pic-sure self-update [flags]
 ## Flags
 
 ```
-      --to VERSION   install this VERSION instead of the newest stable v2 release
+      --require-signature   fail, rather than warn, when cosign 3.0 or newer isn't installed to check the signature (also PIC_SURE_REQUIRE_SIGNATURE=1)
+      --to VERSION          install this VERSION instead of the newest stable v2 release
 ```
 
 The [global flags](pic-sure.md#flags) apply too.

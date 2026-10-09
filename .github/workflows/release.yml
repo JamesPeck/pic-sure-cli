@@ -80,11 +80,13 @@ jobs:
           subject-checksums: dist/checksums.txt
 
       # Install this runner's archive the way users will: checksum, cosign
-      # bundle against this workflow's identity, archive layout. Then check
-      # that the tag reached the binary through the ldflags.
+      # bundle against this workflow's identity (required, so a cosign that
+      # can't check it fails the release), archive layout. Then check that
+      # the tag reached the binary through the ldflags.
       - name: Install with install.sh
         env:
           TAG: ${{ github.ref_name }}
+          PIC_SURE_REQUIRE_SIGNATURE: "1"
         run: |
           mirror="$RUNNER_TEMP/github"
           mkdir -p "$mirror/$GITHUB_REPOSITORY/releases/download"
@@ -100,3 +102,75 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false
+
+  # Informational: which cosign versions can verify the published bundle.
+  # install.sh and self-update require cosign 3.0 (spec §8); this table is
+  # the evidence for lowering that minimum later. It never fails the release.
+  older-cosign:
+    name: Verify with older cosign versions
+    needs: release
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      VERSIONS: v2.4.1 v2.4.2 v2.5.3 v2.6.5 v3.0.6
+    steps:
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        continue-on-error: true
+        with:
+          cosign-release: v2.4.1
+          install-dir: ${{ runner.temp }}/cosign-v2.4.1
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        continue-on-error: true
+        with:
+          cosign-release: v2.4.2
+          install-dir: ${{ runner.temp }}/cosign-v2.4.2
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        continue-on-error: true
+        with:
+          cosign-release: v2.5.3
+          install-dir: ${{ runner.temp }}/cosign-v2.5.3
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        continue-on-error: true
+        with:
+          cosign-release: v2.6.5
+          install-dir: ${{ runner.temp }}/cosign-v2.6.5
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        continue-on-error: true
+        with:
+          cosign-release: v3.0.6
+          install-dir: ${{ runner.temp }}/cosign-v3.0.6
+
+      - name: Verify the release's bundle with each
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          dir="$RUNNER_TEMP/release"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "$dir" \
+            --pattern checksums.txt --pattern checksums.txt.sigstore.json
+          identity="https://github.com/$GITHUB_REPOSITORY/.github/workflows/release.yml@refs/tags/$TAG"
+          {
+            echo "### cosign versions against the $TAG bundle"
+            echo
+            echo "| cosign | verify-blob | last line of output |"
+            echo "|---|---|---|"
+          } >>"$GITHUB_STEP_SUMMARY"
+          for v in $VERSIONS; do
+            cosign="$RUNNER_TEMP/cosign-$v/cosign"
+            if [ ! -x "$cosign" ]; then
+              echo "| $v | not installed | |" >>"$GITHUB_STEP_SUMMARY"
+              continue
+            fi
+            result=ok
+            out="$("$cosign" verify-blob --bundle "$dir/checksums.txt.sigstore.json" \
+              --certificate-identity "$identity" \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              "$dir/checksums.txt" 2>&1)" || result=failed
+            echo "$v: $result"
+            printf '%s\n' "$out"
+            last="$(printf '%s\n' "$out" | tail -n 1 | tr '|' '/' | cut -c1-200)"
+            echo "| $v | $result | $last |" >>"$GITHUB_STEP_SUMMARY"
+          done

@@ -82,6 +82,9 @@ func (u *Updater) resolve(ctx context.Context, version string) (*release, error)
 	if r.Tag == "" {
 		return nil, exitcode.Failed("looking up %s: GitHub's answer has no tag", what)
 	}
+	if r.Tag != version {
+		return nil, exitcode.Failed("looking up %s: GitHub answered with release %s instead; not installing it", what, r.Tag)
+	}
 	return &r, nil
 }
 

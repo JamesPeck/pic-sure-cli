@@ -62,14 +62,24 @@ curl -fsSL https://raw.githubusercontent.com/JamesPeck/pic-sure-cli/main/install
 | `--repo OWNER/NAME` | `JamesPeck/pic-sure-cli` |
 
 The installer checks the archive's SHA-256 against the release's
-`checksums.txt`. If `cosign` is installed (**cosign 2.4 or newer**; older
-2.x releases can't read the release's signature bundle), it also verifies
+`checksums.txt`. If `cosign` is installed (**cosign 3.0 or newer**; older
+releases can't read the release's signature bundle), it also verifies
 `checksums.txt` against its Sigstore signature and stops if that fails.
-Without cosign it warns and relies on the checksum. It ends by printing
-the commands to verify the release by hand.
+cosign fetches Sigstore's trust root each time, so it needs the network
+(through `HTTPS_PROXY` if you use a proxy). Without cosign, or with an
+older one, it warns and relies on the checksum; set
+`PIC_SURE_REQUIRE_SIGNATURE=1` to make that a failure instead. It ends by
+printing the commands to verify the release by hand.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/JamesPeck/pic-sure-cli/main/install.sh \
+  | PIC_SURE_REQUIRE_SIGNATURE=1 bash
+```
 
 Later, `pic-sure self-update` installs the newest stable v2 release with
-the same checks (`--to VERSION` for a specific one).
+the same checks (`--to VERSION` for a specific one). It honours
+`PIC_SURE_REQUIRE_SIGNATURE` too, as does `--require-signature`, and
+inside a stack cosign uses the stack's proxy.
 
 **From source** (Go 1.26, or let `GOTOOLCHAIN=auto` fetch it):
 
@@ -430,4 +440,9 @@ runs nightly, so a newly published vulnerability fails it.
 Releases are tagged `v2.*`. The release workflow refuses a tag whose commit
 isn't on `main`, then runs all of CI against it. GoReleaser builds the
 `linux/darwin × amd64/arm64` archives, signs `checksums.txt` with cosign
-(keyless), and publishes them with SBOMs and build attestations.
+(keyless) with cosign 3, and publishes them with SBOMs and build
+attestations. Before publishing it installs its own archive with
+`install.sh` and `PIC_SURE_REQUIRE_SIGNATURE=1`. Afterwards an
+informational job verifies the published bundle with older cosign
+releases (2.4.1 through 3.0) and lists the results in its job summary,
+the evidence for ever lowering the cosign 3.0 minimum.

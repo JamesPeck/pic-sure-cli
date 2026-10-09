@@ -8,7 +8,9 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -66,10 +68,12 @@ type Updater struct {
 	// GOOS and GOARCH pick the archive; the running platform when empty.
 	GOOS, GOARCH string
 	// VerifyBundle checks bundle, the cosign signature of release tag's
-	// checksums. Nil means cosign isn't available.
+	// checksums. Nil means cosign isn't available; a *CosignTooOldError
+	// means the same for the cosign that is.
 	VerifyBundle func(ctx context.Context, tag, checksums, bundle string) error
-	// RequireSignature also refuses a signed release when cosign isn't
-	// available to check it. A release without a bundle is always refused.
+	// RequireSignature also refuses a signed release when no usable cosign
+	// is available to check it. A release without a bundle is always
+	// refused.
 	RequireSignature bool
 	// Sink and Step receive progress and warnings.
 	Sink events.Sink
@@ -228,22 +232,36 @@ func (u *Updater) verifySignature(ctx context.Context, rel *release, sums, dir s
 		return "", exitcode.Failed("pic-sure release %s isn't signed (no %s); not installing it", rel.Tag, BundleName)
 	}
 	if u.VerifyBundle == nil {
-		if u.RequireSignature {
-			return "", exitcode.Precondition("pic-sure release %s is signed, but cosign isn't installed to verify it; "+
-				"install cosign and run self-update again", rel.Tag)
-		}
-		u.warn("pic-sure release %s is signed, but cosign isn't installed, so only its SHA-256 checksum was verified", rel.Tag)
-		return SignatureUnverified, nil
+		return u.unverified(rel.Tag, "cosign isn't installed to check it", "install cosign "+minCosign+" or newer")
 	}
 	bundle := filepath.Join(dir, BundleName)
 	if _, err := u.download(ctx, b, bundle, maxMetadata); err != nil {
 		return "", err
 	}
-	if err := u.VerifyBundle(ctx, rel.Tag, sums, bundle); err != nil {
+	err := u.VerifyBundle(ctx, rel.Tag, sums, bundle)
+	var old *CosignTooOldError
+	switch {
+	case errors.As(err, &old):
+		return u.unverified(rel.Tag, old.Error(), "upgrade cosign")
+	case err != nil && strings.Contains(err.Error(), "trusted root"):
+		return "", exitcode.Failed("pic-sure release %s: cosign couldn't fetch Sigstore's trust root to check the signature of %s, "+
+			"which is a network or proxy problem, not a bad signature: %v; not installing it", rel.Tag, ChecksumsName, err)
+	case err != nil:
 		return "", exitcode.Failed("pic-sure release %s: the signature of %s doesn't verify: %v; not installing it",
 			rel.Tag, ChecksumsName, err)
 	}
 	return SignatureVerified, nil
+}
+
+// unverified is verifySignature's answer when no usable cosign can check
+// the signature: why says what's wrong with cosign, and fix what to do.
+func (u *Updater) unverified(tag, why, fix string) (string, error) {
+	if u.RequireSignature {
+		return "", exitcode.Precondition("pic-sure release %s is signed, but %s, and a signature is required; %s and try again",
+			tag, why, fix)
+	}
+	u.warn("pic-sure release %s is signed, but %s, so only its SHA-256 checksum was verified; %s to check signatures", tag, why, fix)
+	return SignatureUnverified, nil
 }
 
 // replace extracts the binary from archive next to t and renames it over
@@ -280,23 +298,60 @@ func replace(t target, archive string) error {
 	return nil
 }
 
+// RequireSignatureEnv, set to anything but "", "0" or "false", makes a
+// missing or too-old cosign a failure instead of a warning. install.sh
+// reads it too.
+const RequireSignatureEnv = "PIC_SURE_REQUIRE_SIGNATURE"
+
+// RequireSignatureSet reports whether value turns RequireSignatureEnv on.
+// An unrecognised value turns it on, so a typo can't weaken the check.
+func RequireSignatureSet(value string) bool {
+	return value != "" && value != "0" && value != "false"
+}
+
+// minCosign is the oldest cosign that reads the bundles the release
+// workflow writes (cosign 3's new bundle format).
+const minCosign = "3.0"
+
+// CosignTooOldError is VerifyBundle's error for a cosign older than
+// minCosign, which can't check a release's signature at all.
+type CosignTooOldError struct {
+	Version string
+}
+
+func (e *CosignTooOldError) Error() string {
+	return fmt.Sprintf("cosign %s is older than %s and can't check this release's signature", e.Version, minCosign)
+}
+
+// cosignMajor matches `cosign version`'s GitVersion line.
+var cosignMajor = regexp.MustCompile(`(?m)^GitVersion:\s+v?([0-9]+)\.\S*`)
+
 // CosignVerifier returns an Updater.VerifyBundle that runs `cosign
 // verify-blob` with runner, accepting only a keyless signature made by
 // repo's release workflow for that very tag, so one release's signed
-// assets can't pass for another's. It returns nil when cosign isn't on
-// PATH.
-func CosignVerifier(runner docker.Runner, repo string, lookPath func(string) (string, error)) func(context.Context, string, string, string) error {
+// assets can't pass for another's. cosign fetches Sigstore's trust root on
+// every run, so env (the stack's proxy, as NAME=value entries) is added to
+// its environment. It returns nil when cosign isn't on PATH, and a
+// *CosignTooOldError for a cosign older than 3.0; a version it can't read
+// is tried anyway.
+func CosignVerifier(runner docker.Runner, repo string, lookPath func(string) (string, error), env []string) func(context.Context, string, string, string) error {
 	if _, err := lookPath("cosign"); err != nil {
 		return nil
 	}
 	return func(ctx context.Context, tag, checksums, bundle string) error {
-		_, err := docker.RunChecked(ctx, runner, docker.Cmd{Argv: []string{
+		res, err := runner.Run(ctx, docker.Cmd{Argv: []string{"cosign", "version"}})
+		if m := cosignMajor.FindStringSubmatch(string(res.Stdout) + string(res.Stderr)); err == nil && m != nil {
+			if major, err := strconv.Atoi(m[1]); err == nil && major < 3 {
+				return &CosignTooOldError{Version: strings.TrimPrefix(strings.Fields(m[0])[1], "v")}
+			}
+		}
+		_, err = docker.RunChecked(ctx, runner, docker.Cmd{Argv: []string{
 			"cosign", "verify-blob",
 			"--bundle", bundle,
 			"--certificate-identity", "https://github.com/" + repo + "/.github/workflows/release.yml@refs/tags/" + tag,
 			"--certificate-oidc-issuer", "https://token.actions.githubusercontent.com",
 			checksums,
-		}})
+		}, Env: env})
 		return err
 	}
 }
