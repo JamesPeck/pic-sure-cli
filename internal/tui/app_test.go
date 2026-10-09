@@ -13,6 +13,7 @@ import (
 
 	"github.com/JamesPeck/pic-sure-cli/internal/dashboard"
 	"github.com/JamesPeck/pic-sure-cli/internal/events"
+	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
 	"github.com/JamesPeck/pic-sure-cli/internal/stack"
 )
 
@@ -305,5 +306,44 @@ func TestDashboardActionAsksOnTheRunScreen(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatalf("no answer reached the command; view:\n%s", a.content())
+	}
+}
+
+// A third Ctrl-C on the run screen quits the TUI without waiting for an
+// operation that ignores cancellation, with exit 130 and the step's name.
+func TestRunScreenForceQuitEndsRun(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	a := newApp(context.Background(), Options{
+		Root: t.TempDir(), Start: ScreenDashboard,
+		Command: func(_ context.Context, req CommandRequest) (InitResult, error) {
+			req.Sink.Emit(events.StepStarted{ID: "images", Title: "Build the images"})
+			<-release
+			return InitResult{}, nil
+		},
+	})
+	a.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	a.Update(dashboard.RunMsg{Action: dashboard.Action{Title: "Building", Args: []string{"build"}}})
+	s := a.run
+	pumpRun(t, s, func() bool { return strings.Contains(plainView(s), "Build the images") })
+	ctrlC := tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}
+	a.Update(ctrlC)
+	a.Update(ctrlC)
+	_, cmd := a.Update(ctrlC)
+	if cmd == nil {
+		t.Fatal("a third Ctrl-C didn't quit")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatal("a third Ctrl-C didn't quit")
+	}
+	err := a.end(nil)
+	var coded *exitcode.Error
+	if !errors.As(err, &coded) || coded.Code != exitcode.CodeInterrupted {
+		t.Fatalf("end = %v, want exit 130", err)
+	}
+	for _, want := range []string{`"Build the images"`, "may still be running", "pic-sure status"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q lacks %q", err, want)
+		}
 	}
 }

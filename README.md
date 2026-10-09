@@ -210,7 +210,9 @@ Commands run from the TUI show their steps on a run screen; Enter goes back
 when they finish. Run from a shell, long commands such as `init`, `up`,
 `update` and `data` show the same live checklist and leave it in the
 scrollback. Ctrl-C asks to confirm, a second Ctrl-C cancels and lets the
-command clean up, and a third while it stops quits at once.
+command clean up, and a third while it stops quits at once with exit 130,
+in the TUI too. A forced quit names the step that was running; containers
+it started may still be running, so check with `pic-sure status`.
 
 | To get | Use |
 |---|---|

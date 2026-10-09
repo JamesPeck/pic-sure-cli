@@ -146,6 +146,7 @@ func (r *Renderer) start() {
 		Interrupt:  r.opts.Interrupt,
 		NoColor:    r.opts.NoColor,
 		Scrollback: true,
+		ForceQuit:  true,
 	})
 	p, done := tea.NewProgram(m, opts...), make(chan struct{})
 	r.p, r.done = p, done

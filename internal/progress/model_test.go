@@ -184,7 +184,7 @@ func TestEmbeddedViewShowsEveryStepAndDoesNotQuit(t *testing.T) {
 
 func TestCtrlCAsksThenInterrupts(t *testing.T) {
 	interrupts := 0
-	m, _ := drive(t, New(Options{Scrollback: true, Interrupt: func() { interrupts++ }}), evs(initRun...)...)
+	m, _ := drive(t, New(Options{Scrollback: true, ForceQuit: true, Interrupt: func() { interrupts++ }}), evs(initRun...)...)
 	ctrlC := tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}
 
 	m, cmd := drive(t, m, ctrlC)
@@ -205,8 +205,11 @@ func TestCtrlCAsksThenInterrupts(t *testing.T) {
 	m, _ = drive(t, m, ctrlC)
 	stale := confirmExpiredMsg{seq: m.confirmSeq - 1}
 	m, _ = drive(t, m, stale, ctrlC)
-	if interrupts != 1 || !strings.Contains(view(m), "Cancelling") {
+	if interrupts != 1 || !strings.Contains(view(m), "Ctrl-C again to quit now") || !m.Cancelling() {
 		t.Fatalf("second Ctrl-C should interrupt once; interrupts=%d view:\n%s", interrupts, view(m))
+	}
+	if m.Running() != "Build images" {
+		t.Errorf("Running() = %q, want the step that was stopping", m.Running())
 	}
 
 	// The operation stops: its step fails, and the run ends.
@@ -224,6 +227,36 @@ func TestCtrlCAsksThenInterrupts(t *testing.T) {
 	m, cmd = drive(t, m, ctrlC)
 	if !m.Forced || !isQuit(cmd) || interrupts != 1 {
 		t.Errorf("Ctrl-C while cancelling should force a quit: forced=%v interrupts=%d", m.Forced, interrupts)
+	}
+}
+
+// Without ForceQuit, Ctrl-C while the operation stops does nothing.
+func TestCtrlCWithoutForceQuitOnlyCancels(t *testing.T) {
+	m, _ := drive(t, New(Options{Interrupt: func() {}}), evs(initRun...)...)
+	ctrlC := tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}
+	m, _ = drive(t, m, ctrlC, ctrlC)
+	m, cmd := drive(t, m, ctrlC)
+	if m.Forced || cmd != nil || strings.Contains(view(m), "quit now") {
+		t.Errorf("forced=%v cmd=%v view:\n%s", m.Forced, cmd != nil, view(m))
+	}
+}
+
+// A multi-line warning keeps its lines, the rest indented under the first,
+// as the plain renderer prints it.
+func TestMultiLineWarning(t *testing.T) {
+	m, _ := drive(t, New(Options{}), evs(
+		events.StepStarted{ID: "s", Title: "S"},
+		events.Warning{ID: "s", Text: "hpds restart failed: exit 1\nstderr: no such container\n"},
+		events.Warning{Text: "orphan: first\r\nsecond"},
+	)...)
+	v := view(m)
+	for _, want := range []string{
+		"  ! hpds restart failed: exit 1\n    stderr: no such container\n",
+		"! orphan: first\n  second",
+	} {
+		if !strings.Contains(v, want) {
+			t.Errorf("view lacks %q:\n%s", want, v)
+		}
 	}
 }
 

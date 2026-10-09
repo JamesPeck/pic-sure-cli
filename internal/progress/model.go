@@ -42,10 +42,13 @@ type Options struct {
 	Animations bool
 	// Interrupt is called when the user confirms Ctrl-C. It should cancel
 	// the operation's context; the model keeps rendering the events the
-	// operation emits while it stops. A further Ctrl-C while it stops is a
-	// force quit: the model sets Forced and quits, as a second SIGINT
-	// would kill the process.
+	// operation emits while it stops.
 	Interrupt func()
+	// ForceQuit makes a further Ctrl-C while the operation stops a force
+	// quit: the model sets Forced and quits, as a second SIGINT would kill
+	// the process. The program's owner then exits without waiting for the
+	// operation.
+	ForceQuit bool
 	// NoColor strips color from what scrollback prints, which Bubble Tea
 	// writes as is, whatever the program's color profile.
 	NoColor bool
@@ -84,7 +87,7 @@ type row struct {
 	status   events.StepStatus // "" while running
 	progress string
 	pct      *float64
-	warnings []string
+	warnings []string // each may span lines
 	tail     []string // the last FailTail log lines
 }
 
@@ -151,6 +154,20 @@ func (m Model) Init() tea.Cmd {
 // Done reports whether the model has had its DoneMsg.
 func (m Model) Done() bool { return m.done }
 
+// Cancelling reports whether the user has cancelled the operation and the
+// model is waiting for it to stop.
+func (m Model) Cancelling() bool { return m.cancelling && !m.done }
+
+// Running is the title of the last step still running, or "".
+func (m Model) Running() string {
+	for i := len(m.rows) - 1; i >= 0; i-- {
+		if m.rows[i].running() {
+			return m.rows[i].title
+		}
+	}
+	return ""
+}
+
 // Update handles events, Ctrl-C, the spinner and the window size.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -204,7 +221,7 @@ func (m Model) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if m.cancelling {
-		if msg.String() == "ctrl+c" && m.opts.Scrollback {
+		if msg.String() == "ctrl+c" && m.opts.ForceQuit {
 			m.Forced = true
 			return m, tea.Quit
 		}
@@ -243,7 +260,7 @@ func (m *Model) apply(e events.Event) {
 	case events.Log:
 		m.owner(e.ID).addLog(cleanLine(e.Line))
 	case events.Warning:
-		text := cleanLine(e.Text)
+		text := cleanLines(e.Text)
 		if r := m.byID[e.ID]; r != nil && r.running() {
 			r.warnings = append(r.warnings, text)
 		} else {
@@ -320,7 +337,7 @@ func (m Model) View() tea.View {
 	switch {
 	case m.done && !m.ok && m.logPath != "":
 		line(faint.Render("Log file: " + m.logPath))
-	case m.cancelling && m.opts.Scrollback:
+	case m.cancelling && m.opts.ForceQuit:
 		line(styles.Warn.Render("Cancelling: waiting for the current step to stop… (Ctrl-C again to quit now)"))
 	case m.cancelling:
 		line(styles.Warn.Render("Cancelling: waiting for the current step to stop…"))
@@ -335,7 +352,7 @@ func (m Model) View() tea.View {
 func (m Model) renderRow(r *row) string {
 	var lines []string
 	if !r.step {
-		return m.fit(styles.Warn.Render("! " + r.title))
+		return m.warning("", r.title)
 	}
 	head := m.mark(r) + " " + r.title
 	switch r.status {
@@ -350,7 +367,7 @@ func (m Model) renderRow(r *row) string {
 	}
 	lines = append(lines, m.fit(head))
 	for _, w := range r.warnings {
-		lines = append(lines, m.fit("  "+styles.Warn.Render("! "+w)))
+		lines = append(lines, m.warning("  ", w))
 	}
 	n := 0
 	switch r.status {
@@ -361,6 +378,20 @@ func (m Model) renderRow(r *row) string {
 	}
 	for _, l := range lastN(r.tail, n) {
 		lines = append(lines, m.fit("  "+faint.Render("│ "+l)))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// warning renders a warning, marking its first line with "!" and indenting
+// the rest under it, as the plain renderer does.
+func (m Model) warning(indent, text string) string {
+	lines := strings.Split(text, "\n")
+	for i, l := range lines {
+		mark := "! "
+		if i > 0 {
+			mark = "  "
+		}
+		lines[i] = m.fit(indent + styles.Warn.Render(mark+l))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -408,6 +439,16 @@ func lastN(lines []string, n int) []string {
 
 // CleanLine is cleanLine, for screens that draw other command output.
 func CleanLine(s string) string { return cleanLine(s) }
+
+// cleanLines is cleanLine for text that may span lines, such as a warning
+// that ends in a multi-line error: it cleans each line and keeps the breaks.
+func cleanLines(s string) string {
+	lines := strings.Split(strings.TrimRight(s, "\r\n"), "\n")
+	for i, l := range lines {
+		lines[i] = cleanLine(l)
+	}
+	return strings.Join(lines, "\n")
+}
 
 // cleanLine makes event text safe to draw: the text after its last carriage
 // return (a progress bar's final state), with escape sequences and other

@@ -349,6 +349,19 @@ func TestBareInvocation(t *testing.T) {
 			t.Errorf("TUI options = %+v", got)
 		}
 	})
+	t.Run("a forced quit exits 130 with a note", func(t *testing.T) {
+		a, _, stderr := testApp(t)
+		a.IsTerminal = func() bool { return true }
+		a.StartTUI = func(context.Context, tui.Options) error { return tui.ForcedQuit("Build the images") }
+		if code := a.Run(context.Background(), []string{"--stack", "/srv/demo"}); code != 130 {
+			t.Errorf("exit = %d, want 130", code)
+		}
+		for _, want := range []string{`"Build the images"`, "may still be running", "pic-sure status"} {
+			if !strings.Contains(stderr.String(), want) {
+				t.Errorf("stderr = %q, want %q", stderr, want)
+			}
+		}
+	})
 	for _, flag := range []string{"--json", "--plain", "--yes", "--non-interactive"} {
 		t.Run("terminal with "+flag+" prints help", func(t *testing.T) {
 			a, stdout, _ := testApp(t)

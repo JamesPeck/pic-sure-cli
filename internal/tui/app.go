@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/JamesPeck/pic-sure-cli/internal/dashboard"
 	"github.com/JamesPeck/pic-sure-cli/internal/events"
+	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
 	"github.com/JamesPeck/pic-sure-cli/internal/ops"
 	"github.com/JamesPeck/pic-sure-cli/internal/stack"
 	"github.com/JamesPeck/pic-sure-cli/internal/styles"
@@ -71,7 +73,9 @@ type resumeSetupMsg struct{}
 // Run starts the unified TUI and blocks until the user quits or ctx is
 // done. The CLI owns SIGINT and SIGTERM, which cancel ctx; Bubble Tea's own
 // handler is off so that a signal always ends the program through ctx, with
-// an error, and the CLI can exit 128+N.
+// an error, and the CLI can exit 128+N. A forced quit from the run screen
+// (a third Ctrl-C) returns an exit 130 error naming the step that was
+// running, without waiting for the operation.
 func Run(ctx context.Context, o Options) error {
 	opts := []tea.ProgramOption{tea.WithContext(ctx), tea.WithoutSignalHandler()}
 	if os.Getenv("NO_COLOR") != "" {
@@ -81,11 +85,34 @@ func Run(ctx context.Context, o Options) error {
 	}
 	a := newApp(ctx, o)
 	_, err := tea.NewProgram(a, opts...).Run()
-	if a.run != nil {
+	return a.end(err)
+}
+
+// end settles the run screen's operation once the program has ended with
+// err, and returns Run's error.
+func (a *app) end(err error) error {
+	switch {
+	case a.run != nil && a.run.forced():
+		// A third Ctrl-C while the operation stopped: leave it behind. The
+		// process exits soon after, and the stack lock with it.
+		a.run.abandon()
+		return ForcedQuit(a.run.prog.Running())
+	case a.run != nil:
 		// Ended by a signal while init ran: let it stop and clean up.
 		a.run.close()
 	}
 	return err
+}
+
+// ForcedQuit is the exit 130 error Run returns when the user forces a quit
+// while step (or, if step is "", the operation) stops.
+func ForcedQuit(step string) error {
+	what := "the operation"
+	if step != "" {
+		what = fmt.Sprintf("step %q", step)
+	}
+	return &exitcode.Error{Code: exitcode.CodeInterrupted, Err: fmt.Errorf(
+		"quit while %s was still stopping; containers it started may still be running. Run 'pic-sure status' to check", what)}
 }
 
 type app struct {

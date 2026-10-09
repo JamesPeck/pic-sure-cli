@@ -183,3 +183,96 @@ func TestRunScreenScrollsAFailedCommandsSummary(t *testing.T) {
 		t.Errorf("end didn't scroll to the last line:\n%s", view)
 	}
 }
+
+// A long error after a full step list and a failed step's log tail stays
+// readable on a small terminal: the footer and the log file line stay on
+// screen, and scrolling reaches every line of the error.
+func TestRunScreenKeepsALongErrorReadable(t *testing.T) {
+	var words []string
+	for i := range 78 {
+		words = append(words, fmt.Sprintf("w%03d", i))
+	}
+	msg := strings.Join(words, " ") // 389 characters, plus the mark
+	run := func(_ context.Context, req InitRequest) (InitResult, error) {
+		for i := range 15 {
+			id := fmt.Sprint(i)
+			req.Sink.Emit(events.StepStarted{ID: id, Title: "Step " + id})
+			req.Sink.Emit(events.StepDone{ID: id, Status: events.StepOK})
+		}
+		req.Sink.Emit(events.StepStarted{ID: "x", Title: "Failing step"})
+		for i := range 30 {
+			req.Sink.Emit(events.Log{ID: "x", Line: fmt.Sprintf("log line %02d", i)})
+		}
+		req.Sink.Emit(events.StepDone{ID: "x", Status: events.StepFailed})
+		return InitResult{LogPath: "/tmp/run.log"}, errors.New(msg)
+	}
+	for _, height := range []int{24, 30} {
+		t.Run(fmt.Sprint(height), func(t *testing.T) {
+			s := newRunScreen(context.Background(), "Setting up PIC-SURE", run, InitRequest{}, false)
+			s.setSize(80, height)
+			defer s.close()
+			pumpRun(t, s, func() bool { return s.finished })
+			seen := map[string]bool{}
+			look := func() {
+				t.Helper()
+				view := plainView(s)
+				if lipgloss.Height(view) > height {
+					t.Fatalf("the view is %d lines tall:\n%s", lipgloss.Height(view), view)
+				}
+				for _, want := range []string{"enter to go back", "Log file: /tmp/run.log"} {
+					if !strings.Contains(view, want) {
+						t.Fatalf("view lacks %q:\n%s", want, view)
+					}
+				}
+				for _, f := range strings.Fields(view) {
+					seen[f] = true
+				}
+			}
+			look()
+			if !seen["✗"] || !seen["w000"] {
+				t.Errorf("the error doesn't start on screen:\n%s", plainView(s))
+			}
+			s.update(tea.KeyPressMsg{Code: tea.KeyHome})
+			look()
+			if !seen["Step"] {
+				t.Errorf("home doesn't show the first steps:\n%s", plainView(s))
+			}
+			for range 60 {
+				s.update(tea.KeyPressMsg{Code: tea.KeyDown})
+				look()
+			}
+			// The failure tail keeps the last 20 of the 30 log lines.
+			for _, w := range append(words, "10", "29") {
+				if !seen[w] {
+					t.Errorf("%q never came on screen", w)
+				}
+			}
+		})
+	}
+}
+
+// While the operation stops, the footer offers the force quit.
+func TestRunScreenOffersTheForceQuit(t *testing.T) {
+	release := make(chan struct{})
+	run := func(_ context.Context, req InitRequest) (InitResult, error) {
+		req.Sink.Emit(events.StepStarted{ID: "images", Title: "Build the images"})
+		<-release // ignores cancellation
+		return InitResult{}, nil
+	}
+	s := newRunScreen(context.Background(), "Setting up PIC-SURE", run, InitRequest{}, false)
+	s.setSize(100, 40)
+	defer s.close()
+	defer close(release)
+	pumpRun(t, s, func() bool { return strings.Contains(plainView(s), "Build the images") })
+	ctrlC := tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}
+	s.update(ctrlC)
+	s.update(ctrlC)
+	if !strings.Contains(plainView(s), "ctrl+c again to quit now") {
+		t.Errorf("the footer doesn't offer the force quit:\n%s", plainView(s))
+	}
+	if _, cmd := s.update(ctrlC); !s.forced() || cmd == nil {
+		t.Fatal("a third Ctrl-C didn't force the quit")
+	} else if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Error("a forced quit doesn't quit the program")
+	}
+}

@@ -2391,10 +2391,14 @@ Ticket 038. The TUI renderer for an operation's events (§10.3).
   before a `\r` (`CleanLine` does it for other screens' text). A progress or
   log event for an ID that isn't a running step goes under the last running
   step, or at the bottom when none runs; a warning no running step owns gets
-  its own row. Ctrl-C asks first ("Press Ctrl-C again", withdrawn after 5 s
-  or by another key); the second press calls `Options.Interrupt` once. In
-  scrollback mode one more Ctrl-C while it stops sets `Forced` and quits,
-  as a second SIGINT kills the process.
+  its own row. A multi-line warning keeps its lines, the rest indented
+  under the first, as the plain renderer prints it. Ctrl-C asks first
+  ("Press Ctrl-C again", withdrawn after 5 s or by another key); the
+  second press calls `Options.Interrupt` once, and `Cancelling()` holds
+  until `DoneMsg`. With `Options.ForceQuit` (the inline program and the
+  TUI's run screen) one more Ctrl-C while it stops sets `Forced` and
+  quits, as a second SIGINT kills the process; `Running()` names the step
+  still running.
 - With `Options.Scrollback` (the inline program), finished leading rows are
   printed above the program with `tea.Println`, one print in flight at a
   time so order holds, and the live area keeps only what still runs. On
@@ -2515,8 +2519,15 @@ load wizard, and 083 the landing's actions.
   events in an embedded `progress.Model`. The operation's events, the
   gate's question (`InitRequest.Confirm`, a yes/no dialog) and its result
   reach the screen in order on one channel. Ctrl-C twice cancels the
-  operation's context. If the program ends (a signal) while init runs,
-  `Run` cancels it and waits for it to return. A later in-process
+  operation's context, and the footer then offers "ctrl+c again to quit
+  now": a third press quits the program, and `Run` returns `ForcedQuit`
+  (exit 130, naming the running step, saying its containers may still
+  run and to check `pic-sure status`) without waiting for the operation;
+  the CLI prints it once the terminal is restored. If the program ends
+  (a signal) while init runs, `Run` cancels it and waits for it to
+  return. The finished screen scrolls the steps, the result line and the
+  summary as one body (wrapped before it is measured), opening on the
+  result line; the `Log file:` line and the footer stay below it. A later in-process
   operation (040, 047) can reuse `runScreen`.
 - **Load wizard (047).** `loadScreen` asks for one load: a phenotype CSV
   or archive (`phenoinput.ListCSVEntries` checks the pick and lists its

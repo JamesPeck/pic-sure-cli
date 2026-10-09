@@ -61,10 +61,12 @@ type (
 var (
 	runTitleStyle  = lipgloss.NewStyle().Bold(true).Foreground(styles.Brand).Padding(0, 1)
 	runFooterStyle = lipgloss.NewStyle().Faint(true).Padding(0, 1)
+	logLineStyle   = lipgloss.NewStyle().Faint(true)
 )
 
 // runScreen runs an operation in-process (init, or a dashboard action) and
-// shows its steps with an embedded progress.Model. Ctrl-C twice cancels it; the gate's
+// shows its steps with an embedded progress.Model. Ctrl-C twice cancels it,
+// and a third press while it stops quits the TUI (Forced); the gate's
 // question opens a yes/no dialog.
 type runScreen struct {
 	title string
@@ -84,9 +86,11 @@ type runScreen struct {
 	finished bool
 	res      InitResult
 	err      error
-	// scroll is the first summary line shown when the summary is taller
-	// than the screen, such as doctor's report on a small terminal.
-	scroll int
+	// scroll is the first body line shown once the user scrolls the
+	// finished screen; until then (scrolled false) the body shows from
+	// its result line, after as many of the steps' last lines as fit.
+	scroll   int
+	scrolled bool
 
 	width, height int
 }
@@ -105,6 +109,7 @@ func newRunScreen(ctx context.Context, title string, run func(context.Context, I
 	s.prog = progress.New(progress.Options{
 		Animations: animations,
 		Interrupt:  func() { cancel(exitcode.Signaled(os.Interrupt)) },
+		ForceQuit:  true,
 	})
 	req.Sink = runSink{s}
 	req.Confirm = s.confirm
@@ -164,27 +169,72 @@ func (s *runScreen) init() tea.Cmd { return tea.Batch(s.prog.Init(), s.listen) }
 
 // close stops the operation, if it still runs, and waits for it to return.
 func (s *runScreen) close() {
+	s.abandon()
+	<-s.done
+}
+
+// abandon stops the operation without waiting for it, for a forced quit.
+func (s *runScreen) abandon() {
 	s.cancel(exitcode.Signaled(os.Interrupt))
 	select {
 	case <-s.stop:
 	default:
 		close(s.stop)
 	}
-	<-s.done
 }
 
-// summaryLines is the finished command's summary, wrapped to the block.
-func (s *runScreen) summaryLines() []string {
-	sum := strings.TrimRight(s.res.Summary, "\n")
-	if sum == "" {
-		return nil
+// forced reports whether the user forced a quit while the operation
+// stopped.
+func (s *runScreen) forced() bool { return s.prog.Forced }
+
+// body is the finished screen's scrollable lines: the steps, the result
+// line and the summary, wrapped to the block, and the index of the
+// result line.
+func (s *runScreen) body() (lines []string, result int) {
+	wrap := lipgloss.NewStyle().Width(s.blockWidth())
+	lines = strings.Split(s.prog.View().Content, "\n")
+	result = len(lines) + 1
+	res := styles.OK.Render("✓ " + s.doneText)
+	if s.err != nil {
+		res = styles.Bad.Render("✗ " + s.err.Error())
 	}
-	return strings.Split(lipgloss.NewStyle().Width(s.blockWidth()).Render(sum), "\n")
+	lines = append(lines, "")
+	lines = append(lines, strings.Split(wrap.Render(res), "\n")...)
+	// A failed command can have a summary too: doctor's report.
+	if sum := strings.TrimRight(s.res.Summary, "\n"); sum != "" {
+		lines = append(lines, "")
+		lines = append(lines, strings.Split(wrap.Render(sum), "\n")...)
+	}
+	return lines, result
 }
 
-// summaryRoom is how many summary lines fit below the title, five step
-// lines and the result line, with view's margins.
-func (s *runScreen) summaryRoom() int { return max(s.height-11, 1) }
+// logLine is the finished screen's "Log file:" line, kept below the body.
+func (s *runScreen) logLine() string {
+	if s.err == nil || s.res.LogPath == "" {
+		return ""
+	}
+	return logLineStyle.Render("Log file: " + s.res.LogPath)
+}
+
+// bodyRoom is how many body lines fit between the title and the footer
+// (and the log line), with a line to spare.
+func (s *runScreen) bodyRoom() int {
+	room := s.height - 3
+	if s.logLine() != "" {
+		room -= lipgloss.Height(s.logLine())
+	}
+	return max(room, 1)
+}
+
+// top is the first body line to show: where the user scrolled to, else
+// the result line, after as many of the steps' last lines as fit.
+func (s *runScreen) top(lines []string, result int) int {
+	top := min(result, len(lines)-s.bodyRoom())
+	if s.scrolled {
+		top = s.scroll
+	}
+	return min(max(top, 0), max(len(lines)-s.bodyRoom(), 0))
+}
 
 // blockWidth is the width of the screen's content. It is fixed, so the
 // centered block doesn't shift as lines come and go.
@@ -215,29 +265,35 @@ func (s *runScreen) update(msg tea.Msg) (*runScreen, tea.Cmd) {
 		return s, tea.Batch(s.askDlg.Init(), s.listen)
 	case runDoneMsg:
 		s.finished, s.res, s.err = true, msg.res, msg.err
-		return s, s.feed(progress.DoneMsg{OK: msg.err == nil, LogPath: msg.res.LogPath})
+		// The screen draws the log line itself, below the scrolling body.
+		return s, s.feed(progress.DoneMsg{OK: msg.err == nil})
 	case tea.KeyPressMsg:
 		if s.askDlg != nil {
 			return s.updateAsk(msg)
 		}
 		if s.finished {
+			lines, result := s.body()
+			top := s.top(lines, result)
 			switch msg.String() {
 			case "enter", "esc", "q", "ctrl+c":
 				return s, func() tea.Msg { return runClosedMsg{} }
 			case "up", "k":
-				s.scroll--
+				top--
 			case "down", "j":
-				s.scroll++
+				top++
 			case "pgup":
-				s.scroll -= s.summaryRoom()
+				top -= s.bodyRoom()
 			case "pgdown":
-				s.scroll += s.summaryRoom()
+				top += s.bodyRoom()
 			case "home":
-				s.scroll = 0
+				top = 0
 			case "end":
-				s.scroll = len(s.summaryLines())
+				top = len(lines)
+			default:
+				return s, nil
 			}
-			s.scroll = min(max(s.scroll, 0), max(len(s.summaryLines())-s.summaryRoom(), 0))
+			s.scroll, s.scrolled = top, true
+			s.scroll = s.top(lines, result)
 			return s, nil
 		}
 		return s, s.feed(msg)
@@ -283,41 +339,49 @@ func (s *runScreen) feed(msg tea.Msg) tea.Cmd {
 }
 
 func (s *runScreen) view() string {
-	var parts []string
-	var footer string
+	if s.finished && s.askDlg == nil {
+		return s.finishedView()
+	}
+	var tail, footer string
 	switch {
 	case s.askDlg != nil:
-		parts = append(parts, s.askDlg.View())
+		tail = s.askDlg.View()
 		footer = "enter answer · esc no"
-	case s.finished:
-		if s.err == nil {
-			parts = append(parts, styles.OK.Render("✓ "+s.doneText))
-		} else {
-			parts = append(parts, styles.Bad.Render("✗ "+s.err.Error()))
-		}
-		footer = "enter to go back"
-		// A failed command can have a summary too: doctor's report.
-		if lines := s.summaryLines(); len(lines) > 0 {
-			room := s.summaryRoom()
-			if s.height > 0 && len(lines) > room {
-				top := min(s.scroll, len(lines)-room) // after a resize
-				lines = lines[top : top+room]
-				footer = "↑/↓ pgup/pgdn scroll · enter to go back"
-			}
-			parts = append(parts, strings.Join(lines, "\n"))
-		}
+	case s.prog.Cancelling():
+		footer = "ctrl+c again to quit now"
 	default:
 		footer = "ctrl+c twice to cancel"
 	}
 	// The steps take what room the rest leaves, keeping their latest lines.
-	tail := strings.Join(parts, "\n\n")
 	room := s.height - 4 - lipgloss.Height(tail)
 	steps := strings.Split(s.prog.View().Content, "\n")
 	if s.height > 0 && len(steps) > max(room, 3) {
 		steps = steps[len(steps)-max(room, 3):]
 	}
+	return s.place(strings.Join(steps, "\n"), "", tail, runFooterStyle.Render(footer))
+}
+
+// finishedView shows the finished screen's body from top, with the log line
+// and the footer always below it.
+func (s *runScreen) finishedView() string {
+	lines, result := s.body()
+	footer := "enter to go back"
+	if s.height > 0 && len(lines) > s.bodyRoom() {
+		top := s.top(lines, result)
+		lines = lines[top:min(top+s.bodyRoom(), len(lines))]
+		footer = "↑/↓ pgup/pgdn scroll · enter to go back"
+	}
+	parts := []string{strings.Join(lines, "\n")}
+	if l := s.logLine(); l != "" {
+		parts = append(parts, l)
+	}
+	return s.place(append(parts, runFooterStyle.Render(footer))...)
+}
+
+// place puts the title above parts and centers the block on the screen.
+func (s *runScreen) place(parts ...string) string {
 	content := lipgloss.NewStyle().Width(s.blockWidth()).Render(lipgloss.JoinVertical(lipgloss.Left,
-		runTitleStyle.Render(s.title), strings.Join(steps, "\n"), "", tail, runFooterStyle.Render(footer)))
+		append([]string{runTitleStyle.Render(s.title)}, parts...)...))
 	if s.width == 0 || s.height == 0 {
 		return content
 	}
