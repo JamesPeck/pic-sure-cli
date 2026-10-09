@@ -709,7 +709,7 @@ func (r *initRun) preconditions(ctx context.Context, sink events.Sink) error {
 // are free or published by its own containers.
 func (r *initRun) checkResumedPorts() error {
 	for _, p := range []int{r.cfg.Network.HTTPPort, r.cfg.Network.HTTPSPort} {
-		if !r.published[p] && !(systemHost{}).PortFree(p) {
+		if !r.published[p] && !r.portHost().PortFree(p) {
 			return exitcode.Precondition("port %d, which %s sets, is in use", p, stack.ConfigFile)
 		}
 	}
@@ -1180,6 +1180,10 @@ func writeInitSummary(w io.Writer, s *ops.InitSummary) error {
 	if au := s.Auth0; au != nil && au.Needed {
 		b.WriteString("Register these in the Auth0 application:\n")
 		fmt.Fprintf(&b, "  Callback URL: %s\n  Logout URL:   %s\n  Web origin:   %s\n", au.CallbackURL, au.LogoutURL, au.WebOrigin)
+		if au.DevWebOrigin != "" {
+			b.WriteString("and, for httpd-hmr (dev):\n")
+			fmt.Fprintf(&b, "  Callback URL: %s\n  Logout URL:   %s\n  Web origin:   %s\n", au.DevCallbackURL, au.DevLogoutURL, au.DevWebOrigin)
+		}
 	}
 	if !s.TokenExpiry.IsZero() {
 		fmt.Fprintf(&b, "Introspection token expires %s; pic-sure update renews it.\n", s.TokenExpiry.Format(time.DateOnly))

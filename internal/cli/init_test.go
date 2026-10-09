@@ -15,7 +15,9 @@ import (
 	"github.com/JamesPeck/pic-sure-cli/internal/cache"
 	"github.com/JamesPeck/pic-sure-cli/internal/catalog"
 	"github.com/JamesPeck/pic-sure-cli/internal/docker"
+	"github.com/JamesPeck/pic-sure-cli/internal/docker/fakerunner"
 	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
+	"github.com/JamesPeck/pic-sure-cli/internal/git"
 	"github.com/JamesPeck/pic-sure-cli/internal/ops"
 	"github.com/JamesPeck/pic-sure-cli/internal/release"
 	"github.com/JamesPeck/pic-sure-cli/internal/stack"
@@ -185,7 +187,11 @@ func TestInitWritesTheConfigSecretsAndState(t *testing.T) {
 	}
 }
 
-func TestResumedInitRereadsTheConfigUnderTheLock(t *testing.T) {
+// resumedInit makes a stack, then a resumed init of it that has read its
+// pic-sure.yaml, then sets values in the file as a `config set` landing
+// before the resumed init takes the lock would.
+func resumedInit(t *testing.T, values map[string]string) *initRun {
+	t.Helper()
 	r, err := newInitRun(t, "", "", "--name", "demo", "--admin-email", "admin@example.com", "--auth-mode", "open",
 		"--http-port", "8083", "--https-port", "8443")
 	if err != nil {
@@ -202,17 +208,15 @@ func TestResumedInitRereadsTheConfigUnderTheLock(t *testing.T) {
 	if err != nil || !r2.resumed {
 		t.Fatalf("resume: err %v, resumed %v", err, r2.resumed)
 	}
-	// A config set lands after the resumed init read pic-sure.yaml, and
-	// before it takes the lock.
+	r2.rel = r.rel
 	doc, err := r.st.ReadConfigDoc()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := doc.Set("hpds.java_opts", "-Xmx3g"); err != nil {
-		t.Fatal(err)
-	}
-	if err := doc.Set("proxy.https", "http://proxy.example.org:3128"); err != nil {
-		t.Fatal(err)
+	for k, v := range values {
+		if err := doc.Set(k, v); err != nil {
+			t.Fatal(err)
+		}
 	}
 	data, err := doc.Bytes()
 	if err != nil {
@@ -221,15 +225,54 @@ func TestResumedInitRereadsTheConfigUnderTheLock(t *testing.T) {
 	if err := r.st.WriteConfig(data); err != nil {
 		t.Fatal(err)
 	}
-	r2.rel = r.rel
-	if err := r2.writeConfig(context.Background(), r2.d.Sink); err != nil {
+	return r2
+}
+
+func TestResumedInitRereadsTheConfigUnderTheLock(t *testing.T) {
+	r := resumedInit(t, map[string]string{"hpds.java_opts": "-Xmx3g", "proxy.https": "http://proxy.example.org:3128"})
+	f := fakerunner.New(t)
+	f.On(fakerunner.Glob("git *"))
+	r.git = git.New(f)
+	if err := r.writeConfig(context.Background(), r.d.Sink); err != nil {
 		t.Fatal(err)
 	}
-	if r2.cfg.HPDS.JavaOpts != "-Xmx3g" {
-		t.Errorf("resumed init runs with java_opts %q, not the value set before the lock", r2.cfg.HPDS.JavaOpts)
+	if r.cfg.HPDS.JavaOpts != "-Xmx3g" {
+		t.Errorf("resumed init runs with java_opts %q, not the value set before the lock", r.cfg.HPDS.JavaOpts)
 	}
-	if r2.proxy == nil || !slices.Contains(r2.proxy.Env(), "HTTPS_PROXY=http://proxy.example.org:3128") {
-		t.Error("resumed init doesn't use the proxy set before the lock")
+	// The component fetches go through the new proxy.
+	if err := r.d.Git.Fetch(context.Background(), t.TempDir(), nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if calls := f.Calls(); len(calls) == 0 || !calls[0].HasEnv("HTTPS_PROXY") {
+		t.Errorf("git runs without the proxy set before the lock: %v", calls)
+	}
+}
+
+// busyHost is a host on which ports are busy.
+type busyHost struct {
+	anyPortFree
+	ports []int
+}
+
+func (h busyHost) PortFree(p int) bool { return !slices.Contains(h.ports, p) }
+
+func TestResumedInitChecksPortsChangedBeforeTheLock(t *testing.T) {
+	r := resumedInit(t, map[string]string{"network.http_port": "8090"})
+	r.host = busyHost{ports: []int{8090}}
+	if err := r.writeConfig(context.Background(), r.d.Sink); exitcode.FromError(err) != exitcode.CodePrecondition || !strings.Contains(err.Error(), "port 8090") {
+		t.Errorf("writeConfig = %v, want port 8090 in use", err)
+	}
+}
+
+func TestInitSummaryListsTheHMRAuth0URLs(t *testing.T) {
+	var b strings.Builder
+	s := &ops.InitSummary{Stack: "demo", URL: "http://localhost:15006/", Auth0: &ops.StatusAuth0{Needed: true,
+		CallbackURL: "https://localhost/login/loading/", DevCallbackURL: "http://localhost:15006/login/loading/", DevWebOrigin: "http://localhost:15006"}}
+	if err := writeInitSummary(&b, s); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(b.String(), "http://localhost:15006/login/loading/") {
+		t.Errorf("summary lacks httpd-hmr's callback URL:\n%s", b.String())
 	}
 }
 

@@ -304,9 +304,9 @@ it.
   `--skip-step` that isn't in `ops.InitStepIDs(cfg)`, `--self-update`
   with a stdin flag, and (first of all, 096) a stack directory with a
   `:`, CR or LF, which `render.CheckBindSource` refuses as render would.
-  With `--hpds-data shared:NAME`, the host check also
-  requires the data set (`ops.SharedDataProfile`, exit 3), so a missing
-  set fails before the images are built. A DIR whose state.json
+  With `--hpds-data shared:NAME`, the host check also requires the data
+  set (`ops.SharedDataProfile`, exit 3), so a missing set fails before the
+  images are built. A DIR whose state.json
   has `initialized_at` gets "already initialised" and exit 0; a DIR with a
   `pic-sure.yaml` is resumed with that config as it is: a config flag,
   `--source` or `--set` that would change it is exit 2 naming `config set`
@@ -833,8 +833,7 @@ each AIO source still exists in the AIO checkout beside this repo (or
   and removes the files an earlier render wrote that this one didn't, such
   as the `files/maven/settings.xml` older versions rendered (096: nothing
   read it; the reactor writes its own copy). Callers record `cli_version`
-  and `schema_version` in state.json
-  after a render.
+  and `schema_version` in state.json after a render.
 - `Input`: `StackDir`, `Config`, `State` (image tags from `Images`, node's
   being the `.nvmrc` tag httpd-hmr needs; dev builds' tags from
   `DevImages`, keyed by image), `Sources` (the cache tree of each component
@@ -1429,8 +1428,9 @@ it also makes `<source>/node_modules`, the volume's mount point, so Docker
 doesn't create it root-owned in the checkout) before `dev-start`, which
 recreates only httpd. `init` and `up` add both steps while httpd-hmr is in
 `dev.services` (and `InitStepIDs` and `UpStepIDs` list them), so a new
-`.nvmrc` or a removed
-volume converges; `update --no-build` skips `node-image` with the images. The container copies the rendered Vite config into
+`.nvmrc` or a removed volume converges; `update --no-build` skips
+`node-image` with the images. The container copies the rendered Vite
+config into
 `node_modules/.pic-sure/` (a file bind-mounted into the checkout would need
 a mount point runc won't create through the bind mount, and would dirty
 the checkout). `DevList(cfg)`, `DevPort`, `LookupDev`,

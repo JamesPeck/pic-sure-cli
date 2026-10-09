@@ -173,12 +173,11 @@ const reasonIfMigrationsRun = "if the migrations run: they may change what it ca
 // didn't start it) don't count, nor do the restarts they would bring: the
 // migrate step checks once the database is up.
 func (p *UpdatePlan) Changes() bool {
-	maybe := p.Migrations.dbStopped
 	restarts := slices.ContainsFunc(p.Restarts, func(r RestartPlan) bool {
-		return !maybe || slices.ContainsFunc(r.Reasons, func(s string) bool { return s != reasonIfMigrationsRun })
+		return slices.ContainsFunc(r.Reasons, func(s string) bool { return s != reasonIfMigrationsRun })
 	})
 	if len(p.Config.Migrations) > 0 || p.Release.From != p.Release.To || restarts ||
-		p.Migrations.Status != MigrationsStatusUpToDate && !maybe || p.Token.Renew {
+		p.Migrations.Status != MigrationsStatusUpToDate && !p.Migrations.dbStopped || p.Token.Renew {
 		return true
 	}
 	return slices.ContainsFunc(p.Components, func(c ComponentChange) bool { return c.Changed }) ||

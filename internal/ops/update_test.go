@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"slices"
@@ -519,6 +520,18 @@ func TestPlanUpdateDoesntStartTheDatabaseWithoutTheDictionary(t *testing.T) {
 	x.f.AssertNotCalled(fakerunner.Glob("docker compose * up *"))
 	if p.Migrations.Status != ops.MigrationsStatusUnknown || p.Migrations.StartedDB {
 		t.Errorf("migrations %+v, want unknown with nothing started", p.Migrations)
+	}
+}
+
+func TestPlanUpdateCountsAFailedMigrationsCheckAsAChange(t *testing.T) {
+	x := newUpdateFixture(t)
+	*ops.MigrationsCheck = func(context.Context, *ops.Deps, *stack.Config, *stack.Secrets) (bool, error) {
+		return false, errors.New("synthetic check failure")
+	}
+	rel, comps := x.target(nil)
+	p := x.plan(ops.UpdateOptions{Release: rel, Components: comps})
+	if p.Migrations.Status != ops.MigrationsStatusUnknown || !p.Changes() {
+		t.Errorf("migrations %+v, changes %v; want unknown, and a change", p.Migrations, p.Changes())
 	}
 }
 
