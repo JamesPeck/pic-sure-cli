@@ -686,6 +686,16 @@ func TestNoKeyActsAfterAConfirmIsSent(t *testing.T) {
 			if _, ok := cmd().(LoadMsg); !ok {
 				t.Errorf("l after ActionDoneMsg sent %#v, want LoadMsg", cmd())
 			}
+			if _, cmd := update(t, m, keyMsg("esc")); cmd == nil {
+				t.Error("esc after ActionDoneMsg sent nothing")
+			} else if _, ok := cmd().(BackMsg); !ok {
+				t.Error("esc after ActionDoneMsg didn't ask to go back")
+			}
+			if _, cmd := update(t, m, keyMsg("q")); cmd == nil {
+				t.Error("q after ActionDoneMsg sent nothing")
+			} else if _, ok := cmd().(tea.QuitMsg); !ok {
+				t.Error("q after ActionDoneMsg didn't quit")
+			}
 		})
 	}
 }

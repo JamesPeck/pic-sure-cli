@@ -42,7 +42,9 @@ type Action struct {
 }
 
 // RunMsg asks the embedding program to run an action. It sends ActionDoneMsg
-// back to the dashboard once the user is done with the action's screen.
+// back to the dashboard once the user is done with the action's screen, or
+// at once if it can't run the action: the dashboard ignores every key, q
+// and ctrl+c included, until then.
 type RunMsg struct{ Action Action }
 
 // ActionDoneMsg tells the dashboard its action's screen has closed. The

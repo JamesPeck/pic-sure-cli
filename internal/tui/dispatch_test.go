@@ -213,9 +213,8 @@ func TestBatchedKeysStartOneRun(t *testing.T) {
 }
 
 // A key handled between a dashboard confirm's RunMsg and the run screen
-// (the order a paste, SSH batching or tmux send-keys can produce) used to
-// quit the program, closing the run the confirm had just started, or
-// leave the dashboard.
+// (the order a paste, SSH batching or tmux send-keys can produce) neither
+// quits, which would close the run the confirm started, nor navigates.
 func TestKeyBeforeDashboardRunOpens(t *testing.T) {
 	for _, key := range []tea.KeyPressMsg{
 		{Code: 'q', Text: "q"}, {Code: 'c', Mod: tea.ModCtrl}, {Code: tea.KeyEscape}, {Code: 'l', Text: "l"},

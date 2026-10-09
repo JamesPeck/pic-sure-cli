@@ -218,9 +218,10 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a.openDashboard()
 
 	case dashboard.BackMsg:
-		// The dashboard has already stopped itself; with a run open (esc
-		// batched after a confirm) the run stays in front and closing it
-		// returns to the landing.
+		// The dashboard has already stopped itself. With a run open (the
+		// dashboard ignores keys once it has sent RunMsg, so this is only a
+		// safeguard) the run stays in front and closing it returns to the
+		// landing.
 		a.closeDashboard()
 		if a.run != nil {
 			return a, nil
