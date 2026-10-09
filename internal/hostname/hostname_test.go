@@ -14,8 +14,6 @@ func TestCheck(t *testing.T) {
 		{"localhost", true},
 		{"picsure.example.org", true},
 		{"PicSure.Example.ORG", true},
-		{"my_host", true},
-		{"_srv.example.org", true},
 		{"a-b.c", true},
 		{"host1", true},
 		{"10.0.0.5", true},
@@ -25,6 +23,8 @@ func TestCheck(t *testing.T) {
 		{strings.Repeat(long+".", 3) + strings.Repeat("a", 61), true}, // 253 bytes
 
 		{"", false},
+		{"my_host", false},
+		{"_srv.example.org", false},
 		{"10.1.2.300", false},
 		{"host.123", false},
 		{"picsure.0x1f", false},

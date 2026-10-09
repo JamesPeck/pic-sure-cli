@@ -28,7 +28,7 @@ func TestValidate(t *testing.T) {
 		{"hostname IPv6", func(c *Config) { c.Network.Hostname = "::1" }, nil},
 		{"hostname FQDN", func(c *Config) { c.Network.Hostname = "picsure.example.org" }, nil},
 		{"hostname with a port", func(c *Config) { c.Network.Hostname = "localhost:8443" }, []string{`network.hostname: want a host name or IP address, got "localhost:8443"`}},
-		{"hostname with underscore", func(c *Config) { c.Network.Hostname = "my_host" }, nil},
+		{"hostname with underscore", func(c *Config) { c.Network.Hostname = "my_host" }, []string{"network.hostname: want a host name"}},
 		{"hostname empty label", func(c *Config) { c.Network.Hostname = "a..b" }, []string{"network.hostname: want a host name"}},
 		{"hostname ending in a number", func(c *Config) { c.Network.Hostname = "10.1.2.300" }, []string{`network.hostname: "10.1.2.300" isn't an IP address, and a host name can't end in a numeric label`}},
 		{"hostname with a hex last label", func(c *Config) { c.Network.Hostname = "picsure.0x1f" }, []string{"network.hostname: \"picsure.0x1f\" isn't an IP address"}},

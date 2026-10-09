@@ -92,10 +92,11 @@ func TestExecForegroundReadsTheTerminal(t *testing.T) {
 	}
 }
 
-// When the CLI got SIGINT, the terminal sent it to the foreground child
-// too, so the runner doesn't signal the child again; on any other
-// cancellation, the child gets SIGTERM. Either way the call waits for the
-// child, then returns the context's error.
+// When the CLI got SIGINT from its terminal, the terminal sent it to the
+// foreground child too, so the runner doesn't signal the child again; a
+// SIGINT from elsewhere is forwarded, and on any other cancellation the
+// child gets SIGTERM. Either way the call waits for the child, then returns
+// the context's error.
 func TestExecForegroundCancel(t *testing.T) {
 	t.Parallel()
 	for _, tt := range []struct {
@@ -104,19 +105,17 @@ func TestExecForegroundCancel(t *testing.T) {
 		terminal bool
 		want     int
 	}{
-		// From the terminal, the SIGINT reached the child already.
 		{"SIGINT at the terminal", exitcode.Signaled(os.Interrupt), true, 7},
-		// Otherwise it is forwarded.
 		{"SIGINT from elsewhere", exitcode.Signaled(os.Interrupt), false, 8},
 		{"SIGTERM", exitcode.Signaled(syscall.SIGTERM), true, 9},
 		{"no cause", nil, true, 9},
 	} {
-		// Not parallel: SetTerminalSignaledChild is global.
 		t.Run(tt.name, func(t *testing.T) {
-			defer docker.SetTerminalSignaledChild(tt.terminal)()
+			t.Parallel()
 			ctx, cancel := context.WithCancelCause(context.Background())
 			defer cancel(nil)
 			r := &docker.ExecRunner{Foreground: true, WaitDelay: time.Minute}
+			docker.SetTerminalSignaled(r, tt.terminal)
 			stdout := writerFunc(func(p []byte) (int, error) {
 				if strings.Contains(string(p), "ready") {
 					cancel(tt.cause)

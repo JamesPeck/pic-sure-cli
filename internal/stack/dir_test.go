@@ -292,7 +292,7 @@ func TestFindNotOwned(t *testing.T) {
 				if !errors.Is(err, ErrNotOwned) || exitcode.FromError(err) != exitcode.CodePrecondition {
 					t.Fatalf("Find from %s: err = %v, want ErrNotOwned with exit 3", cwd, err)
 				}
-				for _, want := range []string{p, "uid " + strconv.Itoa(me+1), "--stack " + planted} {
+				for _, want := range []string{p, "uid " + strconv.Itoa(me+1), "--stack \"" + planted + "\""} {
 					if !strings.Contains(err.Error(), want) {
 						t.Errorf("err = %q, want it to contain %q", err, want)
 					}
@@ -306,6 +306,29 @@ func TestFindNotOwned(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("init in cwd won't resume another user's config", func(t *testing.T) {
+		partial := filepath.Join(base, "partial")
+		mkdirs(t, partial)
+		if err := os.WriteFile(filepath.Join(partial, ConfigFile), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		clear(owned)
+		owned[filepath.Join(partial, ConfigFile)] = me + 1
+		if _, err := InitDir("", "", partial); !errors.Is(err, ErrNotOwned) || exitcode.FromError(err) != exitcode.CodePrecondition {
+			t.Errorf("InitDir in cwd: err = %v, want ErrNotOwned with exit 3", err)
+		}
+		for _, args := range [][2]string{{partial, ""}, {"", partial}} {
+			if got, err := InitDir(args[0], args[1], base); err != nil || got != partial {
+				t.Errorf("InitDir(%q, %q) = %q, %v; an explicit directory is never restricted", args[0], args[1], got, err)
+			}
+		}
+		// /tmp itself is root's, but holds no pic-sure.yaml.
+		owned[base] = me + 1
+		if got, err := InitDir("", "", base); err != nil || got != base {
+			t.Errorf("InitDir in a directory without a config = %q, %v", got, err)
+		}
+	})
 
 	t.Run("root under sudo trusts the invoking user", func(t *testing.T) {
 		clear(owned)

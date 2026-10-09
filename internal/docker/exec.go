@@ -92,6 +92,9 @@ type ExecRunner struct {
 	// later. The call waits for the child to exit, then reports ctx's error
 	// if ctx ended first.
 	Foreground bool
+
+	// terminalSignaled replaces terminalSignaledChild in tests.
+	terminalSignaled func() bool
 }
 
 var _ Runner = (*ExecRunner)(nil)
@@ -229,11 +232,9 @@ func (r *ExecRunner) runForeground(ctx context.Context, c Cmd, argv string, stdo
 		case <-ctx.Done():
 		}
 		if interrupted(ctx) {
-			if terminalSignaledChild() {
+			if r.terminalSignaledChild() {
 				return
 			}
-			// A SIGINT the terminal didn't send (kill -INT from a script)
-			// reached only the CLI: pass it on, as the terminal would have.
 			_ = cmd.Process.Signal(os.Interrupt)
 			select {
 			case <-exited:
@@ -272,9 +273,11 @@ func interrupted(ctx context.Context) bool {
 // terminalSignaledChild reports whether a SIGINT the CLI got came from its
 // controlling terminal, which sends it to the whole foreground process
 // group, a Foreground child included. That is so only when stdin is a
-// terminal whose foreground process group is the CLI's. A variable so tests
-// can pretend there is a terminal.
-var terminalSignaledChild = func() bool {
+// terminal whose foreground process group is the CLI's.
+func (r *ExecRunner) terminalSignaledChild() bool {
+	if r.terminalSignaled != nil {
+		return r.terminalSignaled()
+	}
 	fg, err := unix.IoctlGetInt(int(os.Stdin.Fd()), unix.TIOCGPGRP)
 	return err == nil && fg == unix.Getpgrp()
 }

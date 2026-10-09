@@ -563,8 +563,10 @@ A directory is a stack when it holds `pic-sure.yaml` and `.pic-sure/`.
   belong to the user (100, §6.1): its directory and `pic-sure.yaml` owned
   by the effective uid, or, for root under sudo, by `SUDO_UID` (as git
   does). Otherwise Find fails with exit 3 wrapping `ErrNotOwned`, naming the
-  owner and suggesting `--stack DIR`; `--stack` is never checked. The TUI's
-  landing shows that message (`tui.Options.Untrusted`) and offers only
+  owner and suggesting `--stack DIR`; `--stack` is never checked.
+  `InitDir` applies the same check when it defaults to cwd and cwd holds a
+  `pic-sure.yaml`, because init would resume it. The TUI's landing shows
+  that message (`tui.Options.Untrusted`) and offers only
   Preflight and Quit. Tests fake the owner through `fileOwner`, `euid` and
   `sudoUID` in `owner.go`. `InitDir(arg, stackFlag,
   cwd)` resolves `init [DIR]` (D14): DIR wins, and a `--stack` naming a
@@ -1969,9 +1971,12 @@ is ready to use.
   would count as a second Ctrl-C (compose's force-kill). A SIGINT from
   elsewhere (`kill -INT` from a script, 100) is forwarded to the child, and
   if the child is still running `WaitDelay` later, the usual escalation
-  follows. On any other cancellation it sends SIGTERM, then SIGKILL
-  `WaitDelay` later. The call
-  waits for the child, then returns ctx's error if ctx ended first.
+  follows. A sender that signals the whole process group without being the
+  terminal (`kill -INT %1`, GNU `timeout`), or Ctrl-C at a terminal with
+  stdin redirected, still gets its SIGINT forwarded, so the child sees two.
+  On any other cancellation it sends SIGTERM, then SIGKILL `WaitDelay`
+  later. The call waits for the child, then returns ctx's error if ctx
+  ended first.
   `cli.newForegroundRunner` builds one.
 - **Environment.** A child gets only `PATH`, `HOME`, `TERM`,
   `SSH_AUTH_SOCK`, every `DOCKER_*` and `XDG_*` variable,
@@ -2243,8 +2248,7 @@ fills the certs volume (024).
   left out when the hostname is longer than RFC 5280's 64 characters. The
   serial is a random 128-bit number, and the certificate is a non-CA with
   server-auth key usage. `Files.Chain` is the certificate itself, as the
-  bash does. A hostname `hostname.Check` refuses is an error;
-  `CheckHostname` is that rule on its own. Pass
+  bash does. A hostname `hostname.Check` refuses is an error. Pass
   `Deps.Rand` and `Deps.Clock.Now()`; a fixed `Rand` doesn't make the key
   deterministic.
 - `Validate(files, hostname, now) (Report, error)` checks
@@ -2401,11 +2405,11 @@ allowed on a proxy host). The package imports only the catalog and
 Ticket 100. The one host name rule, used by `stack.Validate`
 (`network.hostname`, `auth.auth0.tenant`, `db.remote.host`), `pki` and
 `netproxy`. `Check(s)` accepts an IP address (`net.ParseIP`) or a name
-`ValidName` accepts, and says why it refuses one. A name is dot-separated
-labels of 1 to 63 letters (any case), digits, `-` and `_`, no `-` at either
-end of a label, 253 bytes at most, and a last label that isn't a decimal or
-`0x` hex number (`10.1.2.300` is a mistyped IP, and browsers read it as
-IPv4).
+`ValidName` accepts, and says why it refuses one. A name is RFC 1123:
+dot-separated labels of 1 to 63 letters (any case), digits and `-`, no `-`
+at either end of a label, 253 bytes at most. No `_`, which Java's `URI`
+can't parse as a host. The last label can't be a decimal or `0x` hex number
+(`10.1.2.300` is a mistyped IP, and browsers read it as IPv4).
 
 ## internal/selfupdate
 

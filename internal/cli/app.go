@@ -174,8 +174,8 @@ func (a *App) canPrompt() bool {
 
 // startTUI opens the TUI's landing screen on the stack a command would act
 // on, or else on the directory init would create one in: --stack, or the
-// current one. A stack found that the user doesn't own isn't offered; the
-// landing shows why instead.
+// current one. A stack or pic-sure.yaml found there that the user doesn't
+// own isn't offered; the landing shows why instead.
 func (a *App) startTUI(ctx context.Context) error {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -187,7 +187,11 @@ func (a *App) startTUI(ctx context.Context) error {
 		if errors.Is(err, stack.ErrNotOwned) {
 			untrusted = err.Error()
 		}
-		if dir, err = stack.InitDir("", a.Global.Stack, cwd); err != nil {
+		dir, err = stack.InitDir("", a.Global.Stack, cwd)
+		if errors.Is(err, stack.ErrNotOwned) {
+			untrusted, dir, err = err.Error(), cwd, nil
+		}
+		if err != nil {
 			return err
 		}
 	}

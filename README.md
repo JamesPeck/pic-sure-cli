@@ -404,8 +404,8 @@ delete the binary (`~/.local/bin/pic-sure`) and the cache directory.
 - Another pic-sure command holds the stack lock: wait for it, or pass
   `--wait-lock`.
 - "stack belongs to another user" (exit 3): pic-sure found a stack in the
-  current directory or above it that you don't own, such as one someone
-  planted in `/tmp`. It won't run another user's compose files without
+  current directory or above it (or a `pic-sure.yaml` that init would
+  resume) that you don't own, such as one someone planted in `/tmp`. It won't run another user's compose files without
   being told to. If you trust the stack, name it with `--stack DIR`.
 
 ## For AI agents

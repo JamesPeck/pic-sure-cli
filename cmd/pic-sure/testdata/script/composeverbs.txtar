@@ -208,7 +208,7 @@ hpds-1  | started
 raw compose ps
 -- bin/docker --
 #!/bin/sh
-# Blocks on compose's up and logs --follow; hands the rest to the fake.
+# Blocks on compose's up, logs --follow and logs -f; hands the rest to the fake.
 case "$*" in
 *" up" | *" logs --follow" | *" logs -f")
 	echo $PPID > "$HOME/parent.pid"

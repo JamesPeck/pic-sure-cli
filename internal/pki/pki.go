@@ -97,7 +97,7 @@ func Generate(rand io.Reader, hostname string, now time.Time) (Files, error) {
 }
 
 func subjectAltNames(hostname string) ([]string, []net.IP, error) {
-	if err := CheckHostname(hostname); err != nil {
+	if err := hostpkg.Check(hostname); err != nil {
 		return nil, nil, fmt.Errorf("can't make a TLS certificate for this hostname: %w", err)
 	}
 	dnsNames := []string{"localhost"}
@@ -113,12 +113,6 @@ func subjectAltNames(hostname string) ([]string, []net.IP, error) {
 		dnsNames = append(dnsNames, name)
 	}
 	return dnsNames, ips, nil
-}
-
-// CheckHostname returns an error unless Generate can name hostname in a
-// certificate: an IP address or a name hostname.Check accepts.
-func CheckHostname(hostname string) error {
-	return hostpkg.Check(hostname)
 }
 
 func serialNumber(rand io.Reader) (*big.Int, error) {

@@ -25,8 +25,10 @@ func Check(s string) error {
 }
 
 // ValidName reports whether s is a host or domain name, in any case:
-// dot-separated labels of 1 to 63 letters, digits, hyphens and underscores,
-// none starting or ending with a hyphen, 253 bytes at most. A name whose
+// dot-separated labels of 1 to 63 letters, digits and hyphens, none
+// starting or ending with a hyphen, 253 bytes at most (RFC 1123). No
+// underscores: Java's URI, which the services parse their URLs with, finds
+// no host in a name that has one. A name whose
 // last label is a number (10.1.2.300, x.0x1f) is refused, because it is most
 // likely a mistyped IP address and browsers parse it as an IPv4 address.
 func ValidName(s string) bool {
@@ -39,7 +41,7 @@ func ValidName(s string) bool {
 			return false
 		}
 		for _, c := range label {
-			if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' && c != '_' {
+			if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
 				return false
 			}
 		}

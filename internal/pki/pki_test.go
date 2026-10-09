@@ -206,27 +206,6 @@ func TestGenerateRejectsHostnamesACertificateCannotName(t *testing.T) {
 	}
 }
 
-// CheckHostname says why it refuses a numeric last label, which the config
-// validator passes on to the operator.
-func TestCheckHostname(t *testing.T) {
-	t.Parallel()
-	for _, hostname := range []string{"localhost", "PicSure.Example.ORG", "my_host", "10.1.2.3", "fd00::1"} {
-		if err := pki.CheckHostname(hostname); err != nil {
-			t.Errorf("CheckHostname(%q) = %v, want nil", hostname, err)
-		}
-	}
-	for _, hostname := range []string{"10.1.2.300", "picsure.0x1f", "10.0.0", "1234"} {
-		if err := pki.CheckHostname(hostname); err == nil || !strings.Contains(err.Error(), "IPv4") {
-			t.Errorf("CheckHostname(%q) = %v, want the numeric-label error", hostname, err)
-		}
-	}
-	for _, hostname := range []string{"", "a..b", "-a.example.org", "a b"} {
-		if err := pki.CheckHostname(hostname); err == nil || !strings.Contains(err.Error(), "want a host name or IP address") {
-			t.Errorf("CheckHostname(%q) = %v, want the generic error", hostname, err)
-		}
-	}
-}
-
 func TestGenerateReportsRandomnessFailure(t *testing.T) {
 	t.Parallel()
 	boom := errors.New("entropy exhausted")

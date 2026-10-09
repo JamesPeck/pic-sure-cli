@@ -37,7 +37,7 @@ func checkOwner(dir string) error {
 			return err
 		}
 		if uid := fileOwner(p, fi); !trustedUID(uid) {
-			return exitcode.Precondition("%w: %s is owned by %s, not you; pass --stack %s if you trust it",
+			return exitcode.Precondition("%w: %s is owned by %s, not you; pass --stack %q if you trust it",
 				ErrNotOwned, p, ownerName(uid), dir)
 		}
 	}

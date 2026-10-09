@@ -101,9 +101,10 @@ func TestParseNoProxy(t *testing.T) {
 		{in: "10.1.2.3/8,2001:db8::/32", want: []string{"10.0.0.0/8", "2001:db8::/32"}},
 		{in: "10.0.0.1,::1,[2001:db8::5],2001:DB8::6", want: []string{"10.0.0.1", "::1", "2001:db8::5", "2001:db8::6"}},
 		{in: "registry.example.org:5000,10.0.0.1:8080,[::1]:8443", want: []string{"registry.example.org:5000", "10.0.0.1:8080", "[::1]:8443"}},
-		{in: "my_host,a-b.c", want: []string{"my_host", "a-b.c"}},
+		{in: "my-host,a-b.c", want: []string{"my-host", "a-b.c"}},
 
 		{in: "ok, bad host", wantErr: `isn't a host, domain, IP address or CIDR range: "bad host"`},
+		{in: "my_host", wantErr: `isn't a host, domain, IP address or CIDR range: "my_host"`},
 		{in: "a|b", wantErr: `"a|b"`},
 		{in: "-a.example", wantErr: `"-a.example"`},
 		{in: "a..example", wantErr: `"a..example"`},
