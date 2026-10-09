@@ -184,8 +184,9 @@ type loadScreen struct {
 	enableProfile bool
 
 	// discarding raises the one-keystroke "Discard data load? (y/n)" confirm on
-	// esc once any data has been collected, so a multi-step flow is not silently
-	// thrown away by a reflexive esc. A pristine screen closes immediately.
+	// esc or ctrl+c once any data has been collected, so a multi-step flow is
+	// not silently thrown away by a reflexive key. A pristine screen closes
+	// immediately.
 	discarding bool
 	// done is set once the screen has sent its result; update then drops
 	// every message.
@@ -306,16 +307,17 @@ func (s *loadScreen) update(msg tea.Msg) (*loadScreen, tea.Cmd) {
 		switch key.String() {
 		case "y", "Y":
 			return s, s.closeLoad()
-		case "n", "N", "esc":
+		case "n", "N", "esc", "ctrl+c":
 			s.discarding = false
 		}
 		return s, nil
 	}
 
 	// huh and the filepicker both ship esc disabled, but the footer advertises
-	// "esc cancel" — intercept it here (as wizardScreen does). A screen with
-	// collected input asks to confirm first; a pristine one closes immediately.
-	if key, ok := msg.(tea.KeyPressMsg); ok && key.String() == "esc" {
+	// "esc cancel", so the screen intercepts it (as wizardScreen does), and
+	// ctrl+c, which huh's forms take as abort. A screen with collected input
+	// asks to confirm first; a pristine one closes immediately.
+	if key, ok := msg.(tea.KeyPressMsg); ok && (key.String() == "esc" || key.String() == "ctrl+c") {
 		if s.dirty() {
 			s.discarding = true
 			return s, nil

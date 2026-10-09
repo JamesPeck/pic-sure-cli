@@ -518,8 +518,10 @@ func TestLoadWizardCancels(t *testing.T) {
 	_, cmd = completeForm(s)
 	closed(t, cmd)
 
-	// esc on a pristine screen.
+	// esc or ctrl+c on a pristine screen.
 	_, cmd = newTestLoad(t, "/tmp/x", "").update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	closed(t, cmd)
+	_, cmd = newTestLoad(t, "/tmp/x", "").update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	closed(t, cmd)
 }
 
@@ -541,6 +543,19 @@ func TestLoadWizardEscDirtyGuard(t *testing.T) {
 	s, cmd = s.update(tea.KeyPressMsg{Code: 'n', Text: "n"})
 	if cmd != nil || s.discarding || s.file != "/data/pheno.csv" {
 		t.Errorf("n: cmd %v discarding %v file %q", cmd != nil, s.discarding, s.file)
+	}
+}
+
+// Ctrl-C asks as esc does on a dirty screen, instead of huh aborting.
+func TestLoadWizardCtrlCAsksWhenDirty(t *testing.T) {
+	stubInspect(t, nil, nil)
+	s := pick(t, chooseKind(t, newTestLoad(t, "/tmp/x", ""), kindFile), "/data/pheno.csv")
+	s, cmd := s.update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	if !s.discarding || cmd != nil {
+		t.Fatalf("ctrl+c on a dirty screen: discarding %v cmd %v", s.discarding, cmd != nil)
+	}
+	if _, cmd = s.update(tea.KeyPressMsg{Code: 'y', Text: "y"}); cmd == nil {
+		t.Fatal("y didn't close")
 	}
 }
 

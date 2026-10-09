@@ -212,9 +212,10 @@ func (s *runScreen) logLine() string {
 }
 
 // bodyRoom is how many body lines fit between the title and the footer
-// (and the log line), with a line to spare.
+// (and the log line), with a line to spare. It measures the scrolling
+// footer, the longer one.
 func (s *runScreen) bodyRoom() int {
-	room := s.height - 3
+	room := s.height - 2 - lipgloss.Height(s.footer(scrollFooters...))
 	if s.logLine() != "" {
 		room -= lipgloss.Height(s.logLine())
 	}
@@ -234,8 +235,38 @@ func (s *runScreen) top(lines []string, result int) int {
 func (s *runScreen) clamp(top, n int) int { return min(max(top, 0), max(n-s.bodyRoom(), 0)) }
 
 // blockWidth is the width of the screen's content. It is fixed, so the
-// centered block doesn't shift as lines come and go.
-func (s *runScreen) blockWidth() int { return min(max(s.width-4, 40), 100) }
+// centered block doesn't shift as lines come and go, and never wider than
+// the terminal.
+func (s *runScreen) blockWidth() int {
+	w := min(max(s.width-4, 40), 100)
+	if s.width > 0 {
+		w = min(w, s.width)
+	}
+	return w
+}
+
+// The footers, longest first: footer shows the first that fits.
+var (
+	scrollFooters = []string{"↑/↓ pgup/pgdn scroll · enter to go back", "↑/↓ scroll · enter back"}
+	answerFooters = []string{"enter answer · esc no"}
+	quitFooters   = []string{"ctrl+c again to quit now", "ctrl+c: quit now"}
+	cancelFooters = []string{"ctrl+c twice to cancel", "ctrl+c twice: cancel"}
+	backFooters   = []string{"enter to go back", "enter: back"}
+)
+
+// footer renders the first of texts that fits on one line of the block,
+// or wraps the last, so the footer is never cut.
+func (s *runScreen) footer(texts ...string) string {
+	w := s.blockWidth()
+	text := texts[len(texts)-1]
+	for _, t := range texts {
+		if lipgloss.Width(t)+runFooterStyle.GetHorizontalPadding() <= w {
+			text = t
+			break
+		}
+	}
+	return runFooterStyle.Width(w).Render(text)
+}
 
 func (s *runScreen) setSize(width, height int) {
 	s.width, s.height = width, height
@@ -342,36 +373,36 @@ func (s *runScreen) view() string {
 	switch {
 	case s.askDlg != nil:
 		tail = s.askDlg.View()
-		footer = "enter answer · esc no"
+		footer = s.footer(answerFooters...)
 	case s.prog.Cancelling():
-		footer = "ctrl+c again to quit now"
+		footer = s.footer(quitFooters...)
 	default:
-		footer = "ctrl+c twice to cancel"
+		footer = s.footer(cancelFooters...)
 	}
 	// The steps take what room the rest leaves, keeping their latest lines.
-	room := s.height - 4 - lipgloss.Height(tail)
+	room := s.height - 3 - lipgloss.Height(footer) - lipgloss.Height(tail)
 	steps := strings.Split(s.prog.View().Content, "\n")
 	if s.height > 0 && len(steps) > max(room, 3) {
 		steps = steps[len(steps)-max(room, 3):]
 	}
-	return s.place(strings.Join(steps, "\n"), "", tail, runFooterStyle.Render(footer))
+	return s.place(strings.Join(steps, "\n"), "", tail, footer)
 }
 
 // finishedView shows the finished screen's body from top, with the log line
 // and the footer always below it.
 func (s *runScreen) finishedView() string {
 	lines, result := s.body()
-	footer := "enter to go back"
+	footer := s.footer(backFooters...)
 	if s.height > 0 && len(lines) > s.bodyRoom() {
 		top := s.top(lines, result)
 		lines = lines[top:min(top+s.bodyRoom(), len(lines))]
-		footer = "↑/↓ pgup/pgdn scroll · enter to go back"
+		footer = s.footer(scrollFooters...)
 	}
 	parts := []string{strings.Join(lines, "\n")}
 	if l := s.logLine(); l != "" {
 		parts = append(parts, l)
 	}
-	return s.place(append(parts, runFooterStyle.Render(footer))...)
+	return s.place(append(parts, footer)...)
 }
 
 // place puts the title above parts and centers the block on the screen.

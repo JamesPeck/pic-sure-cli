@@ -259,6 +259,10 @@ func (m *model) summaryBody() []string {
 		oks = append(oks, "migrations")
 	case ops.MigrationsStatusPending:
 		blockers = append(blockers, "migrations pending; m runs them")
+	default:
+		if e := s.Migrations.Error; e != "" {
+			warnings = append(warnings, "migrations: couldn't check ("+firstLine(e)+")")
+		}
 	}
 
 	switch t := s.Token; {

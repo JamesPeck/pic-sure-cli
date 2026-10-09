@@ -672,6 +672,20 @@ func TestSummarySeverityFirst(t *testing.T) {
 	}
 }
 
+func TestSummaryWarnsOfAFailedMigrationCheck(t *testing.T) {
+	m, _ := testModel(t)
+	r := healthyReport()
+	r.Migrations = ops.StatusMigrations{Status: "unknown", Error: "Access denied for user 'root'\nmore"}
+	m, _ = update(t, m, statusMsg{report: r})
+	text := ansi.Strip(m.summaryPane())
+	if !strings.Contains(text, "! migrations: couldn't check (Access denied for user 'root')") {
+		t.Errorf("no migration warning:\n%s", text)
+	}
+	if strings.Contains(text, "· migrations") {
+		t.Errorf("migrations listed as passing:\n%s", text)
+	}
+}
+
 func TestSummaryWorstCaseFitsThePane(t *testing.T) {
 	m, _ := testModel(t)
 	r := &ops.StatusReport{

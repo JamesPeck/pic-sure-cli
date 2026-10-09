@@ -46,3 +46,20 @@ func TestLogoShineDisabledWithoutAnimations(t *testing.T) {
 		t.Error("startShine(true) returned nil; want shine schedule")
 	}
 }
+
+func TestLogoShineDropsAChainScheduledBeforeStop(t *testing.T) {
+	l := newLogo()
+	l.startShine(true)
+	stale := logoShineStartMsg{seq: l.seq}
+	l.stopShine()
+	l.startShine(true) // back on the landing within the idle delay
+	if cmd := l.update(stale); cmd != nil || l.shinePos >= 0 {
+		t.Error("a start scheduled before stopShine began a second sweep chain")
+	}
+	if cmd := l.update(logoShineStartMsg{seq: l.seq}); cmd == nil || l.shinePos != 0 {
+		t.Error("the current chain's start did not begin the sweep")
+	}
+	if cmd := l.update(logoShineStepMsg{seq: l.seq - 1}); cmd != nil || l.shinePos != 0 {
+		t.Error("a stale step moved the sweep")
+	}
+}

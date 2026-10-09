@@ -37,7 +37,6 @@ type Options struct {
 	// belongs to another user (§6.1). The landing shows it and offers no
 	// stack actions.
 	Untrusted  string
-	Start      Screen
 	Animations bool
 	// Init runs init in-process for the setup wizard and "Resume setup",
 	// sending its events to req.Sink.
@@ -144,10 +143,6 @@ func newApp(ctx context.Context, o Options) *app {
 	a := &app{ctx: ctx, opts: o, screen: ScreenLanding}
 	a.landing = newLanding(o.Root, a.detectStack(), o.Animations)
 	a.landing.notice = o.Untrusted
-	if o.Start == ScreenDashboard {
-		a.newDashboard()
-		a.screen = ScreenDashboard
-	}
 	return a
 }
 
@@ -181,12 +176,9 @@ func detectStack(root string) stackStatus {
 	return readyStack
 }
 
-// Init asks the terminal for its background color alongside the first
-// screen's startup, so the palette and the dialogs can match it.
+// Init asks the terminal for its background color alongside the landing's
+// startup, so the palette and the dialogs can match it.
 func (a *app) Init() tea.Cmd {
-	if a.screen == ScreenDashboard {
-		return tea.Batch(tea.RequestBackgroundColor, a.dash.Init())
-	}
 	return tea.Batch(tea.RequestBackgroundColor, a.landing.startAnimations())
 }
 
@@ -242,16 +234,17 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a.openLoad("")
 
 	case openWizardMsg:
-		base, sec := stack.DefaultConfig(), stack.UserSecrets{}
+		defaults, sec := stack.DefaultConfig(), stack.UserSecrets{}
 		if a.opts.Defaults != nil {
-			base = a.opts.Defaults(a.opts.Root)
+			defaults = a.opts.Defaults(a.opts.Root)
 		}
+		base := defaults
 		if a.lastSetup != nil {
 			if cfg, err := a.lastSetup.doc.Config(); err == nil {
 				base, sec = *cfg, a.lastSetup.secrets
 			}
 		}
-		s := newWizardScreen(base, sec)
+		s := newWizardScreen(defaults, base, sec)
 		a.landing.stopAnimations()
 		s.setSize(a.width, a.height)
 		a.wizard = s

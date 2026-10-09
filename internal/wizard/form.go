@@ -32,15 +32,18 @@ type Form struct {
 	// form doesn't ask for.
 	base stack.Config
 	// vals are the values entered, bound to the huh fields; seed is what
-	// they opened with.
+	// they opened with, and def the defaults the summary marks.
 	vals map[string]*string
 	seed map[string]string
+	def  map[string]string
 
 	useProxy, seedProxy bool
-	// httpsInput and httpsSynced pre-fill the HTTPS proxy from the HTTP
-	// one (spec §9.10) until the user edits it.
-	httpsInput  *huh.Input
-	httpsSynced string
+	// httpsInput, httpsFollows and httpsSynced pre-fill the HTTPS proxy
+	// from the HTTP one (spec §9.10) until the user edits it, if the two
+	// were equal when the form opened.
+	httpsInput   *huh.Input
+	httpsFollows bool
+	httpsSynced  string
 
 	// secrets seeds the secret fields.
 	secrets stack.UserSecrets
@@ -52,13 +55,21 @@ type Form struct {
 }
 
 // NewForm returns the form, opened with base's values and the secrets in
-// sec.
+// sec. base is also the defaults the summary marks.
 func NewForm(base stack.Config, sec stack.UserSecrets) *Form {
+	return Reopen(base, base, sec)
+}
+
+// Reopen returns the form opened with base, the answers of a setup that
+// failed, and the secrets in sec. The summary marks a value "(default)"
+// only when it matches defaults, not base.
+func Reopen(defaults, base stack.Config, sec stack.UserSecrets) *Form {
 	f := &Form{
 		base:     base,
 		secrets:  sec,
 		vals:     map[string]*string{},
 		seed:     map[string]string{},
+		def:      map[string]string{},
 		useProxy: base.Proxy.HTTP != "" || base.Proxy.HTTPS != "",
 	}
 	f.seedProxy = f.useProxy
@@ -80,7 +91,15 @@ func NewForm(base stack.Config, sec stack.UserSecrets) *Form {
 		}
 		groups = append(groups, hg)
 	}
+	for _, g := range Groups {
+		for _, it := range g.Items {
+			if got, err := defaults.Get(it.Key); err == nil {
+				f.def[it.Key] = fmt.Sprint(got)
+			}
+		}
+	}
 	f.httpsSynced = f.Value(proxyHTTPSKey)
+	f.httpsFollows = f.httpsSynced == f.Value(proxyHTTPKey)
 	f.Main = huh.NewForm(groups...)
 	return f
 }
@@ -143,9 +162,14 @@ func (f *Form) Update(msg tea.Msg) tea.Cmd {
 
 // syncHTTPSProxy copies the HTTP proxy into the HTTPS one while the HTTPS
 // one still holds the last value copied, so clearing or editing it sticks.
+// A form that opened with the two different (a reopened setup whose HTTPS
+// proxy was cleared) never copies.
 func (f *Form) syncHTTPSProxy() {
 	http, https := f.vals[proxyHTTPKey], f.vals[proxyHTTPSKey]
-	if *https != f.httpsSynced || *https == *http {
+	if *https != f.httpsSynced {
+		f.httpsFollows = false
+	}
+	if !f.httpsFollows || *https == *http {
 		return
 	}
 	*https = *http
@@ -367,8 +391,8 @@ func (f *Form) BuildConfirm() *huh.Form {
 func (f *Form) Confirmed() bool { return f.confirmed }
 
 // summary lists the fields that apply, aligned, with secrets masked, empty
-// optional fields left out and "(default)" after a value left as it
-// opened.
+// optional fields left out and "(default)" after a value equal to its
+// default.
 func (f *Form) summary() string {
 	type row struct{ title, value, note string }
 	var rows []row
@@ -389,7 +413,7 @@ func (f *Form) summary() string {
 				v = "********"
 			}
 			r := row{title: it.Title, value: v}
-			if !sf.Secret && v == f.seed[it.Key] {
+			if d, ok := f.def[it.Key]; ok && !sf.Secret && v == d {
 				r.note = " " + summaryDimStyle.Render("(default)")
 			}
 			rows = append(rows, r)

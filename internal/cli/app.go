@@ -198,7 +198,6 @@ func (a *App) startTUI(ctx context.Context) error {
 	return a.StartTUI(ctx, tui.Options{
 		Root:       dir,
 		Untrusted:  untrusted,
-		Start:      tui.ScreenLanding,
 		Animations: tui.AnimationsEnabled(a.Global.NoAnimations, os.Getenv),
 		Init:       a.initFromTUI,
 		Defaults:   wizardDefaults,

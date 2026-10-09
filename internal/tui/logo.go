@@ -38,14 +38,17 @@ var logoArt = []string{
 // logoWidth is the rune width of the block art (all rows are uniform).
 func logoWidth() int { return len([]rune(logoArt[0])) }
 
-type logoShineStartMsg struct{}
+// The shine's messages carry the logo's seq, as the starfield's ticks do,
+// so a chain scheduled before stopShine is dropped.
+type logoShineStartMsg struct{ seq int }
 
-type logoShineStepMsg struct{}
+type logoShineStepMsg struct{ seq int }
 
 type logo struct {
 	lines    [][]rune
 	shinePos int // -1 when idle
 	maxDiag  int
+	seq      int // shine generation; stale messages are dropped
 }
 
 func newLogo() *logo {
@@ -63,33 +66,40 @@ func (l *logo) startShine(animations bool) tea.Cmd {
 	if !animations {
 		return nil
 	}
-	return tea.Tick(logoShineDelay, func(time.Time) tea.Msg { return logoShineStartMsg{} })
+	l.seq++
+	return l.shineStart(logoShineDelay)
 }
 
 func (l *logo) update(msg tea.Msg) tea.Cmd {
-	switch msg.(type) {
+	switch msg := msg.(type) {
 	case logoShineStartMsg:
+		if msg.seq != l.seq {
+			return nil // scheduled before a stopShine
+		}
 		if l.shinePos >= 0 {
 			return nil // already sweeping (duplicate chain guard)
 		}
 		l.shinePos = 0
 		return l.shineTick()
 	case logoShineStepMsg:
-		if l.shinePos < 0 {
+		if msg.seq != l.seq || l.shinePos < 0 {
 			return nil // stale step after a suspend
 		}
 		l.shinePos += logoShineStep
 		if l.shinePos > l.maxDiag+logoShineBand {
 			l.shinePos = -1
-			return tea.Tick(logoShineInterval, func(time.Time) tea.Msg { return logoShineStartMsg{} })
+			return l.shineStart(logoShineInterval)
 		}
 		return l.shineTick()
 	}
 	return nil
 }
 
-// stopShine halts the sweep; in-flight step messages become no-ops.
-func (l *logo) stopShine() { l.shinePos = -1 }
+// stopShine halts the sweep; in-flight messages become no-ops.
+func (l *logo) stopShine() {
+	l.shinePos = -1
+	l.seq++
+}
 
 func (l *logo) view() string {
 	var sb strings.Builder
@@ -124,6 +134,13 @@ func (l *logo) renderLine(line []rune, row int) string {
 	return sb.String()
 }
 
+// shineStart schedules a sweep after d.
+func (l *logo) shineStart(d time.Duration) tea.Cmd {
+	seq := l.seq
+	return tea.Tick(d, func(time.Time) tea.Msg { return logoShineStartMsg{seq: seq} })
+}
+
 func (l *logo) shineTick() tea.Cmd {
-	return tea.Tick(logoShineTickRate, func(time.Time) tea.Msg { return logoShineStepMsg{} })
+	seq := l.seq
+	return tea.Tick(logoShineTickRate, func(time.Time) tea.Msg { return logoShineStepMsg{seq: seq} })
 }

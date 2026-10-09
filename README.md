@@ -174,10 +174,10 @@ and quit with `q`.
   outside open mode, the ports (free ones are filled in), a local or
   remote database, HPDS's JVM options and a proxy. It then shows a summary
   and asks before creating anything. On yes it runs init and shows its
-  steps. Esc leaves the wizard, asking first if you changed anything. If
-  init fails, fix the cause and pick **Resume setup**, or **Set up
-  PIC-SURE** again if it failed before writing `pic-sure.yaml`: the wizard
-  reopens with your answers.
+  steps. Esc or Ctrl-C leaves the wizard, asking first if you changed
+  anything. If init fails, fix the cause and pick **Resume setup**, or
+  **Set up PIC-SURE** again if it failed before writing `pic-sure.yaml`:
+  the wizard reopens with your answers.
 - **Developer options.** Each item runs one command:
 
   | Item | Runs |
@@ -194,8 +194,8 @@ and quit with `q`.
 
   Reset and Destroy make you type the stack's name, as on the dashboard.
 - **Dashboard.** The stack's services and their state, a status summary
-  (config, version, images, migrations), and the logs of the selected
-  service.
+  (config, version, images, migrations, with a warning when one can't be
+  checked), and the logs of the selected service.
 
   | Key | Does |
   |---|---|

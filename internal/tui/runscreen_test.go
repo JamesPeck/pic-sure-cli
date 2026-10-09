@@ -184,6 +184,45 @@ func TestRunScreenScrollsAFailedCommandsSummary(t *testing.T) {
 	}
 }
 
+// On a narrow terminal the footer stays on one line, inside the terminal
+// and the frame, shortened when the long one doesn't fit.
+func TestRunScreenFooterFitsANarrowTerminal(t *testing.T) {
+	var report []string
+	for i := range 40 {
+		report = append(report, fmt.Sprintf("check-%02d", i))
+	}
+	run := func(context.Context, InitRequest) (InitResult, error) {
+		return InitResult{Summary: strings.Join(report, "\n") + "\n"}, errors.New("doctor: 1 check(s) failed")
+	}
+	for _, width := range []int{30, 40, 43, 80} {
+		t.Run(fmt.Sprint(width), func(t *testing.T) {
+			s := newRunScreen(context.Background(), "Preflight check", run, InitRequest{}, false)
+			s.setSize(width, 24)
+			defer s.close()
+			pumpRun(t, s, func() bool { return s.finished })
+			view := plainView(s)
+			lines := strings.Split(view, "\n")
+			if len(lines) > 24 {
+				t.Fatalf("the view is %d lines tall:\n%s", len(lines), view)
+			}
+			for _, l := range lines {
+				if lipgloss.Width(l) > width {
+					t.Fatalf("a line is %d wide: %q", lipgloss.Width(l), l)
+				}
+			}
+			footer := ""
+			for _, l := range lines {
+				if strings.Contains(l, "scroll") {
+					footer = l
+				}
+			}
+			if !strings.Contains(footer, "enter") || !strings.Contains(footer, "back") {
+				t.Errorf("no one-line footer at %d columns:\n%s", width, view)
+			}
+		})
+	}
+}
+
 // A long error after a full step list and a failed step's log tail stays
 // readable on a small terminal: the footer and the log file line stay on
 // screen, and scrolling reaches every line of the error.

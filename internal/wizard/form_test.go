@@ -4,6 +4,9 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/JamesPeck/pic-sure-cli/internal/stack"
 )
 
@@ -135,6 +138,50 @@ func TestHTTPSProxyFollowsHTTPUntilEdited(t *testing.T) {
 	f.syncHTTPSProxy()
 	if got := f.Value(proxyHTTPSKey); got != "" {
 		t.Errorf("https = %q, want the user's clearing to stick", got)
+	}
+}
+
+// A failed setup reopened with its HTTPS proxy cleared keeps it cleared
+// once the user types; one whose two proxies matched still follows.
+func TestReopenedFormKeepsAClearedHTTPSProxy(t *testing.T) {
+	defaults := stack.DefaultConfig()
+	prev := defaults
+	prev.Name = "demo"
+	prev.Proxy.HTTP = "http://proxy:3128"
+	f := Reopen(defaults, prev, stack.UserSecrets{})
+	f.Main.Init()
+	f.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	if got := f.Value(proxyHTTPSKey); got != "" {
+		t.Errorf("https = %q after a key press, want it to stay cleared", got)
+	}
+
+	prev.Proxy.HTTPS = prev.Proxy.HTTP
+	f = Reopen(defaults, prev, stack.UserSecrets{})
+	set(f, proxyHTTPKey, "http://proxy:8080")
+	f.syncHTTPSProxy()
+	if got := f.Value(proxyHTTPSKey); got != "http://proxy:8080" {
+		t.Errorf("https = %q, want it to follow http", got)
+	}
+}
+
+// "(default)" marks a value equal to the real default, not one carried
+// over from a reopened setup.
+func TestSummaryMarksOnlyTheRealDefault(t *testing.T) {
+	defaults := stack.DefaultConfig()
+	defaults.Name = "demo"
+	prev := defaults
+	prev.Name = "mine"
+	f := Reopen(defaults, prev, stack.UserSecrets{})
+	rows := map[string]string{}
+	for _, l := range strings.Split(ansi.Strip(f.summary()), "\n") {
+		k, v, _ := strings.Cut(l, "  ")
+		rows[k] = v
+	}
+	if v := rows["Stack name"]; strings.Contains(v, "(default)") || !strings.Contains(v, "mine") {
+		t.Errorf("Stack name row = %q, want mine without (default)", v)
+	}
+	if v := rows["HTTP port"]; !strings.Contains(v, "(default)") {
+		t.Errorf("HTTP port row = %q, want (default)", v)
 	}
 }
 

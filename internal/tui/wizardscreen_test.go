@@ -93,7 +93,7 @@ func testWizard(t *testing.T) *wizardScreen {
 	base := stack.DefaultConfig()
 	base.Name = "demo"
 	base.Network.HTTPPort, base.Network.HTTPSPort = 8080, 8443
-	s := newWizardScreen(base, stack.UserSecrets{})
+	s := newWizardScreen(base, base, stack.UserSecrets{})
 	s.setSize(100, 60)
 	drive(s, runCmd(s.init())...)
 	return s
@@ -203,6 +203,25 @@ func TestWizardEscClosesPristineAndAsksWhenDirty(t *testing.T) {
 	drive(s, esc)
 	if out := drive(s, tea.KeyPressMsg{Code: 'y', Text: "y"}); len(out) != 1 {
 		t.Fatalf("y gave %v, want wizardClosedMsg", out)
+	}
+}
+
+// Ctrl-C asks as esc does, instead of huh aborting the form.
+func TestWizardCtrlCAsksWhenDirty(t *testing.T) {
+	ctrlC := tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}
+	s := testWizard(t)
+	if out := drive(s, ctrlC); len(out) != 1 {
+		t.Fatalf("ctrl+c on a pristine form gave %v, want wizardClosedMsg", out)
+	}
+
+	s = testWizard(t)
+	drive(s, seq(enter, enter, enter, enter, typeText("a@example.com"))...)
+	if out := drive(s, ctrlC); len(out) != 0 || !s.discarding {
+		t.Fatalf("ctrl+c on a dirty form closed it (out %v)", out)
+	}
+	drive(s, ctrlC)
+	if s.discarding || s.wf.Value("auth.admin_email") != "a@example.com" {
+		t.Fatal("a second ctrl+c didn't withdraw the question, keeping the answers")
 	}
 }
 

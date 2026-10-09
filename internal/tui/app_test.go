@@ -17,24 +17,20 @@ import (
 	"github.com/JamesPeck/pic-sure-cli/internal/stack"
 )
 
-func testApp(start Screen) *app {
-	a := newApp(context.Background(), Options{Root: "/tmp/x", Start: start, Animations: false})
+func testApp() *app {
+	a := newApp(context.Background(), Options{Root: "/tmp/x", Animations: false})
 	a.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	return a
 }
 
-func TestAppStartsOnRequestedScreen(t *testing.T) {
-	if a := testApp(ScreenLanding); a.screen != ScreenLanding {
+func TestAppStartsOnTheLanding(t *testing.T) {
+	if a := testApp(); a.screen != ScreenLanding || a.dash != nil {
 		t.Errorf("start screen = %v, want landing", a.screen)
-	}
-	a := testApp(ScreenDashboard)
-	if a.screen != ScreenDashboard || a.dash == nil {
-		t.Error("ScreenDashboard start did not construct the dashboard")
 	}
 }
 
 func TestAppNavigationCycle(t *testing.T) {
-	a := testApp(ScreenLanding)
+	a := testApp()
 
 	a.Update(openDashboardMsg{})
 	if a.screen != ScreenDashboard || a.dash == nil {
@@ -48,7 +44,7 @@ func TestAppNavigationCycle(t *testing.T) {
 }
 
 func TestAppDropsStarfieldTicksOffLanding(t *testing.T) {
-	a := testApp(ScreenLanding)
+	a := testApp()
 	a.Update(openDashboardMsg{})
 	if _, cmd := a.Update(starTickMsg{seq: 1}); cmd != nil {
 		t.Error("starfield tick rescheduled while off the landing screen")
@@ -57,7 +53,7 @@ func TestAppDropsStarfieldTicksOffLanding(t *testing.T) {
 
 func TestWizardFlowResultMessages(t *testing.T) {
 	t.Run("cancel shows neutral result", func(t *testing.T) {
-		a := testApp(ScreenLanding)
+		a := testApp()
 		a.screen = ScreenWizard
 		a.Update(wizardClosedMsg{})
 		if a.screen != ScreenLanding || !strings.Contains(a.landing.result, "nothing written") {
@@ -65,7 +61,7 @@ func TestWizardFlowResultMessages(t *testing.T) {
 		}
 	})
 	t.Run("an unusable setup returns to landing with error", func(t *testing.T) {
-		a := testApp(ScreenLanding)
+		a := testApp()
 		a.screen = ScreenWizard
 		a.Update(wizardClosedMsg{err: errors.New("bad name")})
 		if a.screen != ScreenLanding || !strings.Contains(a.landing.result, "setup failed: bad name") {
@@ -75,7 +71,7 @@ func TestWizardFlowResultMessages(t *testing.T) {
 }
 
 func TestAppLoadDataNavigation(t *testing.T) {
-	a := testApp(ScreenLanding)
+	a := testApp()
 
 	// openLoadDataMsg constructs and routes to the guided load screen.
 	a.Update(openLoadDataMsg{})
@@ -130,7 +126,7 @@ func TestAppLoadRunsOnTheRunScreen(t *testing.T) {
 
 // Without a Command, a load says so on the landing instead of hanging.
 func TestAppLoadWithoutCommand(t *testing.T) {
-	a := testApp(ScreenLanding)
+	a := testApp()
 	a.Update(openLoadDataMsg{})
 	a.Update(loadRunMsg{act: dashboard.Action{Title: "Loading phenotype data"}})
 	if a.screen != ScreenLanding || !strings.Contains(a.landing.result, "not available") {
@@ -146,9 +142,10 @@ func TestDashboardLoadRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := newApp(context.Background(), Options{
-		Root: root, Start: ScreenDashboard,
+		Root:    root,
 		Command: func(context.Context, CommandRequest) (InitResult, error) { return InitResult{}, nil },
 	})
+	a.Update(openDashboardMsg{})
 	a.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	a.Update(dashboard.LoadMsg{})
 	if a.screen != ScreenLoadData || a.load == nil || a.dash == nil {
@@ -191,9 +188,17 @@ func TestOpenWizardUsesDefaults(t *testing.T) {
 func TestFailedSetupKeepsItsAnswers(t *testing.T) {
 	root := t.TempDir()
 	fail := errors.New("the host isn't ready")
+	initErr := fail
 	a := newApp(context.Background(), Options{Root: root, Init: func(context.Context, InitRequest) (InitResult, error) {
-		return InitResult{}, fail
+		return InitResult{}, initErr
 	}})
+	finish := func() {
+		<-a.run.done
+		for !a.run.finished {
+			a.Update(a.run.listen())
+		}
+		a.Update(runClosedMsg{})
+	}
 	a.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	cfg := stack.DefaultConfig()
 	cfg.Name = "kept"
@@ -204,9 +209,7 @@ func TestFailedSetupKeepsItsAnswers(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.Update(wizardDoneMsg{doc: doc, secrets: stack.UserSecrets{Auth0ClientSecret: "kept-secret"}})
-	<-a.run.done
-	a.run.err = fail
-	a.Update(runClosedMsg{})
+	finish()
 	if !strings.Contains(a.landing.result, "Set up has your answers") {
 		t.Errorf("result = %q", a.landing.result)
 	}
@@ -215,18 +218,16 @@ func TestFailedSetupKeepsItsAnswers(t *testing.T) {
 		t.Errorf("the wizard reopened with name %q, secret set %v", a.wizard.wf.Value("name"), a.wizard.wf.Value("auth.auth0.client_secret") != "")
 	}
 
+	initErr = nil
 	a.Update(wizardDoneMsg{doc: doc})
-	<-a.run.done
-	a.run.err = nil
-	a.Update(runClosedMsg{})
+	finish()
 	if a.lastSetup != nil {
 		t.Error("a finished setup was kept")
 	}
 }
 
 // A dashboard action runs on the run screen, and closing it returns to the
-// dashboard, which polls again; the dashboard's own messages reach it while
-// the run screen shows.
+// dashboard (TestActionDoneRefreshes covers its polling again).
 func TestDashboardActionRoundTrip(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, stack.ConfigFile), []byte("schema: 1\n"), 0o600); err != nil {
@@ -234,7 +235,7 @@ func TestDashboardActionRoundTrip(t *testing.T) {
 	}
 	var got CommandRequest
 	a := newApp(context.Background(), Options{
-		Root: root, Start: ScreenDashboard,
+		Root: root,
 		Command: func(_ context.Context, req CommandRequest) (InitResult, error) {
 			got = req
 			req.Sink.Emit(events.StepStarted{ID: "restart", Title: "Restart hpds"})
@@ -242,6 +243,7 @@ func TestDashboardActionRoundTrip(t *testing.T) {
 			return InitResult{}, nil
 		},
 	})
+	a.Update(openDashboardMsg{})
 	a.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
 	a.Update(dashboard.RunMsg{Action: dashboard.Action{Title: "Restarting hpds", Done: "Restarted hpds", Args: []string{"restart", "hpds"}}})
@@ -259,8 +261,8 @@ func TestDashboardActionRoundTrip(t *testing.T) {
 		t.Errorf("run screen:\n%s", v)
 	}
 
-	_, cmd := a.Update(runClosedMsg{})
-	if a.screen != ScreenDashboard || a.run != nil || cmd == nil {
+	a.Update(runClosedMsg{})
+	if a.screen != ScreenDashboard || a.run != nil {
 		t.Fatalf("closing didn't return to the dashboard (screen %v)", a.screen)
 	}
 }
@@ -268,9 +270,10 @@ func TestDashboardActionRoundTrip(t *testing.T) {
 // An action that removed the stack (destroy) returns to the landing.
 func TestDashboardActionThatRemovedTheStack(t *testing.T) {
 	a := newApp(context.Background(), Options{
-		Root: t.TempDir(), Start: ScreenDashboard,
+		Root:    t.TempDir(),
 		Command: func(context.Context, CommandRequest) (InitResult, error) { return InitResult{}, nil },
 	})
+	a.Update(openDashboardMsg{})
 	a.Update(dashboard.RunMsg{Action: dashboard.Action{Title: "Destroying the stack", Args: []string{"--yes", "destroy"}}})
 	a.Update(runClosedMsg{})
 	if a.screen != ScreenLanding || a.dash != nil {
@@ -282,13 +285,14 @@ func TestDashboardActionThatRemovedTheStack(t *testing.T) {
 func TestDashboardActionAsksOnTheRunScreen(t *testing.T) {
 	answer := make(chan bool, 1)
 	a := newApp(context.Background(), Options{
-		Root: t.TempDir(), Start: ScreenDashboard,
+		Root: t.TempDir(),
 		Command: func(ctx context.Context, req CommandRequest) (InitResult, error) {
 			yes, err := req.Confirm(ctx, "release-control abc needs pic-sure 2.1.0; this is pic-sure 2.0.0. Update pic-sure now?")
 			answer <- yes
 			return InitResult{}, err
 		},
 	})
+	a.Update(openDashboardMsg{})
 	a.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
 	a.Update(dashboard.RunMsg{Action: dashboard.Action{Title: "Updating PIC-SURE", Args: []string{"update"}}})
 	s := a.run
@@ -315,13 +319,14 @@ func TestRunScreenForceQuitEndsRun(t *testing.T) {
 	release := make(chan struct{})
 	defer close(release)
 	a := newApp(context.Background(), Options{
-		Root: t.TempDir(), Start: ScreenDashboard,
+		Root: t.TempDir(),
 		Command: func(_ context.Context, req CommandRequest) (InitResult, error) {
 			req.Sink.Emit(events.StepStarted{ID: "images", Title: "Build the images"})
 			<-release
 			return InitResult{}, nil
 		},
 	})
+	a.Update(openDashboardMsg{})
 	a.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
 	a.Update(dashboard.RunMsg{Action: dashboard.Action{Title: "Building", Args: []string{"build"}}})
 	s := a.run

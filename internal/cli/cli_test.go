@@ -326,7 +326,7 @@ func TestBareInvocation(t *testing.T) {
 		if code := a.Run(context.Background(), []string{"--stack", "/srv/demo", "--no-animations"}); code != 0 {
 			t.Errorf("exit = %d", code)
 		}
-		if got == nil || got.Root != "/srv/demo" || got.Start != tui.ScreenLanding || got.Animations || got.Init == nil || got.Defaults == nil {
+		if got == nil || got.Root != "/srv/demo" || got.Animations || got.Init == nil || got.Defaults == nil {
 			t.Errorf("TUI options = %+v", got)
 		}
 	})

@@ -43,16 +43,17 @@ var (
 type wizardScreen struct {
 	wf    *wizard.Form
 	phase wizardPhase
-	// discarding is set when esc is pressed on a modified form: the screen
-	// asks "Discard setup? (y/n)" before closing. A pristine form closes at
-	// once.
+	// discarding is set when esc or ctrl+c is pressed on a modified form:
+	// the screen asks "Discard setup? (y/n)" before closing. A pristine
+	// form closes at once.
 	discarding    bool
 	width, height int
 }
 
-// newWizardScreen opens the form with base's values and sec's secrets.
-func newWizardScreen(base stack.Config, sec stack.UserSecrets) *wizardScreen {
-	return &wizardScreen{wf: wizard.NewForm(base, sec)}
+// newWizardScreen opens the form with base's values and sec's secrets;
+// defaults are the values its summary marks "(default)".
+func newWizardScreen(defaults, base stack.Config, sec stack.UserSecrets) *wizardScreen {
+	return &wizardScreen{wf: wizard.Reopen(defaults, base, sec)}
 }
 
 func (s *wizardScreen) init() tea.Cmd { return s.wf.Main.Init() }
@@ -89,13 +90,14 @@ func (s *wizardScreen) update(msg tea.Msg) (*wizardScreen, tea.Cmd) {
 		switch key.String() {
 		case "y", "Y":
 			return s, closeWizard
-		case "n", "N", "esc":
+		case "n", "N", "esc", "ctrl+c":
 			s.discarding = false
 		}
 		return s, nil
 	}
-	// huh ships its esc binding disabled, so the screen handles it.
-	if key, ok := msg.(tea.KeyPressMsg); ok && key.String() == "esc" {
+	// huh ships its esc binding disabled, and its ctrl+c aborts without
+	// asking, so the screen handles both.
+	if key, ok := msg.(tea.KeyPressMsg); ok && (key.String() == "esc" || key.String() == "ctrl+c") {
 		if s.wf.Dirty() {
 			s.discarding = true
 			return s, nil
