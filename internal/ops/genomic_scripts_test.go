@@ -234,7 +234,7 @@ func TestLoadGenomicInterruptedPromoteSaysWhatIsLeft(t *testing.T) {
 			want := []string{"not promoted: synth", "HPDS is stopped: run the load again, or `pic-sure up` to start HPDS"}
 			if unrecovered {
 				want = []string{"HPDS would load its leftover .promote-* and .old-* directories as partitions",
-					"HPDS is stopped; run the load again, which recovers demo_hpds-genomic, before starting it"}
+					"HPDS is stopped; recover demo_hpds-genomic with `pic-sure data load-genomic --recover` (or run the load again"}
 			}
 			for _, w := range want {
 				if !strings.Contains(err.Error(), w) {
@@ -257,7 +257,7 @@ func TestLoadGenomicWarnsOfLeftoversWithoutPromote(t *testing.T) {
 			warnings = append(warnings, w.Text)
 		}
 	}
-	want := "demo_hpds-genomic holds what an interrupted promote left (.old-a), which HPDS loads as partitions; a load with --promote recovers it"
+	want := "demo_hpds-genomic holds what an interrupted promote left (.old-a), which HPDS loads as partitions; `pic-sure data load-genomic --recover` recovers it, as does a load with --promote"
 	if !slices.Contains(warnings, want) || slices.ContainsFunc(warnings, func(w string) bool { return strings.Contains(w, "holds no genomic partition") }) {
 		t.Errorf("warnings %q", warnings)
 	}
@@ -331,7 +331,7 @@ func TestLoadGenomicInterruptedBeforeRecoveringLeftovers(t *testing.T) {
 	defer cancel()
 	fx.onMove = cancel // after finalize, before HPDS stops
 	_, err = fx.loadCtx(ctx, ops.GenomicLoadOptions{Promote: true})
-	if err == nil || !strings.Contains(err.Error(), "HPDS may be stopped; run the load again, which recovers demo_hpds-genomic, before starting it") {
+	if err == nil || !strings.Contains(err.Error(), "HPDS may be stopped; recover demo_hpds-genomic with `pic-sure data load-genomic --recover`") {
 		t.Errorf("interrupted while stopping HPDS: err = %v", err)
 	}
 	if fx.recovers != 0 {

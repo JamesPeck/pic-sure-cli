@@ -142,7 +142,7 @@ different flag.
 | `pic-sure restart [SVC...]`, `ps`, `logs [-f] [SVC]` | The usual compose verbs, for this stack. |
 | `pic-sure update` | Move to the newest release: plan, back up the config, build, migrate, restart what changed. `--dry-run` shows the plan. |
 | `pic-sure data load-phenotype --file F` | Load your own phenotype CSV (plain, `.gz`, `.tar.gz` or `.zip`; `--entry` picks a file in an archive) or `--input-dir D`, then rebuild the dictionary. |
-| `pic-sure data load-genomic --partition P --vcf-index F` | Load VCFs into a genomic partition; `--promote` and `--enable-profile` make it live. |
+| `pic-sure data load-genomic --partition P --vcf-index F` | Load VCFs into a genomic partition; `--promote` and `--enable-profile` make it live. `--recover` only repairs an interrupted promote. |
 | `pic-sure config show` / `set KEY VALUE` / `edit` | Read and change `pic-sure.yaml`, validated. Run `up` afterwards to apply. |
 | `pic-sure doctor [--network]` | Check the host, Docker, the stack and the network. |
 | `pic-sure support-bundle` | A redacted diagnostics archive to attach to an issue. |
@@ -431,6 +431,13 @@ delete the binary (`~/.local/bin/pic-sure`) and the cache directory.
   you don't own, such as some planted in `/tmp`. It won't run another
   user's compose files without being told to. If you trust the stack, name
   it with `--stack DIR`.
+- `up` or `doctor` says the genomic volume "holds what an interrupted
+  promote left" (exit 3): a `data load-genomic --promote` was killed part
+  way. Run `pic-sure data load-genomic --recover`, which needs no VCFs and
+  puts each partition back whole, either the promoted copy or the one from
+  before; then `pic-sure up`. A `--promote` load recovers it too, if you
+  want new data anyway. `up --skip-step genomic-leftovers` starts HPDS
+  over the leftovers, which it loads as partitions: a last resort only.
 
 ## For AI agents
 

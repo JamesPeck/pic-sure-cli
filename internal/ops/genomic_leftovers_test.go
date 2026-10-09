@@ -107,10 +107,10 @@ func TestUpRefusesGenomicLeftovers(t *testing.T) {
 		want string
 	}{
 		{"local", "demo_hpds-genomic", nil, "volume demo_hpds-genomic holds what an interrupted promote left (.old-b, .promote-a), " +
-			"which HPDS would load as partitions; recover it with `pic-sure data load-genomic --promote` first"},
+			"which HPDS would load as partitions; recover it first with `pic-sure data load-genomic --recover` (or a `--promote` load"},
 		{"shared", "nhanes_hpds-genomic", func(c *stack.Config) { c.HPDS.Data, c.HPDS.SharedName = stack.HPDSShared, "nhanes" },
 			"volume nhanes_hpds-genomic holds what an interrupted promote left (.old-b, .promote-a), which HPDS would load as partitions; " +
-				"shared data set nhanes can't be changed"},
+				"shared data set nhanes can't be changed: recover it in the stack that published it with `pic-sure data load-genomic --recover`"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fx := newLeftoverFixture(t, tc.vol, seeded, tc.edit)

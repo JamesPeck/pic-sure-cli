@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -25,8 +26,29 @@ type genomicReport struct {
 	Profile string `json:"profile"`
 }
 
+// genomicLoadFlags are load-genomic's flags for a load, which --recover
+// takes none of.
+var genomicLoadFlags = []string{"partition", "vcf-index", "vcf-dir", "heap", "promote", "all-partitions", "backup", "enable-profile"}
+
 func (a *App) loadGenomic(cmd *cobra.Command, _ []string) error {
 	f := cmd.Flags()
+	if rec, _ := f.GetBool("recover"); rec {
+		for _, name := range genomicLoadFlags {
+			if f.Changed(name) {
+				return withUsageHint(exitcode.Usage("--recover loads nothing, so it can't be combined with --%s", name))
+			}
+		}
+		return a.recoverGenomic(cmd)
+	}
+	var missing []string
+	for _, name := range []string{"partition", "vcf-index"} {
+		if !f.Changed(name) {
+			missing = append(missing, strconv.Quote(name))
+		}
+	}
+	if len(missing) > 0 {
+		return withUsageHint(exitcode.Usage("required flag(s) %s not set", strings.Join(missing, ", ")))
+	}
 	var opts ops.GenomicLoadOptions
 	opts.Partition, _ = f.GetString("partition")
 	index, _ := f.GetString("vcf-index")
@@ -128,6 +150,95 @@ func (a *App) loadGenomic(cmd *cobra.Command, _ []string) error {
 		}
 		if opts.Promote || opts.EnableProfile {
 			msg += fmt.Sprintf("HPDS is healthy, with profile %q.\n", cfg.HPDS.Profile)
+		}
+		_, err := io.WriteString(w, msg)
+		return err
+	})
+}
+
+// genomicRecoverReport is load-genomic --recover's --json data.
+type genomicRecoverReport struct {
+	// Leftovers are the .promote-* and .old-* directories found.
+	Leftovers []string `json:"leftovers"`
+	// Partitions says what became of each partition they were left for.
+	Partitions []recoveredPartition `json:"partitions"`
+	// HPDSStarted reports that HPDS was running, so it was started again.
+	HPDSStarted bool `json:"hpds_started"`
+}
+
+type recoveredPartition struct {
+	Partition string `json:"partition"`
+	// Result is completed, restored or discarded (ops.RecoveredPartition).
+	Result string `json:"result"`
+}
+
+func (a *App) recoverGenomic(cmd *cobra.Command) error {
+	ctx := cmd.Context()
+	st, err := a.openStack(cmd)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = st.Close() }()
+	d := a.newDeps()
+	lock, err := a.lockStack(ctx, cmd, st, d.Sink)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = lock.Unlock() }()
+
+	cfg, err := st.LoadConfig()
+	if err != nil {
+		return configError(err)
+	}
+	if err := checkOwned(cmd, d, st, cfg); err != nil {
+		return err
+	}
+	// Before the compose project is needed, which a stack on a shared
+	// data set may not have rendered.
+	if err := ops.RefuseSharedGenomicRecover(ctx, d, st, cfg); err != nil {
+		return err
+	}
+	state, err := st.LoadState()
+	if errors.Is(err, fs.ErrNotExist) || err == nil && state.InitializedAt.IsZero() {
+		return exitcode.Precondition("the stack in %s isn't initialised; run `pic-sure init %s` to finish it", st.Dir, st.Dir)
+	}
+	if err != nil {
+		return err
+	}
+	if d.Compose, cfg, _, err = a.stackComposeConfig(cmd, d.Runner, st); err != nil {
+		return err
+	}
+	state.StartOperation("data load-genomic --recover", d.Clock.Now())
+	if err := st.SaveState(state); err != nil {
+		return err
+	}
+	r, err := ops.RecoverGenomic(ctx, d, st, cfg)
+	if ferr := finishUp(d, st, err); err == nil {
+		err = ferr
+	}
+	if err != nil {
+		return err
+	}
+	report := genomicRecoverReport{Leftovers: r.Leftovers, Partitions: []recoveredPartition{}, HPDSStarted: r.HPDSStarted}
+	if report.Leftovers == nil {
+		report.Leftovers = []string{}
+	}
+	for _, p := range r.Partitions {
+		report.Partitions = append(report.Partitions, recoveredPartition(p))
+	}
+	return a.finish(report, func(w io.Writer) error {
+		if len(r.Leftovers) == 0 {
+			_, err := fmt.Fprintf(w, "The genomic data holds nothing an interrupted promote left; nothing to recover.\n")
+			return err
+		}
+		msg := fmt.Sprintf("Recovered what an interrupted promote left (%s):\n", strings.Join(r.Leftovers, ", "))
+		for _, p := range r.Partitions {
+			msg += fmt.Sprintf("  %s %s\n", p.Result, p.Partition)
+		}
+		if r.HPDSStarted {
+			msg += "HPDS is healthy again.\n"
+		} else {
+			msg += "HPDS wasn't running; start the stack with `pic-sure up`.\n"
 		}
 		_, err := io.WriteString(w, msg)
 		return err

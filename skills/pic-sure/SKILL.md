@@ -225,5 +225,11 @@ Run these inside the stack directory, or add `--stack DIR`.
 - **Is it ready?** Only `status --deep --json` says: `.deep.data.ready`
   is `true` when HPDS answers queries. `false` on a new stack means no
   data is loaded yet.
+- **"holds what an interrupted promote left"** (exit 3 from `up`, or a
+  failed `genomic-leftovers` doctor check): run `pic-sure data
+  load-genomic --recover --json`, which needs no VCFs, then `pic-sure up
+  --json`. On a shared data set it exits 3 too: recover in the stack that
+  published the set. Don't reach for `--skip-step genomic-leftovers`
+  without asking the user; HPDS would load the leftovers as partitions.
 - **A step failed:** the failed `result` names `.error.step`. Re-running
   the same command skips the steps that already finished.

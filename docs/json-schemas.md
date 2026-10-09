@@ -208,6 +208,7 @@ the same additive-only rule:
 | `data demo` | `{"dataset": "demo:<name>"}`, where `<name>` is the argument, `all` included. |
 | `data load-phenotype` | `{"dataset": "phenotype:<sha256>", "dictionary": "auto" or "custom", "weights": bool}` |
 | `data load-genomic` | `{"partition", "promoted": [...], "profile"}` |
+| `data load-genomic --recover` | `{"leftovers": [...], "partitions": [{"partition", "result"}], "hpds_started"}`: the `.promote-*`/`.old-*` directories found, and each partition's `result`, `completed` (the promoted copy is live), `restored` (the one from before is) or `discarded` (a partial copy was removed). Both lists are empty when there was nothing to recover. |
 | `shared-data publish` | The data set, as one entry of `shared-data list`. |
 | `shared-data remove` | `{"name", "removed": [...]}` |
 | `config set` | `{"key", "value"}`: the key as given, and its value as now saved, typed as `config get KEY --json` prints it. |

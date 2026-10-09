@@ -488,7 +488,12 @@ it.
   cache's `TempDir` and, for `--enable-profile`, up's `ConvergeOptions`
   (cache, CLI version, lazy-env Composer). It records the `data
   load-genomic` operation. `--json`'s data is `{"partition", "promoted":
-  [...], "profile"}`.
+  [...], "profile"}`. `--recover` (108) takes none of the load's flags
+  (exit 2), so `--partition` and `--vcf-index` are required by hand
+  rather than by cobra. Under the stack lock it checks ownership, refuses
+  a shared-mode stack, and runs `ops.RecoverGenomic`, recording `data
+  load-genomic --recover`. `--json`'s data is `{"leftovers": [...],
+  "partitions": [{"partition", "result"}], "hpds_started"}`.
 
 - `shareddata.go` (050): `shared-data publish NAME` checks the name
   (`ops.CheckSharedDataName`, exit 2); then,
@@ -1354,8 +1359,9 @@ the genomic store holds an interrupted promote's leftovers
 Starting all but hpds isn't clean (the query service depends on it), and
 a later refusal would let `restart` restart hpds and `update` migrate the
 database first, so nothing after it runs. Like every up step it can be
-skipped (`--skip-step genomic-leftovers`), an explicit override for an
-operator who can't run the load that recovers.
+skipped (`--skip-step genomic-leftovers`), an explicit override and the
+last resort, after `data load-genomic --recover` (108), which needs no
+VCFs.
 
 **Update (036, `update.go`).** §9.3. `PlanUpdate(ctx, d, st, doc, cfg,
 sec, state, UpdateOptions{ConvergeOptions, Release, Components,
@@ -1623,8 +1629,8 @@ skippable:
   (exit 3) to leave more than `hpdsMaxPartitions` (10) in `hpds-genomic`,
   HPDS's limit, counting an interrupted promote's `.old-<p>` as `<p>`; with
   only `EnableProfile`, it warns if `hpds-genomic` holds no partition, or
-  holds an interrupted promote's leftovers, which only a `Promote` load
-  recovers. If it fails, nothing has changed but perhaps the creation of
+  holds an interrupted promote's leftovers, which `--recover` or a
+  `Promote` load recovers. If it fails, nothing has changed but perhaps the creation of
   an empty `hpds-genomic`.
 - `genomic-stage`: in the per-stack `genomic-staging` volume, clears `all/`
   and `merged/` and writes `vcfIndex.tsv` from stdin.
@@ -1683,11 +1689,30 @@ each stack's `hpds-genomic-copy` is seeded from. It inspects the volume
 first, so a missing one holds none and isn't created, then lists it with
 the loader's `dirs` helper, whose container removal after a failed run
 `loader.rmTimeout` bounds to doctor's probe timeout. `genomicLeftoversError`
-is the exit-3 message doctor and up share: recover with `pic-sure data load-genomic --promote`, or for a
-shared set, which can't change, recover in the publishing stack and
-publish under a new name. `all-bak.new`/`all-bak.old` aren't checked: they
+is the exit-3 message doctor and up share: recover with `pic-sure data
+load-genomic --recover` (or a `--promote` load, which also loads new
+data), or for a shared set, which can't change, recover in the publishing
+stack with `--recover` and publish under a new name. Every hint that
+recovers leftovers, the failed promote's and shared-data publish's too,
+names `--recover` first. `all-bak.new`/`all-bak.old` aren't checked: they
 are in the staging volume, which HPDS never reads, and the next `--backup`
 settles them.
+
+**Recover only (108, `genomic_leftovers.go`).** `RecoverGenomic(ctx, d,
+st, cfg)` is `data load-genomic --recover`: no VCFs, no loader image. A
+shared-mode stack is `RefuseSharedGenomicRecover`'s exit 3 (the set's
+leftovers in `genomicLeftoversError`, or that it holds none), checked
+before the compose project is needed. With no leftovers it returns
+without touching anything. Otherwise it runs `hpds-stop` (noting from
+`compose ps` whether hpds was running or restarting), `genomic-recover`
+(094's `settleLive`, the same helper a `Promote` load runs), and
+`hpds-start` only if hpds was running; a stopped one is left for `pic-sure
+up`. `GenomicRecovery.Partitions` maps settle's `completed`/`restored`
+lines onto each leftover's partition, and `discarded` for one settle only
+removed a partial copy of. Its error replaces `steps.Error`'s resume
+advice with re-running `--recover` (or `pic-sure up` after a failed
+start). Only the stack lock is taken: the cache's use lock guards a VCF
+copy, and there is none.
 
 **Demo data (046, `demo.go`).** `DataDemo(ctx, d, st, cfg, sec, state,
 DemoOptions{Dataset, HeapMB, Cache, HTTP})` is `data demo` (§9.6).

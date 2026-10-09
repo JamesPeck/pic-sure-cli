@@ -79,6 +79,7 @@ type loaderFixture struct {
 	loaderExit   int
 	onLoader     func() error // runs in the loader's docker run, if set
 	health       string
+	stopped      bool // compose ps shows hpds exited
 	marker       []byte
 }
 
@@ -142,6 +143,9 @@ func newLoaderFixture(t *testing.T) *loaderFixture {
 	})
 	f.On(fakerunner.Glob("docker compose * up -d --wait --wait-timeout 900 hpds"))
 	f.On(fakerunner.Glob("docker compose * ps --all --format json hpds")).Do(func(context.Context, fakerunner.Call) (docker.Result, error) {
+		if fx.stopped {
+			return docker.Result{Stdout: []byte(psLine("hpds", "exited", ""))}, nil
+		}
 		return docker.Result{Stdout: []byte(psLine("hpds", "running", fx.health))}, nil
 	})
 	fx.spy = &envSpy{Runner: f, envs: map[string][]string{}}

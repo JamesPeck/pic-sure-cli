@@ -92,7 +92,7 @@ HPDS fails to start after the load; the error then says to check
 
 func newDataLoadGenomicCmd(a *App) *cobra.Command {
 	c := &cobra.Command{
-		Use:   "load-genomic --partition P --vcf-index F [--vcf-dir D] [--promote] [--enable-profile]",
+		Use:   "load-genomic (--partition P --vcf-index F [--vcf-dir D] [--promote] [--enable-profile] | --recover)",
 		Short: "Load VCF data into a genomic partition",
 		Long: `Load the VCFs a vcfIndex.tsv names into a genomic partition, staged in
 the stack's genomic-staging volume, where it replaces any earlier load of
@@ -106,7 +106,14 @@ same path.
 (every staged partition with --all-partitions, after copying the live data
 into all-bak with --backup), and starts HPDS again. --enable-profile sets
 hpds.profile to bch-dev, the profile that reads the genomic data, re-renders
-the stack and starts HPDS on it.`,
+the stack and starts HPDS on it.
+
+A promote that was interrupted can leave .promote-* and .old-* directories
+in the live genomic data, which HPDS would load as partitions, so up and
+update refuse to start it. --recover settles them without loading
+anything, and needs no VCFs: each partition is put back whole, either the
+promoted copy or the one from before. HPDS is stopped for it, and started
+again if it was running. Without leftovers it changes nothing.`,
 		Args: cobra.NoArgs,
 		RunE: a.loadGenomic,
 	}
@@ -119,7 +126,6 @@ the stack and starts HPDS on it.`,
 	f.Bool("all-partitions", false, "with --promote, promote every staged partition")
 	f.Bool("backup", false, "with --promote, first copy the live genomic data into all-bak")
 	f.Bool("enable-profile", false, "switch HPDS to the genomic profile (bch-dev)")
-	_ = c.MarkFlagRequired("partition")
-	_ = c.MarkFlagRequired("vcf-index")
+	f.Bool("recover", false, "only recover what an interrupted promote left in the live genomic data")
 	return c
 }

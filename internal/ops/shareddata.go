@@ -229,7 +229,7 @@ func (p *publish) check(ctx context.Context, sink events.Sink) error {
 	}
 	if len(probe.leftovers) > 0 {
 		return exitcode.Precondition("volume %s holds what an interrupted promote left (%s); "+
-			"recover it with `pic-sure data load-genomic --promote` first", p.srcGenomic, strings.Join(probe.leftovers, ", "))
+			"recover it first with `pic-sure data load-genomic --recover` (or a `--promote` load, if you also want new data)", p.srcGenomic, strings.Join(probe.leftovers, ", "))
 	}
 	for _, part := range probe.partitions {
 		if !slices.ContainsFunc(probe.contigs, func(c string) bool { return strings.HasPrefix(c, part+"/") }) {

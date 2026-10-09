@@ -17,6 +17,8 @@ exitcode 3 pic-sure --stack b --yes secrets rotate hpds-key --discard-data
 stderr 'stack demo in .*/a: container demo-hpds-1, volume demo_hpds-data'
 exitcode 3 pic-sure --stack b data load-phenotype --file pheno.csv
 stderr 'stack demo in .*/a: container demo-hpds-1, volume demo_hpds-data'
+exitcode 3 pic-sure --stack b data load-genomic --recover
+stderr 'stack demo in .*/a: container demo-hpds-1, volume demo_hpds-data'
 exitcode 3 pic-sure --stack b up
 stderr 'stack demo in .*/a: container demo-hpds-1'
 exitcode 3 pic-sure --stack b down

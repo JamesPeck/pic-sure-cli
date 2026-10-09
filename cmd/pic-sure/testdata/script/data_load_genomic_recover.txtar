@@ -1,0 +1,93 @@
+# load-genomic --recover settles what an interrupted promote left in the
+# live genomic volume, without VCFs. The settle script itself runs in the
+# ops tests and the real run (ticket 108's Outcome); here docker is faked.
+env XDG_CACHE_HOME=$WORK/cache
+
+# It takes none of the load's flags, and nothing is touched.
+exitcode 2 pic-sure --stack stack data load-genomic --recover --promote
+stderr '--recover loads nothing, so it can''t be combined with --promote'
+exitcode 2 pic-sure --stack stack data load-genomic --recover --partition p
+stderr 'combined with --partition'
+exitcode 2 pic-sure --stack stack data load-genomic --recover --vcf-index vcfIndex.tsv
+stderr 'combined with --vcf-index'
+exitcode 2 pic-sure --stack stack data load-genomic --recover --enable-profile
+stderr 'combined with --enable-profile'
+! exists docker.log
+
+# Without leftovers it says so, and stops nothing.
+cp none.scenario docker.scenario
+exec pic-sure --stack stack --plain data load-genomic --recover
+stdout 'holds nothing an interrupted promote left; nothing to recover'
+! grep 'stop hpds|genomic-recover|up -d' docker.log
+rm docker.log
+
+# With leftovers, HPDS is stopped, every partition settled, and HPDS
+# started again.
+cp leftovers.scenario docker.scenario
+exec pic-sure --stack stack --json data load-genomic --recover
+jsonlines stdout
+stdout '"data":\{"leftovers":\[".old-a",".promote-b"\],"partitions":\[\{"partition":"a","result":"restored"\},\{"partition":"b","result":"discarded"\}\],"hpds_started":true\}'
+grep -count=1 'compose .* stop hpds$' docker.log
+grep -count=1 'demo-genomic-recover-' docker.log
+grep -count=1 'up -d --wait --wait-timeout 900 hpds$' docker.log
+rm docker.log
+
+# A stack on a shared data set can't change it: exit 3, before compose.
+exitcode 3 pic-sure --stack shared data load-genomic --recover
+stderr 'shared data set demo-set can''t be changed: recover it in the stack that published it with `pic-sure data load-genomic --recover`, publish that under a new name, and set hpds.shared_name to it'
+! grep 'docker compose|genomic-recover' docker.log
+
+-- vcfIndex.tsv --
+filename	chromosome
+-- none.scenario --
+docker ps * => 0
+docker volume ls * => 0
+docker network ls * => 0
+docker image ls * => 0
+docker volume inspect * => 0 stdout=vol.json
+docker run * --name demo-genomic-list-* => 0 stdout=none.txt
+docker * => 1
+-- leftovers.scenario --
+docker ps * => 0
+docker volume ls * => 0
+docker network ls * => 0
+docker image ls * => 0
+docker volume inspect * => 0 stdout=vol.json
+docker run * --name demo-genomic-list-* => 0 stdout=leftovers.txt
+docker run * --name shared-genomic-list-* => 0 stdout=leftovers.txt
+docker compose * ps --all --format json hpds => 0 stdout=ps.json
+docker compose * stop hpds => 0
+docker run * --name demo-genomic-recover-* => 0 stdout=settled.txt
+docker compose * up -d --wait --wait-timeout 900 hpds => 0
+docker * => 1
+-- vol.json --
+[{"Name":"demo_hpds-genomic"}]
+-- none.txt --
+a
+-- leftovers.txt --
+a
+.old-a
+.promote-b
+-- settled.txt --
+restored a
+-- ps.json --
+{"ID":"id-hpds","Service":"hpds","State":"running","Health":"healthy"}
+-- stack/pic-sure.yaml --
+schema: 1
+name: demo
+auth: {mode: open, admin_email: admin@example.com}
+-- stack/.pic-sure/state.json --
+{"cli_version": "dev", "schema_version": 1, "initialized_at": "2026-10-07T12:00:00Z"}
+-- stack/.pic-sure/secrets.yaml --
+db_root_password: rootpw
+auth0_client_secret: generated-0123456789abcdef0123456789abcdef
+auth0_client_secret_generated: true
+-- stack/.pic-sure/render/compose.yaml --
+name: demo
+-- shared/pic-sure.yaml --
+schema: 1
+name: shared
+auth: {mode: open, admin_email: admin@example.com}
+hpds: {data: shared, shared_name: demo-set}
+-- shared/.pic-sure/state.json --
+{"cli_version": "dev", "schema_version": 1, "initialized_at": "2026-10-07T12:00:00Z"}

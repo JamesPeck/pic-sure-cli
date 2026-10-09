@@ -16,10 +16,17 @@ same path.
 into all-bak with --backup), and starts HPDS again. --enable-profile sets
 hpds.profile to bch-dev, the profile that reads the genomic data, re-renders
 the stack and starts HPDS on it.
+
+A promote that was interrupted can leave .promote-* and .old-* directories
+in the live genomic data, which HPDS would load as partitions, so up and
+update refuse to start it. --recover settles them without loading
+anything, and needs no VCFs: each partition is put back whole, either the
+promoted copy or the one from before. HPDS is stopped for it, and started
+again if it was running. Without leftovers it changes nothing.
 ```
 
 ```
-pic-sure data load-genomic --partition P --vcf-index F [--vcf-dir D] [--promote] [--enable-profile] [flags]
+pic-sure data load-genomic (--partition P --vcf-index F [--vcf-dir D] [--promote] [--enable-profile] | --recover) [flags]
 ```
 
 ## Flags
@@ -31,6 +38,7 @@ pic-sure data load-genomic --partition P --vcf-index F [--vcf-dir D] [--promote]
       --heap MB          each loader's JVM heap in MB (default 16000)
       --partition NAME   genomic partition NAME: letters, digits, _ and -
       --promote          promote the loaded partition into the live HPDS data
+      --recover          only recover what an interrupted promote left in the live genomic data
       --vcf-dir DIR      DIR holding the VCFs the index names (default: the index's directory)
       --vcf-index FILE   vcfIndex.tsv FILE
 ```

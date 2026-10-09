@@ -191,7 +191,8 @@ func LoadGenomic(ctx context.Context, d *Deps, st *stack.Stack, cfg *stack.Confi
 	case LoaderStopStepID:
 		switch {
 		case se.Interrupted && g.unrecovered:
-			return nil, fmt.Errorf("%w. HPDS may be stopped; run the load again, which recovers %s, before starting it", failed, g.vol(hpdsGenomicVolume))
+			return nil, fmt.Errorf("%w. HPDS may be stopped; recover %s with `pic-sure data load-genomic --recover` (or run the load again, which recovers it too) "+
+				"before starting it", failed, g.vol(hpdsGenomicVolume))
 		case se.Interrupted:
 			return nil, fmt.Errorf("%w. HPDS may be stopped: run the load again, or `pic-sure up` to start HPDS", failed)
 		}
@@ -200,7 +201,8 @@ func LoadGenomic(ctx context.Context, d *Deps, st *stack.Stack, cfg *stack.Confi
 		return nil, fmt.Errorf("%w. HPDS and its data are unchanged; %s", failed, again)
 	case GenomicPromoteStepID:
 		if g.unrecovered {
-			return nil, fmt.Errorf("%w. HPDS is stopped; run the load again, which recovers %s, before starting it", failed, g.vol(hpdsGenomicVolume))
+			return nil, fmt.Errorf("%w. HPDS is stopped; recover %s with `pic-sure data load-genomic --recover` (or run the load again, which recovers it too) "+
+				"before starting it", failed, g.vol(hpdsGenomicVolume))
 		}
 		return nil, fmt.Errorf("%w. HPDS is stopped: %s, or `pic-sure up` to start HPDS on the partitions it has", failed, again)
 	case LoaderStartStepID:
@@ -285,7 +287,7 @@ func (g *genomicLoad) input(ctx context.Context, sink events.Sink) error {
 		if g.opts.Promote {
 			sink.Emit(events.Progress{ID: GenomicInputStepID, Text: what + "; it is recovered once HPDS stops"})
 		} else {
-			sink.Emit(events.Warning{ID: GenomicInputStepID, Text: what + ", which HPDS loads as partitions; a load with --promote recovers it"})
+			sink.Emit(events.Warning{ID: GenomicInputStepID, Text: what + ", which HPDS loads as partitions; `pic-sure data load-genomic --recover` recovers it, as does a load with --promote"})
 		}
 	}
 	if !g.opts.Promote {
