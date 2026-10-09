@@ -731,21 +731,16 @@ func (c *doctor) genomicLeftoversCheck(ctx context.Context) {
 		c.add("genomic-leftovers", CheckWarn, "the genomic store not checked: %s isn't pulled yet (`docker pull %s`, or run doctor again after `pic-sure up`)", ref, ref)
 		return
 	}
-	type found struct {
-		vol       string
-		leftovers []string
-	}
-	res, err := dockerProbe(ctx, func(ctx context.Context) (found, error) {
-		vol, leftovers, err := GenomicLeftovers(ctx, c.d, c.opts.Stack, c.cfg)
-		return found{vol, leftovers}, err
+	leftovers, err := dockerProbe(ctx, func(ctx context.Context) ([]string, error) {
+		return GenomicLeftovers(ctx, c.d, c.opts.Stack, c.cfg)
 	})
 	switch {
 	case err != nil:
 		c.add("genomic-leftovers", unanswered(err, CheckWarn), "couldn't check the genomic store: %v", err)
-	case len(res.leftovers) > 0:
-		c.add("genomic-leftovers", CheckFail, "%v", genomicLeftoversError(c.cfg, res.vol, res.leftovers))
+	case len(leftovers) > 0:
+		c.add("genomic-leftovers", CheckFail, "%v", genomicLeftoversError(c.cfg, leftovers))
 	default:
-		c.add("genomic-leftovers", CheckOK, "volume %s holds nothing an interrupted promote left", res.vol)
+		c.add("genomic-leftovers", CheckOK, "volume %s holds nothing an interrupted promote left", genomicStoreVolume(c.cfg))
 	}
 }
 

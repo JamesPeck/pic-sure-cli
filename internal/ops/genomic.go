@@ -685,11 +685,11 @@ func (g *genomicLoad) backup(ctx context.Context, sink events.Sink) error {
 }
 
 // dirs lists the directories under dir in volume, hidden ones too.
-func (g *genomicLoad) dirs(ctx context.Context, volume, dir string) ([]string, error) {
+func (l *loader) dirs(ctx context.Context, volume, dir string) ([]string, error) {
 	var out bytes.Buffer
 	script := `cd "$1" 2>/dev/null || exit 0; for e in * .[!.]* ..?*; do if [ -d "$e" ]; then printf '%s\n' "$e"; fi; done`
 	mounts := []docker.Mount{{Source: volume, Target: "/data", ReadOnly: true}}
-	if err := g.script(ctx, "genomic-list", mounts, script, []string{dir}, nil, &out); err != nil {
+	if err := l.script(ctx, "genomic-list", mounts, script, []string{dir}, nil, &out); err != nil {
 		return nil, fmt.Errorf("listing the partitions in volume %s: %w", volume, err)
 	}
 	return strings.FieldsFunc(out.String(), func(r rune) bool { return r == '\n' }), nil

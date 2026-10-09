@@ -32,9 +32,11 @@ func TestUpStepIDsMatchUpSteps(t *testing.T) {
 		if want := ops.UpStepIDs(&cfg); !slices.Equal(ids, want) {
 			t.Errorf("db.mode %s: UpSteps %v, UpStepIDs %v", mode, ids, want)
 		}
-		// up is init's plan with the restart before start.
+		// up is init's plan with the genomic-leftovers check after resolve
+		// and the restart before start.
 		init := ops.InitStepIDs(&cfg)
-		if want := append(slices.Clone(init[:len(init)-1]), ops.RestartStepID, ops.StartStepID); !slices.Equal(ids, want) {
+		want := append([]string{init[0], ops.GenomicLeftoversStepID}, init[1:len(init)-1]...)
+		if want = append(want, ops.RestartStepID, ops.StartStepID); !slices.Equal(ids, want) {
 			t.Errorf("db.mode %s: UpSteps %v, want %v", mode, ids, want)
 		}
 	}
@@ -44,7 +46,7 @@ func TestUpStepIDsMatchUpSteps(t *testing.T) {
 func (x *buildFixture) upImages() error {
 	x.t.Helper()
 	plan := ops.UpSteps(x.d, x.st, x.cfg, &stack.Secrets{}, x.state, ops.ConvergeOptions{Cache: x.cache})
-	return steps.Run(context.Background(), x.d.Sink, plan[:2], steps.Options{})
+	return steps.Run(context.Background(), x.d.Sink, plan[:3], steps.Options{Skip: []string{ops.GenomicLeftoversStepID}})
 }
 
 func TestUpReturnsAnUnsetSourceToTheRecordedRelease(t *testing.T) {

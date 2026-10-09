@@ -8,7 +8,7 @@ stderr 'no pic-sure stack found'
 
 # A --skip-step up doesn't have is exit 2, listing the ones it has.
 exitcode 2 pic-sure --stack stack up --skip-step config
-stderr '--skip-step config: up has no such step; it can skip resolve, images, tls, truststore, render, db, migrate, seed, hpds-key, restart, start$'
+stderr '--skip-step config: up has no such step; it can skip resolve, genomic-leftovers, images, tls, truststore, render, db, migrate, seed, hpds-key, restart, start$'
 ! exists docker.log
 
 # A stack init hasn't finished is exit 3, pointing at init.
@@ -32,7 +32,7 @@ stderr 'the stack has no Auth0 client secret; pipe'
 # up registers the stack in the cache before its steps, so a prune run
 # elsewhere counts it.
 cp registered.scenario docker.scenario
-exec pic-sure --stack registered up --skip-step images --skip-step tls --skip-step truststore --skip-step render --skip-step db --skip-step migrate --skip-step seed --skip-step hpds-key --skip-step restart --skip-step start
+exec pic-sure --stack registered up --skip-step genomic-leftovers --skip-step images --skip-step tls --skip-step truststore --skip-step render --skip-step db --skip-step migrate --skip-step seed --skip-step hpds-key --skip-step restart --skip-step start
 exec grep -r '"name":"registered"' cache/pic-sure/stacks
 # With --skip-step, the run log starts once the IDs are checked.
 exists registered/.pic-sure/logs

@@ -1,10 +1,8 @@
 package ops
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/catalog"
@@ -15,9 +13,9 @@ import (
 	"github.com/JamesPeck/pic-sure-cli/internal/steps"
 )
 
-// leftoverPattern is a sh case pattern matching what an interrupted promote
-// leaves in a genomic store.
-const leftoverPattern = promotePrefix + "*|" + oldPrefix + "*"
+// GenomicLeftoversStepID is the ID of up's first step, which refuses while
+// the genomic store holds what an interrupted promote left.
+const GenomicLeftoversStepID = "genomic-leftovers"
 
 // genomicStoreVolume is the Docker name of the genomic store HPDS loads its
 // partitions from: hpds-genomic, or with hpds.data: shared the set's
@@ -31,32 +29,36 @@ func genomicStoreVolume(cfg *stack.Config) string {
 	return v.DockerName(cfg.Name)
 }
 
-// GenomicLeftovers returns the genomic store's volume (genomicStoreVolume)
-// and the .promote-* and .old-* directories an interrupted promote left in
-// it, which HPDS would load as partitions. A volume that doesn't exist
-// holds none, and isn't created.
-func GenomicLeftovers(ctx context.Context, d *Deps, st *stack.Stack, cfg *stack.Config) (string, []string, error) {
+// GenomicLeftovers returns the .promote-* and .old-* directories an
+// interrupted promote left in the genomic store (genomicStoreVolume), which
+// HPDS would load as partitions. A volume that doesn't exist holds none,
+// and isn't created.
+func GenomicLeftovers(ctx context.Context, d *Deps, st *stack.Stack, cfg *stack.Config) ([]string, error) {
 	vol := genomicStoreVolume(cfg)
 	if _, err := d.Docker.VolumeInspect(ctx, vol); errors.Is(err, docker.ErrNotFound) {
-		return vol, nil, nil
+		return nil, nil
 	} else if err != nil {
-		return vol, nil, err
+		return nil, err
 	}
-	l := &loader{d: d, st: st, cfg: cfg}
-	script := `cd "$1"; for p in * .[!.]* ..?*; do if [ -d "$p" ]; then case "$p" in ` + leftoverPattern + `) printf '%s\n' "$p";; esac; fi; done`
-	var out bytes.Buffer
-	mounts := []docker.Mount{{Source: vol, Target: "/data", ReadOnly: true}}
-	if err := l.script(ctx, "genomic-leftovers", mounts, script, []string{"/data"}, nil, &out); err != nil {
-		return vol, nil, fmt.Errorf("listing volume %s: %w", vol, err)
+	l := &loader{d: d, st: st, cfg: cfg, rmTimeout: dockerProbeTimeout}
+	dirs, err := l.dirs(ctx, vol, "/data")
+	if err != nil {
+		return nil, err
 	}
-	return vol, strings.FieldsFunc(out.String(), func(r rune) bool { return r == '\n' }), nil
+	var leftovers []string
+	for _, dir := range dirs {
+		if strings.HasPrefix(dir, promotePrefix) || strings.HasPrefix(dir, oldPrefix) {
+			leftovers = append(leftovers, dir)
+		}
+	}
+	return leftovers, nil
 }
 
-// genomicLeftoversError is exit 3 for leftovers in vol, with the way to
-// recover them.
-func genomicLeftoversError(cfg *stack.Config, vol string, leftovers []string) error {
-	what := fmt.Sprintf("volume %s holds what an interrupted promote left (%s), which HPDS would load as partitions",
-		vol, strings.Join(leftovers, ", "))
+// genomicLeftoversError is exit 3 for leftovers in the genomic store, with
+// the way to recover them.
+func genomicLeftoversError(cfg *stack.Config, leftovers []string) error {
+	what := "volume " + genomicStoreVolume(cfg) + " holds what an interrupted promote left (" + strings.Join(leftovers, ", ") +
+		"), which HPDS would load as partitions"
 	if cfg.HPDS.Data == stack.HPDSShared {
 		return exitcode.Precondition("%s; shared data set %s can't be changed: recover it in the stack that published it "+
 			"with `pic-sure data load-genomic --promote`, publish that under a new name, and set hpds.shared_name to it", what, cfg.HPDS.SharedName)
@@ -64,20 +66,18 @@ func genomicLeftoversError(cfg *stack.Config, vol string, leftovers []string) er
 	return exitcode.Precondition("%s; recover it with `pic-sure data load-genomic --promote` first", what)
 }
 
-// refuseGenomicLeftovers makes up's start step refuse (exit 3), before it
-// starts anything, while the genomic store holds what an interrupted
-// promote left.
-func refuseGenomicLeftovers(d *Deps, st *stack.Stack, cfg *stack.Config, start steps.Step) steps.Step {
-	apply := start.Apply
-	start.Apply = func(ctx context.Context, sink events.Sink) error {
-		vol, leftovers, err := GenomicLeftovers(ctx, d, st, cfg)
-		if err != nil {
-			return fmt.Errorf("checking for what an interrupted genomic promote left: %w", err)
-		}
-		if len(leftovers) > 0 {
-			return genomicLeftoversError(cfg, vol, leftovers)
-		}
-		return apply(ctx, sink)
+// genomicLeftoversStep refuses (exit 3) while the genomic store holds
+// leftovers: its Check lists them, and its Apply refuses.
+func genomicLeftoversStep(d *Deps, st *stack.Stack, cfg *stack.Config) steps.Step {
+	var leftovers []string
+	return steps.Step{
+		ID:    GenomicLeftoversStepID,
+		Title: "Check the genomic store for an interrupted promote",
+		Check: func(ctx context.Context) (bool, error) {
+			var err error
+			leftovers, err = GenomicLeftovers(ctx, d, st, cfg)
+			return len(leftovers) == 0, err
+		},
+		Apply: func(context.Context, events.Sink) error { return genomicLeftoversError(cfg, leftovers) },
 	}
-	return start
 }

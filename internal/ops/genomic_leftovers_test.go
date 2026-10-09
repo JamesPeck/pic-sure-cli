@@ -2,7 +2,6 @@ package ops_test
 
 import (
 	"context"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -13,8 +12,8 @@ import (
 	"github.com/JamesPeck/pic-sure-cli/internal/events"
 	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
 	"github.com/JamesPeck/pic-sure-cli/internal/ops"
-	"github.com/JamesPeck/pic-sure-cli/internal/render"
 	"github.com/JamesPeck/pic-sure-cli/internal/stack"
+	"github.com/JamesPeck/pic-sure-cli/internal/steps"
 )
 
 // leftoverFixture is a stack whose genomic store, if vol is set, is a
@@ -44,7 +43,7 @@ func newLeftoverFixture(t *testing.T, vol string, files map[string]string, edit 
 		fx.h = newLocalHelperScripts(t, vol)
 		fx.h.seed(vol, files)
 		fx.f.On(fakerunner.Exact("docker", "volume", "inspect", vol)).Stdout(`[{"Name":"` + vol + `"}]`)
-		fx.f.On(fakerunner.Glob("docker run * --name demo-genomic-leftovers-* *")).Do(func(ctx context.Context, c fakerunner.Call) (docker.Result, error) { return fx.h.run(ctx, c) })
+		fx.f.On(fakerunner.Glob("docker run * --name demo-genomic-list-* *")).Do(func(ctx context.Context, c fakerunner.Call) (docker.Result, error) { return fx.h.run(ctx, c) })
 	}
 	fx.f.On(fakerunner.Glob("docker volume inspect *")).Exit(1).Stderr("Error response from daemon: get x: no such volume\n")
 	fx.d = &ops.Deps{Runner: fx.f, Docker: docker.NewEngine(fx.f), Rand: strings.NewReader(strings.Repeat("r", 64)), Sink: events.Discard}
@@ -74,35 +73,33 @@ func TestGenomicLeftovers(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fx := newLeftoverFixture(t, tc.vol, tc.files, tc.edit)
-			vol, got, err := ops.GenomicLeftovers(context.Background(), fx.d, fx.st, fx.cfg)
+			got, err := ops.GenomicLeftovers(context.Background(), fx.d, fx.st, fx.cfg)
 			if err != nil {
 				t.Fatal(err)
 			}
-			wantVol := tc.vol
-			if wantVol == "" {
-				wantVol = "demo_hpds-genomic"
+			if tc.vol == "" {
+				fx.f.AssertCalled(fakerunner.Exact("docker", "volume", "inspect", "demo_hpds-genomic"))
 				fx.f.AssertNotCalled(fakerunner.Glob("docker run *"))
 			}
-			if vol != wantVol || !slices.Equal(got, tc.want) {
-				t.Errorf("GenomicLeftovers = %s %q, want %s %q", vol, got, wantVol, tc.want)
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("GenomicLeftovers = %q, want %q", got, tc.want)
 			}
 		})
 	}
 }
 
-// startStep is UpSteps' last step, with compose answering from fx.f.
-func (fx *leftoverFixture) startStep(t *testing.T) func() error {
+// upStep is the genomic-leftovers step of UpSteps, which comes right
+// after resolve.
+func (fx *leftoverFixture) upStep(t *testing.T) steps.Step {
 	t.Helper()
-	opts := ops.ConvergeOptions{Compose: func() (docker.Composer, error) { return docker.NewCompose(fx.f, fx.st.Dir, nil) }}
-	list := ops.UpSteps(fx.d, fx.st, fx.cfg, &stack.Secrets{}, &stack.State{}, opts)
-	start := list[len(list)-1]
-	if start.ID != ops.StartStepID {
-		t.Fatalf("UpSteps ends with %s", start.ID)
+	list := ops.UpSteps(fx.d, fx.st, fx.cfg, &stack.Secrets{}, &stack.State{}, ops.ConvergeOptions{})
+	if list[1].ID != ops.GenomicLeftoversStepID {
+		t.Fatalf("UpSteps' second step is %s", list[1].ID)
 	}
-	return func() error { return start.Apply(context.Background(), events.Discard) }
+	return list[1]
 }
 
-func TestUpRefusesToStartOverGenomicLeftovers(t *testing.T) {
+func TestUpRefusesGenomicLeftovers(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		vol  string
@@ -117,27 +114,18 @@ func TestUpRefusesToStartOverGenomicLeftovers(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fx := newLeftoverFixture(t, tc.vol, seeded, tc.edit)
-			err := fx.startStep(t)()
+			step := fx.upStep(t)
+			err := steps.Run(context.Background(), events.Discard, []steps.Step{step}, steps.Options{})
 			if exitcode.FromError(err) != exitcode.CodePrecondition || err == nil || !strings.Contains(err.Error(), tc.want) {
-				t.Errorf("start = %v (exit %d), want exit 3 containing %q", err, exitcode.FromError(err), tc.want)
+				t.Errorf("up = %v (exit %d), want exit 3 containing %q", err, exitcode.FromError(err), tc.want)
 			}
-			fx.f.AssertNotCalled(fakerunner.Glob("docker compose *"))
 		})
 	}
 }
 
-func TestUpStartsWithoutGenomicLeftovers(t *testing.T) {
+func TestUpPassesWithoutGenomicLeftovers(t *testing.T) {
 	fx := newLeftoverFixture(t, "demo_hpds-genomic", map[string]string{"synth/chr21/v": ""}, nil)
-	if err := os.MkdirAll(filepath.Dir(fx.st.Path(render.ComposeFile)), 0o755); err != nil {
-		t.Fatal(err)
+	if done, err := fx.upStep(t).Check(context.Background()); !done || err != nil {
+		t.Errorf("Check = %v, %v; want done", done, err)
 	}
-	if err := os.WriteFile(fx.st.Path(render.ComposeFile), []byte("name: demo\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	up := fakerunner.Glob("docker compose * up -d --wait *")
-	fx.f.On(up)
-	if err := fx.startStep(t)(); err != nil {
-		t.Fatal(err)
-	}
-	fx.f.AssertCalled(up)
 }

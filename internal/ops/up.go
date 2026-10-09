@@ -32,7 +32,7 @@ func UpStepIDs(cfg *stack.Config) []string {
 
 // upStepIDs are the IDs of upSteps.
 func upStepIDs(cfg *stack.Config) []string {
-	ids := []string{ImagesStepID}
+	ids := []string{GenomicLeftoversStepID, ImagesStepID}
 	if hmrOn(cfg) {
 		ids = append(ids, NodeImageStepID)
 	}
@@ -54,6 +54,11 @@ func upStepIDs(cfg *stack.Config) []string {
 // running stack whose images, files and data are current, `compose up`
 // changes nothing, so up only verifies.
 //
+// After resolve, the genomic-leftovers step refuses (exit 3) while the
+// genomic store holds what an interrupted promote left, which HPDS would
+// load as partitions. Leaving out only hpds isn't clean, since the query
+// service depends on it, so nothing after it runs.
+//
 // A component whose source was unset goes back to the release (§7.3): it
 // is resolved at the release commit state.json records, without moving
 // that or any other component, so its release images are built or pulled
@@ -65,9 +70,6 @@ func upStepIDs(cfg *stack.Config) []string {
 // render changes a file under render/files, the services that read it are
 // recorded in state.json's PendingRestarts, and the restart step restarts
 // those that are running before start waits for the stack to be healthy.
-//
-// Start refuses (exit 3), before starting anything, while the genomic
-// store holds what an interrupted promote left (GenomicLeftovers).
 func UpSteps(d *Deps, st *stack.Stack, cfg *stack.Config, sec *stack.Secrets, state *stack.State, opts ConvergeOptions) []steps.Step {
 	resolve := resolveStep(d, st, cfg, state, opts.Cache, unsetSources)
 	apply := resolve.Apply
@@ -88,7 +90,7 @@ func upSteps(d *Deps, st *stack.Stack, cfg *stack.Config, sec *stack.Secrets, st
 	r := &upRestarts{d: d, st: st, cfg: cfg, opts: opts}
 	converge := ConvergeSteps(d, st, cfg, sec, opts)
 	last := len(converge) - 1
-	list := []steps.Step{images}
+	list := []steps.Step{genomicLeftoversStep(d, st, cfg), images}
 	if hmrOn(cfg) {
 		list = append(list, NodeImageStep(st, cfg, state))
 	}
@@ -102,7 +104,7 @@ func upSteps(d *Deps, st *stack.Stack, cfg *stack.Config, sec *stack.Secrets, st
 	if user := HostUser(); hmrOn(cfg) && user != "" {
 		list = append(list, HMRVolumeStep(d, st, cfg, user))
 	}
-	return append(list, refuseGenomicLeftovers(d, st, cfg, converge[last]))
+	return append(list, converge[last])
 }
 
 // upRestarts records and runs the restarts up's steps call for.

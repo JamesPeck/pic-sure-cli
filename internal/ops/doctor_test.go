@@ -865,7 +865,7 @@ func TestDoctorGenomicLeftovers(t *testing.T) {
 			h := newLocalHelperScripts(t, tc.vol)
 			h.seed(tc.vol, seeded)
 			e.f.On(fakerunner.Exact("docker", "volume", "inspect", tc.vol)).Stdout(`[{"Name":"` + tc.vol + `"}]`)
-			e.f.On(fakerunner.Glob("docker run * --name demo-genomic-leftovers-* *")).Do(func(ctx context.Context, c fakerunner.Call) (docker.Result, error) { return h.run(ctx, c) })
+			e.f.On(fakerunner.Glob("docker run * --name demo-genomic-list-* *")).Do(func(ctx context.Context, c fakerunner.Call) (docker.Result, error) { return h.run(ctx, c) })
 			r := e.run()
 			wantCheck(t, r, "genomic-leftovers", ops.CheckFail, tc.want)
 			if !r.Failed() {
@@ -878,6 +878,23 @@ func TestDoctorGenomicLeftovers(t *testing.T) {
 		e.stack(t, nil)
 		e.f.On(fakerunner.Glob("docker image inspect alpine:*")).Exit(1).Stderr("Error response from daemon: No such image: alpine:3.23\n")
 		wantCheck(t, e.run(), "genomic-leftovers", ops.CheckWarn, "isn't pulled yet")
-		e.f.AssertNotCalled(fakerunner.Glob("docker run * --name demo-genomic-leftovers-* *"))
+		e.f.AssertNotCalled(fakerunner.Glob("docker run * --name demo-genomic-list-* *"))
 	})
+}
+
+// A daemon that stops answering during the listing fails the check within
+// the timeout, even though removing the helper container hangs too.
+func TestDoctorGenomicLeftoversHungDaemon(t *testing.T) {
+	shortProbeTimeout(t)
+	e := newDoctorEnv(t)
+	e.stack(t, nil)
+	e.f.On(fakerunner.Exact("docker", "volume", "inspect", "demo_hpds-genomic")).Stdout(`[{"Name":"demo_hpds-genomic"}]`)
+	e.f.On(fakerunner.Glob("docker run * --name demo-genomic-list-* *")).Do(hang)
+	e.f.On(fakerunner.Glob("docker rm * demo-genomic-list-*")).Do(hang)
+	start := time.Now()
+	r := e.run()
+	if d := time.Since(start); d > 2*time.Second {
+		t.Errorf("doctor took %s", d)
+	}
+	wantCheck(t, r, "genomic-leftovers", ops.CheckFail, "didn't answer within 20ms")
 }

@@ -218,6 +218,9 @@ type loader struct {
 	image      string
 	// tempVolume is loadDir's volume, once created.
 	tempVolume string
+	// rmTimeout, if set, bounds removing a helper container docker failed
+	// to run, which otherwise waits for the daemon however long it takes.
+	rmTimeout time.Duration
 }
 
 func (l *loader) volume() string {
@@ -540,7 +543,13 @@ func (l *loader) container(ctx context.Context, prefix string, mounts []docker.M
 	}
 	code, err := l.d.Docker.Run(ctx, opts)
 	if err != nil {
-		_ = l.d.Docker.Rm(context.WithoutCancel(ctx), name, true)
+		rmCtx := context.WithoutCancel(ctx)
+		if l.rmTimeout > 0 {
+			var cancel context.CancelFunc
+			rmCtx, cancel = context.WithTimeout(rmCtx, l.rmTimeout)
+			defer cancel()
+		}
+		_ = l.d.Docker.Rm(rmCtx, name, true)
 	}
 	return code, err
 }
