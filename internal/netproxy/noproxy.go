@@ -89,7 +89,7 @@ func parseEntry(s string) (entry, error) {
 	} else if d, ok := strings.CutPrefix(host, "."); ok {
 		e.domain, e.subOnly = d, true
 	}
-	if !hostname.ValidName(e.domain) {
+	if !hostname.ValidMatchName(e.domain) {
 		return entry{}, fmt.Errorf("has an entry that isn't a host, domain, IP address or CIDR range: %q", s)
 	}
 	e.text = e.domain

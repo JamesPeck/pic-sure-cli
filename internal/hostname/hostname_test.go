@@ -52,3 +52,32 @@ func TestCheck(t *testing.T) {
 		t.Error("ValidName accepted an IP address")
 	}
 }
+
+func TestValidMatchName(t *testing.T) {
+	for _, tt := range []struct {
+		s  string
+		ok bool
+	}{
+		{"internal_host", true},
+		{"corp_example.org", true},
+		{"_srv.example.org", true},
+		{"a_", true},
+		{"picsure.example.org", true},
+
+		{"", false},
+		{"a_b-.example", false},
+		{"-a_b.example", false},
+		{"a..b", false},
+		{"bad host", false},
+		{"10.1.2.300", false},
+		{"a_b.123", false},
+		{strings.Repeat("a_", 32) + ".example", false}, // 64-byte label
+	} {
+		if got := ValidMatchName(tt.s); got != tt.ok {
+			t.Errorf("ValidMatchName(%q) = %t, want %t", tt.s, got, tt.ok)
+		}
+		if tt.ok && strings.Contains(tt.s, "_") && ValidName(tt.s) {
+			t.Errorf("ValidName(%q) = true, want false", tt.s)
+		}
+	}
+}

@@ -32,6 +32,17 @@ func Check(s string) error {
 // last label is a number (10.1.2.300, x.0x1f) is refused, because it is most
 // likely a mistyped IP address and browsers parse it as an IPv4 address.
 func ValidName(s string) bool {
+	return validName(s, false)
+}
+
+// ValidMatchName is ValidName that also allows underscores in labels. It is
+// for names that are only matched against a destination's host, such as
+// no_proxy entries, and never connected to or parsed as a URL's host.
+func ValidMatchName(s string) bool {
+	return validName(s, true)
+}
+
+func validName(s string, underscore bool) bool {
 	if s == "" || len(s) > 253 {
 		return false
 	}
@@ -41,7 +52,7 @@ func ValidName(s string) bool {
 			return false
 		}
 		for _, c := range label {
-			if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
+			if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' && (!underscore || c != '_') {
 				return false
 			}
 		}

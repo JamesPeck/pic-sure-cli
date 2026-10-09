@@ -57,6 +57,7 @@ func TestParseURL(t *testing.T) {
 		{in: "http://user:hunter2@proxy.example.org;3128", wantErr: `has an invalid host: "http://user:xxxxx@proxy.example.org;3128"`},
 		{in: "http://proxy.example.org,3128", wantErr: "has an invalid host"},
 		{in: `http://pr"oxy:3128`, wantErr: "has an invalid host"},
+		{in: "http://proxy_01:3128", wantErr: "has an invalid host"},
 		{in: "http://a$(id)b:3128", wantErr: "has an invalid host"},
 		{in: "http://10.1.2.300:3128", wantErr: "has an invalid host"},
 		{in: "http://10.1.2.99999999999999999999:3128", wantErr: "has an invalid host"},
@@ -102,9 +103,10 @@ func TestParseNoProxy(t *testing.T) {
 		{in: "10.0.0.1,::1,[2001:db8::5],2001:DB8::6", want: []string{"10.0.0.1", "::1", "2001:db8::5", "2001:db8::6"}},
 		{in: "registry.example.org:5000,10.0.0.1:8080,[::1]:8443", want: []string{"registry.example.org:5000", "10.0.0.1:8080", "[::1]:8443"}},
 		{in: "my-host,a-b.c", want: []string{"my-host", "a-b.c"}},
+		{in: "My_Host,.corp_example.org,*._srv.example:8080", want: []string{"my_host", ".corp_example.org", "._srv.example:8080"}},
 
 		{in: "ok, bad host", wantErr: `isn't a host, domain, IP address or CIDR range: "bad host"`},
-		{in: "my_host", wantErr: `isn't a host, domain, IP address or CIDR range: "my_host"`},
+		{in: "a_b-.example", wantErr: `"a_b-.example"`},
 		{in: "a|b", wantErr: `"a|b"`},
 		{in: "-a.example", wantErr: `"-a.example"`},
 		{in: "a..example", wantErr: `"a..example"`},
@@ -431,7 +433,7 @@ func TestProxyURL(t *testing.T) {
 	p := mustNew(t, netproxy.Config{
 		HTTP:    "http://user:pw@hproxy:3128",
 		HTTPS:   "http://sproxy:3129",
-		NoProxy: "example.com,.sub.example,registry.example:5000,10.0.0.0/8,192.168.1.1,[2001:db8::5]:8443",
+		NoProxy: "example.com,.sub.example,registry.example:5000,10.0.0.0/8,192.168.1.1,[2001:db8::5]:8443,internal_host",
 	}, "psama")
 	tests := []struct {
 		url  string
@@ -459,6 +461,7 @@ func TestProxyURL(t *testing.T) {
 		{"http://192.168.1.2/", "http://user:pw@hproxy:3128"},
 		{"https://[2001:db8::5]:8443/", ""},
 		{"https://[2001:db8::5]/", "http://sproxy:3129"},
+		{"https://internal_host/", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.url, func(t *testing.T) {

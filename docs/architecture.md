@@ -2447,9 +2447,10 @@ just `proxy.http` set, https traffic goes direct.
 
 `ParseURL` and `ParseNoProxy` are the parsers `New` uses. `stack.Validate`
 calls them too, so a config that validates always resolves. A proxy host
-and a no-proxy name follow `internal/hostname`'s rule (a trailing dot is
-allowed on a proxy host). The package imports only the catalog and
-`hostname`.
+follows `internal/hostname`'s rule, `ValidName` (a trailing dot is
+allowed). A no-proxy name follows `ValidMatchName`, which also allows `_`:
+the name is only matched against a destination, never connected to. The
+package imports only the catalog and `hostname`.
 
 ## internal/hostname
 
@@ -2461,6 +2462,9 @@ dot-separated labels of 1 to 63 letters (any case), digits and `-`, no `-`
 at either end of a label, 253 bytes at most. No `_`, which Java's `URI`
 can't parse as a host. The last label can't be a decimal or `0x` hex number
 (`10.1.2.300` is a mistyped IP, and browsers read it as IPv4).
+`ValidMatchName(s)` is the same rule with `_` allowed in labels, for names
+that are only matched against a destination's host (`netproxy`'s no-proxy
+entries).
 
 ## internal/selfupdate
 
