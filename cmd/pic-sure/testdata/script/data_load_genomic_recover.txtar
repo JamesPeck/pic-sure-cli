@@ -14,11 +14,14 @@ exitcode 2 pic-sure --stack stack data load-genomic --recover --enable-profile
 stderr 'combined with --enable-profile'
 ! exists docker.log
 
-# Without leftovers it says so, and stops nothing.
+# Without leftovers it says so, and changes nothing, state.json included.
 cp none.scenario docker.scenario
 exec pic-sure --stack stack --plain data load-genomic --recover
+cp stack/.pic-sure/state.json state.before
+exec pic-sure --stack stack --plain data load-genomic --recover
 stdout 'holds nothing an interrupted promote left; nothing to recover'
-! grep 'stop hpds|genomic-recover|up -d' docker.log
+! grep 'docker compose|genomic-recover' docker.log
+cmp stack/.pic-sure/state.json state.before
 rm docker.log
 
 # With leftovers, HPDS is stopped, every partition settled, and HPDS

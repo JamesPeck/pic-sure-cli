@@ -13,7 +13,12 @@ import (
 )
 
 func (fx *genomicFixture) recover() (ops.GenomicRecovery, error) {
-	return ops.RecoverGenomic(context.Background(), fx.d, fx.st, fx.cfg)
+	ctx := context.Background()
+	leftovers, err := ops.GenomicLeftovers(ctx, fx.d, fx.st, fx.cfg)
+	if err != nil {
+		return ops.GenomicRecovery{}, err
+	}
+	return ops.RecoverGenomic(ctx, fx.d, fx.st, fx.cfg, leftovers)
 }
 
 func TestRecoverGenomicSettlesEveryLeftover(t *testing.T) {
@@ -36,7 +41,7 @@ func TestRecoverGenomicSettlesEveryLeftover(t *testing.T) {
 		assertTree(t, fx.h, liveVol, map[string]string{"keep/v": "keep", "a/v": "old a", "b/v": "old b", "c/v": "new c", "d/v": "new d"})
 		want := []ops.RecoveredPartition{{Partition: "b", Result: "restored"}, {Partition: "c", Result: "completed"},
 			{Partition: "d", Result: "completed"}, {Partition: "a", Result: "discarded"}}
-		if !slices.Equal(r.Partitions, want) || !r.HPDSStarted || len(r.Leftovers) != 5 {
+		if !slices.Equal(r.Partitions, want) || !r.WasRunning || len(r.Leftovers) != 5 {
 			t.Errorf("RecoverGenomic = %+v", r)
 		}
 		fx.f.AssertOrder(
@@ -51,7 +56,7 @@ func TestRecoverGenomicWithoutLeftoversChangesNothing(t *testing.T) {
 	fx := newGenomicFixture(t)
 	fx.live = "keep\n"
 	r, err := fx.recover()
-	if err != nil || len(r.Leftovers) != 0 || len(r.Partitions) != 0 || r.HPDSStarted {
+	if err != nil || len(r.Leftovers) != 0 || len(r.Partitions) != 0 || r.WasRunning {
 		t.Fatalf("RecoverGenomic = %+v, %v", r, err)
 	}
 	fx.f.AssertNotCalled(fakerunner.Glob("docker compose *"))
@@ -65,7 +70,7 @@ func TestRecoverGenomicLeavesAStoppedHPDSStopped(t *testing.T) {
 	fx.live = ".old-a\n"
 	fx.stopped = true
 	r, err := fx.recover()
-	if err != nil || r.HPDSStarted {
+	if err != nil || r.WasRunning {
 		t.Fatalf("RecoverGenomic = %+v, %v", r, err)
 	}
 	fx.f.AssertCalled(fakerunner.Glob("docker compose * stop hpds"))
@@ -88,6 +93,36 @@ func TestRecoverGenomicFailing(t *testing.T) {
 	fx.f.AssertNotCalled(fakerunner.Glob("docker compose * up *"))
 }
 
+func TestRecoverGenomicFailingToStartHPDS(t *testing.T) {
+	fx := newGenomicFixture(t)
+	fx.live = ".old-a\n"
+	fx.health = "unhealthy"
+	_, err := fx.recover()
+	if err == nil || !strings.Contains(err.Error(), "step hpds-start failed") ||
+		!strings.Contains(err.Error(), "Volume demo_hpds-genomic is recovered; see `pic-sure logs hpds`, then start HPDS with `pic-sure up`") {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestRecoverGenomicInterruptedWhileStoppingHPDS(t *testing.T) {
+	fx := newGenomicFixture(t)
+	fx.live = ".old-a\n"
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fx.onStop = func() error {
+		cancel()
+		return ctx.Err()
+	}
+	_, err := ops.RecoverGenomic(ctx, fx.d, fx.st, fx.cfg, []string{".old-a"})
+	if exitcode.FromError(err) != exitcode.CodeInterrupted || !strings.HasPrefix(err.Error(), "stopped at step hpds-stop") ||
+		!strings.Contains(err.Error(), "HPDS may be stopped; run `pic-sure data load-genomic --recover` again before starting it") {
+		t.Errorf("err = %v (exit %d)", err, exitcode.FromError(err))
+	}
+	if fx.recovers != 0 {
+		t.Errorf("%d recover helpers", fx.recovers)
+	}
+}
+
 func TestRecoverGenomicRefusesASharedDataSet(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -103,7 +138,7 @@ func TestRecoverGenomicRefusesASharedDataSet(t *testing.T) {
 			fx := newLeftoverFixture(t, "nhanes_hpds-genomic", tc.files, func(c *stack.Config) {
 				c.HPDS.Data, c.HPDS.SharedName = stack.HPDSShared, "nhanes"
 			})
-			_, err := ops.RecoverGenomic(context.Background(), fx.d, fx.st, fx.cfg)
+			_, err := ops.RecoverGenomic(context.Background(), fx.d, fx.st, fx.cfg, nil)
 			if exitcode.FromError(err) != exitcode.CodePrecondition || !strings.Contains(err.Error(), tc.want) {
 				t.Errorf("err = %v (exit %d), want exit 3 containing %q", err, exitcode.FromError(err), tc.want)
 			}

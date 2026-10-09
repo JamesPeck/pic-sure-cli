@@ -491,8 +491,10 @@ it.
   [...], "profile"}`. `--recover` (108) takes none of the load's flags
   (exit 2), so `--partition` and `--vcf-index` are required by hand
   rather than by cobra. Under the stack lock it checks ownership, refuses
-  a shared-mode stack, and runs `ops.RecoverGenomic`, recording `data
-  load-genomic --recover`. `--json`'s data is `{"leftovers": [...],
+  a shared-mode stack before the compose project is needed, and lists the
+  leftovers. Without any it stops there, leaving state.json alone;
+  otherwise it records `data load-genomic --recover` and runs
+  `ops.RecoverGenomic`. `--json`'s data is `{"leftovers": [...],
   "partitions": [{"partition", "result"}], "hpds_started"}`.
 
 - `shareddata.go` (050): `shared-data publish NAME` checks the name
@@ -1630,8 +1632,8 @@ skippable:
   HPDS's limit, counting an interrupted promote's `.old-<p>` as `<p>`; with
   only `EnableProfile`, it warns if `hpds-genomic` holds no partition, or
   holds an interrupted promote's leftovers, which `--recover` or a
-  `Promote` load recovers. If it fails, nothing has changed but perhaps the creation of
-  an empty `hpds-genomic`.
+  `Promote` load recovers. If it fails, nothing has changed but perhaps
+  the creation of an empty `hpds-genomic`.
 - `genomic-stage`: in the per-stack `genomic-staging` volume, clears `all/`
   and `merged/` and writes `vcfIndex.tsv` from stdin.
 - `genomic-split`, `genomic-metadata`, `genomic-finalize`:
@@ -1699,12 +1701,12 @@ are in the staging volume, which HPDS never reads, and the next `--backup`
 settles them.
 
 **Recover only (108, `genomic_leftovers.go`).** `RecoverGenomic(ctx, d,
-st, cfg)` is `data load-genomic --recover`: no VCFs, no loader image. A
-shared-mode stack is `RefuseSharedGenomicRecover`'s exit 3 (the set's
-leftovers in `genomicLeftoversError`, or that it holds none), checked
-before the compose project is needed. With no leftovers it returns
-without touching anything. Otherwise it runs `hpds-stop` (noting from
-`compose ps` whether hpds was running or restarting), `genomic-recover`
+st, cfg, leftovers)` is `data load-genomic --recover`, settling what
+`GenomicLeftovers` found: no VCFs, no loader image. A shared-mode stack
+is `RefuseSharedGenomicRecover`'s exit 3 (the set's leftovers in
+`genomicLeftoversError`, or that it holds none). With no leftovers it
+returns without touching anything. Otherwise it runs `hpds-stop` (noting
+from `compose ps` whether hpds was running or restarting, `WasRunning`), `genomic-recover`
 (094's `settleLive`, the same helper a `Promote` load runs), and
 `hpds-start` only if hpds was running; a stopped one is left for `pic-sure
 up`. `GenomicRecovery.Partitions` maps settle's `completed`/`restored`

@@ -431,7 +431,7 @@ delete the binary (`~/.local/bin/pic-sure`) and the cache directory.
   you don't own, such as some planted in `/tmp`. It won't run another
   user's compose files without being told to. If you trust the stack, name
   it with `--stack DIR`.
-- `up` or `doctor` says the genomic volume "holds what an interrupted
+- `up`, `update` or `doctor` says the genomic volume "holds what an interrupted
   promote left" (exit 3): a `data load-genomic --promote` was killed part
   way. Run `pic-sure data load-genomic --recover`, which needs no VCFs and
   puts each partition back whole, either the promoted copy or the one from

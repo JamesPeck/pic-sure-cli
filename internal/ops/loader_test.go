@@ -79,7 +79,8 @@ type loaderFixture struct {
 	loaderExit   int
 	onLoader     func() error // runs in the loader's docker run, if set
 	health       string
-	stopped      bool // compose ps shows hpds exited
+	stopped      bool         // compose ps shows hpds exited
+	onStop       func() error // runs in compose stop hpds, if set
 	marker       []byte
 }
 
@@ -127,7 +128,12 @@ func newLoaderFixture(t *testing.T) *loaderFixture {
 		return docker.Result{Stdout: []byte(out.String())}, nil
 	})
 	f.On(fakerunner.Glob("docker rm -v -f demo-hpds-input-*"))
-	f.On(fakerunner.Glob("docker compose * stop hpds"))
+	f.On(fakerunner.Glob("docker compose * stop hpds")).Do(func(context.Context, fakerunner.Call) (docker.Result, error) {
+		if fx.onStop != nil {
+			return docker.Result{}, fx.onStop()
+		}
+		return docker.Result{}, nil
+	})
 	f.On(fakerunner.Glob("docker run --rm --name demo-hpds-wipe-* --network none * -v demo_hpds-data:/data alpine:* sh -c *"))
 	f.On(fakerunner.Glob("docker run --rm --name demo-hpds-etl-* --user 0:0 --network none *")).Do(func(context.Context, fakerunner.Call) (docker.Result, error) {
 		if fx.onLoader != nil {

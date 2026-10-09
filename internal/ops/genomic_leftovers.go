@@ -96,8 +96,9 @@ type GenomicRecovery struct {
 	Leftovers []string
 	// Partitions says what became of each partition they were left for.
 	Partitions []RecoveredPartition
-	// HPDSStarted reports that HPDS was running, so it was started again.
-	HPDSStarted bool
+	// WasRunning reports that HPDS was running (or restarting) before the
+	// recovery, so it is started again.
+	WasRunning bool
 }
 
 // RecoveredPartition is one partition RecoverGenomic settled. Result is
@@ -126,23 +127,22 @@ func RefuseSharedGenomicRecover(ctx context.Context, d *Deps, st *stack.Stack, c
 		"volume %s holds nothing an interrupted promote left", cfg.HPDS.SharedName, genomicStoreVolume(cfg))
 }
 
-// RecoverGenomic is `data load-genomic --recover`: it settles what an
-// interrupted promote left in hpds-genomic, as a Promote load does before
-// its own promote, without loading anything. The caller holds the stack
-// lock and sets d.Compose. With no leftovers it changes nothing. Otherwise
-// it stops hpds like a Promote load, settles every partition (settleLive),
-// and starts hpds again if it was running; a stopped one is left for
-// `pic-sure up`. A shared data set is RefuseSharedGenomicRecover's exit 3.
-func RecoverGenomic(ctx context.Context, d *Deps, st *stack.Stack, cfg *stack.Config) (GenomicRecovery, error) {
-	var r GenomicRecovery
-	if err := RefuseSharedGenomicRecover(ctx, d, st, cfg); err != nil {
-		return r, err
+// RecoverGenomic is `data load-genomic --recover`: it settles leftovers,
+// what GenomicLeftovers found an interrupted promote left in hpds-genomic,
+// as a Promote load does before its own promote, without loading anything.
+// The caller holds the stack lock and sets d.Compose. With no leftovers it
+// changes nothing. Otherwise it stops hpds like a Promote load, settles
+// every partition (settleLive), and starts hpds again if it was running; a
+// stopped one is left for `pic-sure up`. A shared data set is
+// RefuseSharedGenomicRecover's exit 3.
+func RecoverGenomic(ctx context.Context, d *Deps, st *stack.Stack, cfg *stack.Config, leftovers []string) (GenomicRecovery, error) {
+	r := GenomicRecovery{Leftovers: leftovers}
+	if cfg.HPDS.Data == stack.HPDSShared {
+		return r, RefuseSharedGenomicRecover(ctx, d, st, cfg)
 	}
-	leftovers, err := GenomicLeftovers(ctx, d, st, cfg)
-	if err != nil || len(leftovers) == 0 {
-		return r, err
+	if len(leftovers) == 0 {
+		return r, nil
 	}
-	r.Leftovers = leftovers
 	g := &genomicLoad{loader: &loader{d: d, st: st, cfg: cfg}, leftovers: leftovers}
 	live := g.vol(hpdsGenomicVolume)
 	plan := []steps.Step{
@@ -151,7 +151,7 @@ func RecoverGenomic(ctx context.Context, d *Deps, st *stack.Stack, cfg *stack.Co
 			if err != nil {
 				return err
 			}
-			r.HPDSStarted = svc != nil && (svc.State == "running" || svc.State == "restarting")
+			r.WasRunning = svc != nil && (svc.State == "running" || svc.State == "restarting")
 			return g.stop(ctx, sink)
 		}},
 		{ID: GenomicRecoverStepID, Title: "Recover " + live, Apply: func(ctx context.Context, sink events.Sink) error {
@@ -168,9 +168,9 @@ func RecoverGenomic(ctx context.Context, d *Deps, st *stack.Stack, cfg *stack.Co
 			return nil
 		}},
 		{ID: LoaderStartStepID, Title: "Start HPDS", Apply: g.start,
-			Check: func(context.Context) (bool, error) { return !r.HPDSStarted, nil }},
+			Check: func(context.Context) (bool, error) { return !r.WasRunning, nil }},
 	}
-	err = steps.Run(ctx, d.Sink, plan, steps.Options{})
+	err := steps.Run(ctx, d.Sink, plan, steps.Options{})
 	var se *steps.Error
 	if !errors.As(err, &se) {
 		return r, err

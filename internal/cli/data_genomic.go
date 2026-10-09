@@ -193,8 +193,8 @@ func (a *App) recoverGenomic(cmd *cobra.Command) error {
 	if err := checkOwned(cmd, d, st, cfg); err != nil {
 		return err
 	}
-	// Before the compose project is needed, which a stack on a shared
-	// data set may not have rendered.
+	// Before stackComposeConfig, so that a shared stack gets this refusal
+	// rather than an unrendered stack's.
 	if err := ops.RefuseSharedGenomicRecover(ctx, d, st, cfg); err != nil {
 		return err
 	}
@@ -205,21 +205,30 @@ func (a *App) recoverGenomic(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	if d.Compose, cfg, _, err = a.stackComposeConfig(cmd, d.Runner, st); err != nil {
-		return err
-	}
-	state.StartOperation("data load-genomic --recover", d.Clock.Now())
-	if err := st.SaveState(state); err != nil {
-		return err
-	}
-	r, err := ops.RecoverGenomic(ctx, d, st, cfg)
-	if ferr := finishUp(d, st, err); err == nil {
-		err = ferr
-	}
+	leftovers, err := ops.GenomicLeftovers(ctx, d, st, cfg)
 	if err != nil {
 		return err
 	}
-	report := genomicRecoverReport{Leftovers: r.Leftovers, Partitions: []recoveredPartition{}, HPDSStarted: r.HPDSStarted}
+	var r ops.GenomicRecovery
+	// Without leftovers nothing changes, state.json's last operation
+	// included.
+	if len(leftovers) > 0 {
+		if d.Compose, cfg, _, err = a.stackComposeConfig(cmd, d.Runner, st); err != nil {
+			return err
+		}
+		state.StartOperation("data load-genomic --recover", d.Clock.Now())
+		if err := st.SaveState(state); err != nil {
+			return err
+		}
+		r, err = ops.RecoverGenomic(ctx, d, st, cfg, leftovers)
+		if ferr := finishUp(d, st, err); err == nil {
+			err = ferr
+		}
+		if err != nil {
+			return err
+		}
+	}
+	report := genomicRecoverReport{Leftovers: r.Leftovers, Partitions: []recoveredPartition{}, HPDSStarted: r.WasRunning}
 	if report.Leftovers == nil {
 		report.Leftovers = []string{}
 	}
@@ -235,7 +244,7 @@ func (a *App) recoverGenomic(cmd *cobra.Command) error {
 		for _, p := range r.Partitions {
 			msg += fmt.Sprintf("  %s %s\n", p.Result, p.Partition)
 		}
-		if r.HPDSStarted {
+		if r.WasRunning {
 			msg += "HPDS is healthy again.\n"
 		} else {
 			msg += "HPDS wasn't running; start the stack with `pic-sure up`.\n"
