@@ -310,9 +310,6 @@ func absolute(stackDir, p string) string {
 	return filepath.Join(stackDir, p)
 }
 
-// bindSource checks that p can be a bind mount's source: absolute, and
-// without a colon, which the short volume syntax would split on (§6.4), or a
-// line break. It returns p cleaned.
 // CheckBindSource is bindSource's check of a path such as the stack
 // directory, for init to make before it writes anything.
 func CheckBindSource(what, p string) error {
@@ -320,6 +317,9 @@ func CheckBindSource(what, p string) error {
 	return err
 }
 
+// bindSource checks that p can be a bind mount's source: absolute, and
+// without a colon, which the short volume syntax would split on (§6.4), or a
+// line break. It returns p cleaned.
 func bindSource(what, p string) (string, error) {
 	switch {
 	case !filepath.IsAbs(p):

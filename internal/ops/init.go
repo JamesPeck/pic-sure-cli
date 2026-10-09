@@ -60,7 +60,7 @@ func InitStepIDs(cfg *stack.Config) []string {
 func InitSteps(d *Deps, st *stack.Stack, cfg *stack.Config, sec *stack.Secrets, state *stack.State, opts ConvergeOptions) []steps.Step {
 	images := ImagesStep(d, st, cfg, state, ImagesOptions{Cache: opts.Cache})
 	return append([]steps.Step{ResolveStep(d, st, cfg, state, opts.Cache)},
-		planSteps(d, st, cfg, sec, state, opts, images, nil)...)
+		planSteps(d, st, cfg, sec, state, opts, images, false)...)
 }
 
 // planStepIDs are the IDs of planSteps, with the restart step when restart
@@ -87,12 +87,14 @@ func planStepIDs(cfg *stack.Config, restart bool) []string {
 // planSteps are the steps init, up and update share after resolving the
 // components, with images as the image step: the images (and httpd-hmr's
 // Node tag), TLS and the truststore, a fresh render, then ConvergeSteps,
-// with httpd-hmr's volume step before start. With r set (up and update),
+// with httpd-hmr's volume step before start. With restart (up and update),
 // the TLS, truststore and render steps record the restarts they call for
-// and r's restart step runs them before start.
-func planSteps(d *Deps, st *stack.Stack, cfg *stack.Config, sec *stack.Secrets, state *stack.State, opts ConvergeOptions, images steps.Step, r *upRestarts) []steps.Step {
+// and a restart step runs them before start.
+func planSteps(d *Deps, st *stack.Stack, cfg *stack.Config, sec *stack.Secrets, state *stack.State, opts ConvergeOptions, images steps.Step, restart bool) []steps.Step {
 	tls, trust, rend := TLSStep(d, st, cfg), StackTruststoreStep(d, st, cfg, state), RenderStep(d, st, cfg, state, opts)
-	if r != nil {
+	var r *upRestarts
+	if restart {
+		r = &upRestarts{d: d, st: st, cfg: cfg, opts: opts}
 		tls, trust, rend = r.restartAfter(tls, httpd), r.restartAfter(trust, psama), r.watchRender(rend)
 	}
 	list := []steps.Step{images}
@@ -103,7 +105,7 @@ func planSteps(d *Deps, st *stack.Stack, cfg *stack.Config, sec *stack.Secrets, 
 	converge := ConvergeSteps(d, st, cfg, sec, opts)
 	last := len(converge) - 1
 	list = append(list, converge[:last]...)
-	if r != nil {
+	if restart {
 		list = append(list, withCompose(d, opts, r.step()))
 	}
 	if user := HostUser(); hmrOn(cfg) && user != "" {
@@ -460,17 +462,20 @@ next:
 }
 
 // CanonicalDir is dir as stack.Stack.Dir has it, absolute with symlinks
-// resolved, also when dir doesn't exist yet.
+// resolved, also when dir or some of its parents don't exist yet: the
+// nearest one that exists is resolved.
 func CanonicalDir(dir string) string {
 	dir, _ = filepath.Abs(dir)
-	if r, err := filepath.EvalSymlinks(dir); err == nil {
-		return r
+	rest := ""
+	for p := dir; ; p = filepath.Dir(p) {
+		if r, err := filepath.EvalSymlinks(p); err == nil {
+			return filepath.Join(r, rest)
+		}
+		if filepath.Dir(p) == p {
+			return dir
+		}
+		rest = filepath.Join(filepath.Base(p), rest)
 	}
-	parent, base := filepath.Split(dir)
-	if r, err := filepath.EvalSymlinks(parent); err == nil {
-		return filepath.Join(r, base)
-	}
-	return dir
 }
 
 // InitSummary is init's report (§9.1 step 13).
@@ -506,6 +511,10 @@ func Summary(st *stack.Stack, cfg *stack.Config, sec *stack.Secrets) *InitSummar
 			"pic-sure dictionary hydrate    load the shared data set's dictionary",
 			"pic-sure status                check the stack",
 		}
+	}
+	if a.DevWebOrigin != "" {
+		// httpd-hmr replaces httpd, so nothing serves the HTTPS port.
+		s.URL = a.DevWebOrigin + "/"
 	}
 	if sec != nil {
 		s.TokenExpiry = sec.IntrospectionTokenExpiry.UTC()

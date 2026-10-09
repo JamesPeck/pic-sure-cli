@@ -303,7 +303,8 @@ it.
   anything: a client secret under `jwt.MinSecretLen`, a
   `--skip-step` that isn't in `ops.InitStepIDs(cfg)`, `--self-update`
   with a stdin flag, and (first of all, 096) a stack directory with a
-  `:`, CR or LF, which `render.CheckBindSource` refuses as render would. With `--hpds-data shared:NAME`, the host check also
+  `:`, CR or LF, which `render.CheckBindSource` refuses as render would.
+  With `--hpds-data shared:NAME`, the host check also
   requires the data set (`ops.SharedDataProfile`, exit 3), so a missing
   set fails before the images are built. A DIR whose state.json
   has `initialized_at` gets "already initialised" and exit 0; a DIR with a
@@ -327,8 +328,9 @@ it.
   a `--*-stdin` flag is given) and `config` (`stack.Create`, the run log,
   the stack lock, pic-sure.yaml, `EnsureSecrets` with `OpenAuth`, state.json with
   the release and the operation; a resumed stack's pic-sure.yaml is read
-  again under the lock, as up does, and the flags and `--skip-step` checked
-  against it, `rereadConfig`, 096). Then `ops.InitSteps` with `--skip-step`,
+  again under the lock, as up does: the flags and `--skip-step` are checked
+  against it, changed ports checked again, and a changed proxy used from
+  then on, `rereadConfig`, 096). Then `ops.InitSteps` with `--skip-step`,
   and `initialized_at` once they succeed. A new stack's ports (077): the
   preconditions choose them with the default cache's `ops.ReservedPorts`
   only to check there are some; `claimPorts` chooses them again under the
@@ -830,7 +832,8 @@ each AIO source still exists in the AIO checkout beside this repo (or
   `Write(st, files)` saves them through the stack (atomic, in the manifest)
   and removes the files an earlier render wrote that this one didn't, such
   as the `files/maven/settings.xml` older versions rendered (096: nothing
-  read it; the reactor writes its own copy). Callers record `cli_version` and `schema_version` in state.json
+  read it; the reactor writes its own copy). Callers record `cli_version`
+  and `schema_version` in state.json
   after a render.
 - `Input`: `StackDir`, `Config`, `State` (image tags from `Images`, node's
   being the `.nvmrc` tag httpd-hmr needs; dev builds' tags from
@@ -1281,10 +1284,10 @@ init, and the parts `up` and `update` reuse.
   httpd-hmr, `tls`, `truststore` (`StackTruststoreStep`, which reads the
   psama tag from state when it runs), `render`, then `ConvergeSteps` with
   `hmr-volume` (httpd-hmr, where `HostUser()` is set) before `start`.
-  Given up's `upRestarts`, `planSteps` also wraps `tls`, `truststore` and
-  `render` to record restarts and adds `restart` before `hmr-volume`.
-  `InitStepIDs(cfg)` (`planStepIDs`) lists the IDs for checking
-  `--skip-step` early.
+  With `restart` (up and update), `planSteps` also wraps `tls`,
+  `truststore` and `render` to record restarts (`upRestarts`) and adds
+  `restart` before `hmr-volume`. `InitStepIDs(cfg)` (`planStepIDs`) lists
+  the IDs for checking `--skip-step` early.
 - `RenderStep`, ID `render`, always applies: it renders from a fresh
   state.json (the TLS and truststore steps save it themselves), writes the
   files, records `cli_version` and `schema_version`, copies the state into
@@ -1316,7 +1319,9 @@ init, and the parts `up` and `update` reuse.
 - Doctor's new `DoctorOptions.Config` is init's config, used without a
   `Stack`: `memory` counts its HPDS heap once (a running hpds of a stack of
   that name is taken for it).
-- `Summary` is init's report (URL, Auth0 URLs, token expiry, next steps);
+- `Summary` is init's report (URL, Auth0 URLs, token expiry, next steps;
+  with httpd-hmr the URL is Vite's dev origin, since nothing serves the
+  HTTPS port);
   `stack.PeekState(dir)` reads state.json without opening the stack.
 
 **Up (035, `up.go`).** §9.2. `UpSteps(d, st, cfg, sec, state,
@@ -1383,8 +1388,9 @@ changed `render/files` (up's `readers`), httpd and psama when the TLS or
 truststore Check isn't done, the `RestartAfterMigrate` services unless
 migrations are up to date, psama for a renewed token, and
 `pending_restarts` are restarted. Only running services are listed.
-`Changes()` says whether the plan does anything; migrations of unknown
-status, and the restarts only they would bring, don't count (096).
+`Changes()` says whether the plan does anything; migrations unknown only
+because a database is stopped, and the restarts only they would bring,
+don't count (096).
 PlanUpdate writes nothing to the stack.
 
 `UpdateSteps(d, st, plan, sec, state, opts)` are `config` (Check: nothing
@@ -1422,7 +1428,8 @@ container runs as the host user and Docker creates volumes root-owned;
 it also makes `<source>/node_modules`, the volume's mount point, so Docker
 doesn't create it root-owned in the checkout) before `dev-start`, which
 recreates only httpd. `init` and `up` add both steps while httpd-hmr is in
-`dev.services` (and `InitStepIDs` and `UpStepIDs` list them), so a new `.nvmrc` or a removed
+`dev.services` (and `InitStepIDs` and `UpStepIDs` list them), so a new
+`.nvmrc` or a removed
 volume converges; `update --no-build` skips `node-image` with the images. The container copies the rendered Vite config into
 `node_modules/.pic-sure/` (a file bind-mounted into the checkout would need
 a mount point runc won't create through the bind mount, and would dirty

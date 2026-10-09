@@ -334,7 +334,6 @@ func TestPlanUpdateDoesntStartTheDatabaseUnlessAllowed(t *testing.T) {
 	if p.Migrations.Status != ops.MigrationsStatusUnknown || p.Migrations.StartedDB {
 		t.Errorf("migrations %+v, want unknown with the database left stopped", p.Migrations)
 	}
-	// The migrate step runs anyway; not knowing is no change.
 	if p.Changes() {
 		t.Errorf("a current stack with its database stopped reports changes: %+v", p.Restarts)
 	}
@@ -532,6 +531,9 @@ func TestPlanUpdateTreatsANewMigrationsSourceAsMovedFiles(t *testing.T) {
 		p := x.plan(ops.UpdateOptions{Release: rel, Components: comps, NoBuild: noBuild})
 		if p.Migrations.Status != ops.MigrationsStatusUnknown {
 			t.Errorf("--no-build %v: migrations %+v, want unknown when the files come from a new checkout", noBuild, p.Migrations)
+		}
+		if !p.Changes() {
+			t.Errorf("--no-build %v: new migration files are no change", noBuild)
 		}
 	}
 }

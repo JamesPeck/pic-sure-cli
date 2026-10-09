@@ -206,6 +206,30 @@ func TestSummaryInSharedModeSuggestsHydrateNotDemo(t *testing.T) {
 	}
 }
 
+func TestSummaryOfAnHMRStackGivesTheViteURL(t *testing.T) {
+	x := newUpdateFixture(t)
+	x.cfg.Dev.Services = []string{"httpd-hmr"}
+	if got, want := ops.Summary(x.st, x.cfg, nil).URL, "http://localhost:15006/"; got != want {
+		t.Errorf("URL %s, want %s", got, want)
+	}
+}
+
+func TestCanonicalDirResolvesALinkAboveMissingDirs(t *testing.T) {
+	tmp, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(tmp, "a:b"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(tmp, "a:b"), filepath.Join(tmp, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := ops.CanonicalDir(filepath.Join(tmp, "link", "new", "stack")), filepath.Join(tmp, "a:b", "new", "stack"); got != want {
+		t.Errorf("CanonicalDir = %s, want %s", got, want)
+	}
+}
+
 // writeRegisteredStack makes a stack in dir whose pic-sure.yaml sets the
 // ports, and registers it in c.
 func writeRegisteredStack(t *testing.T, c *cache.Cache, dir string, http, https, devBase int) {

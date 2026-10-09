@@ -289,7 +289,7 @@ func TestInitWithHTTPDHMRTakesTheNodeTagBeforeRender(t *testing.T) {
 	if !strings.Contains(string(compose), "node:24.11.0-alpine3.23") {
 		t.Error("compose.yaml doesn't run the .nvmrc's Node")
 	}
-	if x.callIndex(chown) > x.callIndex(composeWait) {
+	if chowned, started := x.callIndex(chown), x.callIndex(composeWait); chowned < 0 || started < chowned {
 		t.Error("the node_modules volume was chowned after compose up")
 	}
 }

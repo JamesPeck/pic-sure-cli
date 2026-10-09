@@ -211,6 +211,9 @@ func TestResumedInitRereadsTheConfigUnderTheLock(t *testing.T) {
 	if err := doc.Set("hpds.java_opts", "-Xmx3g"); err != nil {
 		t.Fatal(err)
 	}
+	if err := doc.Set("proxy.https", "http://proxy.example.org:3128"); err != nil {
+		t.Fatal(err)
+	}
 	data, err := doc.Bytes()
 	if err != nil {
 		t.Fatal(err)
@@ -224,6 +227,9 @@ func TestResumedInitRereadsTheConfigUnderTheLock(t *testing.T) {
 	}
 	if r2.cfg.HPDS.JavaOpts != "-Xmx3g" {
 		t.Errorf("resumed init runs with java_opts %q, not the value set before the lock", r2.cfg.HPDS.JavaOpts)
+	}
+	if r2.proxy == nil || !slices.Contains(r2.proxy.Env(), "HTTPS_PROXY=http://proxy.example.org:3128") {
+		t.Error("resumed init doesn't use the proxy set before the lock")
 	}
 }
 

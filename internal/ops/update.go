@@ -145,6 +145,9 @@ type MigrationsPlan struct {
 	Status    string `json:"status"`
 	Detail    string `json:"detail,omitempty"`
 	StartedDB bool   `json:"started_db"`
+	// dbStopped says the status is unknown only because a database isn't
+	// running.
+	dbStopped bool
 }
 
 // TokenPlan is the introspection token's expiry and whether the seed step
@@ -166,15 +169,16 @@ type RestartPlan struct {
 const reasonIfMigrationsRun = "if the migrations run: they may change what it caches"
 
 // Changes reports whether the plan changes anything at all. Migrations
-// whose status is unknown (a database is stopped, and the plan didn't
-// start it) don't count, nor do the restarts they would bring: the
+// whose status is unknown only because a database is stopped (the plan
+// didn't start it) don't count, nor do the restarts they would bring: the
 // migrate step checks once the database is up.
 func (p *UpdatePlan) Changes() bool {
+	maybe := p.Migrations.dbStopped
 	restarts := slices.ContainsFunc(p.Restarts, func(r RestartPlan) bool {
-		return slices.ContainsFunc(r.Reasons, func(s string) bool { return s != reasonIfMigrationsRun })
+		return !maybe || slices.ContainsFunc(r.Reasons, func(s string) bool { return s != reasonIfMigrationsRun })
 	})
 	if len(p.Config.Migrations) > 0 || p.Release.From != p.Release.To || restarts ||
-		p.Migrations.Status == MigrationsStatusPending || p.Token.Renew {
+		p.Migrations.Status != MigrationsStatusUpToDate && !maybe || p.Token.Renew {
 		return true
 	}
 	return slices.ContainsFunc(p.Components, func(c ComponentChange) bool { return c.Changed }) ||
@@ -335,6 +339,7 @@ func (p *UpdatePlan) planMigrations(ctx context.Context, d *Deps, cfg *stack.Con
 	// picsure-db would tell nothing.
 	if ok, err := healthy(dictionaryDB); err != nil || !ok {
 		p.Migrations.Status, p.Migrations.Detail = MigrationsStatusUnknown, dictionaryDB+" isn't running; the migrate step checks once it is"
+		p.Migrations.dbStopped = err == nil
 		return err
 	}
 	if cfg.DB.Mode != stack.DBRemote {
@@ -344,7 +349,7 @@ func (p *UpdatePlan) planMigrations(ctx context.Context, d *Deps, cfg *stack.Con
 		}
 		if !ok {
 			if !opts.StartDB {
-				p.Migrations = MigrationsPlan{Status: MigrationsStatusUnknown, Detail: picsureDB + " isn't running"}
+				p.Migrations = MigrationsPlan{Status: MigrationsStatusUnknown, Detail: picsureDB + " isn't running", dbStopped: true}
 				return nil
 			}
 			if err := steps.Run(ctx, d.Sink, DBSteps(d, cfg, sec, DBOptions{}), steps.Options{}); err != nil {
@@ -644,7 +649,7 @@ func UpdateSteps(d *Deps, st *stack.Stack, plan *UpdatePlan, sec *stack.Secrets,
 		// A ref such as a branch can move, so pull mode always pulls.
 		images.Check = nil
 	}
-	return append([]steps.Step{config, resolve, genomicLeftoversStep(d, st, cfg)}, planSteps(d, st, cfg, sec, state, opts.ConvergeOptions, images, &upRestarts{d: d, st: st, cfg: cfg, opts: opts.ConvergeOptions})...)
+	return append([]steps.Step{config, resolve, genomicLeftoversStep(d, st, cfg)}, planSteps(d, st, cfg, sec, state, opts.ConvergeOptions, images, true)...)
 }
 
 // releaseComponents are state's components that aren't built from a local

@@ -64,8 +64,7 @@ func UpSteps(d *Deps, st *stack.Stack, cfg *stack.Config, sec *stack.Secrets, st
 		return apply(ctx, sink)
 	}
 	images := ImagesStep(d, st, cfg, state, ImagesOptions{Cache: opts.Cache})
-	r := &upRestarts{d: d, st: st, cfg: cfg, opts: opts}
-	return append([]steps.Step{resolve, genomicLeftoversStep(d, st, cfg)}, planSteps(d, st, cfg, sec, state, opts, images, r)...)
+	return append([]steps.Step{resolve, genomicLeftoversStep(d, st, cfg)}, planSteps(d, st, cfg, sec, state, opts, images, true)...)
 }
 
 // upRestarts records and runs the restarts up's steps call for.

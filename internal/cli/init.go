@@ -23,6 +23,7 @@ import (
 	"github.com/JamesPeck/pic-sure-cli/internal/docker"
 	"github.com/JamesPeck/pic-sure-cli/internal/events"
 	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
+	"github.com/JamesPeck/pic-sure-cli/internal/git"
 	"github.com/JamesPeck/pic-sure-cli/internal/jwt"
 	"github.com/JamesPeck/pic-sure-cli/internal/log"
 	"github.com/JamesPeck/pic-sure-cli/internal/netproxy"
@@ -105,8 +106,10 @@ type initRun struct {
 	httpPort, httpsPort int
 	autoPorts           bool
 	// host is where ports are checked, the system's when nil.
-	host     ops.Host
-	supplied stack.UserSecrets
+	host ops.Host
+	// published are the ports the stack's own containers publish.
+	published map[int]bool
+	supplied  stack.UserSecrets
 	// fromFlags makes run read the --*-stdin secrets.
 	fromFlags bool
 	// selfUpdate, ignoreCLIVersion and confirm are the gate's options;
@@ -122,6 +125,8 @@ type initRun struct {
 	sets  []initSet
 	cache *cache.Cache
 	proxy *netproxy.Proxy
+	// git is r.d.Git without the proxy env.
+	git   git.Client
 	rel   *release.Release
 	prior *stack.State // state.json before this run, nil if none
 
@@ -673,7 +678,7 @@ func (r *initRun) preconditions(ctx context.Context, sink events.Sink) error {
 	if err != nil {
 		return err
 	}
-	published := owned.Published
+	r.published = owned.Published
 	if r.cfg.HPDS.Data == stack.HPDSShared {
 		// Render checks it too, but only after the images are built.
 		if _, err := ops.SharedDataProfile(ctx, r.d, r.cfg.HPDS.SharedName); err != nil {
@@ -687,14 +692,7 @@ func (r *initRun) preconditions(ctx context.Context, sink events.Sink) error {
 	}
 
 	if r.resumed {
-		// A resumed stack keeps its ports, which its own containers may
-		// already hold.
-		for _, p := range []int{r.cfg.Network.HTTPPort, r.cfg.Network.HTTPSPort} {
-			if !published[p] && !(systemHost{}).PortFree(p) {
-				return exitcode.Precondition("port %d, which %s sets, is in use", p, stack.ConfigFile)
-			}
-		}
-		return nil
+		return r.checkResumedPorts()
 	}
 	// Only a check that there are ports to choose: claimPorts chooses them.
 	reserved, _ := reservedInDefaultCache(r.dir)
@@ -703,6 +701,17 @@ func (r *initRun) preconditions(ctx context.Context, sink events.Sink) error {
 	}
 	if r.cfg, err = r.doc.Config(); err != nil {
 		return r.flagProblems(err)
+	}
+	return nil
+}
+
+// checkResumedPorts checks that a resumed stack's ports, which it keeps,
+// are free or published by its own containers.
+func (r *initRun) checkResumedPorts() error {
+	for _, p := range []int{r.cfg.Network.HTTPPort, r.cfg.Network.HTTPSPort} {
+		if !r.published[p] && !(systemHost{}).PortFree(p) {
+			return exitcode.Precondition("port %d, which %s sets, is in use", p, stack.ConfigFile)
+		}
 	}
 	return nil
 }
@@ -840,22 +849,35 @@ func (r *initRun) portFlag(name, key string) (int, error) {
 // fetchRelease is §9.1 step 2: release-control into the host cache, and the
 // CLI compatibility gate. A resumed stack keeps the release it recorded.
 func (r *initRun) fetchRelease(ctx context.Context, sink events.Sink) error {
+	if err := r.useProxy(); err != nil {
+		return err
+	}
 	var err error
-	if r.proxy, err = netproxy.New(netproxy.Config(r.cfg.Proxy), netproxy.CatalogServices()); err != nil {
-		return exitcode.Usage("%w", err)
-	}
-	r.d.Git = r.d.Git.WithEnv(r.proxy.Env()...)
-	root, err := cache.DefaultRoot()
-	if err != nil {
-		return err
-	}
-	if r.cache, err = cache.Open(root, cache.Options{Git: r.d.Git, Holder: r.cmd.CommandPath()}); err != nil {
-		return err
-	}
 	if r.rel, err = release.Fetch(ctx, r.cache.WithEvents(sink, initRelease), r.d.Git, sink, initRelease, r.releaseOptions()); err != nil {
 		return err
 	}
 	return r.rel.Gate(ctx, r.gateOptions(sink))
+}
+
+// useProxy sets r.proxy from the config, and the git client and cache
+// that go through it.
+func (r *initRun) useProxy() error {
+	if r.git == nil {
+		r.git = r.d.Git
+	}
+	var err error
+	if r.proxy, err = netproxy.New(netproxy.Config(r.cfg.Proxy), netproxy.CatalogServices()); err != nil {
+		return exitcode.Usage("%w", err)
+	}
+	r.d.Git = r.git.WithEnv(r.proxy.Env()...)
+	var root string
+	if r.cache != nil {
+		root = r.cache.Root()
+	} else if root, err = cache.DefaultRoot(); err != nil {
+		return err
+	}
+	r.cache, err = cache.Open(root, cache.Options{Git: r.d.Git, Holder: r.cmd.CommandPath()})
+	return err
 }
 
 // gateOptions are the compatibility gate's options for this run.
@@ -967,8 +989,11 @@ func (r *initRun) writeConfig(ctx context.Context, sink events.Sink) error {
 
 // rereadConfig reads a resumed stack's pic-sure.yaml again under the lock,
 // as up does: a `config set` may have changed it since readConfig. The
-// flags must still agree with it, and --skip-step name its steps.
+// flags must still agree with it, and --skip-step name its steps. Changed
+// ports are checked again, and a changed proxy is used from here on (the
+// release was fetched through the old one).
 func (r *initRun) rereadConfig(st *stack.Stack) error {
+	before := r.cfg
 	data, err := st.ReadFile(stack.ConfigFile)
 	if err != nil {
 		return err
@@ -987,7 +1012,18 @@ func (r *initRun) rereadConfig(st *stack.Stack) error {
 	if err := r.checkResumed(data, given); err != nil {
 		return err
 	}
-	return checkSkipSteps(r.cmd, ops.InitStepIDs(r.cfg), r.a.Global.SkipSteps)
+	if err := checkSkipSteps(r.cmd, ops.InitStepIDs(r.cfg), r.a.Global.SkipSteps); err != nil {
+		return err
+	}
+	if r.cfg.Network.HTTPPort != before.Network.HTTPPort || r.cfg.Network.HTTPSPort != before.Network.HTTPSPort {
+		if err := r.checkResumedPorts(); err != nil {
+			return err
+		}
+	}
+	if r.cfg.Proxy != before.Proxy {
+		return r.useProxy()
+	}
+	return nil
 }
 
 // claimPorts chooses a new stack's ports again with choose, now with those
@@ -1109,8 +1145,8 @@ func (r *initRun) retryPlan(opts ops.ConvergeOptions) ([]steps.Step, []string) {
 func (r *initRun) compose() (docker.Composer, error) {
 	cfg, sec := r.cfg, r.sec
 	c, err := docker.NewCompose(r.d.Runner, r.st.Dir, func() []string {
-		// ComposeEnv fails only on the proxy config, which fetchRelease
-		// has checked.
+		// ComposeEnv fails only on the proxy config, which useProxy has
+		// checked.
 		env, _ := render.ComposeEnv(cfg, sec)
 		return env
 	})
