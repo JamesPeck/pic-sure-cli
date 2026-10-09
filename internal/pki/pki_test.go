@@ -221,7 +221,7 @@ func TestCheckHostname(t *testing.T) {
 		}
 	}
 	for _, hostname := range []string{"", "a..b", "-a.example.org", "a b"} {
-		if err := pki.CheckHostname(hostname); err == nil || !strings.Contains(err.Error(), "neither a DNS name nor an IP address") {
+		if err := pki.CheckHostname(hostname); err == nil || !strings.Contains(err.Error(), "want a host name or IP address") {
 			t.Errorf("CheckHostname(%q) = %v, want the generic error", hostname, err)
 		}
 	}

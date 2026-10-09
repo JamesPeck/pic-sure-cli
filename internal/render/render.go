@@ -441,8 +441,9 @@ func ViteEnv(cfg *stack.Config) map[string]string {
 }
 
 // ComposeEnv returns the environment every compose call needs (§6.4), as
-// NAME=value entries for docker.NewCompose: each of secretVars, plus
-// proxyVars when the config sets a proxy. The values are secrets.
+// NAME=value entries for docker.NewCompose: each of secretVars, plus the
+// proxy's Env (which includes proxyVars) when the config sets a proxy. The
+// values are secrets.
 func ComposeEnv(cfg *stack.Config, sec *stack.Secrets) ([]string, error) {
 	root := sec.DBRootPassword
 	if cfg.DB.Mode == stack.DBRemote {
@@ -473,17 +474,9 @@ func ComposeEnv(cfg *stack.Config, sec *stack.Secrets) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	if p.Enabled() {
-		pv := map[string]string{}
-		for _, kv := range p.Env() {
-			k, v, _ := strings.Cut(kv, "=")
-			pv[k] = v
-		}
-		for _, name := range proxyVars {
-			env = append(env, name+"="+pv[name])
-		}
-	}
-	return env, nil
+	// All of Env, not just proxyVars: compose itself must not use a proxy
+	// from the user's shell that the config replaces.
+	return append(env, p.Env()...), nil
 }
 
 // Write saves a render's files in the stack, then removes the files an

@@ -14,6 +14,8 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
 )
 
@@ -31,7 +33,11 @@ const DefaultWaitDelay = 5 * time.Second
 //   - PATH, HOME, TERM and SSH_AUTH_SOCK;
 //   - every variable whose name starts with DOCKER_ or XDG_;
 //   - HTTP_PROXY, HTTPS_PROXY, NO_PROXY and ALL_PROXY, in upper or lower
-//     case.
+//     case;
+//   - SSL_CERT_FILE and SSL_CERT_DIR (a corporate CA for Go and OpenSSL
+//     children such as cosign), and GIT_SSL_CAINFO and GIT_SSL_CAPATH,
+//     git's own, since the TLS library under git's curl may ignore
+//     SSL_CERT_*.
 //
 // Nothing else is inherited: COMPOSE_PROJECT_NAME, LANG or a token in the
 // user's shell reach a child only if the caller puts them in Cmd.Env.
@@ -75,12 +81,16 @@ type ExecRunner struct {
 	// line buffering, so an *os.File such as the terminal becomes the
 	// child's own stdout or stderr, and its guarantees about whole lines
 	// and serialized writes don't hold. When ctx ends because the CLI got
-	// SIGINT (its cause is exitcode.Signaled(os.Interrupt)), the runner
-	// leaves the child alone: Ctrl-C at the terminal has reached it
-	// already, and a second signal would count as a second Ctrl-C
-	// (compose's force-kill). Otherwise the child gets SIGTERM, and SIGKILL
-	// WaitDelay later. The call waits for the child to exit, then reports
-	// ctx's error if ctx ended first.
+	// SIGINT (its cause is exitcode.Signaled(os.Interrupt)) from its
+	// terminal, that is with stdin a terminal whose foreground process group
+	// is the CLI's, the runner leaves the child alone: Ctrl-C at the
+	// terminal has reached it already, and a second signal would count as a
+	// second Ctrl-C (compose's force-kill). A SIGINT from anywhere else
+	// (kill -INT from a script) is forwarded to the child, and if it is
+	// still running WaitDelay later the usual escalation follows. On any
+	// other cancellation the child gets SIGTERM, and SIGKILL WaitDelay
+	// later. The call waits for the child to exit, then reports ctx's error
+	// if ctx ended first.
 	Foreground bool
 }
 
@@ -218,8 +228,18 @@ func (r *ExecRunner) runForeground(ctx context.Context, c Cmd, argv string, stdo
 			return
 		case <-ctx.Done():
 		}
-		if interruptedAtTerminal(ctx) {
-			return
+		if interrupted(ctx) {
+			if terminalSignaledChild() {
+				return
+			}
+			// A SIGINT the terminal didn't send (kill -INT from a script)
+			// reached only the CLI: pass it on, as the terminal would have.
+			_ = cmd.Process.Signal(os.Interrupt)
+			select {
+			case <-exited:
+				return
+			case <-time.After(delay):
+			}
 		}
 		_ = cmd.Process.Signal(syscall.SIGTERM)
 		select {
@@ -243,11 +263,20 @@ func (r *ExecRunner) runForeground(ctx context.Context, c Cmd, argv string, stdo
 	}
 }
 
-// interruptedAtTerminal reports whether ctx ended because the CLI got
-// SIGINT, which a terminal sends to its whole foreground process group.
-func interruptedAtTerminal(ctx context.Context) bool {
+// interrupted reports whether ctx ended because the CLI got SIGINT.
+func interrupted(ctx context.Context) bool {
 	var e *exitcode.Error
 	return errors.As(context.Cause(ctx), &e) && e.Code == exitcode.CodeInterrupted
+}
+
+// terminalSignaledChild reports whether a SIGINT the CLI got came from its
+// controlling terminal, which sends it to the whole foreground process
+// group, a Foreground child included. That is so only when stdin is a
+// terminal whose foreground process group is the CLI's. A variable so tests
+// can pretend there is a terminal.
+var terminalSignaledChild = func() bool {
+	fg, err := unix.IoctlGetInt(int(os.Stdin.Fd()), unix.TIOCGPGRP)
+	return err == nil && fg == unix.Getpgrp()
 }
 
 // stdinCopy feeds a Cmd.Stdin that isn't an *os.File to the child through
@@ -341,6 +370,7 @@ var (
 		"PATH": true, "HOME": true, "TERM": true, "SSH_AUTH_SOCK": true,
 		"HTTP_PROXY": true, "HTTPS_PROXY": true, "NO_PROXY": true, "ALL_PROXY": true,
 		"http_proxy": true, "https_proxy": true, "no_proxy": true, "all_proxy": true,
+		"SSL_CERT_FILE": true, "SSL_CERT_DIR": true, "GIT_SSL_CAINFO": true, "GIT_SSL_CAPATH": true,
 	}
 	baseEnvPrefixes = []string{"DOCKER_", "XDG_"}
 )

@@ -319,16 +319,19 @@ func TestComposeEnv(t *testing.T) {
 		t.Errorf("proxy env: HTTP_PROXY %q NO_PROXY %q", proxied["HTTP_PROXY"], proxied["NO_PROXY"])
 	}
 
-	// With only proxy.http, HTTPS_PROXY is still set, empty, so the
-	// compose file's ${HTTPS_PROXY} never comes from the caller's env.
+	// With only proxy.http, HTTPS_PROXY and ALL_PROXY are still set, empty,
+	// in both cases, so neither the compose file's ${HTTPS_PROXY} nor compose
+	// itself uses a proxy from the caller's env.
 	cfg := goldenConfig(goldenCase{})
 	cfg.Proxy.HTTP = "http://proxy.example.org:3128"
 	env, err := ComposeEnv(cfg, sec)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(env, "HTTPS_PROXY=") {
-		t.Errorf("HTTPS_PROXY should be set empty: %v", env[len(secretVars):])
+	for _, want := range []string{"HTTPS_PROXY=", "https_proxy=", "ALL_PROXY=", "all_proxy="} {
+		if !slices.Contains(env, want) {
+			t.Errorf("%s should be set empty: %v", strings.TrimSuffix(want, "="), env[len(secretVars):])
+		}
 	}
 }
 

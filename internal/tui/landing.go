@@ -70,7 +70,10 @@ type landing struct {
 	// one read can't ask twice.
 	leaving bool
 
-	result        string
+	result string
+	// notice is a standing message, such as why the stack here can't be
+	// used; navigation doesn't clear it.
+	notice        string
 	width, height int
 }
 
@@ -108,6 +111,11 @@ func (l *landing) rebuildMenu() {
 			menuItem{ID: "update", Label: "Update"},
 			menuItem{ID: "loaddata", Label: "Load your data…"},
 			menuItem{ID: "devmenu", Label: "Developer options…"},
+			menuItem{ID: "quit", Label: "Quit"},
+		)
+	case l.status == untrustedStack:
+		l.menu = newMenu(
+			menuItem{ID: "preflight", Label: "Preflight check"},
 			menuItem{ID: "quit", Label: "Quit"},
 		)
 	case l.status == partStack:
@@ -230,7 +238,7 @@ func (l *landing) choose(id string) (*landing, tea.Cmd) {
 		return l.leave(func() tea.Msg { return resumeSetupMsg{} })
 	case "preflight":
 		// Read-only, so it runs without asking.
-		return l.leave(runAction(preflightAction(l.status == noStack)))
+		return l.leave(runAction(preflightAction(l.status == noStack || l.status == untrustedStack)))
 	case "dryrun":
 		return l.startConfirm(dryRunAction())
 	case "update":
@@ -529,6 +537,9 @@ func (l *landing) contentLines(withLogo bool) []string {
 		menuWidth := min(max(l.width/3, 28), l.width-8)
 		box := landingBoxStyle.Render(l.menu.view(menuWidth))
 		content = append(content, strings.Split(box, "\n")...)
+	}
+	if l.notice != "" {
+		content = append(content, "", landingResultStyle.Width(min(l.width-4, 80)).Render(l.notice))
 	}
 	if l.result != "" {
 		content = append(content, "", landingResultStyle.Render(l.result))

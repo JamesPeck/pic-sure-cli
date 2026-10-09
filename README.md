@@ -321,6 +321,13 @@ image builds, Maven, node, and the services' JVMs.
   spoken to in plain HTTP. An `https://` URL is rejected.
 - `proxy.https` doesn't fall back to `proxy.http`. Nearly everything is
   HTTPS, so set `proxy.https`.
+- Once the config sets a proxy, it replaces the one in your shell
+  (`HTTPS_PROXY` and the rest) for everything pic-sure runs. With only
+  `proxy.http` set, https goes direct.
+- On Linux behind a proxy that intercepts TLS, export `SSL_CERT_FILE` (or
+  `SSL_CERT_DIR`) and `GIT_SSL_CAINFO` naming your CA bundle; pic-sure
+  passes them on to the programs it runs, such as git and cosign. Put the
+  CA in `certs/trust/` for the services.
 - Credentials in the URL work for everything except the services' JVMs
   (psama's calls to Auth0). Allow-list Auth0 on the proxy or put it in
   `no_proxy`.
@@ -396,6 +403,10 @@ delete the binary (`~/.local/bin/pic-sure`) and the cache directory.
   `--auto-ports` or other `--http-port`/`--https-port`.
 - Another pic-sure command holds the stack lock: wait for it, or pass
   `--wait-lock`.
+- "stack belongs to another user" (exit 3): pic-sure found a stack in the
+  current directory or above it that you don't own, such as one someone
+  planted in `/tmp`. It won't run another user's compose files without
+  being told to. If you trust the stack, name it with `--stack DIR`.
 
 ## For AI agents
 

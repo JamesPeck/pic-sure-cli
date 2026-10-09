@@ -230,7 +230,9 @@ func TestBuildFrontendCopiesTheSourceAndWritesTheEnv(t *testing.T) {
 		"-t", want.Ref,
 		"--label", ops.FrontendConfigLabel+"="+hash,
 		"--label", ops.FrontendSrcLabel+"="+feSHA,
+		"--build-arg", "HTTP_PROXY", "--build-arg", "http_proxy",
 		"--build-arg", "HTTPS_PROXY", "--build-arg", "https_proxy",
+		"--build-arg", "ALL_PROXY", "--build-arg", "all_proxy",
 		"--build-arg", "NO_PROXY", "--build-arg", "no_proxy",
 		ctxDir))
 	build := x.f.CallsMatching(fakerunner.Glob("docker build *"))[0]

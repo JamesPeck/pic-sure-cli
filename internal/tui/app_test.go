@@ -347,3 +347,28 @@ func TestRunScreenForceQuitEndsRun(t *testing.T) {
 		}
 	}
 }
+
+// A stack another user owns shows why it can't be used and offers no stack
+// actions, even though the directory holds a stack, and stays that way when
+// the landing reopens.
+func TestAppUntrustedStack(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, stack.ConfigFile), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	msg := "stack belongs to another user: owned by mallory"
+	a := newApp(context.Background(), Options{Root: root, Untrusted: msg})
+	a.Update(tea.WindowSizeMsg{Width: 80, Height: 40})
+	check := func(when string) {
+		t.Helper()
+		if got, want := menuIDs(a.landing.menu), []string{"preflight", "quit"}; !eq(got, want) {
+			t.Errorf("%s: menu = %v, want %v", when, got, want)
+		}
+		if v := a.landing.view(); !strings.Contains(v, "mallory") {
+			t.Errorf("%s: landing doesn't show the notice:\n%s", when, v)
+		}
+	}
+	check("at start")
+	a.openLandingCmd()
+	check("after reopening")
+}

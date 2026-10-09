@@ -214,10 +214,13 @@ func TestEnv(t *testing.T) {
 	}{
 		{"http only", netproxy.Config{HTTP: "http://proxy.example.org:3128"}, []string{
 			"HTTP_PROXY=http://proxy.example.org:3128", "http_proxy=http://proxy.example.org:3128",
+			"HTTPS_PROXY=", "https_proxy=", "ALL_PROXY=", "all_proxy=",
 			"NO_PROXY=localhost,127.0.0.1", "no_proxy=localhost,127.0.0.1",
 		}},
 		{"https only, missing port", netproxy.Config{HTTPS: "http://proxy.example.org"}, []string{
+			"HTTP_PROXY=", "http_proxy=",
 			"HTTPS_PROXY=http://proxy.example.org:80", "https_proxy=http://proxy.example.org:80",
+			"ALL_PROXY=", "all_proxy=",
 			"NO_PROXY=localhost,127.0.0.1", "no_proxy=localhost,127.0.0.1",
 		}},
 		{"both, credentials, IPv6, user entries", netproxy.Config{
@@ -227,6 +230,7 @@ func TestEnv(t *testing.T) {
 		}, []string{
 			"HTTP_PROXY=http://user:p%40ss@[2001:db8::1]:80", "http_proxy=http://user:p%40ss@[2001:db8::1]:80",
 			"HTTPS_PROXY=http://user:p%40ss@[2001:db8::1]:3128", "https_proxy=http://user:p%40ss@[2001:db8::1]:3128",
+			"ALL_PROXY=", "all_proxy=",
 			"NO_PROXY=.corp.example,10.0.0.0/8,localhost,127.0.0.1", "no_proxy=.corp.example,10.0.0.0/8,localhost,127.0.0.1",
 		}},
 	}

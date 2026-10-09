@@ -14,6 +14,8 @@ import (
 	"net"
 	"strings"
 	"time"
+
+	hostpkg "github.com/JamesPeck/pic-sure-cli/internal/hostname"
 )
 
 // Validity is how long a generated certificate is valid.
@@ -114,45 +116,9 @@ func subjectAltNames(hostname string) ([]string, []net.IP, error) {
 }
 
 // CheckHostname returns an error unless Generate can name hostname in a
-// certificate. It must be an IP address or a DNS name: dot-separated labels
-// of letters, digits, hyphens and underscores, none starting or ending with
-// a hyphen. A name whose last label is a number (10.1.2.300, x.0x1f) is
-// refused too, because browsers parse it as an IPv4 address.
+// certificate: an IP address or a name hostname.Check accepts.
 func CheckHostname(hostname string) error {
-	if net.ParseIP(hostname) != nil {
-		return nil
-	}
-	name := strings.ToLower(hostname)
-	labels := strings.Split(name, ".")
-	if last := labels[len(labels)-1]; last != "" && (strings.Trim(last, "0123456789") == "" ||
-		(strings.HasPrefix(last, "0x") && strings.Trim(last[2:], "0123456789abcdef") == "")) {
-		return fmt.Errorf("%q isn't an IP address, and a DNS name can't end in a numeric label, which browsers read as part of an IPv4 address", hostname)
-	}
-	if !validDNSName(name) {
-		return fmt.Errorf("%q is neither a DNS name nor an IP address", hostname)
-	}
-	return nil
-}
-
-// validDNSName reports whether name is a lowercase host name: dot-separated
-// labels of letters, digits, hyphens and underscores, none starting or
-// ending with a hyphen.
-func validDNSName(name string) bool {
-	if name == "" || len(name) > 253 {
-		return false
-	}
-	labels := strings.Split(name, ".")
-	for _, label := range labels {
-		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
-			return false
-		}
-		for _, c := range label {
-			if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' && c != '_' {
-				return false
-			}
-		}
-	}
-	return true
+	return hostpkg.Check(hostname)
 }
 
 func serialNumber(rand io.Reader) (*big.Int, error) {

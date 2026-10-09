@@ -19,6 +19,7 @@ import (
 
 	"github.com/JamesPeck/pic-sure-cli/internal/docker"
 	"github.com/JamesPeck/pic-sure-cli/internal/docker/fakerunner"
+	"github.com/JamesPeck/pic-sure-cli/internal/netproxy"
 )
 
 // sh is a Cmd that runs script with sh, with args as $1...
@@ -271,6 +272,39 @@ func TestExecLingeringGrandchildAfterExit(t *testing.T) {
 	}
 }
 
+// A configured proxy replaces the shell's for every scheme: with only
+// proxy.http set, a child sees no https or all proxy at all, in either case.
+func TestExecConfiguredProxyReplacesTheShells(t *testing.T) {
+	t.Parallel()
+	r := &docker.ExecRunner{Environ: []string{
+		"PATH=" + os.Getenv("PATH"),
+		"HTTPS_PROXY=http://stale:3128", "https_proxy=http://stale:3128",
+		"ALL_PROXY=socks5://stale:1080", "all_proxy=socks5://stale:1080",
+		"HTTP_PROXY=http://stale:3128",
+	}}
+	p, err := netproxy.New(netproxy.Config{HTTP: "http://proxy.example.org:3128"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := r.Run(context.Background(), docker.Cmd{Argv: []string{"env"}, Env: p.Env()})
+	if err != nil || res.ExitCode != 0 {
+		t.Fatalf("env: %d, %v, %s", res.ExitCode, err, res.Stderr)
+	}
+	got := map[string]string{}
+	for _, kv := range strings.Split(strings.TrimSpace(string(res.Stdout)), "\n") {
+		k, v, _ := strings.Cut(kv, "=")
+		got[k] = v
+	}
+	for _, name := range []string{"HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"} {
+		if v, ok := got[name]; !ok || v != "" {
+			t.Errorf("%s = %q (set %v), want set and empty", name, v, ok)
+		}
+	}
+	if got["HTTP_PROXY"] != "http://proxy.example.org:3128" {
+		t.Errorf("HTTP_PROXY = %q, want the config's", got["HTTP_PROXY"])
+	}
+}
+
 func TestExecEnvIsMinimalPlusCmdEnv(t *testing.T) {
 	t.Parallel()
 	r := &docker.ExecRunner{Environ: []string{
@@ -283,6 +317,10 @@ func TestExecEnvIsMinimalPlusCmdEnv(t *testing.T) {
 		"XDG_CACHE_HOME=/cache",
 		"HTTPS_PROXY=http://proxy:3128",
 		"no_proxy=localhost",
+		"SSL_CERT_FILE=/etc/corp-ca.pem",
+		"SSL_CERT_DIR=/etc/corp-certs",
+		"GIT_SSL_CAINFO=/etc/corp-ca.pem",
+		"GIT_SSL_CAPATH=/etc/corp-certs",
 		"COMPOSE_PROJECT_NAME=someone-elses",
 		"LANG=fr_FR.UTF-8",
 		"GITHUB_TOKEN=not-for-children",
@@ -301,11 +339,15 @@ func TestExecEnvIsMinimalPlusCmdEnv(t *testing.T) {
 	want := []string{
 		"DOCKER_CONTEXT=colima",
 		"DOCKER_HOST=unix:///var/run/docker.sock",
+		"GIT_SSL_CAINFO=/etc/corp-ca.pem",
+		"GIT_SSL_CAPATH=/etc/corp-certs",
 		"HOME=/override",
 		"HTTPS_PROXY=http://proxy:3128",
 		"MYSQL_PWD=from-cmd",
 		"PATH=" + os.Getenv("PATH"),
 		"SSH_AUTH_SOCK=/tmp/agent.sock",
+		"SSL_CERT_DIR=/etc/corp-certs",
+		"SSL_CERT_FILE=/etc/corp-ca.pem",
 		"TERM=xterm",
 		"XDG_CACHE_HOME=/cache",
 		"no_proxy=localhost",

@@ -174,20 +174,26 @@ func (a *App) canPrompt() bool {
 
 // startTUI opens the TUI's landing screen on the stack a command would act
 // on, or else on the directory init would create one in: --stack, or the
-// current one.
+// current one. A stack found that the user doesn't own isn't offered; the
+// landing shows why instead.
 func (a *App) startTUI(ctx context.Context) error {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return err
 	}
+	untrusted := ""
 	dir, err := stack.Find(a.Global.Stack, cwd)
 	if err != nil {
+		if errors.Is(err, stack.ErrNotOwned) {
+			untrusted = err.Error()
+		}
 		if dir, err = stack.InitDir("", a.Global.Stack, cwd); err != nil {
 			return err
 		}
 	}
 	return a.StartTUI(ctx, tui.Options{
 		Root:       dir,
+		Untrusted:  untrusted,
 		Start:      tui.ScreenLanding,
 		Animations: tui.AnimationsEnabled(a.Global.NoAnimations, os.Getenv),
 		Init:       a.initFromTUI,

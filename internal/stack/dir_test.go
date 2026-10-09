@@ -2,8 +2,10 @@ package stack
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -258,4 +260,70 @@ func TestLabels(t *testing.T) {
 	if len(got) != 2 || got["org.hms-dbmi.picsure.stack"] != "mystack" || got["org.hms-dbmi.picsure.stack-dir"] != dir {
 		t.Errorf("Labels = %v", got)
 	}
+}
+
+func TestFindNotOwned(t *testing.T) {
+	base := tempDir(t)
+	planted := filepath.Join(base, "planted")
+	deep := filepath.Join(planted, "a")
+	mine := filepath.Join(base, "mine")
+	mkdirs(t, deep, mine)
+	makeStack(t, planted)
+	makeStack(t, mine)
+
+	// owned maps a path to a uid other than ours; the rest are ours.
+	me := os.Geteuid()
+	owned := map[string]int{}
+	oldOwner, oldEUID, oldSudo := fileOwner, euid, sudoUID
+	t.Cleanup(func() { fileOwner, euid, sudoUID = oldOwner, oldEUID, oldSudo })
+	fileOwner = func(p string, _ fs.FileInfo) int {
+		if uid, ok := owned[p]; ok {
+			return uid
+		}
+		return me
+	}
+
+	for _, p := range []string{planted, filepath.Join(planted, ConfigFile)} {
+		t.Run("someone else owns "+filepath.Base(p), func(t *testing.T) {
+			clear(owned)
+			owned[p] = me + 1
+			for _, cwd := range []string{planted, deep} {
+				_, err := Find("", cwd)
+				if !errors.Is(err, ErrNotOwned) || exitcode.FromError(err) != exitcode.CodePrecondition {
+					t.Fatalf("Find from %s: err = %v, want ErrNotOwned with exit 3", cwd, err)
+				}
+				for _, want := range []string{p, "uid " + strconv.Itoa(me+1), "--stack " + planted} {
+					if !strings.Contains(err.Error(), want) {
+						t.Errorf("err = %q, want it to contain %q", err, want)
+					}
+				}
+			}
+			if got, err := Find(planted, deep); err != nil || got != planted {
+				t.Errorf("Find with --stack = %q, %v; want %q: --stack is never restricted", got, err, planted)
+			}
+			if got, err := Find("", mine); err != nil || got != mine {
+				t.Errorf("Find in my own stack = %q, %v", got, err)
+			}
+		})
+	}
+
+	t.Run("root under sudo trusts the invoking user", func(t *testing.T) {
+		clear(owned)
+		owned[planted] = 1234
+		owned[filepath.Join(planted, ConfigFile)] = 1234
+		owned[mine] = 0
+		owned[filepath.Join(mine, ConfigFile)] = 0
+		euid = func() int { return 0 }
+		sudoUID = func() string { return "1234" }
+		if _, err := Find("", planted); err != nil {
+			t.Errorf("sudo user's stack: %v", err)
+		}
+		if _, err := Find("", mine); err != nil {
+			t.Errorf("root's own stack: %v", err)
+		}
+		sudoUID = func() string { return "" }
+		if _, err := Find("", planted); !errors.Is(err, ErrNotOwned) {
+			t.Errorf("root without SUDO_UID: err = %v, want ErrNotOwned", err)
+		}
+	})
 }

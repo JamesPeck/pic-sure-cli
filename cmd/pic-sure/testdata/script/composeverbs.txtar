@@ -121,6 +121,17 @@ stderr '^pic-sure: interrupted \(interrupt\)$'
 ! stderr 'docker compose'
 exec sh -c '! kill -0 "$(cat follow.pid)" 2>/dev/null'
 
+# The passthrough runs compose in pic-sure's process group, where a
+# terminal's Ctrl-C reaches both. A kill -INT to pic-sure alone, with no
+# terminal, is forwarded, so compose stops too.
+rm follow.pid
+! exec pic-sure --stack stack compose -- logs -f &passlogs&
+exec sh -c 'while [ ! -f follow.pid ]; do sleep 0.05; done'
+kill -INT passlogs
+exec sh -c 'i=0; while kill -0 "$(cat follow.pid)" 2>/dev/null; do i=$((i+1)); [ $i -lt 100 ] || exit 1; sleep 0.05; done'
+wait passlogs
+stderr '^pic-sure: interrupted \(interrupt\)$'
+
 # A mutating compose subcommand holds the stack lock while compose runs,
 # and a SIGTERM to pic-sure alone reaches compose, which the terminal's
 # Ctrl-C would not.
@@ -199,7 +210,7 @@ raw compose ps
 #!/bin/sh
 # Blocks on compose's up and logs --follow; hands the rest to the fake.
 case "$*" in
-*" up" | *" logs --follow")
+*" up" | *" logs --follow" | *" logs -f")
 	echo $PPID > "$HOME/parent.pid"
 	echo $$ > "$HOME/follow.pid"
 	exec sleep 30

@@ -559,7 +559,14 @@ A directory is a stack when it holds `pic-sure.yaml` and `.pic-sure/`.
 `*stack.Stack` is one open stack; operations take it as an argument.
 
 - **Finding it.** `Find(stackFlag, cwd)` returns `--stack DIR` if set,
-  otherwise the nearest stack at or above cwd. `InitDir(arg, stackFlag,
+  otherwise the nearest stack at or above cwd. A stack found that way must
+  belong to the user (100, §6.1): its directory and `pic-sure.yaml` owned
+  by the effective uid, or, for root under sudo, by `SUDO_UID` (as git
+  does). Otherwise Find fails with exit 3 wrapping `ErrNotOwned`, naming the
+  owner and suggesting `--stack DIR`; `--stack` is never checked. The TUI's
+  landing shows that message (`tui.Options.Untrusted`) and offers only
+  Preflight and Quit. Tests fake the owner through `fileOwner`, `euid` and
+  `sudoUID` in `owner.go`. `InitDir(arg, stackFlag,
   cwd)` resolves `init [DIR]` (D14): DIR wins, and a `--stack` naming a
   different directory is exit 2. No stack is exit 3, wrapping
   `ErrNotFound`. `Open(dir)` opens an existing stack; `Create(dir)` is
@@ -1956,16 +1963,26 @@ is ready to use.
   exec hpds sh`). The child stays in the CLI's process group, so it can
   read the terminal and gets Ctrl-C from it, and `Stream` hands it the
   writers as they are (an `*os.File` becomes its stdout), without line
-  buffering. When ctx ends from SIGINT, the runner leaves the child alone:
+  buffering. When ctx ends from SIGINT and stdin is a terminal whose
+  foreground process group is the CLI's, the runner leaves the child alone:
   Ctrl-C has reached it from the terminal already, and a second signal
-  would count as a second Ctrl-C (compose's force-kill). On any other
-  cancellation it sends SIGTERM, then SIGKILL `WaitDelay` later. The call
+  would count as a second Ctrl-C (compose's force-kill). A SIGINT from
+  elsewhere (`kill -INT` from a script, 100) is forwarded to the child, and
+  if the child is still running `WaitDelay` later, the usual escalation
+  follows. On any other cancellation it sends SIGTERM, then SIGKILL
+  `WaitDelay` later. The call
   waits for the child, then returns ctx's error if ctx ended first.
   `cli.newForegroundRunner` builds one.
 - **Environment.** A child gets only `PATH`, `HOME`, `TERM`,
-  `SSH_AUTH_SOCK`, every `DOCKER_*` and `XDG_*` variable, and
-  `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`/`ALL_PROXY` in either case from the
-  CLI's environment, then `Cmd.Env`, where a later entry wins. Anything else
+  `SSH_AUTH_SOCK`, every `DOCKER_*` and `XDG_*` variable,
+  `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`/`ALL_PROXY` in either case, and the
+  CA settings `SSL_CERT_FILE`, `SSL_CERT_DIR`, `GIT_SSL_CAINFO` and
+  `GIT_SSL_CAPATH` from the CLI's environment, then `Cmd.Env`, where a later
+  entry wins. A configured proxy replaces the inherited proxy variables
+  through `Cmd.Env` (see netproxy's `Env`). The CA settings let cosign and
+  other Go or OpenSSL children trust a TLS-intercepting proxy's CA as the
+  CLI's own downloads do; git gets its own pair because the TLS library
+  under its curl may ignore `SSL_CERT_*`. Anything else
   (`COMPOSE_PROJECT_NAME`, `LANG`, a token in the user's shell) has to be
   put in `Cmd.Env`.
 - **Results.** Death by signal N is exit code 128+N. An error from a ctx
@@ -2226,10 +2243,8 @@ fills the certs volume (024).
   left out when the hostname is longer than RFC 5280's 64 characters. The
   serial is a random 128-bit number, and the certificate is a non-CA with
   server-auth key usage. `Files.Chain` is the certificate itself, as the
-  bash does. A hostname that isn't an IP or a valid DNS name is an error,
-  and so is one whose last label is a number (`10.1.2.300`, `x.0x1f`),
-  which browsers read as an IPv4 address. `CheckHostname` is that rule on
-  its own; the config validator applies it to `network.hostname`. Pass
+  bash does. A hostname `hostname.Check` refuses is an error;
+  `CheckHostname` is that rule on its own. Pass
   `Deps.Rand` and `Deps.Clock.Now()`; a fixed `Rand` doesn't make the key
   deterministic.
 - `Validate(files, hostname, now) (Report, error)` checks
@@ -2344,8 +2359,13 @@ just `proxy.http` set, https traffic goes direct.
   or a CIDR range; a name or address may end in `:port`.
 - `ProxyURL` is an `http.Transport.Proxy` for the CLI's own HTTP, with
   Go's NO_PROXY rules: localhost and loopback addresses always go direct.
-- `Env()`: `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY`, each also in lower
-  case, for git (`git.Client.WithEnv`), node and runtime containers.
+- `Env()`: `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` and `NO_PROXY`, each
+  also in lower case, for git (`git.Client.WithEnv`), cosign, node, compose
+  (`render.ComposeEnv`) and runtime containers. A scheme the config doesn't
+  set, and `ALL_PROXY` always, are present and empty, so the entries
+  replace a proxy inherited from the user's shell (100): with just
+  `proxy.http`, https really goes direct. Without a proxy, `Env` is nil and
+  children keep the shell's.
   `BuildArgs()` are the same `NAME=value` entries for
   `docker.BuildOpts.BuildArgs`. The proxy URLs keep their user and password,
   so treat the values as secrets: `Cmd.Env`, or `${VAR}` in the rendered
@@ -2372,8 +2392,20 @@ just `proxy.http` set, https traffic goes direct.
 
 `ParseURL` and `ParseNoProxy` are the parsers `New` uses. `stack.Validate`
 calls them too, so a config that validates always resolves. A proxy host
-must be an IP address or a host name whose last label isn't all digits.
-The package imports only the catalog.
+and a no-proxy name follow `internal/hostname`'s rule (a trailing dot is
+allowed on a proxy host). The package imports only the catalog and
+`hostname`.
+
+## internal/hostname
+
+Ticket 100. The one host name rule, used by `stack.Validate`
+(`network.hostname`, `auth.auth0.tenant`, `db.remote.host`), `pki` and
+`netproxy`. `Check(s)` accepts an IP address (`net.ParseIP`) or a name
+`ValidName` accepts, and says why it refuses one. A name is dot-separated
+labels of 1 to 63 letters (any case), digits, `-` and `_`, no `-` at either
+end of a label, 253 bytes at most, and a last label that isn't a decimal or
+`0x` hex number (`10.1.2.300` is a mistyped IP, and browsers read it as
+IPv4).
 
 ## internal/selfupdate
 

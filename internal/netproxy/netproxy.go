@@ -7,12 +7,12 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/catalog"
+	"github.com/JamesPeck/pic-sure-cli/internal/hostname"
 )
 
 // Config is the proxy block of pic-sure.yaml, with the fields of
@@ -105,7 +105,7 @@ func ParseURL(s string) (*url.URL, error) {
 	}
 	// A trailing dot makes a name absolute, skipping the resolver's search
 	// domains.
-	if host := u.Hostname(); net.ParseIP(host) == nil && !validHostName(strings.ToLower(strings.TrimSuffix(host, "."))) {
+	if host := u.Hostname(); net.ParseIP(host) == nil && !hostname.ValidName(strings.TrimSuffix(host, ".")) {
 		return nil, fmt.Errorf("has an invalid host: %q", u.Redacted())
 	}
 	port := u.Port()
@@ -117,26 +117,6 @@ func ParseURL(s string) (*url.URL, error) {
 		return nil, fmt.Errorf("has a port outside 1-65535: %q", u.Redacted())
 	}
 	return &url.URL{Scheme: u.Scheme, User: u.User, Host: net.JoinHostPort(u.Hostname(), strconv.Itoa(n))}, nil
-}
-
-// labelRE is one label of a lower-case host or domain name: letters,
-// digits, - and _, with no - at either end.
-var labelRE = regexp.MustCompile(`^[a-z0-9_]([a-z0-9_-]*[a-z0-9_])?$`)
-
-// validHostName reports whether s, in lower case, is a host or domain name.
-// A last label of only digits is refused, because the name is then most
-// likely a mistyped IP address such as 10.1.2.300.
-func validHostName(s string) bool {
-	if len(s) > 253 {
-		return false
-	}
-	labels := strings.Split(s, ".")
-	for _, l := range labels {
-		if len(l) > 63 || !labelRE.MatchString(l) {
-			return false
-		}
-	}
-	return strings.Trim(labels[len(labels)-1], "0123456789") != ""
 }
 
 func defaultPort(scheme string) string {
@@ -160,11 +140,14 @@ func (p *Proxy) NoProxy() []string {
 	return out
 }
 
-// Env returns HTTP_PROXY, HTTPS_PROXY and NO_PROXY, each in upper and lower
-// case, as NAME=value entries for git, node and runtime containers. A proxy
-// that isn't set has no entries. The proxy URLs keep their user and
-// password, so pass the entries as secrets are passed (Cmd.Env, or ${VAR}
-// in the rendered compose file), never in argv or a rendered file.
+// Env returns HTTP_PROXY, HTTPS_PROXY, ALL_PROXY and NO_PROXY, each in upper
+// and lower case, as NAME=value entries for git, node and runtime containers.
+// A proxy the config doesn't set, and ALL_PROXY, which it never sets, are
+// present and empty: the entries replace a proxy inherited from the user's
+// shell, so with only proxy.http set https really goes direct. Without a
+// proxy, Env is nil and children keep the shell's. The proxy URLs keep their
+// user and password, so pass the entries as secrets are passed (Cmd.Env, or
+// ${VAR} in the rendered compose file), never in argv or a rendered file.
 func (p *Proxy) Env() []string {
 	if !p.Enabled() {
 		return nil
@@ -173,14 +156,19 @@ func (p *Proxy) Env() []string {
 	add := func(name, value string) {
 		env = append(env, name+"="+value, strings.ToLower(name)+"="+value)
 	}
-	if p.http != nil {
-		add("HTTP_PROXY", p.http.String())
-	}
-	if p.https != nil {
-		add("HTTPS_PROXY", p.https.String())
-	}
+	add("HTTP_PROXY", urlString(p.http))
+	add("HTTPS_PROXY", urlString(p.https))
+	add("ALL_PROXY", "")
 	add("NO_PROXY", strings.Join(p.NoProxy(), ","))
 	return env
+}
+
+// urlString is u as a string, or "" for nil.
+func urlString(u *url.URL) string {
+	if u == nil {
+		return ""
+	}
+	return u.String()
 }
 
 // BuildArgs returns docker build's predefined proxy args, which have the

@@ -32,7 +32,11 @@ const (
 
 // Options configures the unified TUI.
 type Options struct {
-	Root       string
+	Root string
+	// Untrusted, when set, is why the stack found here can't be used: it
+	// belongs to another user (§6.1). The landing shows it and offers no
+	// stack actions.
+	Untrusted  string
 	Start      Screen
 	Animations bool
 	// Init runs init in-process for the setup wizard and "Resume setup",
@@ -138,7 +142,8 @@ type app struct {
 
 func newApp(ctx context.Context, o Options) *app {
 	a := &app{ctx: ctx, opts: o, screen: ScreenLanding}
-	a.landing = newLanding(o.Root, detectStack(o.Root), o.Animations)
+	a.landing = newLanding(o.Root, a.detectStack(), o.Animations)
+	a.landing.notice = o.Untrusted
 	if o.Start == ScreenDashboard {
 		a.newDashboard()
 		a.screen = ScreenDashboard
@@ -154,7 +159,17 @@ const (
 	// partStack has a pic-sure.yaml, but init hasn't finished.
 	partStack
 	readyStack
+	// untrustedStack is a stack another user owns (Options.Untrusted).
+	untrustedStack
 )
+
+// detectStack is what the landing finds in Root now.
+func (a *app) detectStack() stackStatus {
+	if a.opts.Untrusted != "" {
+		return untrustedStack
+	}
+	return detectStack(a.opts.Root)
+}
 
 func detectStack(root string) stackStatus {
 	if _, err := os.Stat(filepath.Join(root, stack.ConfigFile)); err != nil {
@@ -270,7 +285,7 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.run.close()
 		failed := a.run.err != nil
 		a.run = nil
-		if failed && a.lastSetup != nil && detectStack(a.opts.Root) == noStack {
+		if failed && a.lastSetup != nil && a.detectStack() == noStack {
 			a.landing.result = "setup failed before creating the stack; Set up has your answers"
 		} else {
 			a.lastSetup = nil
@@ -425,7 +440,7 @@ func (a *app) actionClosed() (tea.Model, tea.Cmd) {
 		a.run.close()
 		a.run = nil
 	}
-	if detectStack(a.opts.Root) == noStack {
+	if a.detectStack() == noStack {
 		a.closeDashboard()
 		return a, a.openLandingCmd()
 	}
@@ -464,7 +479,7 @@ func (a *app) startInit(req InitRequest) (tea.Model, tea.Cmd) {
 func (a *app) openLandingCmd() tea.Cmd {
 	a.screen = ScreenLanding
 	a.landing.leaving = false
-	a.landing.setStatus(detectStack(a.opts.Root))
+	a.landing.setStatus(a.detectStack())
 	return a.landing.startAnimations()
 }
 

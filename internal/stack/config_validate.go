@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io/fs"
 	"maps"
-	"net"
 	"net/mail"
 	"os"
 	"path/filepath"
@@ -14,8 +13,8 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/JamesPeck/pic-sure-cli/internal/hostname"
 	"github.com/JamesPeck/pic-sure-cli/internal/netproxy"
-	"github.com/JamesPeck/pic-sure-cli/internal/pki"
 )
 
 // Problem is one thing wrong with a config, at a key path.
@@ -61,7 +60,6 @@ var (
 	// Shared data set names: shared-data publish's rule (and AIO's), which
 	// is also a compose project name's.
 	sharedNameRE  = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
-	hostLabelRE   = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$`)
 	envNameRE     = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 	projectNameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
 )
@@ -81,12 +79,7 @@ func (c *Config) Validate() error {
 	if c.Name != "" && !nameRE.MatchString(c.Name) {
 		v.add("name", "must be lowercase letters, digits, - and _, starting with a letter or digit; got %q", c.Name)
 	}
-	if v.hostname("network.hostname", c.Network.Hostname) && c.Network.Hostname != "" {
-		// The TLS step must be able to put it in a certificate.
-		if err := pki.CheckHostname(c.Network.Hostname); err != nil {
-			v.add("network.hostname", "%v", err)
-		}
-	}
+	v.hostname("network.hostname", c.Network.Hostname)
 	v.ports()
 
 	if c.Auth.AdminEmail != "" {
@@ -256,20 +249,17 @@ func (v *validator) ports() {
 	}
 }
 
-// hostname checks that a non-empty s is a DNS name or an IP address, and
-// reports whether it is (or is empty).
+// hostname checks that a non-empty s is a host name or an IP address
+// (hostname.Check), and reports whether it is (or is empty).
 func (v *validator) hostname(path, s string) bool {
-	if s == "" || net.ParseIP(s) != nil {
+	if s == "" {
 		return true
 	}
-	ok := len(s) <= 253
-	for label := range strings.SplitSeq(s, ".") {
-		ok = ok && hostLabelRE.MatchString(label) && len(label) <= 63
+	if err := hostname.Check(s); err != nil {
+		v.add(path, "%v", err)
+		return false
 	}
-	if !ok {
-		v.add(path, "want a host name or IP address, got %q", s)
-	}
-	return ok
+	return true
 }
 
 func (v *validator) notOption(path, s string) {

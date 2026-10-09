@@ -45,7 +45,9 @@ type Stack struct {
 // Find returns the directory of the stack a command acts on (§6.1, D14):
 // dir when it is set (--stack DIR, relative to cwd), otherwise the nearest
 // directory at or above cwd that holds both pic-sure.yaml and .pic-sure/.
-// Finding no stack is an exit-3 error wrapping ErrNotFound.
+// Finding no stack is an exit-3 error wrapping ErrNotFound, and finding one
+// without --stack that the user doesn't own is an exit-3 error wrapping
+// ErrNotOwned.
 func Find(dir, cwd string) (string, error) {
 	if dir != "" {
 		dir = absFrom(cwd, dir)
@@ -60,6 +62,9 @@ func Find(dir, cwd string) (string, error) {
 			return "", err
 		}
 		if ok {
+			if err := checkOwner(d); err != nil {
+				return "", err
+			}
 			return d, nil
 		}
 		if filepath.Dir(d) == d {

@@ -99,16 +99,21 @@ func TestExecForegroundReadsTheTerminal(t *testing.T) {
 func TestExecForegroundCancel(t *testing.T) {
 	t.Parallel()
 	for _, tt := range []struct {
-		name  string
-		cause error
-		want  int
+		name     string
+		cause    error
+		terminal bool
+		want     int
 	}{
-		{"SIGINT", exitcode.Signaled(os.Interrupt), 7},
-		{"SIGTERM", exitcode.Signaled(syscall.SIGTERM), 9},
-		{"no cause", nil, 9},
+		// From the terminal, the SIGINT reached the child already.
+		{"SIGINT at the terminal", exitcode.Signaled(os.Interrupt), true, 7},
+		// Otherwise it is forwarded.
+		{"SIGINT from elsewhere", exitcode.Signaled(os.Interrupt), false, 8},
+		{"SIGTERM", exitcode.Signaled(syscall.SIGTERM), true, 9},
+		{"no cause", nil, true, 9},
 	} {
+		// Not parallel: SetTerminalSignaledChild is global.
 		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
+			defer docker.SetTerminalSignaledChild(tt.terminal)()
 			ctx, cancel := context.WithCancelCause(context.Background())
 			defer cancel(nil)
 			r := &docker.ExecRunner{Foreground: true, WaitDelay: time.Minute}
@@ -119,7 +124,7 @@ func TestExecForegroundCancel(t *testing.T) {
 				return len(p), nil
 			})
 
-			code, err := r.Stream(ctx, sh(`trap 'exit 9' TERM; echo ready; sleep 0.3; exit 7`), stdout, nil)
+			code, err := r.Stream(ctx, sh(`trap 'exit 8' INT; trap 'exit 9' TERM; echo ready; sleep 0.3; exit 7`), stdout, nil)
 			if !errors.Is(err, context.Canceled) {
 				t.Fatalf("err = %v, want context.Canceled", err)
 			}

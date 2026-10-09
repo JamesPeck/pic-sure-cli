@@ -290,6 +290,7 @@ func TestLandingActionsRunTheirCommands(t *testing.T) {
 		noStack bool
 	}{
 		{noStack, false, "preflight", nil, []string{"doctor"}, true},
+		{untrustedStack, false, "preflight", nil, []string{"doctor"}, true},
 		{readyStack, false, "update", []tea.Msg{left, enter}, []string{"update"}, false},
 		{readyStack, true, "preflight", nil, []string{"doctor"}, false},
 		{readyStack, true, "dryrun", []tea.Msg{left, enter}, []string{"update", "--dry-run"}, false},
@@ -350,7 +351,7 @@ func TestLandingActionsRunTheirCommands(t *testing.T) {
 func TestLandingEveryItemIsWired(t *testing.T) {
 	testConfig(t)
 	nav := map[string]bool{"quit": true, "back": true, "devmenu": true}
-	for _, st := range []stackStatus{noStack, partStack, readyStack} {
+	for _, st := range []stackStatus{noStack, partStack, readyStack, untrustedStack} {
 		for _, dev := range []bool{false, true} {
 			l := newLanding("/tmp/x", st, false)
 			l.dev = dev
