@@ -69,12 +69,13 @@ clean:
 
 # Removes the containers, volumes and images the Docker tests label
 # org.hms-dbmi.picsure.test=1, which a killed test run leaves behind, and
-# nothing else. Pulled base images stay: they're an ordinary cache. Tagged
-# images go by reference, so an image that also carries another tag keeps it.
+# nothing else. Pulled base images stay: they're an ordinary cache. Images
+# go by reference, because removing a multi-tagged image by ID needs -f.
 TEST_LABEL := label=org.hms-dbmi.picsure.test=1
 
 clean-test-docker:
-	@ids="$$(docker ps -aq --filter '$(TEST_LABEL)')"; \
+	@set -e; \
+	ids="$$(docker ps -aq --filter '$(TEST_LABEL)')"; \
 	if [ -n "$$ids" ]; then docker rm -f -v $$ids; fi; \
 	vols="$$(docker volume ls -q --filter '$(TEST_LABEL)')"; \
 	if [ -n "$$vols" ]; then docker volume rm -f $$vols; fi; \

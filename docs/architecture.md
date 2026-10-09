@@ -49,10 +49,10 @@ section. Edit only your own.
   business (ticket 004).
 - **Tests.** Unit tests use the fake runner, never real Docker. CLI
   behaviour is tested with testscript. A test that needs a real Docker
-  daemon skips itself when there isn't one, and under `-short`. It labels
-  everything it creates `org.hms-dbmi.picsure.test=1` (in `internal/ops`,
-  the `labelEngine` wrapper does that), so `make clean-test-docker` can
-  remove what a killed run leaves behind.
+  daemon skips itself when there isn't one. The ones that run by default
+  (in `internal/ops`) also skip under `-short`, and label everything they
+  create `org.hms-dbmi.picsure.test=1` through the `labelEngine` wrapper,
+  so `make clean-test-docker` can remove what a killed run leaves behind.
 
 ## Adding a command
 

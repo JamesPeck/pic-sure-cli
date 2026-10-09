@@ -15,13 +15,15 @@ import (
 // leaves behind. Keep the two in step.
 const testLabel = "org.hms-dbmi.picsure.test"
 
-// requireDocker skips the test under -short or without a Docker daemon.
 func requireDocker(t *testing.T) {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("needs docker")
 	}
-	if err := exec.Command("docker", "info").Run(); err != nil {
+	// A wedged daemon can accept the connection and never answer.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := exec.CommandContext(ctx, "docker", "info").Run(); err != nil {
 		t.Skipf("docker is not available: %v", err)
 	}
 }
@@ -62,8 +64,8 @@ func (e labelEngine) Create(ctx context.Context, opts docker.RunOpts) (string, e
 	return e.Engine.Create(ctx, opts)
 }
 
-// cleanupDocker registers f to run when the test ends, on a context that
-// a cancelled or timed-out test context doesn't cancel.
+// cleanupDocker registers f to run when the test ends, on its own context
+// bounded at two minutes rather than the test's, which may be cancelled.
 func cleanupDocker(t *testing.T, f func(ctx context.Context)) {
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
