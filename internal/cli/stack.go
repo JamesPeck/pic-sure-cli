@@ -28,7 +28,7 @@ func (a *App) openStack(cmd *cobra.Command) (*stack.Stack, error) {
 }
 
 // openStackUnlogged is openStack without the run log, for a command that
-// must change nothing in the stack until the user confirms (reset, destroy).
+// must change nothing in the stack until the user confirms.
 func (a *App) openStackUnlogged(cmd *cobra.Command) (*stack.Stack, error) {
 	if a.noStack {
 		return nil, stack.ErrNotFound

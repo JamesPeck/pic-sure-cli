@@ -596,7 +596,7 @@ func TestBuildRefusesAStackNameTooLongForADevTag(t *testing.T) {
 }
 
 // The image step holds the cache's use lock, so it can't run while cache
-// prune does (057).
+// prune does.
 func TestBuildWaitsForCachePrune(t *testing.T) {
 	x := newBuildFixture(t)
 	x.missing()

@@ -763,8 +763,8 @@ difference (§10.6).
   `schema_version` to the next render.
 - **Comparing versions.** `CompareVersions(a, b)` orders versions as semver,
   ignoring a leading `v`, `+build` and a git-describe suffix (`-N-gSHA`,
-  `-dirty`). It reports not-ok for anything else, such as `dev`. 028 uses it
-  for PSCLI.
+  `-dirty`). It reports not-ok for anything else, such as `dev`. The release
+  gate uses it for PSCLI.
 - **The gate.** `st.CheckVersions(cli, reg)` reads state.json's two
   version fields (missing is fine, corrupt is an error) and pic-sure.yaml's
   schema. On the result,
@@ -1033,10 +1033,10 @@ with `docker.PsTimeout`, stopping at the first docker failure), and
 release-control. A section it can't read carries an error string instead
 of failing, so the command exits 0. The command leaves `Deps.Compose` nil for an unrendered stack and
 builds it with no env, since `ps` needs no secret. Migrations are
-`unknown` until 032 adds its check. 027 added
+`up_to_date`, `pending` or `unknown`. It uses
 `VersionCheck.MigrationErr` (a config schema older than every migration)
 and `render.HMROrigin` (httpd-hmr's Vite origin, which status prints for
-Auth0) for it.
+Auth0).
 
 **Deep status (`status_deep.go`).** `StatusOptions.Deep` adds
 `StatusReport.Deep`: busybox `wget -S` probes through `compose exec -T`
@@ -1077,8 +1077,8 @@ checkout has and the Dockerfile never copies.
 `DictionaryETLSrcLabel`), pass the proxy build args, take the cache tree
 unless `Source` is set (`Tag` and `Force` serve §7.3 builds), and write
 `<image>.log` to `LogDir` through `partOutput`, showing the tail on
-failure. They return `ImageBuildResult{Tag, Ref, Built}`; 031 records the
-tags in state.json.
+failure. They return `ImageBuildResult{Tag, Ref, Built}`; the build step
+records the tags in state.json.
 
 **Doctor (`doctor.go`).** `Doctor(ctx, d, DoctorOptions)` returns a
 `*DoctorReport`: a list of `Check{Name, Status, Message, Detail}` with
@@ -1316,7 +1316,7 @@ init, and the parts `up` and `update` reuse.
   set in their pic-sure.yaml (a gone or unreadable one counts for
   nothing); `ReservingHost{Host, Reserved}` makes them busy for both
   choosers, and a busy default that is reserved says "another stack's".
-  `StackNameInUse` became `StackResources` in 084 (ownership, below).
+  The name check is `StackResources` (ownership, below).
 - Doctor's new `DoctorOptions.Config` is init's config, used without a
   `Stack`: `memory` counts its HPDS heap once (a running hpds of a stack of
   that name is taken for it).
@@ -2304,8 +2304,8 @@ waits are warnings.
   sha to a full commit sha in `git/<repo>.git`, under the repo's fetch
   lock. It clones, or fetches every branch and tag first so a branch gives
   its current head; a full sha the clone already has skips the fetch.
-- `ReleaseControlDir()` (028 clones into it under `LockRepo(ctx,
-  "release-control")`), `DownloadsDir()`, `BuildDir(sha)` (`build/<sha12>`,
+- `ReleaseControlDir()` (release fetches clone into it under
+  `LockRepo(ctx, "release-control")`), `DownloadsDir()`, `BuildDir(sha)` (`build/<sha12>`,
   not created: the build makes and removes it under the reactor lock).
 - `TempDir(pattern)` makes a fresh 0700 directory under `tmp/` for one run's
   temporary files, such as an extracted phenotype CSV, that a container may
@@ -2756,7 +2756,7 @@ Debug logging that is safe to attach to a bug report (§6.1,
   wherever it appears: message, attr, error, struct, or an attr added with
   `Logger.With` before the value was registered. Its JSON-escaped and
   Go-quoted forms are caught too. Register a secret as soon as it is read
-  or generated (008 does it when secrets load; whoever reads one from stdin
+  or generated (the stack package does it when secrets load; whoever reads one from stdin
   does it there). `log.Redact(s)` applies the registry to any string, for
   `support-bundle`. Values shorter than 4 bytes aren't registered:
   they would match all through unrelated text. The registry also scrubs the
@@ -3150,5 +3150,4 @@ terminal.
 ## internal/ctxio
 
 `ctxio.Reader(ctx, r)` fails with `ctx`'s cause once `ctx` is done, so a
-long copy, checksum or extraction (the phenotype loader, `phenoinput`,
-the demo data) ends promptly on Ctrl-C.
+long copy, checksum or extraction ends promptly on Ctrl-C.

@@ -208,10 +208,11 @@ Run these inside the stack directory, or add `--stack DIR`.
   give Docker more (Docker Desktop: Settings, Resources). `data demo
   --heap 1024` lowers the loader's heap.
 - **"all predefined address pools have been fully subnetted":** Docker
-  has run out of network ranges. Each running stack takes 4 networks, so
-  the default pools fill at roughly 7 stacks. `pic-sure --stack DIR down
-  --json` frees a stack's networks and keeps its data, so ask the user
-  which idle stacks to stop with `down` first; offer `destroy` only for
+  has run out of network ranges. Each stack takes 4 networks until
+  `down` or `destroy` removes them (a stack whose containers just exited
+  keeps them), so the default pools fill at roughly 7 stacks.
+  `pic-sure --stack DIR down --json` frees a stack's networks and keeps
+  its data, so ask the user which idle stacks to stop with `down` first; offer `destroy` only for
   stacks whose data they want gone. Don't prune networks yourself. Then
   re-run the same command.
 - **Docker Desktop file sharing:** a data file outside Docker's shared

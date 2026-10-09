@@ -21,6 +21,8 @@ func TestPrivateKey(t *testing.T) {
 		"stray.password":                          true, // not a field
 		"stray.encryption_key":                    true,
 		"stray.key":                               false,
+		"stray.private.key":                       false, // judged by the last segment
+		"services.psama.env.PRIVATE_KEY":          true,
 		"stray.name":                              false,
 		"services.psama.env.AUTHORIZATION_HEADER": false,
 	} {

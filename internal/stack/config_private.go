@@ -15,9 +15,9 @@ func (f Field) Private() bool {
 
 // PrivateKey reports whether the value of the dotted config key is kept out
 // of the run logs and support bundles: a Private field's, or, for a key that
-// isn't a field or matches a wildcard field such as an env var, a
-// secret-named key's (log.IsSecretName). A field that isn't Private, such
-// as auth.consent_authorization, never is.
+// isn't a field or matches a wildcard field such as an env var, one whose
+// last segment is secret-named (log.IsSecretName). A field that isn't
+// Private, such as auth.consent_authorization, never is.
 func PrivateKey(key string) bool {
 	f, ok := LookupField(key)
 	switch {
@@ -26,5 +26,5 @@ func PrivateKey(key string) bool {
 	case ok && !strings.HasSuffix(f.Key, ".*"):
 		return false
 	}
-	return log.IsSecretName(key)
+	return log.IsSecretName(key[strings.LastIndex(key, ".")+1:])
 }

@@ -328,8 +328,7 @@ func mountsEntry(mount, rel string, roots []string) bool {
 }
 
 // withinLexically reports whether path is dir or inside it, comparing the
-// paths as written without following symlinks. The cache package's
-// withinResolved follows them.
+// paths as written without following symlinks.
 func withinLexically(path, dir string) bool {
 	r, err := filepath.Rel(dir, path)
 	return err == nil && filepath.IsLocal(r)

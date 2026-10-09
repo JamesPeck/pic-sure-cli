@@ -4,7 +4,4 @@
 // contexts, per-run temporary directories, the locks (per-repo fetch, the
 // global reactor lock, per image tag), and the name of the pic-sure-m2
 // Maven volume.
-//
-// cache.go has the root and layout, source.go EnsureSource, and prune.go
-// backs `cache list` and `cache prune`.
 package cache
