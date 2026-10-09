@@ -275,14 +275,17 @@ it.
   read-only ones run without the lock and on a newer stack, and write a run
   log file only at debug level, like `ps`; any other, an unknown one or
   none, and `wait --down-project`, holds the stack lock until compose
-  exits. It sets the adapter's `Project` to the config's name, whose `-p`
-  beats a `name:` in a file added with `-f` or an override and an
+  exits. It sets the adapter's `Project` to the config's name (the
+  rendered file's stays when a read-only one can't read the config), whose
+  `-p` beats a `name:` in a file added with `-f` or an override and an
   `--env-file`'s `COMPOSE_PROJECT_NAME`, so compose acts on the project the
-  ownership check covered (084). A mutating one also runs
-  `ops.CheckVolumeLabels` on `config --no-interpolate` (107): exit 3, "run
-  `pic-sure up`", if the render would give an existing volume labels it
-  doesn't have, since compose would ask on the terminal whether to
-  recreate it. The user's own
+  ownership check covered (084). One whose subcommand creates volumes
+  (`up`, `create`, `run`, `watch`, or one it can't place) first runs
+  `config --no-interpolate` with the user's global flags and
+  `ops.CheckVolumeLabels` on it (107): exit 3, "run `pic-sure up`", if
+  that config would give a volume compose made labels it doesn't have,
+  since compose would ask on the terminal whether to recreate it. The
+  user's own
   `-p`/`--project-name` is exit 2 (`composeProjectFlag`). The
   passthrough's output goes straight to the terminal, never to
   the run log.

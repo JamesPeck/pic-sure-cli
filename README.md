@@ -395,7 +395,8 @@ a volume, so the moved stack's volumes keep `a` in their labels for good:
 pic-sure renders each existing volume with the labels it has, so compose
 never asks to recreate it. `pic-sure compose --` doesn't re-render, so
 if the last render doesn't match a volume's labels (a stack rendered by an
-older pic-sure), it refuses with exit 3 until `pic-sure up` re-renders.
+older pic-sure), `compose -- up` (or `create`, `run`) refuses with exit 3
+until `pic-sure up` re-renders.
 `pic-sure compose --` always runs on the stack's own project: it refuses
 `-p`, and a top-level `name:` in a file added with `-f` or in
 `overrides/*.yaml` doesn't change it (`doctor` warns about the latter).

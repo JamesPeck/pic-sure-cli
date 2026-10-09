@@ -1,11 +1,13 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -242,20 +244,16 @@ the stack does.`,
 			}
 			// -p pins the project the ownership check covers: it beats a
 			// name: in a file added with -f or an override, and
-			// COMPOSE_PROJECT_NAME in an --env-file.
-			c.Project = cfg.Name
+			// COMPOSE_PROJECT_NAME in an --env-file. A read-only command on
+			// an unreadable config keeps the rendered file's name.
+			if cfg.Name != "" {
+				c.Project = cfg.Name
+			}
 			if commandClass(cmd) != stack.ReadOnly {
 				if err := checkOwned(cmd, d, st, cfg); err != nil {
 					return err
 				}
-				// Only up re-renders, and this compose may reach a terminal,
-				// where compose's "Recreate (data will be lost)?" is a real
-				// question.
-				merged, err := c.Config(cmd.Context(), false)
-				if err != nil {
-					return err
-				}
-				if err := ops.CheckVolumeLabels(cmd.Context(), d, st, cfg.Name, merged); err != nil {
+				if err := checkVolumeLabels(cmd, d, st, c, cfg.Name, args); err != nil {
 					return err
 				}
 			}
@@ -286,6 +284,28 @@ the stack does.`,
 func (a *App) stackCompose(cmd *cobra.Command, r docker.Runner, st *stack.Stack) (*docker.Compose, error) {
 	c, _, _, err := a.stackComposeConfig(cmd, r, st)
 	return c, err
+}
+
+// checkVolumeLabels runs ops.CheckVolumeLabels for a passthrough whose
+// subcommand creates volumes, on the config compose will use, the user's
+// global flags (an extra -f) included. Only up re-renders, and this compose
+// may reach a terminal, where compose's "Recreate (data will be lost)?" is
+// a real question.
+func checkVolumeLabels(cmd *cobra.Command, d *ops.Deps, st *stack.Stack, c *docker.Compose, name string, args []string) error {
+	i := composeSubcommand(args)
+	if i >= 0 && !composeCreatesVolumes[args[i]] {
+		return nil
+	}
+	globals := args[:max(i, 0)]
+	var out, errOut bytes.Buffer
+	code, err := c.Passthrough(cmd.Context(), append(slices.Clip(globals), "config", "--no-interpolate"), nil, &out, &errOut)
+	if err != nil {
+		return err
+	}
+	if code != 0 {
+		return fmt.Errorf("docker compose config: %s", strings.TrimSpace(errOut.String()))
+	}
+	return ops.CheckVolumeLabels(cmd.Context(), d, st, name, out.Bytes())
 }
 
 // stackComposeConfig is stackCompose, also returning the config and secrets

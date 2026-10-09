@@ -1,0 +1,79 @@
+# compose -- runs on the stack's own project, and refuses a subcommand that
+# creates volumes when the config it would use relabels an existing volume:
+# compose would ask on the terminal whether to recreate it (ticket 107).
+cd stack
+
+# The render gives demo_hpds-data, made in the directory the stack moved
+# from, the current directory: refused before compose up runs.
+cp ../stale.txt ../config.txt
+exitcode 3 pic-sure compose -- up -d
+stderr 'demo_hpds-data, so compose would offer to recreate them'
+stderr 'run `pic-sure up` to re-render first'
+grep ' -p demo config --no-interpolate$' $WORK/docker.log
+! grep ' up -d$' $WORK/docker.log
+
+# A subcommand that creates no volume isn't checked.
+rm $WORK/docker.log
+exec pic-sure compose -- down
+grep ' -p demo down$' $WORK/docker.log
+! grep 'config' $WORK/docker.log
+
+# A render that keeps the volume's labels runs.
+cp ../match.txt ../config.txt
+exec pic-sure compose -- up -d
+grep ' -p demo up -d$' $WORK/docker.log
+
+# The check reads the config with the user's own -f.
+exitcode 3 pic-sure compose -- -f extra.yaml up -d
+grep ' -p demo -f extra.yaml config --no-interpolate$' $WORK/docker.log
+
+# A read-only subcommand on a config this CLI can't read still runs on the
+# rendered project, though an override names another.
+cp ../bad.yaml pic-sure.yaml
+exec pic-sure compose -- ps
+grep ' -p demo ps$' $WORK/docker.log
+
+-- docker.scenario --
+docker ps --all --no-trunc --filter label=com.docker.compose.project=* --format * => 0
+docker volume ls -q --filter label=* => 0 stdout=vols.txt
+docker volume inspect demo_hpds-data => 0 stdout=inspect.json
+docker network ls -q --no-trunc --filter label=com.docker.compose.project=* => 0
+docker compose * -f extra.yaml config --no-interpolate => 0 stdout=stale.txt
+docker compose * config --no-interpolate => 0 stdout=config.txt
+docker compose * up -d => 0
+docker compose * down => 0
+docker compose * ps => 0
+-- vols.txt --
+demo_hpds-data
+-- inspect.json --
+[{"Name":"demo_hpds-data","Labels":{"com.docker.compose.project":"demo","com.docker.compose.volume":"hpds-data","com.docker.compose.config-hash":"abc","org.hms-dbmi.picsure.stack":"demo","org.hms-dbmi.picsure.stack-dir":"/gone/demo","org.hms-dbmi.picsure.stack-id":"0123456789abcdef0123456789abcdef"}}]
+-- stale.txt --
+volumes:
+  hpds-data:
+    labels:
+      - org.hms-dbmi.picsure.stack=demo
+      - org.hms-dbmi.picsure.stack-dir=/now/demo
+      - org.hms-dbmi.picsure.stack-id=0123456789abcdef0123456789abcdef
+-- match.txt --
+volumes:
+  hpds-data:
+    labels:
+      org.hms-dbmi.picsure.stack: demo
+      org.hms-dbmi.picsure.stack-dir: /gone/demo
+      org.hms-dbmi.picsure.stack-id: "0123456789abcdef0123456789abcdef"
+-- bad.yaml --
+schema: 1
+name: [unclosed
+-- stack/pic-sure.yaml --
+schema: 1
+name: demo
+auth: {mode: open, admin_email: admin@example.com}
+-- stack/.pic-sure/state.json --
+{"cli_version": "dev", "schema_version": 1, "stack_id": "0123456789abcdef0123456789abcdef"}
+-- stack/.pic-sure/secrets.yaml --
+db_root_password: rootpw
+-- stack/.pic-sure/render/compose.yaml --
+name: demo
+services: {}
+-- stack/overrides/n.yaml --
+name: other

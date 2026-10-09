@@ -635,6 +635,11 @@ func TestDoctorStackCompose(t *testing.T) {
 		if strings.Contains(c.Message, "a.yaml") {
 			t.Errorf("message %q", c.Message)
 		}
+		// The warning needs no config.
+		if err := st.WriteFile("pic-sure.yaml", []byte("name: [unclosed\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		wantCheck(t, e.run(), "overrides", ops.CheckWarn, "name: in overrides/b.yaml is ignored")
 	})
 }
 

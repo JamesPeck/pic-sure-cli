@@ -27,7 +27,7 @@ func fakeDocker(t *testing.T) string {
 	script := `#!/bin/sh
 echo "$@" >> ` + logf + `
 case "$*" in
-"ps --all --no-trunc "*|"volume ls "*|"network ls "*) ;;
+"ps --all --no-trunc "*|"volume ls "*|"network ls "*|*" config --no-interpolate") ;;
 *" ps "*) echo '{"Service":"hpds","Name":"demo-hpds-1","State":"running","Health":"healthy","Status":"Up 2 minutes"}' ;;
 *" logs "*) echo "hpds-1  | started"; echo "compose noise" >&2; echo "hpds-1  | ready" ;;
 *" restart nosuch") echo "no such service: nosuch" >&2; exit 1 ;;

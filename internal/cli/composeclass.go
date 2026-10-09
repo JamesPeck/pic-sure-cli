@@ -42,6 +42,10 @@ func composeClass(args []string) stack.CommandClass {
 	return stack.ReadOnly
 }
 
+// composeCreatesVolumes is the compose subcommands that create a missing
+// volume, and so may ask whether to recreate one whose config changed.
+var composeCreatesVolumes = map[string]bool{"up": true, "create": true, "run": true, "watch": true}
+
 // composeSubcommand returns the index in args of the compose subcommand,
 // the first argument after compose's global flags, or -1 when there is
 // none or a global flag it doesn't know (or a "--") comes first.

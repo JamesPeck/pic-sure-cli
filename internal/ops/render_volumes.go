@@ -9,6 +9,7 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
+	"github.com/JamesPeck/pic-sure-cli/internal/docker"
 	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
 	"github.com/JamesPeck/pic-sure-cli/internal/stack"
 )
@@ -18,33 +19,51 @@ import (
 // stack's own under the ownership rule (§6.1), its key and labels without
 // compose's. Another stack's volumes are left to the ownership check.
 func existingVolumeLabels(ctx context.Context, d *Deps, st *stack.Stack, name string) (map[string]map[string]string, error) {
+	vols, err := ownVolumes(ctx, d, st, name)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]map[string]string{}
+	for key, v := range vols {
+		out[key] = userLabels(v.Labels)
+	}
+	return out, nil
+}
+
+// ownVolumes returns the stack's volumes in its compose project, by key.
+func ownVolumes(ctx context.Context, d *Deps, st *stack.Stack, name string) (map[string]docker.Volume, error) {
 	vols, err := d.Docker.VolumeList(ctx, stack.LabelComposeProject+"="+name)
 	if err != nil {
 		return nil, err
 	}
 	dir := CanonicalDir(st.Dir)
-	out := map[string]map[string]string{}
+	out := map[string]docker.Volume{}
 	for _, v := range vols {
-		key := v.Labels[stack.LabelComposeVolume]
-		if key == "" || stack.Owner(st.ID(), dir, v.Labels) == stack.Foreign {
-			continue
+		if key := v.Labels[stack.LabelComposeVolume]; key != "" && stack.Owner(st.ID(), dir, v.Labels) != stack.Foreign {
+			out[key] = v
 		}
-		labels := map[string]string{}
-		for k, val := range v.Labels {
-			if !strings.HasPrefix(k, stack.LabelComposePrefix) {
-				labels[k] = val
-			}
-		}
-		out[key] = labels
 	}
 	return out, nil
+}
+
+// userLabels returns labels without compose's own.
+func userLabels(labels map[string]string) map[string]string {
+	out := map[string]string{}
+	for k, v := range labels {
+		if !strings.HasPrefix(k, stack.LabelComposePrefix) {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 // CheckVolumeLabels refuses, with exit 3, a compose config (merged, not
 // interpolated) that gives one of the stack's existing volumes labels it
 // doesn't have: compose would offer to recreate the volume, deleting its
-// data. A render made by pic-sure up never does; one made before render
-// kept existing volumes' labels can.
+// data. Only volumes compose made carry the config hash it compares, and a
+// label set from a ${VAR} can't be compared uninterpolated, so those are
+// skipped. A render by pic-sure up always matches; one by an older pic-sure
+// may not.
 func CheckVolumeLabels(ctx context.Context, d *Deps, st *stack.Stack, name string, config []byte) error {
 	var f struct {
 		Volumes map[string]struct {
@@ -54,22 +73,26 @@ func CheckVolumeLabels(ctx context.Context, d *Deps, st *stack.Stack, name strin
 	if err := yaml.Unmarshal(config, &f); err != nil {
 		return fmt.Errorf("reading the compose config: %w", err)
 	}
-	existing, err := existingVolumeLabels(ctx, d, st, name)
+	vols, err := ownVolumes(ctx, d, st, name)
 	if err != nil {
 		return err
 	}
 	var differ []string
-	for key, have := range existing {
+	for key, vol := range vols {
 		v, ok := f.Volumes[key]
-		if !ok {
+		if !ok || vol.Labels[docker.ConfigHashLabel] == "" {
 			continue
 		}
 		want := map[string]string{}
 		for k, val := range v.Labels {
+			if strings.Contains(strings.ReplaceAll(val, "$$", ""), "$") {
+				want = nil
+				break
+			}
 			want[k] = strings.ReplaceAll(val, "$$", "$")
 		}
-		if !maps.Equal(have, want) {
-			differ = append(differ, name+"_"+key)
+		if want != nil && !maps.Equal(userLabels(vol.Labels), want) {
+			differ = append(differ, vol.Name)
 		}
 	}
 	if len(differ) > 0 {
@@ -79,8 +102,8 @@ func CheckVolumeLabels(ctx context.Context, d *Deps, st *stack.Stack, name strin
 	return nil
 }
 
-// composeLabels reads compose labels in either form: a mapping, or the
-// list of "key=value" that compose config prints.
+// composeLabels reads compose labels in either form compose config prints:
+// a mapping or a list of "key=value".
 type composeLabels map[string]string
 
 func (l *composeLabels) UnmarshalYAML(n *yaml.Node) error {
