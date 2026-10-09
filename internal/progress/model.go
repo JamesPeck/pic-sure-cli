@@ -47,7 +47,8 @@ type Options struct {
 	// ForceQuit makes a further Ctrl-C while the operation stops a force
 	// quit: the model sets Forced and quits, as a second SIGINT would kill
 	// the process. The program's owner then exits without waiting for the
-	// operation.
+	// operation. The inline program's live area offers it; an embedding
+	// screen offers it in its own footer.
 	ForceQuit bool
 	// NoColor strips color from what scrollback prints, which Bubble Tea
 	// writes as is, whatever the program's color profile.
@@ -337,9 +338,9 @@ func (m Model) View() tea.View {
 	switch {
 	case m.done && !m.ok && m.logPath != "":
 		line(faint.Render("Log file: " + m.logPath))
-	case m.cancelling && m.opts.ForceQuit:
+	case m.Cancelling() && m.opts.ForceQuit && m.opts.Scrollback:
 		line(styles.Warn.Render("Cancelling: waiting for the current step to stop… (Ctrl-C again to quit now)"))
-	case m.cancelling:
+	case m.Cancelling():
 		line(styles.Warn.Render("Cancelling: waiting for the current step to stop…"))
 	case m.confirm:
 		line(styles.Warn.Render("Press Ctrl-C again to cancel."))

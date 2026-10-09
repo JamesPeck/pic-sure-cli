@@ -92,7 +92,7 @@ func Run(ctx context.Context, o Options) error {
 // err, and returns Run's error.
 func (a *app) end(err error) error {
 	switch {
-	case a.run != nil && a.run.forced():
+	case a.run != nil && a.run.prog.Forced:
 		// A third Ctrl-C while the operation stopped: leave it behind. The
 		// process exits soon after, and the stack lock with it.
 		a.run.abandon()

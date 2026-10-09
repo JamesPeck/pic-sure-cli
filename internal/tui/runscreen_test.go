@@ -130,8 +130,8 @@ func TestRunScreenCtrlCTwiceCancels(t *testing.T) {
 	}
 	s.update(ctrlC)
 	pumpRun(t, s, func() bool { return s.finished })
-	if !strings.Contains(plainView(s), "✗") {
-		t.Errorf("a cancelled run isn't shown as failed:\n%s", plainView(s))
+	if !strings.Contains(plainView(s), "✗") || strings.Contains(plainView(s), "Cancelling") {
+		t.Errorf("a cancelled run isn't shown as failed, or still as stopping:\n%s", plainView(s))
 	}
 }
 
@@ -192,7 +192,8 @@ func TestRunScreenKeepsALongErrorReadable(t *testing.T) {
 	for i := range 78 {
 		words = append(words, fmt.Sprintf("w%03d", i))
 	}
-	msg := strings.Join(words, " ") // 389 characters, plus the mark
+	msg := strings.Join(words, " ")                                        // 389 characters, plus the mark
+	logPath := "/tmp/" + strings.Repeat("deep-stack-dir/", 12) + "run.log" // wraps to three lines
 	run := func(_ context.Context, req InitRequest) (InitResult, error) {
 		for i := range 15 {
 			id := fmt.Sprint(i)
@@ -204,7 +205,7 @@ func TestRunScreenKeepsALongErrorReadable(t *testing.T) {
 			req.Sink.Emit(events.Log{ID: "x", Line: fmt.Sprintf("log line %02d", i)})
 		}
 		req.Sink.Emit(events.StepDone{ID: "x", Status: events.StepFailed})
-		return InitResult{LogPath: "/tmp/run.log"}, errors.New(msg)
+		return InitResult{LogPath: logPath}, errors.New(msg)
 	}
 	for _, height := range []int{24, 30} {
 		t.Run(fmt.Sprint(height), func(t *testing.T) {
@@ -219,7 +220,7 @@ func TestRunScreenKeepsALongErrorReadable(t *testing.T) {
 				if lipgloss.Height(view) > height {
 					t.Fatalf("the view is %d lines tall:\n%s", lipgloss.Height(view), view)
 				}
-				for _, want := range []string{"enter to go back", "Log file: /tmp/run.log"} {
+				for _, want := range []string{"enter to go back", "Log file: /tmp/deep-stack-dir/", "run.log"} {
 					if !strings.Contains(view, want) {
 						t.Fatalf("view lacks %q:\n%s", want, view)
 					}
@@ -270,7 +271,7 @@ func TestRunScreenOffersTheForceQuit(t *testing.T) {
 	if !strings.Contains(plainView(s), "ctrl+c again to quit now") {
 		t.Errorf("the footer doesn't offer the force quit:\n%s", plainView(s))
 	}
-	if _, cmd := s.update(ctrlC); !s.forced() || cmd == nil {
+	if _, cmd := s.update(ctrlC); !s.prog.Forced || cmd == nil {
 		t.Fatal("a third Ctrl-C didn't force the quit")
 	} else if _, ok := cmd().(tea.QuitMsg); !ok {
 		t.Error("a forced quit doesn't quit the program")

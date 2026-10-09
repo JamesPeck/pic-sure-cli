@@ -2527,8 +2527,8 @@ load wizard, and 083 the landing's actions.
   (a signal) while init runs, `Run` cancels it and waits for it to
   return. The finished screen scrolls the steps, the result line and the
   summary as one body (wrapped before it is measured), opening on the
-  result line; the `Log file:` line and the footer stay below it. A later in-process
-  operation (040, 047) can reuse `runScreen`.
+  result line; the `Log file:` line and the footer stay below it. A later
+  in-process operation (040, 047) can reuse `runScreen`.
 - **Load wizard (047).** `loadScreen` asks for one load: a phenotype CSV
   or archive (`phenoinput.ListCSVEntries` checks the pick and lists its
   CSVs; two or more open an entry picker for `--entry`), a directory

@@ -86,9 +86,8 @@ type runScreen struct {
 	finished bool
 	res      InitResult
 	err      error
-	// scroll is the first body line shown once the user scrolls the
-	// finished screen; until then (scrolled false) the body shows from
-	// its result line, after as many of the steps' last lines as fit.
+	// scroll is the finished screen's first body line, once the user has
+	// scrolled it (see top).
 	scroll   int
 	scrolled bool
 
@@ -183,10 +182,6 @@ func (s *runScreen) abandon() {
 	}
 }
 
-// forced reports whether the user forced a quit while the operation
-// stopped.
-func (s *runScreen) forced() bool { return s.prog.Forced }
-
 // body is the finished screen's scrollable lines: the steps, the result
 // line and the summary, wrapped to the block, and the index of the
 // result line.
@@ -213,7 +208,7 @@ func (s *runScreen) logLine() string {
 	if s.err == nil || s.res.LogPath == "" {
 		return ""
 	}
-	return logLineStyle.Render("Log file: " + s.res.LogPath)
+	return logLineStyle.Width(s.blockWidth()).Render("Log file: " + s.res.LogPath)
 }
 
 // bodyRoom is how many body lines fit between the title and the footer
@@ -229,12 +224,14 @@ func (s *runScreen) bodyRoom() int {
 // top is the first body line to show: where the user scrolled to, else
 // the result line, after as many of the steps' last lines as fit.
 func (s *runScreen) top(lines []string, result int) int {
-	top := min(result, len(lines)-s.bodyRoom())
 	if s.scrolled {
-		top = s.scroll
+		return s.clamp(s.scroll, len(lines))
 	}
-	return min(max(top, 0), max(len(lines)-s.bodyRoom(), 0))
+	return s.clamp(result, len(lines))
 }
+
+// clamp keeps top within a body of n lines.
+func (s *runScreen) clamp(top, n int) int { return min(max(top, 0), max(n-s.bodyRoom(), 0)) }
 
 // blockWidth is the width of the screen's content. It is fixed, so the
 // centered block doesn't shift as lines come and go.
@@ -292,8 +289,7 @@ func (s *runScreen) update(msg tea.Msg) (*runScreen, tea.Cmd) {
 			default:
 				return s, nil
 			}
-			s.scroll, s.scrolled = top, true
-			s.scroll = s.top(lines, result)
+			s.scroll, s.scrolled = s.clamp(top, len(lines)), true
 			return s, nil
 		}
 		return s, s.feed(msg)
