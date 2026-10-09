@@ -304,7 +304,7 @@ func (p *publish) probe(ctx context.Context) (publishProbe, error) {
 	// interrupted promote left.
 	script := `cd "$1"; for f in ` + strings.Join(sharedPhenotypeFiles, " ") + `; do [ -s "$f" ] || printf 'missing %s\n' "$f"; done; ` +
 		`if [ -f ` + datasetMarker + ` ]; then printf 'dataset %s\n' "$(head -n 1 ` + datasetMarker + `)"; fi; ` +
-		`cd "$2"; for p in * .[!.]* ..?*; do [ -d "$p" ] || continue; case "$p" in ` + genomicBackup + `) continue;; ` + promotePrefix + `*|` + oldPrefix + `*) printf 'leftover %s\n' "$p"; continue;; esac; ` +
+		`cd "$2"; for p in * .[!.]* ..?*; do [ -d "$p" ] || continue; case "$p" in ` + genomicBackup + `) continue;; ` + leftoverPattern + `) printf 'leftover %s\n' "$p"; continue;; esac; ` +
 		`printf 'partition %s\n' "$p"; for c in "./$p"/*/; do [ -d "$c" ] || continue; c=${c#./}; printf 'contig %s\n' "${c%/}"; ` +
 		`for f in ` + strings.Join(sharedGenomicIndexes, " ") + `; do [ -s "$c$f" ] || printf 'unindexed %s\n' "$c$f"; done; done; done`
 	mounts := []docker.Mount{{Source: p.srcData, Target: "/d", ReadOnly: true}, {Source: p.srcGenomic, Target: "/g", ReadOnly: true}}

@@ -130,8 +130,8 @@ it. Exit code 3 when `--stack` names no stack.
 Check names. Host and Docker: `docker-cli`, `docker-daemon`,
 `docker-runtime`, `compose-version`, `buildx-version` (a failure only when
 images are built), `git`, `disk-cache`, `disk-docker`, `memory`,
-`arm64-images`. Stack: `config`, `compose-config`, `overrides`, `ports`,
-`auth0`, `proxy`. With `--network`: `network-release-control`,
+`arm64-images`. Stack: `config`, `compose-config`, `overrides`,
+`stack-name`, `genomic-leftovers`, `ports`, `auth0`, `proxy`. With `--network`: `network-release-control`,
 `network-github`, `network-maven-central`, `network-npm-registry`,
 `network-alpine-cdn`, and, when a proxy is set, `network-docker-pull`.
 New checks may be added; treat an unknown name like any other.

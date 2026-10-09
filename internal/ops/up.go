@@ -65,6 +65,9 @@ func upStepIDs(cfg *stack.Config) []string {
 // render changes a file under render/files, the services that read it are
 // recorded in state.json's PendingRestarts, and the restart step restarts
 // those that are running before start waits for the stack to be healthy.
+//
+// Start refuses (exit 3), before starting anything, while the genomic
+// store holds what an interrupted promote left (GenomicLeftovers).
 func UpSteps(d *Deps, st *stack.Stack, cfg *stack.Config, sec *stack.Secrets, state *stack.State, opts ConvergeOptions) []steps.Step {
 	resolve := resolveStep(d, st, cfg, state, opts.Cache, unsetSources)
 	apply := resolve.Apply
@@ -99,7 +102,7 @@ func upSteps(d *Deps, st *stack.Stack, cfg *stack.Config, sec *stack.Secrets, st
 	if user := HostUser(); hmrOn(cfg) && user != "" {
 		list = append(list, HMRVolumeStep(d, st, cfg, user))
 	}
-	return append(list, converge[last])
+	return append(list, refuseGenomicLeftovers(d, st, cfg, converge[last]))
 }
 
 // upRestarts records and runs the restarts up's steps call for.

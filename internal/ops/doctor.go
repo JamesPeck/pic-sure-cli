@@ -687,6 +687,7 @@ func (c *doctor) stack(ctx context.Context) {
 		return
 	}
 	c.ownershipCheck(ctx)
+	c.genomicLeftoversCheck(ctx)
 	c.portsCheck(ctx)
 	c.auth0Check()
 	c.proxyCheck()
@@ -710,6 +711,41 @@ func (c *doctor) ownershipCheck(ctx context.Context) {
 		c.add("stack-name", CheckOK, "the stack moved from %s and adopts its Docker resources", o.Moved()[0].StackDir)
 	default:
 		c.add("stack-name", CheckOK, "no other stack uses the name %s", c.cfg.Name)
+	}
+}
+
+// genomicLeftoversCheck fails while the genomic store holds what an
+// interrupted promote left, which up refuses to start HPDS over. Like
+// disk-docker, it needs alpine already pulled.
+func (c *doctor) genomicLeftoversCheck(ctx context.Context) {
+	if !c.daemonOK {
+		return
+	}
+	ref := imageRef("alpine")
+	ok, err := dockerProbe(ctx, func(ctx context.Context) (bool, error) { return c.d.Docker.ImageExists(ctx, ref) })
+	switch {
+	case err != nil:
+		c.add("genomic-leftovers", unanswered(err, CheckWarn), "couldn't check the genomic store: %v", err)
+		return
+	case !ok:
+		c.add("genomic-leftovers", CheckWarn, "the genomic store not checked: %s isn't pulled yet (`docker pull %s`, or run doctor again after `pic-sure up`)", ref, ref)
+		return
+	}
+	type found struct {
+		vol       string
+		leftovers []string
+	}
+	res, err := dockerProbe(ctx, func(ctx context.Context) (found, error) {
+		vol, leftovers, err := GenomicLeftovers(ctx, c.d, c.opts.Stack, c.cfg)
+		return found{vol, leftovers}, err
+	})
+	switch {
+	case err != nil:
+		c.add("genomic-leftovers", unanswered(err, CheckWarn), "couldn't check the genomic store: %v", err)
+	case len(res.leftovers) > 0:
+		c.add("genomic-leftovers", CheckFail, "%v", genomicLeftoversError(c.cfg, res.vol, res.leftovers))
+	default:
+		c.add("genomic-leftovers", CheckOK, "volume %s holds nothing an interrupted promote left", res.vol)
 	}
 }
 

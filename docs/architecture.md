@@ -1098,6 +1098,10 @@ preconditions (034) can call it with no `Stack` and `Building: true`.
   services are on), `auth0` (tenant, client ID and the client secret
   unless open mode) and `proxy` (warns on an http-only proxy and on
   credentials psama can't use, §9.10).
+- `genomic-leftovers` (105, `genomic_leftovers.go`): fails while the
+  genomic store HPDS loads its partitions from holds what an interrupted
+  promote left, with the way to recover it (below). Like `disk-docker` it
+  needs alpine already pulled, and warns otherwise.
 - `Network`: `network-github`, `-maven-central`, `-npm-registry`,
   `-alpine-cdn` (an HTTP HEAD through the stack's proxy; any status counts,
   but a 407 or a refused CONNECT is a failure naming credentials) and `-release-control` (`git ls-remote` with the proxy env).
@@ -1316,6 +1320,11 @@ start service if that can't be read). `restart` restarts the pending services th
 clears them, so `start`'s `--wait` covers the restarted services, and a
 run that fails before then leaves them pending for the next. `bindMounts`
 (migrate.go) is the shared `compose config` parse.
+`start` first refuses (exit 3), before starting anything, while the
+genomic store holds an interrupted promote's leftovers
+(`GenomicLeftovers`, 105), since HPDS would load them as partitions.
+Leaving out only hpds isn't clean: the query service depends on it, so
+everything up to `restart` converges and `compose up` doesn't run.
 
 **Update (036, `update.go`).** §9.3. `PlanUpdate(ctx, d, st, doc, cfg,
 sec, state, UpdateOptions{ConvergeOptions, Release, Components,
@@ -1629,6 +1638,21 @@ A failed or interrupted load's error replaces `steps.Error`'s advice,
 since a re-run loads again from the start, with what state HPDS and its
 data are in. For an interrupted `genomic-promote` it keeps promote's own
 error, which `steps.Run` replaces with the context's cause.
+
+**Promote leftovers (105, `genomic_leftovers.go`).** Recovery can itself
+fail, and a SIGKILLed CLI never runs it, so leftovers can outlive a load.
+`GenomicLeftovers(ctx, d, st, cfg)` lists the `.promote-*` and `.old-*`
+directories (`leftoverPattern`, which shared-data publish's probe uses
+too) in the genomic store, `genomicStoreVolume(cfg)`: `hpds-genomic`, or
+in shared mode the set's `<set>_hpds-genomic`, which each stack's
+`hpds-genomic-copy` is seeded from. It inspects the volume first, so a
+missing one holds none and isn't created, then lists it in a read-only
+alpine helper. `genomicLeftoversError` is the exit-3 message doctor and up
+share: recover with `pic-sure data load-genomic --promote`, or for a
+shared set, which can't change, recover in the publishing stack and
+publish under a new name. `all-bak.new`/`all-bak.old` aren't checked: they
+are in the staging volume, which HPDS never reads, and the next `--backup`
+settles them.
 
 **Demo data (046, `demo.go`).** `DataDemo(ctx, d, st, cfg, sec, state,
 DemoOptions{Dataset, HeapMB, Cache, HTTP})` is `data demo` (§9.6).

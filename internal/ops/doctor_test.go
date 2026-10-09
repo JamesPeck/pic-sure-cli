@@ -130,6 +130,7 @@ func (e *doctorEnv) run() *ops.DoctorReport {
 	e.f.On(fakerunner.Glob("docker rm -v -f pic-sure-doctor-*")).Exit(1).Stderr("Error response from daemon: No such container: x\n")
 	e.f.On(fakerunner.Glob("docker ps *")).Stdout("")
 	noStackResources(e.f)
+	e.f.On(fakerunner.Glob("docker volume inspect *")).Exit(1).Stderr("Error response from daemon: get x: no such volume\n")
 	e.f.On(fakerunner.Glob("docker image inspect *")).Exit(1).Stderr("Error: No such image\n")
 	e.f.On(fakerunner.Glob("docker pull *"))
 	d := &ops.Deps{
@@ -840,4 +841,43 @@ func TestDoctorReportJSON(t *testing.T) {
 	if got, want := jsonOf(t, r), `{"checks":[{"name":"git","status":"ok","message":"git is on PATH"}]}`; got != want {
 		t.Errorf("JSON = %s\nwant   %s", got, want)
 	}
+}
+
+func TestDoctorGenomicLeftovers(t *testing.T) {
+	t.Run("no volume", func(t *testing.T) {
+		e := newDoctorEnv(t)
+		e.stack(t, nil)
+		wantCheck(t, e.run(), "genomic-leftovers", ops.CheckOK, "volume demo_hpds-genomic holds nothing an interrupted promote left")
+	})
+	for _, tc := range []struct {
+		name, vol string
+		edit      func(*stack.Config)
+		want      string
+	}{
+		{"local", "demo_hpds-genomic", nil, "volume demo_hpds-genomic holds what an interrupted promote left (.old-b, .promote-a), " +
+			"which HPDS would load as partitions; recover it with `pic-sure data load-genomic --promote` first"},
+		{"shared", "nhanes_hpds-genomic", func(c *stack.Config) { c.HPDS.Data, c.HPDS.SharedName = stack.HPDSShared, "nhanes" },
+			"volume nhanes_hpds-genomic holds what an interrupted promote left (.old-b, .promote-a)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newDoctorEnv(t)
+			e.stack(t, tc.edit)
+			h := newLocalHelperScripts(t, tc.vol)
+			h.seed(tc.vol, seeded)
+			e.f.On(fakerunner.Exact("docker", "volume", "inspect", tc.vol)).Stdout(`[{"Name":"` + tc.vol + `"}]`)
+			e.f.On(fakerunner.Glob("docker run * --name demo-genomic-leftovers-* *")).Do(func(ctx context.Context, c fakerunner.Call) (docker.Result, error) { return h.run(ctx, c) })
+			r := e.run()
+			wantCheck(t, r, "genomic-leftovers", ops.CheckFail, tc.want)
+			if !r.Failed() {
+				t.Error("doctor didn't fail")
+			}
+		})
+	}
+	t.Run("alpine not pulled", func(t *testing.T) {
+		e := newDoctorEnv(t)
+		e.stack(t, nil)
+		e.f.On(fakerunner.Glob("docker image inspect alpine:*")).Exit(1).Stderr("Error response from daemon: No such image: alpine:3.23\n")
+		wantCheck(t, e.run(), "genomic-leftovers", ops.CheckWarn, "isn't pulled yet")
+		e.f.AssertNotCalled(fakerunner.Glob("docker run * --name demo-genomic-leftovers-* *"))
+	})
 }
