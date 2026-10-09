@@ -189,5 +189,6 @@ func (a *App) startTUI(ctx context.Context) error {
 		Defaults:   wizardDefaults,
 		Dashboard:  dashBackend{a: a, dir: dir},
 		Command:    a.commandFromTUI,
+		Log:        a.newLogger(),
 	})
 }

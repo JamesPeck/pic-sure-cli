@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 
@@ -47,6 +48,8 @@ type Options struct {
 	// and the dashboard's actions and the load wizard's loads, sending its
 	// events to req.Sink.
 	Command func(ctx context.Context, req CommandRequest) (InitResult, error)
+	// Log receives the TUI's own debug records. Nil discards them.
+	Log *slog.Logger
 }
 
 // CommandRequest is a command the landing, the dashboard or the load
@@ -137,6 +140,9 @@ type app struct {
 }
 
 func newApp(ctx context.Context, o Options) *app {
+	if o.Log == nil {
+		o.Log = slog.New(slog.DiscardHandler)
+	}
 	a := &app{ctx: ctx, opts: o, screen: ScreenLanding}
 	a.landing = newLanding(o.Root, detectStack(o.Root), o.Animations)
 	if o.Start == ScreenDashboard {
@@ -367,6 +373,9 @@ func (a *app) closeLoad() {
 // dashboard action, or a load. Closing it returns to the dashboard if one
 // is open, else to the landing.
 func (a *app) startAction(act dashboard.Action) (tea.Model, tea.Cmd) {
+	if a.runActive(act.Title) {
+		return a, nil
+	}
 	if a.opts.Command == nil {
 		if a.dash != nil {
 			a.screen = ScreenDashboard
@@ -425,6 +434,9 @@ func (a *app) openDashboard() (tea.Model, tea.Cmd) {
 
 // startInit opens the run screen on an init of req.
 func (a *app) startInit(req InitRequest) (tea.Model, tea.Cmd) {
+	if a.runActive("init") {
+		return a, nil
+	}
 	if a.opts.Init == nil {
 		a.landing.result = "setup failed: init isn't available here"
 		return a, a.openLandingCmd()
@@ -436,8 +448,20 @@ func (a *app) startInit(req InitRequest) (tea.Model, tea.Cmd) {
 	return a, a.run.init()
 }
 
+// runActive reports whether the run screen is open, in which case a
+// request to start another run (title) is refused: replacing the screen
+// would leave its operation running unseen, holding the stack lock.
+func (a *app) runActive(title string) bool {
+	if a.run == nil {
+		return false
+	}
+	a.opts.Log.Debug("tui: a run is open; not starting another", "run", title)
+	return true
+}
+
 func (a *app) openLandingCmd() tea.Cmd {
 	a.screen = ScreenLanding
+	a.landing.leaving = false
 	a.landing.setStatus(detectStack(a.opts.Root))
 	return a.landing.startAnimations()
 }

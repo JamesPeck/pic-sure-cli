@@ -1,0 +1,188 @@
+package tui
+
+import (
+	"context"
+	"io"
+	"testing"
+	"time"
+
+	tea "charm.land/bubbletea/v2"
+	"charm.land/huh/v2"
+
+	"github.com/JamesPeck/pic-sure-cli/internal/dashboard"
+)
+
+// countingApp is an app whose Options.Command reports each call on the
+// returned channel and returns at once.
+func countingApp(t *testing.T, root string) (*app, chan []string) {
+	t.Helper()
+	calls := make(chan []string, 8)
+	a := newApp(context.Background(), Options{Root: root, Command: func(_ context.Context, req CommandRequest) (InitResult, error) {
+		calls <- req.Args
+		return InitResult{}, nil
+	}})
+	a.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	t.Cleanup(func() {
+		if a.run != nil {
+			a.run.close()
+		}
+	})
+	return a, calls
+}
+
+// assertOneCommand waits for the first command, then gives a second one
+// time to show up.
+func assertOneCommand(t *testing.T, calls chan []string) {
+	t.Helper()
+	select {
+	case <-calls:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no command ran")
+	}
+	select {
+	case args := <-calls:
+		t.Fatalf("a second command ran: %q", args)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// loadAtConfirm opens the app's load screen on kind and walks it to its
+// confirm step.
+func loadAtConfirm(t *testing.T, a *app, kind string) {
+	t.Helper()
+	stubInspect(t, nil, nil)
+	a.Update(openLoadDataMsg{kind: kind})
+	s := a.load
+	switch kind {
+	case kindDemo:
+		s, _ = completeForm(s) // dataset
+		s, _ = completeForm(s) // heap
+	case kindGenomic:
+		s = pick(t, s, "/data/index.tsv")
+		s.includeVCFDir = false
+		s, _ = completeForm(s) // VCF directory? no
+		s.partition = "chr1"
+		s, _ = completeForm(s) // partition
+		s, _ = completeForm(s) // heap
+		s, _ = completeForm(s) // promote
+		s, _ = completeForm(s) // profile
+	default:
+		s = pick(t, s, "/data/pheno.csv")
+		s, _ = completeForm(s) // heap
+		s, _ = completeForm(s) // dictionary: auto
+	}
+	if s.step != loadConfirm && s.step != loadGenomicConfirm {
+		t.Fatalf("%s: step = %v, want a confirm step", kind, s.step)
+	}
+}
+
+// Messages that reach a load screen after its confirm completed, before the
+// app has acted on the loadRunMsg (keys, huh blink ticks), dispatch nothing.
+func TestLoadConfirmDispatchesOnce(t *testing.T) {
+	for _, kind := range []string{kindFile, kindDemo, kindGenomic} {
+		t.Run(kind, func(t *testing.T) {
+			a, calls := countingApp(t, t.TempDir())
+			loadAtConfirm(t, a, kind)
+			a.load.confirmed = true
+			a.load.form.State = huh.StateCompleted
+			var cmds []tea.Cmd
+			for _, m := range []tea.Msg{struct{}{}, tea.KeyPressMsg{Code: 'y', Text: "y"}, enter, struct{}{}} {
+				_, cmd := a.Update(m)
+				cmds = append(cmds, cmd)
+			}
+			for _, cmd := range cmds {
+				pumpApp(a, cmd, 0)
+			}
+			assertOneCommand(t, calls)
+		})
+	}
+}
+
+// The landing's direct actions, pressed again before the app has acted on
+// the first, ask once.
+func TestLandingDirectActionsAskOnce(t *testing.T) {
+	for _, id := range []string{"preflight", "resume", "dashboard", "setup", "loaddata", "demo"} {
+		t.Run(id, func(t *testing.T) {
+			l := newLanding(t.TempDir(), noStack, false)
+			if _, cmd := l.choose(id); cmd == nil {
+				t.Fatal("no command")
+			}
+			if _, cmd := l.update(enter); cmd != nil {
+				t.Error("a second enter asked again")
+			}
+		})
+	}
+}
+
+// A confirmed landing dialog asks once too.
+func TestLandingConfirmAsksOnce(t *testing.T) {
+	l := newLanding(t.TempDir(), readyStack, false)
+	l.startConfirm(dashboard.MigrateAction())
+	l.confirmOK = true
+	l.form.State = huh.StateCompleted
+	if _, cmd := l.update(struct{}{}); cmd == nil {
+		t.Fatal("the confirm asked for nothing")
+	}
+	for _, m := range []tea.Msg{enter, struct{}{}} {
+		if _, cmd := l.update(m); cmd != nil {
+			t.Error("a message after the confirm asked again")
+		}
+	}
+}
+
+// The app never replaces an open run screen: a second request is refused,
+// and the first run keeps its screen.
+func TestAppStartsOneRunAtATime(t *testing.T) {
+	root := t.TempDir()
+	inits := make(chan struct{}, 4)
+	a, calls := countingApp(t, root)
+	a.opts.Init = func(context.Context, InitRequest) (InitResult, error) {
+		inits <- struct{}{}
+		return InitResult{}, nil
+	}
+	a.Update(dashboard.RunMsg{Action: preflightAction(true)})
+	first := a.run
+	a.Update(dashboard.RunMsg{Action: preflightAction(true)})
+	a.Update(loadRunMsg{act: dashboard.Action{Title: "Loading", Args: []string{"data", "demo"}}})
+	a.Update(resumeSetupMsg{})
+	if a.run != first || a.screen != ScreenRun {
+		t.Fatal("a second request replaced the run screen")
+	}
+	assertOneCommand(t, calls)
+	if len(inits) != 0 {
+		t.Error("init started while a command ran")
+	}
+}
+
+// Keys that arrive in one read (a paste, SSH batching, tmux send-keys)
+// through a real program start one run.
+func TestBatchedKeysStartOneRun(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(*testing.T, *app)
+		keys  string
+	}{
+		{"load confirm yy", func(t *testing.T, a *app) { loadAtConfirm(t, a, kindDemo) }, "yy"},
+		{"landing preflight", func(*testing.T, *app) {}, "j\r\r"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			a, calls := countingApp(t, t.TempDir())
+			tc.setup(t, a)
+			in, keys := io.Pipe()
+			ctx, cancel := context.WithCancel(context.Background())
+			p := tea.NewProgram(a, tea.WithContext(ctx), tea.WithInput(in), tea.WithOutput(io.Discard),
+				tea.WithoutSignalHandler(), tea.WithWindowSize(100, 40))
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				_, _ = p.Run()
+			}()
+			go func() { _, _ = keys.Write([]byte(tc.keys)) }()
+			assertOneCommand(t, calls)
+			cancel()
+			_ = keys.Close()
+			<-done
+		})
+	}
+}

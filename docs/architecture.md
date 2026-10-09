@@ -2542,6 +2542,14 @@ load wizard, and 083 the landing's actions.
   landing's "Load your data…" opens it on the kind step, the developer
   menu's demo entry on the datasets, and the dashboard's `l` over the
   dashboard, which it returns to.
+- **One run at a time (087).** A screen that hands the app its result
+  enters a terminal state first, so keys or huh ticks that arrive before
+  the app acts can't send it again: the setup wizard's `wizardDone`, the
+  load screen's `done` (set by `dispatch` and `closeLoad`), and the
+  landing's `leaving`, which `openLandingCmd` clears. Behind them,
+  `startAction` and `startInit` refuse to start while the run screen is
+  open (a debug record on `Options.Log`), so a run is never replaced and
+  left running unseen.
 
 It runs on the Charm v2 modules (`charm.land/bubbletea/v2`, `bubbles/v2`,
 `huh/v2`, `lipgloss/v2`; ticket 002). The root model's `View` returns a

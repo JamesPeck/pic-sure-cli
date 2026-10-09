@@ -187,6 +187,8 @@ type loadScreen struct {
 	// esc once any data has been collected, so a multi-step flow is not silently
 	// thrown away by a reflexive esc. A pristine screen closes immediately.
 	discarding bool
+	// done is set once the screen has sent its result (dispatch, closeLoad).
+	done bool
 
 	// A picked phenotype file or directory is checked asynchronously: a file
 	// for the CSVs it holds (≥2 → entry picker), a directory as --input-dir
@@ -283,6 +285,9 @@ func isFileStep(step loadStep) bool {
 }
 
 func (s *loadScreen) update(msg tea.Msg) (*loadScreen, tea.Cmd) {
+	if s.done {
+		return s, nil
+	}
 	// The async check's result is handled before any gate so it reaches the
 	// inspecting file step regardless of which overlay (discard prompt) is up;
 	// its own seq guard drops a result for a since-re-entered/closed step.
@@ -299,7 +304,7 @@ func (s *loadScreen) update(msg tea.Msg) (*loadScreen, tea.Cmd) {
 		}
 		switch key.String() {
 		case "y", "Y":
-			return s, closeLoad(true)
+			return s, s.closeLoad()
 		case "n", "N", "esc":
 			s.discarding = false
 		}
@@ -314,7 +319,7 @@ func (s *loadScreen) update(msg tea.Msg) (*loadScreen, tea.Cmd) {
 			s.discarding = true
 			return s, nil
 		}
-		return s, closeLoad(true)
+		return s, s.closeLoad()
 	}
 
 	// While a pick is being checked the filebrowser is parked behind a
@@ -346,7 +351,7 @@ func (s *loadScreen) updateForm(msg tea.Msg) (*loadScreen, tea.Cmd) {
 	}
 	switch s.form.State {
 	case huh.StateAborted:
-		return s, closeLoad(true)
+		return s, s.closeLoad()
 	case huh.StateCompleted:
 		return s.formCompleted()
 	}
@@ -358,7 +363,7 @@ func (s *loadScreen) formCompleted() (*loadScreen, tea.Cmd) {
 	switch s.step {
 	case loadKind:
 		if s.kind == "" { // Cancel
-			return s, closeLoad(true)
+			return s, s.closeLoad()
 		}
 		s.heap = strconv.Itoa(defaultHeaps[s.kind])
 		return s.enterStep(firstStep(s.kind))
@@ -384,7 +389,7 @@ func (s *loadScreen) formCompleted() (*loadScreen, tea.Cmd) {
 		return s.enterStep(loadConfirm)
 	case loadConfirm:
 		if !s.confirmed {
-			return s, closeLoad(true)
+			return s, s.closeLoad()
 		}
 		return s, s.dispatch()
 
@@ -399,7 +404,7 @@ func (s *loadScreen) formCompleted() (*loadScreen, tea.Cmd) {
 		return s.enterStep(loadGenomicConfirm)
 	case loadGenomicConfirm:
 		if !s.confirmed {
-			return s, closeLoad(true)
+			return s, s.closeLoad()
 		}
 		return s, s.dispatch()
 	}
@@ -646,13 +651,18 @@ func (s *loadScreen) action() dashboard.Action {
 	return act
 }
 
+// dispatch and closeLoad end the screen: once either has run, update
+// drops every message, so a huh blink tick or a key that arrives before the
+// app acts can't complete a form, and dispatch, a second time.
 func (s *loadScreen) dispatch() tea.Cmd {
+	s.done = true
 	act := s.action()
 	return func() tea.Msg { return loadRunMsg{act: act} }
 }
 
-func closeLoad(aborted bool) tea.Cmd {
-	return func() tea.Msg { return loadDataClosedMsg{aborted: aborted} }
+func (s *loadScreen) closeLoad() tea.Cmd {
+	s.done = true
+	return func() tea.Msg { return loadDataClosedMsg{aborted: true} }
 }
 
 // --- form builders (Value bound before Options, per the huh gotcha) ---------

@@ -65,6 +65,11 @@ type landing struct {
 	keepDB          bool
 	confirmText     string
 
+	// leaving is set once the landing has asked the app for another
+	// screen or a run; it drops input until the app shows the landing
+	// again, so keys that arrive together can't ask twice.
+	leaving bool
+
 	result        string
 	width, height int
 }
@@ -170,6 +175,10 @@ func (l *landing) update(msg tea.Msg) (*landing, tea.Cmd) {
 		return l, l.logo.update(msg)
 	}
 
+	if l.leaving {
+		return l, nil
+	}
+
 	// Confirm dialog consumes everything else while open.
 	if l.form != nil {
 		return l.updateForm(msg)
@@ -214,14 +223,14 @@ func (l *landing) choose(id string) (*landing, tea.Cmd) {
 		l.rebuildMenu()
 		return l, nil
 	case "dashboard":
-		return l, func() tea.Msg { return openDashboardMsg{} }
+		return l.leave(func() tea.Msg { return openDashboardMsg{} })
 	case "setup":
-		return l, func() tea.Msg { return openWizardMsg{} }
+		return l.leave(func() tea.Msg { return openWizardMsg{} })
 	case "resume":
-		return l, func() tea.Msg { return resumeSetupMsg{} }
+		return l.leave(func() tea.Msg { return resumeSetupMsg{} })
 	case "preflight":
 		// Read-only, so it runs without asking.
-		return l, runAction(preflightAction(l.status == noStack))
+		return l.leave(runAction(preflightAction(l.status == noStack)))
 	case "dryrun":
 		return l.startConfirm(dryRunAction())
 	case "update":
@@ -229,9 +238,9 @@ func (l *landing) choose(id string) (*landing, tea.Cmd) {
 	case "migrate":
 		return l.startConfirm(dashboard.MigrateAction())
 	case "loaddata":
-		return l, func() tea.Msg { return openLoadDataMsg{} }
+		return l.leave(func() tea.Msg { return openLoadDataMsg{} })
 	case "demo":
-		return l, func() tea.Msg { return openLoadDataMsg{kind: kindDemo} }
+		return l.leave(func() tea.Msg { return openLoadDataMsg{kind: kindDemo} })
 	case "dictionary":
 		return l.startPicker("Rebuild the dictionary",
 			"The stack must be up. Loading a dictionary CSV or facets is\n"+
@@ -255,6 +264,13 @@ func (l *landing) choose(id string) (*landing, tea.Cmd) {
 		return l.startTeardown(true)
 	}
 	return l, nil
+}
+
+// leave sends cmd, which asks the app for another screen or a run, and
+// drops input until the app shows the landing again.
+func (l *landing) leave(cmd tea.Cmd) (*landing, tea.Cmd) {
+	l.leaving = true
+	return l, cmd
 }
 
 func runAction(act dashboard.Action) tea.Cmd {
@@ -468,7 +484,7 @@ func (l *landing) updateForm(msg tea.Msg) (*landing, tea.Cmd) {
 		if act == nil {
 			return l, nil
 		}
-		return l, runAction(*act)
+		return l.leave(runAction(*act))
 	case huh.StateAborted:
 		l.closeForm()
 		return l, nil
