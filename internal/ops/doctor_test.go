@@ -274,9 +274,9 @@ func TestDoctorDaemonHangsAfterInfo(t *testing.T) {
 		t.Errorf("doctor took %s", d)
 	}
 	wantCheck(t, r, "docker-daemon", ops.CheckOK, "answers")
-	wantCheck(t, r, "disk-docker", ops.CheckWarn, "didn't answer within 20ms")
-	wantCheck(t, r, "memory", ops.CheckWarn, "didn't answer within 20ms")
-	wantCheck(t, r, "arm64-images", ops.CheckWarn, "didn't answer within 20ms")
+	for _, name := range []string{"docker-runtime", "disk-docker", "memory", "arm64-images"} {
+		wantCheck(t, r, name, ops.CheckFail, "didn't answer within 20ms")
+	}
 	e.f.AssertNotCalled(fakerunner.Glob("docker run *"))
 }
 

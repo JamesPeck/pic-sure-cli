@@ -212,7 +212,7 @@ func probeGateway(ctx context.Context, c docker.Composer) StatusGateway {
 	g := StatusGateway{Checked: true}
 	if res.timeout != 0 || res.code != 0 {
 		g.Healthy = new(false)
-		if status := res.lastStatus(); res.timeout == 0 && status != 0 {
+		if status := res.lastStatus(); res.timeout == 0 && status >= 400 {
 			g.Message = fmt.Sprintf("gateway /system/status answered HTTP %d", status)
 		} else {
 			g.Message = "gateway /system/status did not respond" + res.why()

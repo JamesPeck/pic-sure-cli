@@ -263,7 +263,7 @@ func (l *lockedWriter) Write(p []byte) (int, error) {
 // dockerFailedRE matches a last stderr line in docker's own words, as
 // opposed to the workload's: an API error, a failure to reach or open the
 // daemon's socket, or the runtime failing to start the command.
-var dockerFailedRE = regexp.MustCompile(`(?i)^(docker: )?(error response from daemon: |cannot connect to the docker daemon|failed to connect to the docker api|(got )?permission denied while trying to connect to the docker|error during connect: |oci runtime \w+ failed)`)
+var dockerFailedRE = regexp.MustCompile(`(?i)^(docker: )?(error response from daemon: |` + socketErrors + `|oci runtime \w+ failed)`)
 
 // workloadResult interprets a non-125 exit of a docker command that ran a
 // workload. Docker reuses the workload's exit codes for its own failures

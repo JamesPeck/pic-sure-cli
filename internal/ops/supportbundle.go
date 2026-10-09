@@ -35,7 +35,7 @@ const (
 )
 
 // bundleLogsTimeout bounds each service's `compose logs`. Tests shorten it.
-var bundleLogsTimeout = 30 * time.Second
+var bundleLogsTimeout = docker.ProbeTimeout
 
 // SupportBundleOptions configures SupportBundle.
 type SupportBundleOptions struct {

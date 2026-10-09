@@ -59,14 +59,23 @@ var errProbeDeadline = errors.New("doctor: docker probe deadline")
 
 // dockerProbe runs fn with ctx bounded by dockerProbeTimeout. If the bound
 // is why fn failed, the error says so (errNoAnswer).
-func dockerProbe(ctx context.Context, fn func(context.Context) error) error {
+func dockerProbe[T any](ctx context.Context, fn func(context.Context) (T, error)) (T, error) {
 	pctx, cancel := context.WithTimeoutCause(ctx, dockerProbeTimeout, errProbeDeadline)
 	defer cancel()
-	err := fn(pctx)
+	v, err := fn(pctx)
 	if err != nil && ctx.Err() == nil && context.Cause(pctx) == errProbeDeadline {
-		return fmt.Errorf("%w within %s", errNoAnswer, dockerProbeTimeout)
+		err = fmt.Errorf("%w within %s", errNoAnswer, dockerProbeTimeout)
 	}
-	return err
+	return v, err
+}
+
+// unanswered is CheckFail for a probe the daemon didn't answer, and
+// otherwise status.
+func unanswered(err error, status CheckStatus) CheckStatus {
+	if errors.Is(err, errNoAnswer) {
+		return CheckFail
+	}
+	return status
 }
 
 // CheckStatus is a check's outcome.
@@ -243,11 +252,7 @@ func (c *doctor) dockerCLIChecks(ctx context.Context) {
 	c.dockerCLI = true
 	c.add("docker-cli", CheckOK, "docker is on PATH")
 
-	var info docker.Info
-	err := dockerProbe(ctx, func(ctx context.Context) (err error) {
-		info, err = c.d.Docker.Info(ctx)
-		return err
-	})
+	info, err := dockerProbe(ctx, c.d.Docker.Info)
 	c.info = info
 	switch {
 	case err == nil:
@@ -341,7 +346,12 @@ const (
 )
 
 func (c *doctor) runtimeCheck(ctx context.Context) {
-	c.runtime = detectRuntime(c.info, c.serverVersion(ctx))
+	v, err := dockerProbe(ctx, c.d.Docker.Version)
+	if errors.Is(err, errNoAnswer) {
+		c.add("docker-runtime", CheckFail, "docker version: %v", err)
+		return
+	}
+	c.runtime = detectRuntime(c.info, v.Server)
 	where := c.info.ClientInfo.Context
 	if where == "" {
 		where = "default"
@@ -351,19 +361,6 @@ func (c *doctor) runtimeCheck(ctx context.Context) {
 		return
 	}
 	c.add("docker-runtime", CheckOK, "%s (context %s)", c.runtime, where)
-}
-
-// serverVersion is the daemon's half of docker version, or nil.
-func (c *doctor) serverVersion(ctx context.Context) *docker.ServerVersion {
-	var v docker.VersionInfo
-	err := dockerProbe(ctx, func(ctx context.Context) (err error) {
-		v, err = c.d.Docker.Version(ctx)
-		return err
-	})
-	if err != nil {
-		return nil
-	}
-	return v.Server
 }
 
 func detectRuntime(info docker.Info, server *docker.ServerVersion) string {
@@ -432,14 +429,10 @@ func gib(n uint64) string { return fmt.Sprintf("%.1f GiB", float64(n)/(1<<30)) }
 // never downloads anything.
 func (c *doctor) dockerDiskCheck(ctx context.Context) {
 	ref := imageRef("alpine")
-	var ok bool
-	err := dockerProbe(ctx, func(ctx context.Context) (err error) {
-		ok, err = c.d.Docker.ImageExists(ctx, ref)
-		return err
-	})
+	ok, err := dockerProbe(ctx, func(ctx context.Context) (bool, error) { return c.d.Docker.ImageExists(ctx, ref) })
 	switch {
 	case err != nil:
-		c.add("disk-docker", CheckWarn, "couldn't measure Docker's free space: %v", err)
+		c.add("disk-docker", unanswered(err, CheckWarn), "couldn't measure Docker's free space: %v", err)
 		return
 	case !ok:
 		c.add("disk-docker", CheckWarn, "Docker's free space not measured: %s isn't pulled yet (`docker pull %s`, or run doctor again after `pic-sure up`)", ref, ref)
@@ -456,19 +449,17 @@ func (c *doctor) dockerDiskCheck(ctx context.Context) {
 		_ = c.d.Docker.Rm(rmCtx, name, true)
 	}()
 	var out, errOut strings.Builder
-	var code int
-	err = dockerProbe(ctx, func(ctx context.Context) (err error) {
-		code, err = c.d.Docker.Run(ctx, docker.RunOpts{
+	code, err := dockerProbe(ctx, func(ctx context.Context) (int, error) {
+		return c.d.Docker.Run(ctx, docker.RunOpts{
 			Image: ref, Args: []string{"df", "-Pk", "/"}, Name: name, Remove: true,
 			Network: "none", Stdout: &out, Stderr: &errOut,
 		})
-		return err
 	})
 	if err == nil && code != 0 {
 		err = fmt.Errorf("df exited %d: %s", code, strings.TrimSpace(errOut.String()))
 	}
 	if err != nil {
-		c.add("disk-docker", CheckWarn, "couldn't measure Docker's free space with %s: %v", ref, err)
+		c.add("disk-docker", unanswered(err, CheckWarn), "couldn't measure Docker's free space with %s: %v", ref, err)
 		return
 	}
 	free, err := parseDF(out.String())
@@ -523,7 +514,7 @@ func (c *doctor) memoryCheck(ctx context.Context) {
 	}
 	running, err := c.runningHPDS(ctx)
 	if err != nil {
-		c.add("memory", CheckWarn, "couldn't list running HPDS containers: %v", err)
+		c.add("memory", unanswered(err, CheckWarn), "couldn't list running HPDS containers: %v", err)
 		return
 	}
 	var runningTotal int64
@@ -576,14 +567,12 @@ func (c *doctor) hpdsJavaOpts() string {
 }
 
 func (c *doctor) runningHPDS(ctx context.Context) ([]hpdsContainer, error) {
-	var res docker.Result
-	err := dockerProbe(ctx, func(ctx context.Context) (err error) {
-		res, err = docker.RunChecked(ctx, c.d.Runner, docker.Cmd{Argv: []string{
+	res, err := dockerProbe(ctx, func(ctx context.Context) (docker.Result, error) {
+		return docker.RunChecked(ctx, c.d.Runner, docker.Cmd{Argv: []string{
 			"docker", "ps", "--quiet", "--no-trunc",
 			"--filter", "label=" + stack.LabelStack,
 			"--filter", "label=com.docker.compose.service=hpds",
 		}})
-		return err
 	})
 	if err != nil {
 		return nil, err
@@ -592,9 +581,8 @@ func (c *doctor) runningHPDS(ctx context.Context) ([]hpdsContainer, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	err = dockerProbe(ctx, func(ctx context.Context) (err error) {
-		res, err = docker.RunChecked(ctx, c.d.Runner, docker.Cmd{Argv: append([]string{"docker", "container", "inspect"}, ids...)})
-		return err
+	res, err = dockerProbe(ctx, func(ctx context.Context) (docker.Result, error) {
+		return docker.RunChecked(ctx, c.d.Runner, docker.Cmd{Argv: append([]string{"docker", "container", "inspect"}, ids...)})
 	})
 	if err != nil {
 		return nil, err
@@ -651,13 +639,11 @@ func (c *doctor) archCheck(ctx context.Context) {
 			continue
 		}
 		argv := []string{"docker", "image", "inspect", "--format", "{{.Architecture}}", img.Ref}
-		var res docker.Result
-		err := dockerProbe(ctx, func(ctx context.Context) (err error) {
-			res, err = c.d.Runner.Run(ctx, docker.Cmd{Argv: argv})
-			return err
+		res, err := dockerProbe(ctx, func(ctx context.Context) (docker.Result, error) {
+			return c.d.Runner.Run(ctx, docker.Cmd{Argv: argv})
 		})
 		if err != nil {
-			c.add("arm64-images", CheckWarn, "couldn't inspect %s: %v", img.Ref, err)
+			c.add("arm64-images", unanswered(err, CheckWarn), "couldn't inspect %s: %v", img.Ref, err)
 			return
 		}
 		if res.ExitCode != 0 {
@@ -714,11 +700,7 @@ func (c *doctor) composeCheck(ctx context.Context) {
 	case !c.dockerCLI:
 		c.add("compose-config", CheckWarn, "not checked: docker isn't available")
 	default:
-		err := dockerProbe(ctx, func(ctx context.Context) error {
-			_, err := c.d.Compose.Config(ctx, true)
-			return err
-		})
-		if err != nil {
+		if _, err := dockerProbe(ctx, func(ctx context.Context) ([]byte, error) { return c.d.Compose.Config(ctx, true) }); err != nil {
 			c.add("compose-config", CheckFail, "docker compose config: %v", err)
 			return
 		}

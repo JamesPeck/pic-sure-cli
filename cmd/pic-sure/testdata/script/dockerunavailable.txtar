@@ -31,6 +31,12 @@ stderr 'docker is not on PATH'
 exitcode 3 sh $WORK/nodocker.sh up
 stderr 'docker is not on PATH'
 
+# Without the compose plugin: exit 3, naming the compose pic-sure needs.
+cp $WORK/nocompose.scenario $WORK/docker.scenario
+exitcode 3 pic-sure ps
+stderr '^pic-sure: docker compose isn''t installed; pic-sure needs 2.29.0 or later \('
+cp $WORK/unreachable.scenario $WORK/docker.scenario
+
 # doctor keeps its own contract: a failed check is exit 1.
 exitcode 1 pic-sure doctor
 stdout '^\[FAIL\] docker-daemon '
@@ -41,15 +47,27 @@ cd $WORK
 cp hung.scenario docker.scenario
 exitcode 1 pic-sure doctor
 stdout '^\[FAIL\] docker-daemon +the Docker daemon didn''t answer within 10s$'
-exec pic-sure support-bundle -o hung.tar.gz
-exec tar -xzf hung.tar.gz
-exec sh -c 'cat */doctor.json'
+exec pic-sure --stack stack support-bundle -o hung.tar.gz
+mkdir hung
+exec tar -xzf hung.tar.gz -C hung
+exec sh -c 'cat hung/*/doctor.json'
 stdout '"name":"docker-daemon","status":"fail","message":"the Docker daemon didn''t answer within 10s"'
+stdout '"name":"compose-config","status":"fail","message":"docker compose config: the Docker daemon didn''t answer within 10s"'
+exec sh -c 'cat hung/*/README.txt'
+stdout 'compose ps: '
 
 -- hung.scenario --
 docker * => 0 sleep=1h
 -- docker.scenario --
 docker * => 1 stderr=unreachable.txt
+-- unreachable.scenario --
+docker * => 1 stderr=unreachable.txt
+-- nocompose.scenario --
+docker compose * => 1 stderr=nocompose.txt
+-- nocompose.txt --
+docker: unknown command: docker compose
+
+Run 'docker --help' for more information
 -- nodocker.sh --
 # Runs pic-sure with only itself on PATH.
 mkdir -p "$HOME/nodocker"

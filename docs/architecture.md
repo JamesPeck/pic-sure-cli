@@ -140,7 +140,8 @@ it.
   mapping. A signal received while a command runs decides the exit code,
   even if the command then returns cleanly. An exit-1 error caused by a
   missing `docker` or an unreachable daemon (`docker.IsMissing`,
-  `docker.IsUnreachable`) becomes exit 3 there, in `dockerPrecondition`
+  `docker.IsUnreachable`), or a missing compose plugin
+  (`docker.IsComposeMissing`), becomes exit 3 there, in `dockerPrecondition`
   (`dockerexit.go`, 091), with doctor's install or start advice, so no
   command maps these itself. With no arguments, pic-sure
   opens the TUI when stdin and stdout are terminals and none of `--json`,
@@ -1016,12 +1017,14 @@ preconditions (034) can call it with no `Stack` and `Building: true`.
   stack's HPDS (`docker ps` by the stack label and compose service)
   against `docker info`'s `MemTotal` (fail when over), plus this stack's
   when it isn't running (only a warning, since `-Xmx` is a ceiling).
-- Every Docker request doctor makes (`docker info` and `version`, the
-  disk, memory and arm64 probes, `compose config`) has its own
-  `docker.ProbeTimeout` (10 s) deadline, through `dockerProbe` (091). A
-  request that runs out of it fails or warns its check with "the Docker
-  daemon didn't answer within 10s", so a hung daemon can't hang doctor or
-  support-bundle. `docker-daemon` failing skips the probes after it.
+- Doctor's Docker probes (`docker info` and `version`, the disk, memory
+  and arm64 probes, `compose config`) each get a `docker.ProbeTimeout`
+  (10 s) deadline through `dockerProbe` (091); `ports` relies on
+  `Compose.Ps`'s own `PsTimeout`, and `--network`'s pull has 2 min. A probe
+  that runs out of time fails its check with "the Docker daemon didn't
+  answer within 10s", so a hung daemon can't hang doctor or
+  support-bundle. A failed `docker-daemon` skips the disk, memory, arm64
+  and ports probes.
   `arm64-images` inspects only the pinned images already pulled.
 - With a `Stack`: `config` (including `CheckFiles`), `compose-config` (`d.Compose.Config(quiet)`;
   a warning before the first render, from `ComposeErr`), `overrides`
@@ -1714,8 +1717,8 @@ to w, every file under `Prefix/` with mode 0600: `status.json` (Status
 with the caller's options, `Deep` set by the cli) and `doctor.json`, as
 `--json` prints them; the newest `BundleRunLogs` (5) run logs, by name;
 `compose/ps.json` and `compose/logs/<service>.log` (`compose logs --tail
-500` per service compose ps lists, 30 s each, and after one runs out of
-time the rest are skipped as a problem, 091); `stack/` with pic-sure.yaml,
+500` per service compose ps lists, `docker.ProbeTimeout` each; after one
+runs out of time the rest are skipped as a problem, 091); `stack/` with pic-sure.yaml,
 state.json and manifest.json; and `README.txt`. It only reads. Whatever it
 can't collect is a `Problems` line, in the report and README; only
 failing to write w, or ctx ending, is an error. With no Stack it holds doctor alone.
@@ -1816,8 +1819,10 @@ adapter.
   messages and logs.
 - **Docker unavailable** (091, `unavailable.go`). `IsMissing(err)` is
   `docker` not found on PATH; `IsUnreachable(err)` is `ErrDaemonUnreachable`
-  or docker's or compose's own "Cannot connect to the Docker daemon",
-  "failed to connect to the docker API" or "error during connect".
+  or an error quoting docker's or compose's socket errors ("Cannot connect
+  to the Docker daemon", "failed to connect to the docker API", "permission
+  denied while trying to connect", "error during connect");
+  `IsComposeMissing(err)` is docker saying it has no compose command.
   `InstallHint` and `StartHint` are the advice doctor and the CLI's exit-3
   mapping give.
 
