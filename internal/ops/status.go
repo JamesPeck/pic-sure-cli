@@ -59,6 +59,9 @@ type StatusReport struct {
 	LastOperation *StatusOperation `json:"last_operation"`
 	// Deep is set by status --deep.
 	Deep *StatusDeep `json:"deep,omitempty"`
+	// Foreign lists another stack's Docker resources that use this
+	// stack's name (§6.1); services may then be that stack's.
+	Foreign []ResourceRef `json:"foreign,omitempty"`
 }
 
 // StatusOperation is the last mutating command state.json records.
@@ -217,6 +220,12 @@ func Status(ctx context.Context, d *Deps, st *stack.Stack, opts StatusOptions) *
 		r.Components = append(r.Components, StatusComponent{Name: c.Name, Ref: rec.Ref, Commit: rec.Commit})
 	}
 	statusImages(ctx, d, r, state, cfg)
+	if cfg != nil && d.Compose != nil {
+		// An unreachable daemon is the services' error to report.
+		if o, err := StackResources(ctx, d, cfg.Name, state.StackID, st.Dir); err == nil {
+			r.Foreign = Refs(o.Foreign())
+		}
+	}
 	statusServices(ctx, d, r, opts.ComposeErr)
 	if opts.Deep {
 		r.Deep = statusDeep(ctx, d, r)

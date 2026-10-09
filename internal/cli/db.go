@@ -100,6 +100,9 @@ func (a *App) dbBootstrap(cmd *cobra.Command, _ []string) error {
 		}
 		return nil
 	}
+	if err := checkOwned(cmd, d, st, cfg); err != nil {
+		return err
+	}
 	opts := ops.BootstrapOptions{SyncPasswords: sync}
 	if err := ops.Bootstrap(cmd.Context(), d, cfg, sec, opts, a.Global.SkipSteps); err != nil {
 		return err

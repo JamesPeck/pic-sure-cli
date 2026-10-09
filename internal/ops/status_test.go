@@ -78,6 +78,7 @@ func saveStatusState(t *testing.T, st *stack.Stack) {
 func statusDeps(t *testing.T, f *fakerunner.Runner, st *stack.Stack) *ops.Deps {
 	t.Helper()
 	d := &ops.Deps{Runner: f, Docker: docker.NewEngine(f), Clock: ops.FixedClock(statusNow), Sink: events.Discard}
+	noStackResources(f)
 	if c, err := docker.NewCompose(f, st.Dir, nil); err == nil {
 		d.Compose = c
 	}

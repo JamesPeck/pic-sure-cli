@@ -525,8 +525,12 @@ func DictionaryWeights(ctx context.Context, d *Deps, st *stack.Stack, cfg *stack
 	return x.runSteps(ctx, x.WeightsSteps(opts), skip)
 }
 
-// runSteps runs list and the refresh step, then closes x.
+// runSteps makes the ownership check, then runs list and the refresh step,
+// then closes x.
 func (x *Dictionary) runSteps(ctx context.Context, list []steps.Step, skip []string) (err error) {
+	if _, err := CheckOwnership(ctx, x.d, x.st, x.cfg.Name); err != nil {
+		return err
+	}
 	defer func() {
 		if cerr := x.Close(ctx); cerr != nil {
 			x.d.Sink.Emit(events.Warning{Text: cerr.Error()})

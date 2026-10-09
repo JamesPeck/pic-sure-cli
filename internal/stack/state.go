@@ -10,6 +10,10 @@ import (
 // no secrets. Unknown fields are ignored on load, so a read-only command of
 // an older CLI can still read a newer CLI's state (§10.6).
 type State struct {
+	// StackID is the random ID init gave the stack, in the stack-id label
+	// of its Docker resources (§6.1). A copy of the directory has the same
+	// one, which is how the ownership rule tells a copy from a move.
+	StackID string `json:"stack_id,omitempty"`
 	// CLIVersion is the version of the CLI that last rendered the stack.
 	CLIVersion string `json:"cli_version"`
 	// SchemaVersion is the pic-sure.yaml schema the stack was last
@@ -164,8 +168,15 @@ func (s *Stack) LoadState() (*State, error) {
 	return &st, nil
 }
 
-// SaveState atomically writes state.json.
+// SaveState atomically writes state.json. A State without a StackID keeps
+// the one state.json has, so a command that loaded state before the ID was
+// given can't drop it.
 func (s *Stack) SaveState(st *State) error {
+	if st.StackID == "" {
+		if cur, err := s.LoadState(); err == nil {
+			st.StackID = cur.StackID
+		}
+	}
 	data, err := json.MarshalIndent(st, "", "  ")
 	if err != nil {
 		return err

@@ -346,8 +346,8 @@ func TestTruststoreStepRebuilds(t *testing.T) {
 
 func TestTruststoreStepRefusesAVolumeThatIsntTheStacks(t *testing.T) {
 	for owner, labels := range map[string]map[string]string{
-		`"other"`: {stack.LabelStack: "other"},
-		`""`:      {},
+		"stack other in /stacks/other":  {stack.LabelStack: "other", stack.LabelStackDir: "/stacks/other"},
+		"something other than pic-sure": {},
 	} {
 		t.Run(owner, func(t *testing.T) {
 			st, cfg := newTrustStack(t)

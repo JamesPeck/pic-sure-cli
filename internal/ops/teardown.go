@@ -49,6 +49,9 @@ type TeardownReport struct {
 	Images []string `json:"images,omitempty"`
 	// Files is what destroy did in the stack directory.
 	Files *stack.RemoveReport `json:"files,omitempty"`
+	// LeftAlone lists another stack's resources that use this stack's
+	// name, which destroy in a copy of that stack leaves alone.
+	LeftAlone []ResourceRef `json:"left_alone,omitempty"`
 	// Pruned is what --prune-images removed.
 	Pruned *PruneReport `json:"pruned,omitempty"`
 }
@@ -56,9 +59,15 @@ type TeardownReport struct {
 // Reset removes the stack's containers and its data, TLS and (unless
 // KeepDB) database volumes, keeping its config, secrets, logs and TLS
 // sources, so the next up re-converges (§9.8). It forgets what state.json
-// recorded about the volumes' contents, so up copies them again.
+// recorded about the volumes' contents, so up copies them again. The
+// stack's name selecting another stack's resources (in a copy, the
+// original's) is exit 3, before anything changes.
 func Reset(ctx context.Context, d *Deps, st *stack.Stack, opts TeardownOptions) (*TeardownReport, error) {
 	report := &TeardownReport{Stack: opts.Name, Volumes: []string{}}
+	owned, err := CheckOwnership(ctx, d, st, opts.Name)
+	if err != nil {
+		return nil, err
+	}
 	state, err := st.LoadState()
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
@@ -73,7 +82,7 @@ func Reset(ctx context.Context, d *Deps, st *stack.Stack, opts TeardownOptions) 
 	}
 	plan := []steps.Step{
 		downStep(d),
-		volumesStep(d, st, opts.Name, report, func(v catalog.Volume) bool {
+		volumesStep(d, owned, report, func(v catalog.Volume) bool {
 			switch v.Kind {
 			case catalog.KindData, catalog.KindTLS:
 				return true
@@ -102,19 +111,37 @@ func Reset(ctx context.Context, d *Deps, st *stack.Stack, opts TeardownOptions) 
 // resources are never touched. With PruneImages it then prunes the
 // commit-tagged images nothing uses any more. The caller holds the stack
 // lock; st is unusable afterwards except for Close.
+//
+// When the stack's name selects another stack's resources, st is a copy of
+// that stack (or shares its name), and compose down, the volumes and the
+// dev images would all be the other stack's: destroy removes only st's
+// files and lists the rest in LeftAlone.
 func Destroy(ctx context.Context, d *Deps, st *stack.Stack, opts TeardownOptions) (*TeardownReport, error) {
 	report := &TeardownReport{Stack: opts.Name, Volumes: []string{}, Images: []string{}}
-	plan := []steps.Step{
-		downStep(d),
-		volumesStep(d, st, opts.Name, report, func(catalog.Volume) bool { return true }),
-		{
-			ID:    StepDevImages,
-			Title: "Remove the stack's dev images",
-			Apply: func(ctx context.Context, sink events.Sink) error {
-				return removeDevImages(ctx, d, sink, opts.Name, report)
+	owned, err := StackResources(ctx, d, opts.Name, st.ID(), st.Dir)
+	if err != nil {
+		return nil, err
+	}
+	NoteMoved(d.Sink, owned)
+	var plan []steps.Step
+	if report.LeftAlone = Refs(owned.Foreign()); len(report.LeftAlone) > 0 {
+		d.Sink.Emit(events.Warning{ID: StepFiles, Text: fmt.Sprintf("the stack name %s is in use by another stack's Docker resources, so destroy removes only this directory's files and leaves these alone:\n%s",
+			opts.Name, ResourceList(report.LeftAlone))})
+	} else {
+		plan = []steps.Step{
+			downStep(d),
+			volumesStep(d, owned, report, func(catalog.Volume) bool { return true }),
+			{
+				ID:    StepDevImages,
+				Title: "Remove the stack's dev images",
+				Apply: func(ctx context.Context, sink events.Sink) error {
+					return removeDevImages(ctx, d, sink, st, opts.Name, report)
+				},
 			},
-		},
-		{
+		}
+	}
+	plan = append(plan,
+		steps.Step{
 			ID:    StepFiles,
 			Title: "Remove the files pic-sure created",
 			Apply: func(ctx context.Context, sink events.Sink) error {
@@ -133,8 +160,7 @@ func Destroy(ctx context.Context, d *Deps, st *stack.Stack, opts TeardownOptions
 				}
 				return nil
 			},
-		},
-	}
+		})
 	if opts.PruneImages {
 		plan = append(plan, steps.Step{
 			ID:    StepPrune,
@@ -168,23 +194,19 @@ func downStep(d *Deps) steps.Step {
 	}
 }
 
-// volumesStep removes the volumes labelled for stack name in st's
-// directory that remove selects. Selection is by label only, never by name
-// (§4): a volume labelled with the name but another directory belongs to
-// another stack, and a shared data set or host volume is never the stack's,
-// whatever its labels say.
-func volumesStep(d *Deps, st *stack.Stack, name string, report *TeardownReport, remove func(catalog.Volume) bool) steps.Step {
+// volumesStep removes the stack's volumes in owned that remove selects.
+// Selection is by label only, never by name (§4), and a shared data set or
+// host volume is never the stack's, whatever its labels say.
+func volumesStep(d *Deps, owned *Ownership, report *TeardownReport, remove func(catalog.Volume) bool) steps.Step {
 	return steps.Step{
 		ID:    StepVolumes,
 		Title: "Remove the stack's volumes",
 		Apply: func(ctx context.Context, sink events.Sink) error {
-			vols, err := stackVolumes(ctx, d, st, name)
-			if err != nil {
-				return err
-			}
-			warnMoved(ctx, d, sink, st, name)
 			var failed []string
-			for _, v := range vols {
+			for _, v := range owned.Resources {
+				if v.Kind != "volume" || v.Claim == stack.Foreign {
+					continue
+				}
 				cv, known := catalog.LookupVolume(v.Labels[stack.LabelComposeVolume])
 				if known && cv.Scope != catalog.StackScoped {
 					continue
@@ -209,45 +231,22 @@ func volumesStep(d *Deps, st *stack.Stack, name string, report *TeardownReport, 
 	}
 }
 
-// stackVolumes returns the volumes labelled for stack name whose stack-dir
-// label is st's directory.
-func stackVolumes(ctx context.Context, d *Deps, st *stack.Stack, name string) ([]docker.Volume, error) {
-	vols, err := d.Docker.VolumeList(ctx, stack.LabelStack+"="+name, stack.LabelStackDir+"="+st.Dir)
-	if err != nil {
-		return nil, fmt.Errorf("listing the stack's volumes: %w", err)
-	}
-	return vols, nil
-}
-
-// warnMoved warns about volumes labelled for stack name in another
-// directory, which teardown leaves alone: another stack's, or this one's
-// from before its directory moved.
-func warnMoved(ctx context.Context, d *Deps, sink events.Sink, st *stack.Stack, name string) {
-	vols, err := d.Docker.VolumeList(ctx, stack.LabelStack+"="+name)
-	if err != nil {
-		return
-	}
-	for _, v := range vols {
-		switch dir := v.Labels[stack.LabelStackDir]; dir {
-		case st.Dir:
-		case "":
-			sink.Emit(events.Warning{ID: StepVolumes, Text: fmt.Sprintf("left volume %s alone: it is labelled for stack %s but has no %s label", v.Name, name, stack.LabelStackDir)})
-		default:
-			sink.Emit(events.Warning{ID: StepVolumes, Text: fmt.Sprintf("left volume %s alone: it is labelled for stack %s in %s, not this directory", v.Name, name, dir)})
-		}
-	}
-}
-
 // removeDevImages removes the dev-<name>-* images of the built catalog
-// images.
-func removeDevImages(ctx context.Context, d *Deps, sink events.Sink, name string, report *TeardownReport) error {
+// images that are st's: labelled for it by the ownership rule, or from
+// before dev images had stack labels.
+func removeDevImages(ctx context.Context, d *Deps, sink events.Sink, st *stack.Stack, name string, report *TeardownReport) error {
 	imgs, err := d.Docker.ImageList(ctx, catalog.Namespace+"/*")
 	if err != nil {
 		return fmt.Errorf("listing images: %w", err)
 	}
+	id := st.ID()
 	var failed []string
 	for _, img := range imgs {
 		if devStack, ok := cachedImage(img.Ref); !ok || devStack != name {
+			continue
+		}
+		if _, labelled := img.Labels[stack.LabelStackDir]; labelled && stack.Owner(id, st.Dir, img.Labels) == stack.Foreign {
+			sink.Emit(events.Warning{ID: StepDevImages, Text: fmt.Sprintf("left image %s alone: it belongs to %s", img.Ref, stack.OwnerName(img.Labels))})
 			continue
 		}
 		if err := d.Docker.RemoveImage(ctx, img.Ref); err != nil {

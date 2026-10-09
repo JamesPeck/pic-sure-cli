@@ -102,7 +102,7 @@ func buildData(in Input) (templateData, catalog.Mode, *netproxy.Proxy, error) {
 	flags := stack.DeriveAuthFlags(cfg.Auth.Mode)
 	d := templateData{
 		Name:              cfg.Name,
-		Labels:            map[string]string{stack.LabelStack: cfg.Name, stack.LabelStackDir: stackDir},
+		Labels:            labels(cfg.Name, stackDir, st.StackID),
 		FilesDir:          path.Join(stackDir, FilesDir),
 		HTTPPort:          cfg.Network.HTTPPort,
 		HTTPSPort:         cfg.Network.HTTPSPort,
@@ -516,3 +516,13 @@ func Write(st *stack.Stack, files []File) error {
 // responses that carry none of their own. `status --deep` tells it apart from the
 // frontend's nonce policy.
 const CSPFloorPolicy = "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; sandbox"
+
+// labels are the stack's labels on every resource compose makes (§6.1). A
+// stack without an ID yet gets no stack-id label.
+func labels(name, dir, id string) map[string]string {
+	l := map[string]string{stack.LabelStack: name, stack.LabelStackDir: dir}
+	if id != "" {
+		l[stack.LabelStackID] = id
+	}
+	return l
+}

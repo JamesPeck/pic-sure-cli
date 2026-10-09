@@ -74,7 +74,7 @@ func newGenomicFixture(t *testing.T) *genomicFixture {
 	}
 	f := fx.f
 	for _, vol := range []string{"demo_genomic-staging", "demo_hpds-genomic"} {
-		out, _ := json.Marshal([]map[string]any{{"Name": vol, "CreatedAt": "2026-10-07T12:00:00Z", "Labels": map[string]string{stack.LabelStack: "demo"}}})
+		out, _ := json.Marshal([]map[string]any{{"Name": vol, "CreatedAt": "2026-10-07T12:00:00Z", "Labels": fx.st.Labels("demo")}})
 		f.On(fakerunner.Exact("docker", "volume", "inspect", vol)).Stdout(string(out))
 	}
 	f.On(fakerunner.Glob("docker run --rm --name demo-genomic-input-* --network none *")).Do(func(ctx context.Context, c fakerunner.Call) (docker.Result, error) {

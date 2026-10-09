@@ -98,6 +98,10 @@ docker rm -v -f pic-sure-doctor-* => 0
 re:^docker compose .*/leaky .* (ps|config) => 1 stderr=leak.txt
 re:^docker compose .*/leaky .* (down|restart)( |$) => 0 stderr=leak.txt
 docker compose * => 0
+docker ps --all --no-trunc --filter label=com.docker.compose.project=* --format * => 0
+docker volume ls -q --filter label=com.docker.compose.project=* => 0
+docker volume ls -q --filter label=org.hms-dbmi.picsure.stack=* => 0
+docker network ls -q --no-trunc --filter label=com.docker.compose.project=* => 0
 docker * => 1
 -- leak.txt --
 password rootpw-0123456789 rejected

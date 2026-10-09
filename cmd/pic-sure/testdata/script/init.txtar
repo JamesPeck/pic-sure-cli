@@ -85,7 +85,19 @@ cp info-ok.json info.json
 # A stack name another compose project uses is exit 3.
 cp ps-other.json ps.json
 exitcode 3 pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --auto-ports
-stderr 'the stack name demo is in use by another stack or compose project \(container demo-web-1\)'
+stderr 'the stack name demo is in use by another stack''s Docker resources, which pic-sure won''t touch:'
+stderr '^  something other than pic-sure: container demo-web-1$'
+stderr '^Choose another --name'
+! exists new
+
+# Docker resources a stack deleted at the same path without destroy left
+# behind are exit 3 before anything is written, naming them and how to
+# remove them.
+exec sh -c 'sed "s|@DIR@|$(pwd -P)/new|g" ps-leftover.tmpl >ps.json'
+exitcode 3 pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --auto-ports
+stderr 'the stack name demo has Docker resources left by a stack deleted without `pic-sure destroy`:'
+stderr '^  stack demo in .*/new: container demo-picsure-db-1$'
+stderr '^  docker rm -f demo-picsure-db-1$'
 ! exists new
 cp empty.json ps.json
 
@@ -246,12 +258,18 @@ docker ps * => 0
 docker volume ls * => 0
 docker volume inspect * => 1 stderr=nosuch.txt
 docker image inspect * => 1
+docker ps --all --no-trunc --filter label=com.docker.compose.project=* --format * => 0
+docker volume ls -q --filter label=com.docker.compose.project=* => 0
+docker volume ls -q --filter label=org.hms-dbmi.picsure.stack=* => 0
+docker network ls -q --no-trunc --filter label=com.docker.compose.project=* => 0
 -- nosuch.txt --
 Error response from daemon: get nhanes_hpds-data: no such volume
 -- ps.json --
 -- empty.json --
 -- ps-other.json --
-{"Names":"demo-web-1","Labels":"com.docker.compose.project=demo,com.docker.compose.service=web"}
+{"Names":"demo-web-1","Ports":"","Labels":{"org.hms-dbmi.picsure.stack":"","org.hms-dbmi.picsure.stack-dir":"","org.hms-dbmi.picsure.stack-id":""}}
+-- ps-leftover.tmpl --
+{"Names":"demo-picsure-db-1","Ports":"","Labels":{"org.hms-dbmi.picsure.stack":"demo","org.hms-dbmi.picsure.stack-dir":"@DIR@","org.hms-dbmi.picsure.stack-id":"0123456789abcdef0123456789abcdef"}}
 -- info-ok.json --
 {"ServerVersion":"28.5.1","OperatingSystem":"Docker Desktop","OSType":"linux","Architecture":"x86_64","MemTotal":17179869184,"DockerRootDir":"/var/lib/docker","ClientInfo":{"Context":"desktop-linux","Plugins":[{"Name":"compose","Version":"v2.29.7"},{"Name":"buildx","Version":"v0.17.1"}]}}
 -- info.json --

@@ -72,6 +72,10 @@ func newDictFixture(t *testing.T) *dictFixture {
 	x.d = &Deps{Runner: x.f, Docker: docker.NewEngine(x.f), Rand: rand.Reader, Clock: FixedClock(time.Unix(0, 0)), Sink: x.rec,
 		Compose: &docker.Compose{Runner: x.f, Files: []string{"/stack/.pic-sure/render/compose.yaml"}, ProjectDir: "/stack",
 			Env: func() []string { return []string{"DB_DICTIONARY_PASSWORD=" + dictPassword} }}}
+	// The ownership check finds nothing of another stack's.
+	x.f.On(fakerunner.Glob("docker ps --all --no-trunc --filter label=com.docker.compose.project=demo --format *"))
+	x.f.On(fakerunner.Glob("docker volume ls -q --filter label=*"))
+	x.f.On(fakerunner.Glob("docker network ls -q --no-trunc --filter label=com.docker.compose.project=demo"))
 	return x
 }
 

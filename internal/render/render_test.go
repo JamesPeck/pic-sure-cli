@@ -97,7 +97,7 @@ func goldenConfig(c goldenCase) *stack.Config {
 }
 
 func goldenInput(c goldenCase) Input {
-	st := &stack.State{Images: map[string]string{"node": "24.19.0-alpine3.23"}, DevImages: map[string]string{}}
+	st := &stack.State{StackID: "0123456789abcdef0123456789abcdef", Images: map[string]string{"node": "24.19.0-alpine3.23"}, DevImages: map[string]string{}}
 	for _, img := range catalog.Images() {
 		if img.Built() {
 			st.Images[img.Name] = "abc123def456"

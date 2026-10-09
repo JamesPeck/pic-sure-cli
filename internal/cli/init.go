@@ -665,13 +665,11 @@ func (r *initRun) preconditions(ctx context.Context, sink events.Sink) error {
 		return exitcode.Precondition("the host isn't ready:\n  %s\nRun `pic-sure doctor` for details", strings.Join(failed, "\n  "))
 	}
 
-	user, published, err := ops.StackNameInUse(ctx, r.d, r.cfg.Name, r.dir)
+	owned, err := r.checkName(ctx)
 	if err != nil {
 		return err
 	}
-	if user != "" {
-		return exitcode.Precondition("the stack name %s is in use by another stack or compose project (%s); choose another --name", r.cfg.Name, user)
-	}
+	published := owned.Published
 	if r.cfg.HPDS.Data == stack.HPDSShared {
 		// Render checks it too, but only after the images are built.
 		if _, err := ops.SharedDataProfile(ctx, r.d, r.cfg.HPDS.SharedName); err != nil {
@@ -706,6 +704,63 @@ func (r *initRun) preconditions(ctx context.Context, sink events.Sink) error {
 }
 
 // choosePorts chooses the ports init wasn't given on h.
+// checkName makes the ownership check before init writes anything (§6.1).
+// A new stack owns no Docker resources yet, so whatever its name selects
+// is foreign; a resumed one owns those labelled with its ID or, without
+// one, its directory. Foreign resources labelled with this directory, or
+// with one that no longer holds a stack, are the leftovers of a stack
+// deleted without destroy, which init names with the commands that remove
+// them.
+func (r *initRun) checkName(ctx context.Context) (*ops.Ownership, error) {
+	id, dir := "", ""
+	if r.prior != nil {
+		id, dir = r.prior.StackID, r.dir
+	}
+	owned, err := ops.StackResources(ctx, r.d, r.cfg.Name, id, dir)
+	if err != nil {
+		return nil, err
+	}
+	ops.NoteMoved(r.d.Sink, owned)
+	foreign := owned.Foreign()
+	if len(foreign) == 0 {
+		return owned, nil
+	}
+	here := ops.CanonicalDir(r.dir)
+	var leftovers []ops.Resource
+	for _, res := range foreign {
+		if res.StackDir == "" {
+			continue
+		}
+		if id, err := stack.IDAt(res.StackDir); res.StackDir == here || id == "" && err == nil {
+			leftovers = append(leftovers, res)
+		}
+	}
+	if len(leftovers) == 0 {
+		return nil, exitcode.Precondition("%v\nChoose another --name", owned.Err(r.cfg.Name))
+	}
+	return nil, exitcode.Precondition("the stack name %s has Docker resources left by a stack deleted without `pic-sure destroy`:\n%s\n"+
+		"They hold that stack's data and passwords, which this stack can't use. Remove them with:\n%s\nor choose another --name",
+		r.cfg.Name, ops.ResourceList(ops.Refs(leftovers)), removeCommands(leftovers))
+}
+
+// removeCommands are the docker commands that remove resources: containers
+// first, since a volume or network in use can't be removed.
+func removeCommands(rs []ops.Resource) string {
+	var cmds []string
+	for _, kind := range []struct{ kind, argv string }{{"container", "docker rm -f"}, {"volume", "docker volume rm"}, {"network", "docker network rm"}} {
+		var names []string
+		for _, res := range rs {
+			if res.Kind == kind.kind {
+				names = append(names, res.Name)
+			}
+		}
+		if len(names) > 0 {
+			cmds = append(cmds, "  "+kind.argv+" "+strings.Join(names, " "))
+		}
+	}
+	return strings.Join(cmds, "\n")
+}
+
 func (r *initRun) choosePorts(h ops.Host) error {
 	return r.setPorts(h, r.httpPort, r.httpsPort, r.autoPorts)
 }
@@ -869,6 +924,11 @@ func (r *initRun) writeConfig(ctx context.Context, sink events.Sink) error {
 	}
 	if err != nil {
 		return err
+	}
+	if state.StackID == "" {
+		if state.StackID, err = stack.NewID(r.d.Rand); err != nil {
+			return err
+		}
 	}
 	if state.Release.Commit == "" {
 		state.Release = stack.Release{Repo: r.rel.Repo, Branch: r.rel.Branch, Commit: r.rel.Commit}

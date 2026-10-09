@@ -76,6 +76,9 @@ func (a *App) dataDemo(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	if err := checkOwned(cmd, d, st, cfg); err != nil {
+		return err
+	}
 	state.StartOperation("data demo", d.Clock.Now())
 	if err := st.SaveState(state); err != nil {
 		return err

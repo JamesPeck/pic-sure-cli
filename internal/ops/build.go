@@ -88,8 +88,10 @@ type imagePart struct {
 	images    []catalog.Image
 	comp      stack.Component // with Source and Dirty for a local checkout
 	tag       string
-	pull      bool // pulled from the registry rather than built
-	registry  string
+	// stackLabels are the stack's labels for a dev image (§6.1).
+	stackLabels map[string]string
+	pull        bool // pulled from the registry rather than built
+	registry    string
 	// tree says render needs the cache's source tree, for its SQL and
 	// schema bind mounts, whether or not anything is built from it.
 	tree bool
@@ -269,6 +271,7 @@ func planImages(ctx context.Context, d *Deps, st *stack.Stack, cfg *stack.Config
 			}
 			p.comp = stack.Component{Commit: wt.Head, Source: src, Dirty: wt.Dirty}
 			p.tag = DevTag(cfg.Name, wt.Head, wt.Dirty)
+			p.stackLabels = st.Labels(cfg.Name)
 			// Checked as if dirty, so a name doesn't fail only once the tree is.
 			if long := DevTag(cfg.Name, wt.Head, true); !imageTag.MatchString(long) {
 				return nil, exitcode.Usage("the stack name %q is too long for a dev image tag (%s); local sources need a shorter name", cfg.Name, long)
@@ -452,12 +455,14 @@ func buildImages(ctx context.Context, d *Deps, st *stack.Stack, cfg *stack.Confi
 			res, err = BuildReactor(ctx, d, ReactorOptions{
 				Cache: opts.Cache, SHA: p.comp.Commit, Source: p.comp.Source, Tag: p.tag,
 				Proxy: proxy, Force: opts.Force || p.comp.Dirty, LogDir: logDir, Step: ImagesStepID,
+				StackLabels: p.stackLabels,
 			})
 			tag, built = res.Tag, res.Built
 		default:
 			bo := ImageBuildOptions{
 				Cache: opts.Cache, SHA: p.comp.Commit, Source: p.comp.Source, Tag: p.tag,
 				Proxy: proxy, Force: opts.Force || p.comp.Dirty, LogDir: logDir, Step: ImagesStepID,
+				StackLabels: p.stackLabels,
 			}
 			var res ImageBuildResult
 			if p.component == catalog.Frontend {

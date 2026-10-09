@@ -450,7 +450,7 @@ func TestTLSStepRefusesAVolumeItDoesntOwn(t *testing.T) {
 		fx := newTLSFixture(t)
 		fx.vol.createdAt, fx.vol.labels = "2026-01-01T00:00:00Z", labels
 		err := ops.TLSStep(fx.d, fx.st, fx.cfg).Apply(context.Background(), fx.rec)
-		if err == nil || !strings.Contains(err.Error(), "volume demo_certs exists but isn't stack demo's") {
+		if err == nil || !strings.Contains(err.Error(), "volume demo_certs belongs to ") {
 			t.Errorf("labels %v: Apply = %v", labels, err)
 		}
 		if fx.vol.runs != 0 {

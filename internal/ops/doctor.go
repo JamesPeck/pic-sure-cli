@@ -686,9 +686,31 @@ func (c *doctor) stack(ctx context.Context) {
 	if c.cfg == nil {
 		return
 	}
+	c.ownershipCheck(ctx)
 	c.portsCheck(ctx)
 	c.auth0Check()
 	c.proxyCheck()
+}
+
+// ownershipCheck reports another stack's Docker resources that use this
+// stack's name (§6.1), which every command that changes the stack refuses.
+func (c *doctor) ownershipCheck(ctx context.Context) {
+	if !c.daemonOK {
+		return
+	}
+	st := c.opts.Stack
+	o, err := StackResources(ctx, c.d, c.cfg.Name, st.ID(), st.Dir)
+	switch {
+	case err != nil:
+		c.add("stack-name", CheckWarn, "couldn't list the Docker resources of stack name %s: %v", c.cfg.Name, err)
+	case len(o.Foreign()) > 0:
+		c.add("stack-name", CheckFail, "the stack name %s is in use by another stack's Docker resources:\n%s", c.cfg.Name, ResourceList(Refs(o.Foreign()))).Detail =
+			"If this directory is a copy of that stack, `pic-sure destroy` here removes only the copy's files."
+	case len(o.Moved()) > 0:
+		c.add("stack-name", CheckOK, "the stack moved from %s and adopts its Docker resources", o.Moved()[0].StackDir)
+	default:
+		c.add("stack-name", CheckOK, "no other stack uses the name %s", c.cfg.Name)
+	}
 }
 
 func (c *doctor) composeCheck(ctx context.Context) {

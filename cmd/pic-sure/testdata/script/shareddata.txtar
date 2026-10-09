@@ -49,9 +49,17 @@ docker volume inspect nhanes_hpds-data => 0 stdout=data.json
 docker volume inspect nhanes_hpds-genomic => 0 stdout=genomic.json
 docker ps -a --no-trunc --filter volume=nhanes_hpds-data * => 0
 docker ps -a --no-trunc --filter volume=nhanes_hpds-genomic * => 0 stdout=ps.txt
+docker ps --all --no-trunc --filter label=com.docker.compose.project=* --format * => 0
+docker volume ls -q --filter label=com.docker.compose.project=* => 0
+docker volume ls -q --filter label=org.hms-dbmi.picsure.stack=* => 0
+docker network ls -q --no-trunc --filter label=com.docker.compose.project=* => 0
 -- empty.scenario --
 docker volume ls * => 0
 docker volume inspect * => 1 stderr=nosuch.txt
+docker ps --all --no-trunc --filter label=com.docker.compose.project=* --format * => 0
+docker volume ls -q --filter label=com.docker.compose.project=* => 0
+docker volume ls -q --filter label=org.hms-dbmi.picsure.stack=* => 0
+docker network ls -q --no-trunc --filter label=com.docker.compose.project=* => 0
 -- nosuch.txt --
 Error response from daemon: get nhanes_hpds-data: no such volume
 -- names.txt --

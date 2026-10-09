@@ -602,7 +602,7 @@ type hpdsRotateFakes struct {
 func (x *rotateFixture) hpdsFakes(files string) *hpdsRotateFakes {
 	h := &hpdsRotateFakes{}
 	x.f.On(fakerunner.Exact("docker", "volume", "inspect", "demo_hpds-data")).
-		Stdout(`[{"Name":"demo_hpds-data","CreatedAt":"2026-10-07T12:00:00Z","Labels":{"` + stack.LabelStack + `":"demo"}}]`)
+		Stdout(`[{"Name":"demo_hpds-data","CreatedAt":"2026-10-07T12:00:00Z","Labels":` + labelsJSON(x.st) + `}]`)
 	x.f.On(fakerunner.Glob("docker compose * stop hpds"))
 	x.f.On(fakerunner.Glob("docker run * demo-hpds-data-* *")).Do(func(context.Context, fakerunner.Call) (docker.Result, error) {
 		if h.wiped {

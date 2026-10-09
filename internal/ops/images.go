@@ -60,6 +60,9 @@ type ImageBuildOptions struct {
 	LogDir string
 	// Step is the step ID the build's events carry.
 	Step string
+	// StackLabels are a dev image's stack labels (§6.1), added to its
+	// own. An image of the tag labelled for another stack is exit 3.
+	StackLabels map[string]string
 }
 
 // ImageBuildResult is what BuildFrontend or BuildDictionaryETL did.
@@ -222,6 +225,9 @@ func buildSourceImage(ctx context.Context, d *Deps, component string, opts Image
 		return res, err
 	}
 	defer func() { _ = lock.Unlock() }()
+	if err := checkImageOwner(ctx, d, ref, opts.StackLabels); err != nil {
+		return res, err
+	}
 	if !opts.Force {
 		if fresh, err := imageHasLabels(ctx, d, ref, labels); err != nil || fresh {
 			if fresh {
@@ -262,7 +268,7 @@ func buildSourceImage(ctx context.Context, d *Deps, component string, opts Image
 		Context: filepath.Join(dir, filepath.FromSlash(img.Context)),
 		File:    filepath.Join(dir, filepath.FromSlash(img.Dockerfile)),
 		Tag:     ref,
-		Labels:  labels,
+		Labels:  withLabels(labels, opts.StackLabels),
 		Stdout:  out,
 		Stderr:  out,
 	}

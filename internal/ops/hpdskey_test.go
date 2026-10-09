@@ -34,6 +34,21 @@ type hpdsKeyFixture struct {
 	d   *ops.Deps
 }
 
+// ownerLabels are the stack labels of a volume of stack owner: st's, when
+// owner is st's name "demo".
+func ownerLabels(st *stack.Stack, owner string) map[string]string {
+	if owner == "demo" {
+		return st.Labels("demo")
+	}
+	return map[string]string{stack.LabelStack: owner, stack.LabelStackDir: "/stacks/" + owner}
+}
+
+// labelsJSON is st's labels for stack demo, as docker inspect has them.
+func labelsJSON(st *stack.Stack) string {
+	b, _ := json.Marshal(st.Labels("demo"))
+	return string(b)
+}
+
 func newHPDSKeyFixture(t *testing.T) *hpdsKeyFixture {
 	st, err := stack.Create(filepath.Join(t.TempDir(), "demo"))
 	if err != nil {
@@ -54,7 +69,7 @@ func newHPDSKeyFixture(t *testing.T) *hpdsKeyFixture {
 			return docker.Result{Stderr: []byte("Error response from daemon: get demo_hpds-data: no such volume\n"), ExitCode: 1}, nil
 		}
 		out, err := json.Marshal([]map[string]any{{"Name": "demo_hpds-data", "CreatedAt": v.createdAt,
-			"Labels": map[string]string{stack.LabelStack: v.owner}}})
+			"Labels": ownerLabels(st, v.owner)}})
 		return docker.Result{Stdout: out}, err
 	})
 	f.On(fakerunner.Glob("docker volume create * demo_hpds-data")).Do(func(_ context.Context, c fakerunner.Call) (docker.Result, error) {
@@ -128,7 +143,7 @@ func TestHPDSKeyStepRefusesAnotherStacksVolume(t *testing.T) {
 	fx := newHPDSKeyFixture(t)
 	fx.vol.createdAt, fx.vol.owner = "2026-10-07T12:00:00Z", "other"
 	err := fx.apply(t)
-	if err == nil || !strings.Contains(err.Error(), "isn't stack demo's") {
+	if err == nil || !strings.Contains(err.Error(), "belongs to stack other in /stacks/other") {
 		t.Fatalf("err = %v, want a refusal", err)
 	}
 	if fx.vol.runs != 0 {

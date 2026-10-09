@@ -25,7 +25,9 @@ stdout '^FAIL compose config'
 stdout '^FAIL project UUIDs \(secrets.yaml lacks application_uuid, resource_uuid, visualization_uuid\)$'
 ! stdout 'look valid'
 
-# A migrate that can't start the database fails in the db step.
+# A migrate that can't start the database fails in the db step. Docker
+# answers only the ownership check.
+cp owned.scenario docker.scenario
 exitcode 1 pic-sure --stack stack --json migrate
 stdout '"type":"step_done","id":"db","status":"failed"'
 stdout '"step":"db"'
@@ -56,3 +58,8 @@ name: demo
 auth: {mode: open, admin_email: admin@example.com}
 -- nosecrets/.pic-sure/render/compose.yaml --
 services: {}
+-- owned.scenario --
+docker ps --all --no-trunc --filter label=com.docker.compose.project=* --format * => 0
+docker volume ls -q --filter label=com.docker.compose.project=* => 0
+docker volume ls -q --filter label=org.hms-dbmi.picsure.stack=* => 0
+docker network ls -q --no-trunc --filter label=com.docker.compose.project=* => 0

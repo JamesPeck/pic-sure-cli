@@ -208,6 +208,9 @@ func writeDestroySummary(w io.Writer, dir string, r *ops.TeardownReport) error {
 		fmt.Fprintf(&b, ", and %s", countOf(len(r.Files.Removed), "path"))
 	}
 	b.WriteString(".\n")
+	if len(r.LeftAlone) > 0 {
+		fmt.Fprintf(&b, "Left another stack's Docker resources alone (this directory is a copy of it, or shares its name):\n%s\n", ops.ResourceList(r.LeftAlone))
+	}
 	if r.Pruned != nil {
 		fmt.Fprintf(&b, "Pruned %s, freeing %s.\n", countOf(len(r.Pruned.Removed), "shared image"), ops.FormatBytes(r.Pruned.Freed))
 	}

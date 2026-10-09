@@ -36,6 +36,10 @@ stdout 'dictionary-db isn''t running and healthy; run `pic-sure up`'
 
 -- docker.scenario --
 docker compose * ps --all --format json dictionary-db => 0
+docker ps --all --no-trunc --filter label=com.docker.compose.project=* --format * => 0
+docker volume ls -q --filter label=com.docker.compose.project=* => 0
+docker volume ls -q --filter label=org.hms-dbmi.picsure.stack=* => 0
+docker network ls -q --no-trunc --filter label=com.docker.compose.project=* => 0
 -- datasets.csv --
 ref,full_name,abbreviation,description
 phs1,One,O,first

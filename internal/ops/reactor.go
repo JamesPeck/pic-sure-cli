@@ -56,6 +56,9 @@ type ReactorOptions struct {
 	LogDir string
 	// Step is the step ID the build's events carry.
 	Step string
+	// StackLabels are a dev image's stack labels (§6.1), added to its
+	// own. An image of the tag labelled for another stack is exit 3.
+	StackLabels map[string]string
 }
 
 // ReactorResult is what BuildReactor did.
@@ -486,6 +489,9 @@ func buildReactorImage(ctx context.Context, d *Deps, c *cache.Cache, opts Reacto
 		return false, err
 	}
 	defer func() { _ = lock.Unlock() }()
+	if err := checkImageOwner(ctx, d, ref, opts.StackLabels); err != nil {
+		return false, err
+	}
 	if !opts.Force {
 		if fresh, err := builtFrom(ctx, d, ref, opts.SHA); err != nil || fresh {
 			return false, err
@@ -505,7 +511,7 @@ func buildReactorImage(ctx context.Context, d *Deps, c *cache.Cache, opts Reacto
 		Context: filepath.Join(buildDir, filepath.FromSlash(img.Context)),
 		File:    filepath.Join(buildDir, filepath.FromSlash(img.Dockerfile)),
 		Tag:     ref,
-		Labels:  map[string]string{ReactorSrcLabel: opts.SHA},
+		Labels:  withLabels(map[string]string{ReactorSrcLabel: opts.SHA}, opts.StackLabels),
 		Stdout:  out,
 		Stderr:  out,
 	}

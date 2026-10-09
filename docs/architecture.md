@@ -162,7 +162,12 @@ it.
   directory, and `a.lockStack(ctx, cmd, st, sink)` takes the stack lock
   for a mutating command: exit 1 if it is held, or a wait with
   `--wait-lock`. Holding the lock, it applies the gate again (009), since
-  the command it waited for may have been a newer pic-sure.
+  the command it waited for may have been a newer pic-sure, and gives a
+  stack without a stack ID one (`st.EnsureID`, 084). A command that
+  changes the stack's Docker resources then calls `checkOwned(cmd, d, st,
+  cfg)` (`ops.CheckOwnership`) after its own preconditions and before its
+  first change; `warnForeign` is the read-only commands' stderr warning
+  (`ps`, `logs`).
 - `gate.go` (009): `commandClasses`, the version-gate class of every
   command (§10.6; a test keeps it complete): read-only, mutating, or
   `update`'s own class. `openStack` runs `a.gate`, so every command that
@@ -292,7 +297,10 @@ it.
   accepted, and `--auto-ports` is ignored. Then
   three unskippable steps run:
   `preconditions` (doctor's host checks with the new config, `memory` only
-  a warning; `ops.StackNameInUse`; on a new stack `ops.ChoosePorts` and
+  a warning; `checkName`, `ops.StackResources` with the prior state's ID,
+  where a new stack owns nothing and foreign resources labelled with this
+  directory are named as a deleted stack's leftovers with the `docker`
+  commands that remove them (084); on a new stack `ops.ChoosePorts` and
   `ChooseDevPortsBase`, on a resumed one its ports must be free or its own;
   a loopback remote `--db-host` warns), `release` (`release.Fetch` at a
   resumed stack's recorded commit, else the branch head, then `Gate` with
@@ -326,7 +334,7 @@ it.
   generated (`auth0_client_secret_generated`) or missing is exit 3 pointing
   at `secrets rotate auth0-client-secret` (§9.11); then `EnsureSecrets`
   with `OpenAuth` (fills a generated secret a newer pic-sure added, never
-  replaces one). `ops.StackNameInUse` refuses a name another project uses,
+  replaces one). `ops.CheckOwnership` refuses another stack's resources,
   and a stack port that is busy but not published by the stack's own
   containers is exit 3. Then `ops.UpSteps` with the cache and a lazy-env
   Composer like init's, recording the `up` operation in state.json. The
@@ -472,7 +480,7 @@ it.
   an unknown variant (`ops.LookupDev`, exit 2, listing them). Under the stack lock: `dev off` of a variant that isn't on
   changes nothing. Then an initialised stack, and for `on`
   `ops.CheckDevOn` (exit 3: the component's source, httpd-hmr's
-  `.nvmrc`, not httpd beside httpd-hmr); `upSecrets`; `StackNameInUse`, and
+  `.nvmrc`, not httpd beside httpd-hmr); `upSecrets`; `CheckOwnership`, and
   for `on` its port free or the stack's own. It records the `dev on` or
   `dev off` operation and runs `ops.DevSteps` with up's lazy-env Composer. `--json`'s data is
   `{"service", "on", "services", "port", "source"}`. `dev off`'s text says
@@ -633,13 +641,23 @@ A directory is a stack when it holds `pic-sure.yaml` and `.pic-sure/`.
   `.pic-sure/lock`; a command that waited on a destroyed stack fails with
   exit 3 wrapping `ErrNotFound`. `openStackUnlogged` (cli) is openStack
   without the run log.
-- **Labels.** `st.Labels(name)` returns `org.hms-dbmi.picsure.stack=<name>`
-  and `org.hms-dbmi.picsure.stack-dir=<Dir>` (`LabelStack`,
-  `LabelStackDir`). `st.VolumeLabels(name, key)` adds compose's
+- **Labels.** `st.Labels(name)` returns `org.hms-dbmi.picsure.stack=<name>`,
+  `org.hms-dbmi.picsure.stack-dir=<Dir>` and, once the stack has one,
+  `org.hms-dbmi.picsure.stack-id=<ID>` (`LabelStack`, `LabelStackDir`,
+  `LabelStackID`). `st.VolumeLabels(name, key)` adds compose's
   `com.docker.compose.project` and `com.docker.compose.volume` for a stack
   volume a helper creates before compose does (024). `st.EnsureVolume(ctx, engine,
   name, vol, key)` creates such a volume with those labels if it's missing
-  and refuses (exit 3) one not labelled for this stack.
+  and refuses (exit 3) one `Owner` calls foreign.
+- **Ownership (084, `ownership.go`).** state.json's `stack_id` is a random
+  ID (`NewID`) init gives the stack; a copy of the directory has the same
+  one. `SaveState` keeps the file's ID when the State has none, so a State
+  loaded before `EnsureID(rand)` gave one can't drop it. `Owner(id, dir,
+  labels)` is §6.1's rule for one resource: `Own`, `Moved` (this ID, another
+  directory that no longer holds a stack with it, read by `IDAt`) or
+  `Foreign` (another ID; this ID in a directory that still holds it or
+  can't be read; no ID and another or no stack-dir). `OwnerName` describes
+  the owner for messages. ops lists and checks resources (ops, Ownership).
 
 ### Secrets (008)
 
@@ -1251,10 +1269,7 @@ init, and the parts `up` and `update` reuse.
   set in their pic-sure.yaml (a gone or unreadable one counts for
   nothing); `ReservingHost{Host, Reserved}` makes them busy for both
   choosers, and a busy default that is reserved says "another stack's".
-  `StackNameInUse(ctx, d, name, dir)` finds a container or volume of
-  compose project `name`, or a volume labelled for stack `name`, whose
-  stack-dir label isn't `dir`, and returns the host ports `dir`'s own
-  containers publish.
+  `StackNameInUse` became `StackResources` in 084 (ownership, below).
 - Doctor's new `DoctorOptions.Config` is init's config, used without a
   `Stack`: `memory` counts its HPDS heap once (a running hpds of a stack of
   that name is taken for it).
@@ -1743,12 +1758,32 @@ The new values come from `stack.GeneratePassword` and
 `stack.GenerateHexToken`, added here; `markPendingRestarts` is shared with
 up.
 
+**Ownership (084, `ownership.go`).** §6.1. `StackResources(ctx, d, name,
+id, dir)` lists the containers (`docker ps` with exact stack labels) and
+networks of compose project `name` and the volumes of that project or
+labelled `stack=<name>`, each a `Resource` with its labels and its
+`stack.Owner` claim for the stack with ID `id` in `dir` (empty `dir`: a
+stack init hasn't made, which owns nothing). `Published` holds the host
+ports of the stack's own containers. `CheckOwnership(ctx, d, st, name)` is
+the check every command that changes the stack's Docker resources makes:
+`NoteMoved` warns "stack moved from A; adopting its resources", and any
+foreign resource is exit 3 (`Ownership.Err`) listing each with its owner
+(`ResourceList`). `ResourceRef` is a resource as `status`'s `foreign` and
+destroy's `left_alone` give it. Dev image builds carry the stack's labels
+(`StackLabels` on `ImageBuildOptions` and `ReactorOptions`), and
+`checkImageOwner` refuses to build over another stack's labelled image;
+one without stack labels predates them and is taken as the stack's.
+`doctor`'s `stack-name` check reports the same.
+
 **Reset and destroy (056, `teardown.go`).** §9.8. Both run a `down` step
 (compose down; nothing when `d.Compose` is nil, a never-rendered stack)
-and a `volumes` step: `docker volume ls` filtered by both `stack=<name>`
-and `stack-dir=<Dir>` labels, never by name. Volumes labelled with the name
-but another directory (another stack, or this one before it moved) are
-left alone with a warning. A volume
+and a `volumes` step over `StackResources`' volumes that are the stack's
+own or adopted (084), selected by label, never by name. `Reset` makes the
+ownership check first, so in a copy it is exit 3 before anything changes.
+`Destroy` with any foreign resource (a copy, or another stack of the same
+name) runs only the `files` step, and lists those resources in
+`LeftAlone`; dev images labelled for another stack are left with a
+warning. A volume
 whose `com.docker.compose.volume` is a catalog `SharedData` or
 `HostScoped` volume is never removed, whatever its labels.
 - `Reset(d, st, TeardownOptions{Name, KeepDB})` removes `KindData` and

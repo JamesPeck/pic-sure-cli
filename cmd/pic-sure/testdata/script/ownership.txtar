@@ -1,0 +1,96 @@
+# A copy of a stack directory has the original's stack ID, and its name
+# selects the original's Docker resources (§6.1): every command that
+# changes them refuses, read-only ones say so, and destroy removes only
+# the copy's files. The real run is in ticket 084's Outcome.
+env XDG_CACHE_HOME=$WORK/cache
+
+# Stack a's container and volume carry its directory and ID.
+exec sh -c 'cd a && dir=$(pwd -P) && cd .. && sed "s|@A@|$dir|g" ps.tmpl >ps.json && sed "s|@A@|$dir|g" vols.tmpl >vols.json'
+exec cp -R a b
+
+# In the copy, the commands that change the stack refuse with exit 3,
+# naming the original, before docker is asked to change anything.
+exitcode 3 pic-sure --stack b --yes reset
+stderr 'the stack name demo is in use by another stack''s Docker resources, which pic-sure won''t touch:'
+stderr '^  stack demo in .*/a: container demo-hpds-1, volume demo_hpds-data$'
+exitcode 3 pic-sure --stack b --yes secrets rotate hpds-key --discard-data
+stderr 'stack demo in .*/a: container demo-hpds-1, volume demo_hpds-data'
+exitcode 3 pic-sure --stack b data load-phenotype --file pheno.csv
+stderr 'stack demo in .*/a: container demo-hpds-1, volume demo_hpds-data'
+exitcode 3 pic-sure --stack b up
+stderr 'stack demo in .*/a: container demo-hpds-1'
+exitcode 3 pic-sure --stack b down
+! grep 'down|volume rm|docker run|volume create' docker.log
+cmp a/.pic-sure/hpds/encryption_key b/.pic-sure/hpds/encryption_key
+
+# Read-only commands report the original's resources.
+exec pic-sure --stack b --json status
+stdout '"foreign":\[\{"kind":"container","name":"demo-hpds-1","stack":"demo","stack_dir":"[^"]*/a"\},\{"kind":"volume","name":"demo_hpds-data",'
+exec pic-sure --stack b ps
+stderr 'warning: the stack name demo is in use by another stack''s Docker resources, so what follows may be theirs:'
+
+# destroy in the copy removes only the copy's files, and says why.
+exec pic-sure --stack b --plain --yes destroy
+stdout '^Destroyed stack demo: removed 0 volumes and 0 dev images, and [0-9]+ paths.$'
+stdout '^Left another stack''s Docker resources alone \(this directory is a copy of it, or shares its name\):$'
+stdout '^  stack demo in .*/a: container demo-hpds-1, volume demo_hpds-data$'
+! grep 'down|volume rm|image rm' docker.log
+! exists b
+exists a/pic-sure.yaml
+
+# Moved, the stack adopts the resources labelled with its old directory.
+exec mv a c
+exec pic-sure --stack c --plain --yes destroy
+stderr 'stack moved from .*/a; adopting its resources'
+grep 'down --remove-orphans$' docker.log
+grep '^docker volume rm demo_hpds-data$' docker.log
+
+-- docker.scenario --
+docker ps --all --no-trunc --filter label=com.docker.compose.project=demo --format * => 0 stdout=ps.json
+docker volume ls -q --filter label=com.docker.compose.project=demo => 0 stdout=vols.txt
+docker volume ls -q --filter label=org.hms-dbmi.picsure.stack=demo => 0 stdout=vols.txt
+docker volume inspect * => 0 stdout=vols.json
+docker network ls * => 0
+docker image ls * => 0
+docker image inspect * => 1 stderr=nosuch.txt
+docker compose * => 0
+docker volume rm * => 0
+docker * => 1
+-- nosuch.txt --
+Error response from daemon: No such image
+-- vols.txt --
+demo_hpds-data
+-- ps.tmpl --
+{"Names":"demo-hpds-1","Ports":"","Labels":{"org.hms-dbmi.picsure.stack":"demo","org.hms-dbmi.picsure.stack-dir":"@A@","org.hms-dbmi.picsure.stack-id":"0123456789abcdef0123456789abcdef"}}
+-- vols.tmpl --
+[{"Name":"demo_hpds-data","Labels":{"com.docker.compose.project":"demo","com.docker.compose.volume":"hpds-data","org.hms-dbmi.picsure.stack":"demo","org.hms-dbmi.picsure.stack-dir":"@A@","org.hms-dbmi.picsure.stack-id":"0123456789abcdef0123456789abcdef"}}]
+-- pheno.csv --
+PATIENT_NUM,CONCEPT_PATH,NUMERIC_VALUE,TEXT_VALUE
+1,\demo\age\,42,
+-- a/pic-sure.yaml --
+schema: 1
+name: demo
+auth: {mode: open, admin_email: admin@example.com}
+-- a/.pic-sure/state.json --
+{"stack_id": "0123456789abcdef0123456789abcdef", "cli_version": "dev", "schema_version": 1, "initialized_at": "2026-10-07T12:00:00Z"}
+-- a/.pic-sure/secrets.yaml --
+db_root_password: rootpw-0123456789
+auth0_client_secret: generated-0123456789abcdef0123456789abcdef
+auth0_client_secret_generated: true
+-- a/.pic-sure/hpds/encryption_key --
+00112233445566778899aabbccddeeff
+-- a/.pic-sure/render/compose.yaml --
+name: demo
+-- a/.pic-sure/manifest.json --
+{"version": 1, "entries": [
+  {"path": ".", "type": "dir"},
+  {"path": ".pic-sure", "type": "dir"},
+  {"path": ".pic-sure/manifest.json", "type": "file"},
+  {"path": "pic-sure.yaml", "type": "file"},
+  {"path": ".pic-sure/state.json", "type": "file"},
+  {"path": ".pic-sure/secrets.yaml", "type": "file"},
+  {"path": ".pic-sure/hpds", "type": "dir"},
+  {"path": ".pic-sure/hpds/encryption_key", "type": "file"},
+  {"path": ".pic-sure/render", "type": "dir"},
+  {"path": ".pic-sure/render/compose.yaml", "type": "file"}
+]}

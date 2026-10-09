@@ -65,6 +65,9 @@ func (a *App) composeVerb(cmd *cobra.Command, id, title string, verb func(*ops.D
 	if d.Compose, err = a.stackCompose(cmd, d.Runner, st); err != nil {
 		return err
 	}
+	if err := checkOwnedStack(cmd, d, st); err != nil {
+		return err
+	}
 
 	err = sinkStep(d.Sink, id, title, func(_, errOut io.Writer) error { return verb(d, errOut) })
 	if err != nil {
@@ -111,6 +114,7 @@ func newPsCmd(a *App) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			a.warnForeign(cmd.Context(), d, st)
 			ps, err := c.Ps(cmd.Context())
 			if err != nil {
 				return err
@@ -162,6 +166,7 @@ step "logs".`,
 			if err != nil {
 				return err
 			}
+			a.warnForeign(cmd.Context(), d, st)
 			opts := docker.ComposeLogsOpts{Services: args, Follow: follow, Out: a.stdout(), Err: a.stderr()}
 			if a.output().mode != modeJSON {
 				err = c.Logs(cmd.Context(), opts)
@@ -224,6 +229,11 @@ the stack does.`,
 			c, err := a.stackCompose(cmd, a.newForegroundRunner(d.Log), st)
 			if err != nil {
 				return err
+			}
+			if commandClass(cmd) != stack.ReadOnly {
+				if err := checkOwnedStack(cmd, d, st); err != nil {
+					return err
+				}
 			}
 			// Waiting for the lock may have started the TUI; compose needs
 			// the terminal.

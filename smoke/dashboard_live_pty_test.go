@@ -71,12 +71,14 @@ func (w *screenWatch) repaint() {
 }
 
 // fakeDockerPath returns a PATH whose docker answers compose's ps, logs and
-// restart for two services, and fails everything else.
+// restart for two services and the ownership check's listings with
+// nothing, and fails everything else.
 func fakeDockerPath(t *testing.T) string {
 	t.Helper()
 	bin := t.TempDir()
 	script := `#!/bin/sh
 case "$*" in
+"ps --all --no-trunc "*|"volume ls "*|"network ls "*) ;;
 *" ps "*)
 	echo '{"Service":"hpds","Name":"demo-hpds-1","State":"running","Health":"healthy","Status":"Up"}'
 	echo '{"Service":"psama","Name":"demo-psama-1","State":"running","Health":"starting","Status":"Up"}' ;;

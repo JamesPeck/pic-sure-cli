@@ -83,6 +83,9 @@ func (a *App) build(cmd *cobra.Command, components []string, force bool) (err er
 		return err
 	}
 
+	if err := checkOwned(cmd, d, st, cfg); err != nil {
+		return err
+	}
 	state.StartOperation("build", d.Clock.Now())
 	if err := st.SaveState(state); err != nil {
 		return err

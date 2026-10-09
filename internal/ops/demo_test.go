@@ -440,7 +440,7 @@ func newDemoFixture(t *testing.T, files map[string][]byte) *demoFixture {
 	x := &demoFixture{dictFixture: newDictFixture(t)}
 	// The loader writes only to a volume labelled as the stack's.
 	x.f.On(fakerunner.Exact("docker", "volume", "inspect", "demo_hpds-data")).Stdout(
-		`[{"Name":"demo_hpds-data","CreatedAt":"2026-10-07T12:00:00Z","Labels":{"` + stack.LabelStack + `":"demo"}}]`)
+		`[{"Name":"demo_hpds-data","CreatedAt":"2026-10-07T12:00:00Z","Labels":{"` + stack.LabelStack + `":"demo","` + stack.LabelStackDir + `":"` + x.st.Dir + `"}}]`)
 	x.stackUp()
 	if _, err := x.st.EnsureSecrets(rand.Reader, stack.EnsureOptions{OpenAuth: true}); err != nil {
 		t.Fatal(err)

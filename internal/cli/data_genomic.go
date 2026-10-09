@@ -103,6 +103,9 @@ func (a *App) loadGenomic(cmd *cobra.Command, _ []string) error {
 	opts.LockUse = c.WithEvents(d.Sink, ops.GenomicInputStepID).LockUse
 	opts.Converge = ops.ConvergeOptions{Cache: c, CLIVersion: a.Info.Version, Compose: a.upCompose(d, st, cfg, sec)}
 
+	if err := checkOwned(cmd, d, st, cfg); err != nil {
+		return err
+	}
 	state.StartOperation("data load-genomic", d.Clock.Now())
 	if err := st.SaveState(state); err != nil {
 		return err

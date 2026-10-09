@@ -18,7 +18,8 @@ import (
 )
 
 // fakeDocker puts a docker on PATH that logs its arguments to the returned
-// file and answers compose's ps, logs and restart.
+// file and answers compose's ps, logs and restart, and the ownership
+// check's listings with nothing.
 func fakeDocker(t *testing.T) string {
 	t.Helper()
 	bin := t.TempDir()
@@ -26,6 +27,7 @@ func fakeDocker(t *testing.T) string {
 	script := `#!/bin/sh
 echo "$@" >> ` + logf + `
 case "$*" in
+"ps --all --no-trunc "*|"volume ls "*|"network ls "*) ;;
 *" ps "*) echo '{"Service":"hpds","Name":"demo-hpds-1","State":"running","Health":"healthy","Status":"Up 2 minutes"}' ;;
 *" logs "*) echo "hpds-1  | started"; echo "compose noise" >&2; echo "hpds-1  | ready" ;;
 *" restart nosuch") echo "no such service: nosuch" >&2; exit 1 ;;

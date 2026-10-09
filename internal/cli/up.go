@@ -177,19 +177,16 @@ func refuseClientSecret(cfg *stack.Config, sec *stack.Secrets) error {
 	return nil
 }
 
-// checkUpPorts makes sure the stack's HTTP and HTTPS ports are free, or
-// published by its own containers, so a busy port is exit 3 rather than a
-// failed `compose up` after the database work.
+// checkUpPorts makes the ownership check, then makes sure the stack's HTTP
+// and HTTPS ports are free, or published by its own containers, so a busy
+// port is exit 3 rather than a failed `compose up` after the database work.
 func checkUpPorts(cmd *cobra.Command, d *ops.Deps, st *stack.Stack, cfg *stack.Config) error {
-	user, published, err := ops.StackNameInUse(cmd.Context(), d, cfg.Name, st.Dir)
+	owned, err := ops.CheckOwnership(cmd.Context(), d, st, cfg.Name)
 	if err != nil {
 		return err
 	}
-	if user != "" {
-		return exitcode.Precondition("the stack name %s is in use by another stack or compose project (%s)", cfg.Name, user)
-	}
 	for _, p := range []int{cfg.Network.HTTPPort, cfg.Network.HTTPSPort} {
-		if !published[p] && !(systemHost{}).PortFree(p) {
+		if !owned.Published[p] && !(systemHost{}).PortFree(p) {
 			return exitcode.Precondition("port %d, which %s sets, is in use", p, stack.ConfigFile)
 		}
 	}

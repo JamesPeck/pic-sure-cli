@@ -90,8 +90,16 @@ db_airflow_password: synthetic-airflow
 -- ready.scenario --
 docker run -i --rm -e MYSQL_PWD mysql:8.0 mysql * --user=admin => 0 stdout=full.tsv
 docker run -i --rm -e MYSQL_PWD mysql:8.0 mysql * --user=* => 0
+docker ps --all --no-trunc --filter label=com.docker.compose.project=* --format * => 0
+docker volume ls -q --filter label=com.docker.compose.project=* => 0
+docker volume ls -q --filter label=org.hms-dbmi.picsure.stack=* => 0
+docker network ls -q --no-trunc --filter label=com.docker.compose.project=* => 0
 -- empty.scenario --
 docker run -i --rm -e MYSQL_PWD mysql:8.0 mysql * --user=admin => 0 stdout=empty.tsv
+docker ps --all --no-trunc --filter label=com.docker.compose.project=* --format * => 0
+docker volume ls -q --filter label=com.docker.compose.project=* => 0
+docker volume ls -q --filter label=org.hms-dbmi.picsure.stack=* => 0
+docker network ls -q --no-trunc --filter label=com.docker.compose.project=* => 0
 -- bootstrap.scenario --
 # The db step's probe, the bootstrap Check, the bootstrap, and the check
 # after it.
@@ -100,11 +108,19 @@ docker run -i --rm -e MYSQL_PWD mysql:8.0 mysql * --user=admin => 0 stdout=empty
 docker run -i --rm -e MYSQL_PWD mysql:8.0 mysql * --user=admin => 0 times=1
 docker run -i --rm -e MYSQL_PWD mysql:8.0 mysql * --user=admin => 0 stdout=full.tsv times=1
 docker run -i --rm -e MYSQL_PWD mysql:8.0 mysql * --user=* => 0
+docker ps --all --no-trunc --filter label=com.docker.compose.project=* --format * => 0
+docker volume ls -q --filter label=com.docker.compose.project=* => 0
+docker volume ls -q --filter label=org.hms-dbmi.picsure.stack=* => 0
+docker network ls -q --no-trunc --filter label=com.docker.compose.project=* => 0
 -- mismatch.scenario --
 docker run -i --rm -e MYSQL_PWD mysql:8.0 mysql * --user=admin => 0 stdout=one.tsv times=1
 docker run -i --rm -e MYSQL_PWD mysql:8.0 mysql * --user=admin => 0 stdout=full.tsv
 docker run -i --rm -e MYSQL_PWD mysql:8.0 mysql * --user=auth => 1 stderr=denied.txt
 docker run -i --rm -e MYSQL_PWD mysql:8.0 mysql * --user=* => 0
+docker ps --all --no-trunc --filter label=com.docker.compose.project=* --format * => 0
+docker volume ls -q --filter label=com.docker.compose.project=* => 0
+docker volume ls -q --filter label=org.hms-dbmi.picsure.stack=* => 0
+docker network ls -q --no-trunc --filter label=com.docker.compose.project=* => 0
 -- one.tsv --
 1
 -- empty.tsv --

@@ -182,6 +182,9 @@ func (a *App) loadPhenotype(cmd *cobra.Command, args []string) error {
 		load.CSV = in.CSV
 	}
 
+	if err := checkOwned(cmd, d, st, cfg); err != nil {
+		return err
+	}
 	state.StartOperation("data load-phenotype", d.Clock.Now())
 	if err := st.SaveState(state); err != nil {
 		return err

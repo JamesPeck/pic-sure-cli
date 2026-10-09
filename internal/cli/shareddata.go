@@ -77,6 +77,9 @@ func (a *App) publishSharedData(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	if err := checkOwned(cmd, d, st, cfg); err != nil {
+		return err
+	}
 	state.StartOperation("shared-data publish", d.Clock.Now())
 	if err := st.SaveState(state); err != nil {
 		return err

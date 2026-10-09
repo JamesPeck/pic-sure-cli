@@ -5,12 +5,18 @@ package stack
 const (
 	LabelStack    = "org.hms-dbmi.picsure.stack"
 	LabelStackDir = "org.hms-dbmi.picsure.stack-dir"
+	LabelStackID  = "org.hms-dbmi.picsure.stack-id"
 )
 
 // Labels returns the labels that mark a resource as belonging to this stack,
-// whose pic-sure.yaml name is name.
+// whose pic-sure.yaml name is name. A stack without an ID yet gets no
+// stack-id label.
 func (s *Stack) Labels(name string) map[string]string {
-	return map[string]string{LabelStack: name, LabelStackDir: s.Dir}
+	l := map[string]string{LabelStack: name, LabelStackDir: s.Dir}
+	if id := s.ID(); id != "" {
+		l[LabelStackID] = id
+	}
+	return l
 }
 
 // Compose's labels on the volumes it creates. A volume without the project

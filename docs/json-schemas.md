@@ -84,6 +84,11 @@ an `omitted` field is left out when empty.
 | `last_operation.status` | string | `running` (or interrupted, if nothing holds the lock), `ok` or `failed`. |
 | `last_operation.started_at` | string | When it started. |
 | `last_operation.finished_at` | string, omitted | When it finished. |
+| `foreign` | array, omitted | Another stack's Docker resources that use this stack's name (§6.1): in a copy of a stack directory, the original's. `services` may then be theirs, and every command that changes the stack refuses with exit 3. Omitted when there are none or the stack was never rendered. |
+| `foreign[].kind` | string | `container`, `volume` or `network`. |
+| `foreign[].name` | string | The resource's Docker name. |
+| `foreign[].stack` | string, omitted | Its `org.hms-dbmi.picsure.stack` label. |
+| `foreign[].stack_dir` | string, omitted | Its `org.hms-dbmi.picsure.stack-dir` label: the directory of the stack it belongs to. |
 | `deep` | object, omitted | Probes run inside the running containers; only with `--deep`. A probe that couldn't run (its service isn't running, or `compose exec` failed) has `checked` false and says why in its `message`. |
 | `deep.gateway.checked` | bool | Whether the gateway was probed (it must be running). |
 | `deep.gateway.healthy` | bool or null | Whether the gateway's `/system/status` is `RUNNING`, which folds in every downstream service; false when it didn't answer; null when not checked. |
@@ -205,7 +210,7 @@ the same additive-only rule:
 | `shared-data publish` | The data set, as one entry of `shared-data list`. |
 | `shared-data remove` | `{"name", "removed": [...]}` |
 | `dev on`, `dev off` | `{"service", "on", "services", "port", "source"}` |
-| `reset`, `destroy` | `{"stack", "volumes": [...], "kept_volumes": [...], "images": [...], "files", "pruned"}`: the volumes removed, the volumes reset kept (`--keep-db`), destroy's dev images, and for destroy `files: {"removed", "kept", "remaining", "dir_removed"}` (`remaining` lists what you added, which destroy leaves). `pruned` is there with `--prune-images`. Empty lists may be omitted. |
+| `reset`, `destroy` | `{"stack", "volumes": [...], "kept_volumes": [...], "images": [...], "files", "pruned"}`: the volumes removed, the volumes reset kept (`--keep-db`), destroy's dev images, and for destroy `files: {"removed", "kept", "remaining", "dir_removed"}` (`remaining` lists what you added, which destroy leaves). `pruned` is there with `--prune-images`. In a copy of another stack's directory, destroy removes only the copy's files and lists the original's resources in `left_alone` (`[{"kind", "name", "stack", "stack_dir"}]`), as `status` lists `foreign`. Empty lists may be omitted. |
 
 Other commands' `data` isn't listed here yet; treat it as informational.
 

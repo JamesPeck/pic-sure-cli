@@ -157,7 +157,7 @@ func hmrFixture(t *testing.T, nvmrc string) *buildFixture {
 	}
 	x.cfg.Components.Frontend.Source = src
 	x.saveConfig()
-	vol, _ := json.Marshal([]map[string]any{{"Name": "demo_frontend-node-modules", "Labels": map[string]string{stack.LabelStack: "demo"}}})
+	vol, _ := json.Marshal([]map[string]any{{"Name": "demo_frontend-node-modules", "Labels": x.st.Labels("demo")}})
 	x.f.On(fakerunner.Glob("docker volume inspect demo_frontend-node-modules")).Stdout(string(vol))
 	x.f.On(fakerunner.Glob("docker run * alpine:3.23 sh -c *"))
 	return x

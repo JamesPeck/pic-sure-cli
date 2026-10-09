@@ -129,6 +129,7 @@ func (e *doctorEnv) run() *ops.DoctorReport {
 		"Filesystem 1024-blocks Used Available Capacity Mounted on\noverlay 200000000 1000 %d 1%% /\n", e.dfAvail))
 	e.f.On(fakerunner.Glob("docker rm -v -f pic-sure-doctor-*")).Exit(1).Stderr("Error response from daemon: No such container: x\n")
 	e.f.On(fakerunner.Glob("docker ps *")).Stdout("")
+	noStackResources(e.f)
 	e.f.On(fakerunner.Glob("docker image inspect *")).Exit(1).Stderr("Error: No such image\n")
 	e.f.On(fakerunner.Glob("docker pull *"))
 	d := &ops.Deps{

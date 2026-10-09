@@ -8,7 +8,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -417,74 +416,9 @@ next:
 	return 0, exitcode.Precondition("no free block of %d dev ports from %d", catalog.DevPortSpan, DevPortsStart)
 }
 
-// StackNameInUse reports what, if anything, already uses the stack name
-// for a stack other than the one in dir: a container or volume of the
-// compose project of that name, or a volume labelled for that stack, whose
-// stack-dir label isn't dir. "" means the name is free. published holds
-// the host ports dir's own stack's containers publish.
-func StackNameInUse(ctx context.Context, d *Deps, name, dir string) (user string, published map[int]bool, err error) {
-	dir = canonicalDir(dir)
-	res, err := docker.RunChecked(ctx, docker.WithTimeout(d.Runner, docker.PsTimeout), docker.Cmd{Argv: []string{
-		"docker", "ps", "--all", "--no-trunc",
-		"--filter", "label=com.docker.compose.project=" + name,
-		"--format", "{{json .}}",
-	}})
-	if err != nil {
-		return "", nil, err
-	}
-	published = map[int]bool{}
-	for line := range strings.Lines(string(res.Stdout)) {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		var c struct{ Names, Labels, Ports string }
-		if err := json.Unmarshal([]byte(line), &c); err != nil {
-			return "", nil, fmt.Errorf("parsing docker ps: %w", err)
-		}
-		if labelValue(c.Labels, stack.LabelStackDir) != dir {
-			return "container " + c.Names, nil, nil
-		}
-		for _, m := range publishedPort.FindAllStringSubmatch(c.Ports, -1) {
-			p, _ := strconv.Atoi(m[1])
-			published[p] = true
-		}
-	}
-	seen := map[string]bool{}
-	for _, filter := range []string{"com.docker.compose.project=" + name, stack.LabelStack + "=" + name} {
-		vols, err := d.Docker.VolumeList(ctx, filter)
-		if err != nil {
-			return "", nil, err
-		}
-		for _, v := range vols {
-			if !seen[v.Name] && v.Labels[stack.LabelStackDir] != dir {
-				return "volume " + v.Name, nil, nil
-			}
-			seen[v.Name] = true
-		}
-	}
-	return "", published, nil
-}
-
-// publishedPort is a host port in docker ps's Ports column, such as the
-// 8443 of "0.0.0.0:8443->443/tcp".
-var publishedPort = regexp.MustCompile(`:(\d+)->`)
-
-// labelValue reads one label from docker ps's comma-separated KEY=VALUE
-// list. A label value with a comma is cut short; stack-dir values the CLI
-// writes are absolute paths, which it compares whole, so a cut one is
-// reported as another stack's.
-func labelValue(labels, key string) string {
-	for kv := range strings.SplitSeq(labels, ",") {
-		if v, ok := strings.CutPrefix(kv, key+"="); ok {
-			return v
-		}
-	}
-	return ""
-}
-
-// canonicalDir is dir as stack.Stack.Dir has it, absolute with symlinks
+// CanonicalDir is dir as stack.Stack.Dir has it, absolute with symlinks
 // resolved, also when dir doesn't exist yet.
-func canonicalDir(dir string) string {
+func CanonicalDir(dir string) string {
 	dir, _ = filepath.Abs(dir)
 	if r, err := filepath.EvalSymlinks(dir); err == nil {
 		return r

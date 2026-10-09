@@ -72,51 +72,6 @@ func TestChooseDevPortsBase(t *testing.T) {
 	}
 }
 
-func TestStackNameInUse(t *testing.T) {
-	// The labels hold the directory with symlinks resolved, as Stack.Dir.
-	tmp, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	dir := filepath.Join(tmp, "demo")
-	ps := `{"Names":"demo-httpd-1","Ports":"0.0.0.0:8443->443/tcp, [::]:8443->443/tcp, 0.0.0.0:8083->80/tcp",` +
-		`"Labels":"com.docker.compose.project=demo,` + stack.LabelStackDir + `=` + dir + `"}` + "\n"
-	for _, tc := range []struct {
-		name, ps, vols string
-		wantUser       string
-		wantPorts      []int
-	}{
-		{name: "free", vols: "[]"},
-		{name: "this stack's", ps: ps, vols: "[]", wantPorts: []int{8083, 8443}},
-		{name: "another project's container", ps: `{"Names":"demo-web-1","Labels":"com.docker.compose.project=demo"}`, vols: "[]", wantUser: "container demo-web-1"},
-		{name: "another stack's volume", vols: `[{"Name":"demo_hpds-data","Labels":{"` + stack.LabelStackDir + `":"/elsewhere"}}]`, wantUser: "volume demo_hpds-data"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			f := fakerunner.New(t)
-			f.On(fakerunner.Glob("docker ps --all --no-trunc --filter label=com.docker.compose.project=demo *")).Stdout(tc.ps)
-			f.On(fakerunner.Glob("docker volume ls *")).Stdout(volumeLines(t, tc.vols))
-			f.On(fakerunner.Glob("docker volume inspect *")).Stdout(tc.vols)
-			d := &ops.Deps{Runner: f, Docker: docker.NewEngine(f)}
-			user, published, err := ops.StackNameInUse(context.Background(), d, "demo", dir)
-			ports := slices.Sorted(maps.Keys(published))
-			if err != nil || user != tc.wantUser || !slices.Equal(ports, tc.wantPorts) {
-				t.Fatalf("got %q, %v, %v; want %q, %v", user, ports, err, tc.wantUser, tc.wantPorts)
-			}
-		})
-	}
-}
-
-// volumeLines is `docker volume ls --format` output naming the volumes in
-// the JSON array vols.
-func volumeLines(t *testing.T, vols string) string {
-	t.Helper()
-	if vols == "[]" {
-		return ""
-	}
-	name := strings.SplitN(strings.SplitN(vols, `"Name":"`, 2)[1], `"`, 2)[0]
-	return name + "\n"
-}
-
 func TestStartServicesLeaveOutTheOneShots(t *testing.T) {
 	cfg := stack.DefaultConfig()
 	got := ops.StartServices(&cfg)

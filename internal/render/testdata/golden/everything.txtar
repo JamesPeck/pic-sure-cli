@@ -11,7 +11,7 @@ services:
   httpd:
     image: "node:24.19.0-alpine3.23"
     restart: always
-    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden", "org.hms-dbmi.picsure.stack-id": "0123456789abcdef0123456789abcdef"}
     ports:
       - "127.0.0.1:15006:3000"
     volumes:
@@ -97,7 +97,7 @@ services:
   gateway:
     image: "hms-dbmi/pic-sure-gateway:dev-golden-abc123def456"
     restart: always
-    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden", "org.hms-dbmi.picsure.stack-id": "0123456789abcdef0123456789abcdef"}
     environment:
       JAVA_OPTS: "-Xms512m -Xmx2g -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005"
       SPRING_PROFILE: aio
@@ -137,7 +137,7 @@ services:
   pic-sure-operations-service:
     image: "hms-dbmi/pic-sure-operations-service:dev-golden-abc123def456"
     restart: always
-    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden", "org.hms-dbmi.picsure.stack-id": "0123456789abcdef0123456789abcdef"}
     environment:
       JAVA_OPTS: "-Xms512m -Xmx2g -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005"
       SPRING_DATASOURCE_URL: "jdbc:mysql://db.example.org:3307/picsure?useUnicode=true&characterEncoding=UTF-8&autoReconnect=true&autoReconnectForPools=true&serverTimezone=UTC"
@@ -167,7 +167,7 @@ services:
   pic-sure-hpds-query-service:
     image: "hms-dbmi/pic-sure-hpds-query-service:dev-golden-abc123def456"
     restart: always
-    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden", "org.hms-dbmi.picsure.stack-id": "0123456789abcdef0123456789abcdef"}
     environment:
       JAVA_OPTS: "-Xms512m -Xmx2g -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005"
       # One HPDS instance, so the auth and open backends are the same.
@@ -207,7 +207,7 @@ services:
   psama:
     image: "hms-dbmi/pic-sure-psama:dev-golden-abc123def456"
     restart: always
-    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden", "org.hms-dbmi.picsure.stack-id": "0123456789abcdef0123456789abcdef"}
     volumes:
       - psama-logs:/var/log
       - truststore:/truststore:ro
@@ -264,7 +264,7 @@ services:
   hpds:
     image: "hms-dbmi/pic-sure-hpds:dev-golden-abc123def456"
     restart: always
-    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden", "org.hms-dbmi.picsure.stack-id": "0123456789abcdef0123456789abcdef"}
     environment:
       JAVA_OPTS: "-Xmx2g -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005"
       SPRING_PROFILES_ACTIVE: "bch-dev"
@@ -317,7 +317,7 @@ services:
   visualization:
     image: "hms-dbmi/pic-sure-visualization:dev-golden-abc123def456"
     restart: always
-    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden", "org.hms-dbmi.picsure.stack-id": "0123456789abcdef0123456789abcdef"}
     volumes:
       - visualization-logs:/var/log
     environment:
@@ -346,7 +346,7 @@ services:
   dictionary-api:
     image: "hms-dbmi/pic-sure-dictionary-api:dev-golden-abc123def456"
     restart: always
-    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden", "org.hms-dbmi.picsure.stack-id": "0123456789abcdef0123456789abcdef"}
     environment:
       POSTGRES_HOST: dictionary-db
       POSTGRES_DB: dictionary
@@ -374,7 +374,7 @@ services:
   dictionary-dump:
     image: "hms-dbmi/pic-sure-dictionary-dump:dev-golden-abc123def456"
     restart: always
-    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden", "org.hms-dbmi.picsure.stack-id": "0123456789abcdef0123456789abcdef"}
     environment:
       POSTGRES_HOST: dictionary-db
       POSTGRES_DB: dictionary
@@ -391,7 +391,7 @@ services:
   dictionary-db:
     image: "postgres:16-alpine"
     restart: always
-    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden", "org.hms-dbmi.picsure.stack-id": "0123456789abcdef0123456789abcdef"}
     environment:
       POSTGRES_DB: dictionary
       POSTGRES_USER: picsure
@@ -421,7 +421,7 @@ services:
   flyway-init:
     image: "flyway/flyway:10"
     profiles: [migrate]
-    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden", "org.hms-dbmi.picsure.stack-id": "0123456789abcdef0123456789abcdef"}
     entrypoint: ["bash", "/scripts/run-migrations.sh"]
     volumes:
       - type: bind
@@ -470,7 +470,7 @@ services:
   flyway-dictionary-init:
     image: "flyway/flyway:10"
     profiles: [migrate]
-    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden", "org.hms-dbmi.picsure.stack-id": "0123456789abcdef0123456789abcdef"}
     entrypoint: ["bash", "/scripts/run-dictionary-migrations.sh"]
     volumes:
       - type: bind
@@ -499,7 +499,7 @@ services:
   pic-sure-logging:
     image: "hms-dbmi/pic-sure-logging:abc123def456"
     restart: always
-    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden", "org.hms-dbmi.picsure.stack-id": "0123456789abcdef0123456789abcdef"}
     volumes:
       - logging-logs:/app/logs
     environment:
@@ -523,7 +523,7 @@ services:
     image: "alpine:3.23"
     network_mode: none
     restart: "no"
-    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden", "org.hms-dbmi.picsure.stack-id": "0123456789abcdef0123456789abcdef"}
     volumes:
       - shared-hpds-genomic:/src:ro
       - hpds-genomic-copy:/dst
@@ -539,47 +539,47 @@ networks:
   # Only httpd joins it.
   public:
     driver: bridge
-    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden", "org.hms-dbmi.picsure.stack-id": "0123456789abcdef0123456789abcdef"}
   # The app tier. Not internal: PSAMA must reach Auth0.
   app:
     driver: bridge
-    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden", "org.hms-dbmi.picsure.stack-id": "0123456789abcdef0123456789abcdef"}
   # The dictionary tier, with no route off the host.
   data:
     driver: bridge
     internal: true
-    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden", "org.hms-dbmi.picsure.stack-id": "0123456789abcdef0123456789abcdef"}
   # Isolates HPDS from the app tier: only the query service (its query path),
   # the gateway (/system/status) and logging (audit events) join it.
   query:
     driver: bridge
     internal: true
-    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden", "org.hms-dbmi.picsure.stack-id": "0123456789abcdef0123456789abcdef"}
 volumes:
   dictionary-db-data:
-    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden", "org.hms-dbmi.picsure.stack-id": "0123456789abcdef0123456789abcdef"}
   hpds-csv:
-    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden", "org.hms-dbmi.picsure.stack-id": "0123456789abcdef0123456789abcdef"}
   # Query result files for GIC file sharing.
   hpds-query-results:
-    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden", "org.hms-dbmi.picsure.stack-id": "0123456789abcdef0123456789abcdef"}
   # VCFs and loader output staged by data load-genomic.
   genomic-staging:
-    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden", "org.hms-dbmi.picsure.stack-id": "0123456789abcdef0123456789abcdef"}
   certs:
-    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden", "org.hms-dbmi.picsure.stack-id": "0123456789abcdef0123456789abcdef"}
   httpd-logs:
-    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden", "org.hms-dbmi.picsure.stack-id": "0123456789abcdef0123456789abcdef"}
   psama-logs:
-    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden", "org.hms-dbmi.picsure.stack-id": "0123456789abcdef0123456789abcdef"}
   hpds-logs:
-    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden", "org.hms-dbmi.picsure.stack-id": "0123456789abcdef0123456789abcdef"}
   visualization-logs:
-    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden", "org.hms-dbmi.picsure.stack-id": "0123456789abcdef0123456789abcdef"}
   dictionary-logs:
-    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden", "org.hms-dbmi.picsure.stack-id": "0123456789abcdef0123456789abcdef"}
   logging-logs:
-    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden", "org.hms-dbmi.picsure.stack-id": "0123456789abcdef0123456789abcdef"}
   shared-hpds-data:
     external: true
     name: "nhanes_hpds-data"
@@ -587,11 +587,11 @@ volumes:
     external: true
     name: "nhanes_hpds-genomic"
   hpds-genomic-copy:
-    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden", "org.hms-dbmi.picsure.stack-id": "0123456789abcdef0123456789abcdef"}
   truststore:
-    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden", "org.hms-dbmi.picsure.stack-id": "0123456789abcdef0123456789abcdef"}
   frontend-node-modules:
-    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden"}
+    labels: {"org.hms-dbmi.picsure.stack": "golden", "org.hms-dbmi.picsure.stack-dir": "/stacks/golden", "org.hms-dbmi.picsure.stack-id": "0123456789abcdef0123456789abcdef"}
 -- files/httpd/httpd-vhosts.conf --
 Listen 0.0.0.0:80
 Listen 0.0.0.0:443

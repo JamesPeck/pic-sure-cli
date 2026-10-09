@@ -150,6 +150,13 @@ func writeStatus(w io.Writer, r *ops.StatusReport) error {
 	}
 
 	b.WriteString("Services:\n")
+	if len(r.Foreign) > 0 {
+		fmt.Fprintf(&b, "  the stack name %s is in use by another stack's Docker resources, so these may be theirs:\n", r.Stack.Name)
+		for line := range strings.Lines(ops.ResourceList(r.Foreign)) {
+			b.WriteString("  " + line)
+		}
+		b.WriteString("\n")
+	}
 	switch {
 	case r.ServicesError != "":
 		fmt.Fprintf(&b, "  unknown: %s\n", r.ServicesError)

@@ -79,6 +79,9 @@ func (a *App) migrate(cmd *cobra.Command, _ []string) error {
 		}
 		return nil
 	}
+	if err := checkOwned(cmd, d, st, cfg); err != nil {
+		return err
+	}
 	opts := ops.MigrateOptions{Action: ops.FlywayMigrate}
 	if repair {
 		opts.Action = ops.FlywayRepair

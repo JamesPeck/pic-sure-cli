@@ -249,19 +249,15 @@ func verb(services []string, one, many string) string {
 	return many
 }
 
-// checkDevStack makes sure no other stack or compose project uses the
-// stack's name and, for dev on, that the port v publishes is free or already
-// published by the stack's own containers, so either is exit 3 before
-// anything is built or recreated.
+// checkDevStack makes the ownership check and, for dev on, makes sure the
+// port v publishes is free or already published by the stack's own
+// containers, so either is exit 3 before anything is built or recreated.
 func checkDevStack(cmd *cobra.Command, d *ops.Deps, st *stack.Stack, cfg *stack.Config, v catalog.DevVariant, on bool) error {
-	user, published, err := ops.StackNameInUse(cmd.Context(), d, cfg.Name, st.Dir)
+	owned, err := ops.CheckOwnership(cmd.Context(), d, st, cfg.Name)
 	if err != nil {
 		return err
 	}
-	if user != "" {
-		return exitcode.Precondition("the stack name %s is in use by another stack or compose project (%s)", cfg.Name, user)
-	}
-	if port := ops.DevPort(cfg, v); on && port != 0 && !published[port] && !(systemHost{}).PortFree(port) {
+	if port := ops.DevPort(cfg, v); on && port != 0 && !owned.Published[port] && !(systemHost{}).PortFree(port) {
 		return exitcode.Precondition("port %d, dev %s's port from network.dev_ports.base (%d), is in use", port, v.Name, cfg.Network.DevPorts.Base)
 	}
 	return nil

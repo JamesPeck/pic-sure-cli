@@ -382,6 +382,23 @@ anything made in the last hour, so right after a first build it frees
 little. The cache is
 in `$XDG_CACHE_HOME/pic-sure` (default `~/.cache/pic-sure`).
 
+**Copies and moves.** A stack's Docker resources carry its directory and a
+random stack ID that `init` records in `.pic-sure/state.json`. A copy of
+the directory (`cp -r a b`) has the same name and ID, so in `b` every
+command that would change the stack's containers, volumes or data refuses
+with exit 3, naming `a`; `status`, `ps`, `logs` and `doctor` say so too.
+`destroy` in `b` removes only `b`'s files and leaves `a` alone. To run two
+stacks, `init` a second one with another `--name`. A moved stack
+(`mv a c`) adopts the resources labelled with its old directory, with a
+note, once nothing at `a` holds a stack with its ID. Docker can't relabel
+a volume, so compose then says each volume "doesn't match configuration"
+and asks whether to recreate it; pic-sure gives it no input, which keeps
+the volume and its data (answer no yourself under `pic-sure compose --`).
+A stack directory
+deleted without `destroy` leaves its containers and volumes behind;
+`init` at the same path and name refuses until you remove them, and
+prints the `docker` commands that do.
+
 To uninstall pic-sure itself: `destroy` each stack, `cache prune`, then
 delete the binary (`~/.local/bin/pic-sure`) and the cache directory.
 
