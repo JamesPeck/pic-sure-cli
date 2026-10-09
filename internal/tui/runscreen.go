@@ -245,6 +245,9 @@ func (s *runScreen) blockWidth() int {
 	return w
 }
 
+// dialogWidth fits the yes/no dialog inside the block.
+func (s *runScreen) dialogWidth() int { return min(max(min(s.width-4, 76), 40), s.blockWidth()) }
+
 // The footers, longest first: footer shows the first that fits.
 var (
 	scrollFooters = []string{"↑/↓ pgup/pgdn scroll · enter to go back", "↑/↓ scroll · enter back"}
@@ -273,7 +276,7 @@ func (s *runScreen) setSize(width, height int) {
 	m, _ := s.prog.Update(tea.WindowSizeMsg{Width: s.blockWidth() - 2, Height: height})
 	s.prog = m.(progress.Model)
 	if s.askDlg != nil {
-		s.askDlg = dialog.Fit(s.askDlg, max(min(width-4, 76), 40), max(height/2, 8))
+		s.askDlg = dialog.Fit(s.askDlg, s.dialogWidth(), max(height/2, 8))
 	}
 }
 
@@ -289,7 +292,7 @@ func (s *runScreen) update(msg tea.Msg) (*runScreen, tea.Cmd) {
 			Affirmative("Update").
 			Negative("No").
 			Value(&s.askOK)))
-		s.askDlg = dialog.Fit(s.askDlg, max(min(s.width-4, 76), 40), max(s.height/2, 8))
+		s.askDlg = dialog.Fit(s.askDlg, s.dialogWidth(), max(s.height/2, 8))
 		return s, tea.Batch(s.askDlg.Init(), s.listen)
 	case runDoneMsg:
 		s.finished, s.res, s.err = true, msg.res, msg.err

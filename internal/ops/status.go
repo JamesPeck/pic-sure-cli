@@ -406,6 +406,12 @@ func StatusServices(ps []docker.ComposeService) []StatusService {
 	return services
 }
 
+// The migration check's Error when it was skipped rather than failed.
+const (
+	MigrationsSkippedRemote    = "not checked for a remote database"
+	MigrationsSkippedUnhealthy = "the databases aren't running and healthy"
+)
+
 // statusMigrationsTimeout bounds the migration check's compose and
 // database calls, so a wedged daemon can't hang status.
 const statusMigrationsTimeout = 30 * time.Second
@@ -418,7 +424,7 @@ func statusMigrations(ctx context.Context, d *Deps, r *StatusReport, st *stack.S
 		return
 	}
 	if cfg.DB.Mode == stack.DBRemote {
-		r.Migrations.Error = "not checked for a remote database"
+		r.Migrations.Error = MigrationsSkippedRemote
 		return
 	}
 	healthy := func(service string) bool {
@@ -427,7 +433,7 @@ func statusMigrations(ctx context.Context, d *Deps, r *StatusReport, st *stack.S
 		})
 	}
 	if !healthy(picsureDB) || !healthy(dictionaryDB) {
-		r.Migrations.Error = "the databases aren't running and healthy"
+		r.Migrations.Error = MigrationsSkippedUnhealthy
 		return
 	}
 	sec, err := st.LoadSecrets()

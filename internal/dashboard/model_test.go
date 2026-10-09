@@ -684,6 +684,13 @@ func TestSummaryWarnsOfAFailedMigrationCheck(t *testing.T) {
 	if strings.Contains(text, "· migrations") {
 		t.Errorf("migrations listed as passing:\n%s", text)
 	}
+	for _, skipped := range []string{ops.MigrationsSkippedRemote, ops.MigrationsSkippedUnhealthy} {
+		r.Migrations.Error = skipped
+		m, _ = update(t, m, statusMsg{report: r})
+		if text := ansi.Strip(m.summaryPane()); strings.Contains(text, "migrations:") {
+			t.Errorf("a skipped check (%s) warns:\n%s", skipped, text)
+		}
+	}
 }
 
 func TestSummaryWorstCaseFitsThePane(t *testing.T) {

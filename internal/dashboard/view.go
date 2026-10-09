@@ -260,7 +260,11 @@ func (m *model) summaryBody() []string {
 	case ops.MigrationsStatusPending:
 		blockers = append(blockers, "migrations pending; m runs them")
 	default:
-		if e := s.Migrations.Error; e != "" {
+		// A skipped check isn't a problem the user can fix here: a remote
+		// database, or databases the services pane already shows down.
+		switch e := s.Migrations.Error; e {
+		case "", ops.MigrationsSkippedRemote, ops.MigrationsSkippedUnhealthy:
+		default:
 			warnings = append(warnings, "migrations: couldn't check ("+firstLine(e)+")")
 		}
 	}

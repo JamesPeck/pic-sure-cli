@@ -57,13 +57,13 @@ type Form struct {
 // NewForm returns the form, opened with base's values and the secrets in
 // sec. base is also the defaults the summary marks.
 func NewForm(base stack.Config, sec stack.UserSecrets) *Form {
-	return Reopen(base, base, sec)
+	return NewFormFrom(base, base, sec)
 }
 
-// Reopen returns the form opened with base, the answers of a setup that
-// failed, and the secrets in sec. The summary marks a value "(default)"
-// only when it matches defaults, not base.
-func Reopen(defaults, base stack.Config, sec stack.UserSecrets) *Form {
+// NewFormFrom returns the form opened with base's values (the defaults
+// themselves, or a failed setup's answers) and the secrets in sec. The
+// summary marks a value "(default)" only when it matches defaults.
+func NewFormFrom(defaults, base stack.Config, sec stack.UserSecrets) *Form {
 	f := &Form{
 		base:     base,
 		secrets:  sec,
@@ -82,7 +82,7 @@ func Reopen(defaults, base stack.Config, sec stack.UserSecrets) *Form {
 				Value(&f.useProxy))
 		}
 		for _, it := range g.Items {
-			fields = append(fields, f.field(it))
+			fields = append(fields, f.field(it, defaults))
 		}
 		hg := huh.NewGroup(fields...).Title(g.Title).Description(g.Description)
 		if g.Shown != nil {
@@ -91,21 +91,15 @@ func Reopen(defaults, base stack.Config, sec stack.UserSecrets) *Form {
 		}
 		groups = append(groups, hg)
 	}
-	for _, g := range Groups {
-		for _, it := range g.Items {
-			if got, err := defaults.Get(it.Key); err == nil {
-				f.def[it.Key] = fmt.Sprint(got)
-			}
-		}
-	}
 	f.httpsSynced = f.Value(proxyHTTPSKey)
 	f.httpsFollows = f.httpsSynced == f.Value(proxyHTTPKey)
 	f.Main = huh.NewForm(groups...)
 	return f
 }
 
-// field builds the huh field for one item, bound to its value.
-func (f *Form) field(it Item) huh.Field {
+// field builds the huh field for one item, bound to its value, and records
+// its default from defaults.
+func (f *Form) field(it Item, defaults stack.Config) huh.Field {
 	sf, ok := stack.LookupField(it.Key)
 	if !ok {
 		panic("wizard: no config field " + it.Key)
@@ -122,6 +116,9 @@ func (f *Form) field(it Item) huh.Field {
 		}
 	}
 	f.vals[it.Key], f.seed[it.Key] = &v, v
+	if got, err := defaults.Get(it.Key); err == nil && !sf.Secret {
+		f.def[it.Key] = fmt.Sprint(got)
+	}
 	if len(sf.Options) > 0 {
 		opts := make([]huh.Option[string], len(sf.Options))
 		for i, o := range sf.Options {
@@ -413,7 +410,7 @@ func (f *Form) summary() string {
 				v = "********"
 			}
 			r := row{title: it.Title, value: v}
-			if d, ok := f.def[it.Key]; ok && !sf.Secret && v == d {
+			if d, ok := f.def[it.Key]; ok && v == d {
 				r.note = " " + summaryDimStyle.Render("(default)")
 			}
 			rows = append(rows, r)

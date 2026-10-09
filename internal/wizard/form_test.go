@@ -148,7 +148,7 @@ func TestReopenedFormKeepsAClearedHTTPSProxy(t *testing.T) {
 	prev := defaults
 	prev.Name = "demo"
 	prev.Proxy.HTTP = "http://proxy:3128"
-	f := Reopen(defaults, prev, stack.UserSecrets{})
+	f := NewFormFrom(defaults, prev, stack.UserSecrets{})
 	f.Main.Init()
 	f.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
 	if got := f.Value(proxyHTTPSKey); got != "" {
@@ -156,7 +156,7 @@ func TestReopenedFormKeepsAClearedHTTPSProxy(t *testing.T) {
 	}
 
 	prev.Proxy.HTTPS = prev.Proxy.HTTP
-	f = Reopen(defaults, prev, stack.UserSecrets{})
+	f = NewFormFrom(defaults, prev, stack.UserSecrets{})
 	set(f, proxyHTTPKey, "http://proxy:8080")
 	f.syncHTTPSProxy()
 	if got := f.Value(proxyHTTPSKey); got != "http://proxy:8080" {
@@ -171,7 +171,7 @@ func TestSummaryMarksOnlyTheRealDefault(t *testing.T) {
 	defaults.Name = "demo"
 	prev := defaults
 	prev.Name = "mine"
-	f := Reopen(defaults, prev, stack.UserSecrets{})
+	f := NewFormFrom(defaults, prev, stack.UserSecrets{})
 	rows := map[string]string{}
 	for _, l := range strings.Split(ansi.Strip(f.summary()), "\n") {
 		k, v, _ := strings.Cut(l, "  ")

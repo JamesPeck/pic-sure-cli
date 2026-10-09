@@ -2736,8 +2736,8 @@ load wizard, and 083 the landing's actions.
 - **Leaving a form (090).** The setup and load wizards take esc and
   Ctrl-C (which huh would take as abort) themselves: a form with answers
   asks "Discard ...? (y/n)" first, and n, esc or Ctrl-C keeps it. A setup
-  reopened after a failed init (`wizard.Reopen`) gets the `Defaults`
-  config too, so its summary marks only real defaults. The landing
+  reopened after a failed init gets the `Defaults` config too
+  (`wizard.NewFormFrom`), so its summary marks only real defaults. The landing
   always opens first; there is no start-on-dashboard option.
 - **One run at a time (087).** A screen that hands the app its result
   enters a terminal state first, so keys or huh ticks that arrive before
@@ -2769,7 +2769,9 @@ Ticket 040. The dashboard screen, embedded in the TUI (alt-screen).
   with the last 200 lines). The services pane polls every 2 s with a 10 s
   timeout, the status pane every 15 s; each poll has at most one in flight.
   A migration status left `unknown` with an error (Flyway couldn't be
-  queried) shows as the warning "migrations: couldn't check (ERROR)".
+  queried) shows as the warning "migrations: couldn't check (ERROR)";
+  a check `status` skipped (`ops.MigrationsSkippedRemote`,
+  `MigrationsSkippedUnhealthy`) shows nothing.
   `h` runs the deep check, which is cached (with its time) until an action
   runs: `deepGen` drops a check that started before one. The log pane
   follows the selected service, and the selection stays on its service
@@ -2822,10 +2824,10 @@ generates the client secret; the remote-database page outside remote mode.
 "Use a proxy?" gates the proxy page, and the HTTPS proxy follows the HTTP
 one until the user edits it (`Form.Update`), and only if the two were
 equal when the form opened: a reopened setup's cleared HTTPS proxy stays
-cleared. `Reopen(defaults, base, sec)` opens it on a failed setup's
-answers; the summary's "(default)" marks values equal to `defaults`. `Result` is the config
-document and the secrets; `BuildConfirm`'s summary masks secrets and its
-yes runs `Check` first. It writes nothing.
+cleared. `NewFormFrom(defaults, base, sec)` opens it on a failed setup's
+answers; the summary's "(default)" marks values equal to `defaults`.
+`Result` is the config document and the secrets; `BuildConfirm`'s summary
+masks secrets and its yes runs `Check` first. It writes nothing.
 
 ## internal/filebrowser
 

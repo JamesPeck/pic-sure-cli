@@ -66,6 +66,7 @@ func (l *logo) startShine(animations bool) tea.Cmd {
 	if !animations {
 		return nil
 	}
+	l.shinePos = -1
 	l.seq++
 	return l.shineStart(logoShineDelay)
 }
@@ -134,7 +135,6 @@ func (l *logo) renderLine(line []rune, row int) string {
 	return sb.String()
 }
 
-// shineStart schedules a sweep after d.
 func (l *logo) shineStart(d time.Duration) tea.Cmd {
 	seq := l.seq
 	return tea.Tick(d, func(time.Time) tea.Msg { return logoShineStartMsg{seq: seq} })

@@ -113,6 +113,28 @@ func TestRunScreenAsksTheGateQuestion(t *testing.T) {
 	}
 }
 
+// On a terminal narrower than the dialog's usual minimum, the question
+// is fitted to the block instead of wrapped a second time.
+func TestRunScreenFitsTheQuestionToANarrowTerminal(t *testing.T) {
+	run := func(ctx context.Context, req InitRequest) (InitResult, error) {
+		_, err := req.Confirm(ctx, "release-control abc needs pic-sure 2.1.0; this is pic-sure 2.0.0. Update pic-sure now?")
+		return InitResult{}, err
+	}
+	s := newRunScreen(context.Background(), "Setting up PIC-SURE", run, InitRequest{}, false)
+	s.setSize(30, 24)
+	defer s.close()
+	pumpRun(t, s, func() bool { return s.askDlg != nil })
+	view := plainView(s)
+	for _, l := range strings.Split(view, "\n") {
+		if lipgloss.Width(l) > 30 {
+			t.Fatalf("a line is %d wide: %q", lipgloss.Width(l), l)
+		}
+		if strings.HasPrefix(strings.TrimSpace(l), "pic-sure 2.") {
+			t.Errorf("the question was wrapped outside its border:\n%s", view)
+		}
+	}
+}
+
 func TestRunScreenCtrlCTwiceCancels(t *testing.T) {
 	run := func(ctx context.Context, req InitRequest) (InitResult, error) {
 		req.Sink.Emit(events.StepStarted{ID: "images", Title: "Build the images"})

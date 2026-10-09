@@ -53,7 +53,7 @@ type wizardScreen struct {
 // newWizardScreen opens the form with base's values and sec's secrets;
 // defaults are the values its summary marks "(default)".
 func newWizardScreen(defaults, base stack.Config, sec stack.UserSecrets) *wizardScreen {
-	return &wizardScreen{wf: wizard.Reopen(defaults, base, sec)}
+	return &wizardScreen{wf: wizard.NewFormFrom(defaults, base, sec)}
 }
 
 func (s *wizardScreen) init() tea.Cmd { return s.wf.Main.Init() }
