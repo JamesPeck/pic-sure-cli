@@ -11,58 +11,33 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  check:
-    name: Check
+  on-main:
+    name: Tag is on main
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: read
-    # Mirror ci.yml so the release gate is no weaker than the per-PR gate:
-    # the PTY end-to-end test runs here too instead of self-skipping under CI.
-    env:
-      PICSURE_PTY_TEST: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0 # the history of main, for the ancestry check
           persist-credentials: false
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: go.sum
-
-      - name: Install golangci-lint
+      - name: The tagged commit is on main
+        env:
+          TAG: ${{ github.ref_name }}
         run: |
-          version="$(make -s print-lint-version)"
-          curl -sSfL "https://raw.githubusercontent.com/golangci/golangci-lint/$version/install.sh" \
-            | sh -s -- -b "$(go env GOPATH)/bin" "$version"
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "::error::$TAG points at $(git rev-parse --short HEAD), which is not on main"
+            exit 1
+          fi
 
-      # go.mod/go.sum must match the import graph; catches missing
-      # `go mod tidy` (e.g. direct deps mislabeled // indirect).
-      - name: Tidy check
-        run: |
-          go mod tidy
-          git diff --exit-code go.mod go.sum
-
-      - name: Check (gofmt, vet, lint, test)
-        run: make check
-
-      - name: Shellcheck
-        run: shellcheck install.sh smoke/install_test.sh
-
-      - name: GoReleaser config check
-        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
-        with:
-          version: v2.18.2
-          args: check
-
-      - name: Snapshot build
-        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
-        with:
-          version: v2.18.2
-          args: release --snapshot --clean
-
-      - name: install.sh tests
-        run: bash smoke/install_test.sh dist
+  check:
+    name: CI
+    needs: on-main
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
 
   release:
     name: Build, sign, attest, publish

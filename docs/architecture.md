@@ -26,7 +26,8 @@ section. Edit only your own.
 - **Rebase conflicts.** In `go.mod`/`go.sum`, keep both sides' requirements
   and run `go mod tidy`. In this file, keep both sections.
 - `make check` runs the gofmt check, `go vet`, golangci-lint (pinned in the
-  Makefile) and `go test ./...`. CI runs the same target.
+  Makefile) and `go test ./...`. CI runs the same target, and more (see the
+  README's Development section).
 
 ## Conventions
 

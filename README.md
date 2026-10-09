@@ -401,14 +401,16 @@ curl -fsSL -o ~/.claude/skills/pic-sure/SKILL.md \
 
 Package layout, the shared interfaces and how to add a command or an
 operation are in [docs/architecture.md](docs/architecture.md). Requires
-Go 1.26 (`GOTOOLCHAIN=auto` fetches it).
+Go 1.26. CI and releases build with the patch release on go.mod's
+`toolchain` line, which `GOTOOLCHAIN=auto` fetches.
 
 | Target | Does |
 |---|---|
 | `make build` | build `bin/pic-sure` with version ldflags |
 | `make test` | `go test ./...`: unit tests, goldens, testscript scenarios and, outside CI, the PTY smoke tests (set `PICSURE_PTY_TEST=1` to run those in CI) |
 | `make lint` | golangci-lint, at the version pinned in the Makefile |
-| `make check` | gofmt check, `go vet`, lint and test: what CI runs |
+| `make check` | gofmt check, `go vet`, lint and test: CI's main job, on Linux and macOS |
+| `make vulncheck` | govulncheck over the code and its dependencies; needs the network, and its standard-library findings depend on the Go that runs it |
 | `make docs` | regenerate the [command reference](docs/commands/README.md) from the cobra help; CI fails when it's stale (`make docs-check`) |
 | `make compose-check` | `docker compose config` over every render golden |
 | `make snapshot` | a local, unsigned dry run of the release into `dist/` |
@@ -418,6 +420,12 @@ End-to-end tests against real Docker stacks are the `scripts/e2e-*.sh`
 scripts, run nightly by `.github/workflows/e2e.yml`; `scripts/e2e-lib.sh`
 documents their settings. They build images and take a long time.
 
-Releases are tagged `v2.*`: GoReleaser builds the `linux/darwin ×
-amd64/arm64` archives, signs `checksums.txt` with cosign (keyless), and
-publishes them with SBOMs and build attestations.
+CI (`.github/workflows/ci.yml`) runs `make check` on Linux and macOS,
+`make compose-check`, `make docs-check`, `make vulncheck`, shellcheck over
+every script, and the snapshot release with the `install.sh` tests. It also
+runs nightly, so a newly published vulnerability fails it.
+
+Releases are tagged `v2.*`. The release workflow refuses a tag whose commit
+isn't on `main`, then runs all of CI against it. GoReleaser builds the
+`linux/darwin × amd64/arm64` archives, signs `checksums.txt` with cosign
+(keyless), and publishes them with SBOMs and build attestations.

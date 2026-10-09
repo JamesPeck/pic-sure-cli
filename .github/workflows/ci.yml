@@ -5,13 +5,22 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Nightly, so a vulnerability published after the last push still fails a
+  # run (govulncheck reads a live database).
+  schedule:
+    - cron: "17 6 * * *"
+  # release.yml's gate, so a tag passes exactly these jobs.
+  workflow_call:
 
 permissions:
   contents: read
 
-# A new push to a PR cancels its older run; runs for pushes to v2 all finish.
+# A new push to a PR cancels its older run; other runs only queue, and a
+# newer queued run replaces an older one. The group names CI literally:
+# called from release.yml, github.workflow is "Release", and a group shared
+# with the caller would deadlock.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -129,7 +138,35 @@ jobs:
       - name: Shellcheck
         run: |
           shellcheck --version
-          shellcheck install.sh smoke/install_test.sh scripts/*.sh
+          git ls-files -z '*.sh' | xargs -0 shellcheck
+
+  vulncheck:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      # The standard-library findings are only as good as the Go that runs the
+      # scan, so it must be the toolchain line's release, not the go line's.
+      - name: Go is go.mod's toolchain
+        run: |
+          want="$(go mod edit -json | jq -r .Toolchain)"
+          have="$(go env GOVERSION)"
+          if [ "$have" != "$want" ]; then
+            echo "::error::Go is $have, not go.mod's toolchain $want"
+            exit 1
+          fi
+
+      - name: make vulncheck
+        run: make vulncheck
 
   release:
     name: Release snapshot + install.sh
@@ -144,6 +181,12 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
+
+      - name: GoReleaser config check
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          version: v2.18.2
+          args: check
 
       # Unsigned, with no SBOM or upload (.goreleaser.yaml skips them for
       # snapshots).

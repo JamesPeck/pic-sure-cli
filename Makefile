@@ -5,7 +5,7 @@ COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
 DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS := -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(DATE)
 
-.PHONY: build snapshot install-test test fmt-check vet lint print-lint-version check compose-check docs docs-check clean
+.PHONY: build snapshot install-test test fmt-check vet lint print-lint-version check vulncheck compose-check docs docs-check clean
 
 build:
 	$(GO) build -ldflags "$(LDFLAGS)" -o $(BIN) ./cmd/pic-sure
@@ -42,6 +42,12 @@ print-lint-version:
 
 # What CI runs. The PTY tests in smoke/ run as part of `test`.
 check: fmt-check vet lint test
+
+# Not part of check: it needs the network (the vuln DB), and its
+# standard-library findings depend on the Go that runs it, which under
+# GOTOOLCHAIN=local may be older than go.mod's toolchain line.
+vulncheck:
+	$(GO) tool govulncheck ./...
 
 # CI's Linux-only compose validation: the render tests, whose compose checks
 # run docker compose config --quiet over every golden and fail instead of
