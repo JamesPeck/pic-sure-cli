@@ -20,7 +20,7 @@ const (
 
 // PhenotypeOptions are `data load-phenotype`'s options.
 type PhenotypeOptions struct {
-	// Load is the HPDS load (042).
+	// Load is the HPDS load.
 	Load PhenotypeLoadOptions
 	// Dictionary is DictionaryAuto (hydrate from the loaded data) or
 	// DictionaryCustom (Datasets and Concepts, and Facets if set).

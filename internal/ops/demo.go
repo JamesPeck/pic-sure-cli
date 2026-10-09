@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/cache"
+	"github.com/JamesPeck/pic-sure-cli/internal/ctxio"
 	"github.com/JamesPeck/pic-sure-cli/internal/events"
 	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
 	"github.com/JamesPeck/pic-sure-cli/internal/phenoinput"
@@ -170,7 +171,7 @@ func DataDemo(ctx context.Context, d *Deps, st *stack.Stack, cfg *stack.Config, 
 
 // demoDictionarySteps rebuild the dictionary after a demo load. Demo loads
 // always ask for the default facets plus the facet configuration; custom
-// loads (045) use what was requested.
+// loads use what was requested.
 func demoDictionarySteps(x *Dictionary, opts DemoOptions, facets []byte) []steps.Step {
 	list := x.HydrateSteps(HydrateOptions{IncludeDatasetFacets: true, Clear: true, Heap: opts.HeapMB})
 	list = append(list, x.FacetConfigSteps(facets)...)
@@ -414,7 +415,7 @@ func (m *csvMerge) append(ctx context.Context, path, name string) error {
 		return err
 	}
 	defer func() { _ = f.Close() }()
-	r := bufio.NewReaderSize(ctxReader{ctx, f}, 1<<20)
+	r := bufio.NewReaderSize(ctxio.Reader(ctx, f), 1<<20)
 	line, err := r.ReadString('\n')
 	if err != nil && (err != io.EOF || line == "") {
 		if err == io.EOF {

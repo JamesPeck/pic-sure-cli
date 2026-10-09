@@ -107,6 +107,9 @@ pic-sure status
   30 to 60 minutes**; later stacks reuse the images. It ends by printing
   the URL, e.g. `https://localhost:8443`. The certificate is self-signed,
   so your browser will warn once.
+- Pull mode (`images.mode: pull`, which pulls prebuilt images instead of
+  building them) is experimental: no images are published for it yet, so
+  leave `images.mode` at its default, `build`.
 - `--name` (the stack's name, fixed once created) and `--admin-email` are
   always required. Outside open mode so are `--auth0-client-id` and the
   client secret.
@@ -370,7 +373,7 @@ one rendered (exit 5).
 
 | Command | Removes | Keeps |
 |---|---|---|
-| `pic-sure down` | containers | everything else |
+| `pic-sure down` | containers and the stack's networks | volumes (all data), config, secrets, logs |
 | `pic-sure reset [--keep-db]` | containers and the stack's volumes: HPDS, dictionary, staging, certs, truststore, and the database unless `--keep-db` | config, secrets, logs and TLS sources: `up` sets it up again, empty |
 | `pic-sure destroy [--prune-images]` | containers, every volume and dev image of this stack, and the files pic-sure created in the stack directory | files you added (listed), shared data sets, other stacks |
 

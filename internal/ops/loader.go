@@ -16,6 +16,7 @@ import (
 
 	"github.com/JamesPeck/pic-sure-cli/internal/cache"
 	"github.com/JamesPeck/pic-sure-cli/internal/catalog"
+	"github.com/JamesPeck/pic-sure-cli/internal/ctxio"
 	"github.com/JamesPeck/pic-sure-cli/internal/docker"
 	"github.com/JamesPeck/pic-sure-cli/internal/events"
 	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
@@ -569,7 +570,7 @@ func fileSHA256(ctx context.Context, path string) (string, error) {
 	}
 	defer func() { _ = f.Close() }()
 	h := sha256.New()
-	if _, err := io.Copy(h, ctxReader{ctx, f}); err != nil {
+	if _, err := io.Copy(h, ctxio.Reader(ctx, f)); err != nil {
 		return "", fmt.Errorf("reading %s: %w", path, err)
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
@@ -590,21 +591,8 @@ func copyInput(ctx context.Context, src, dst string) (err error) {
 			err = cerr
 		}
 	}()
-	if _, err := io.Copy(out, ctxReader{ctx, in}); err != nil {
+	if _, err := io.Copy(out, ctxio.Reader(ctx, in)); err != nil {
 		return fmt.Errorf("copying %s: %w", src, err)
 	}
 	return nil
-}
-
-// ctxReader stops a long copy when ctx ends.
-type ctxReader struct {
-	ctx context.Context
-	r   io.Reader
-}
-
-func (c ctxReader) Read(p []byte) (int, error) {
-	if err := context.Cause(c.ctx); err != nil {
-		return 0, err
-	}
-	return c.r.Read(p)
 }

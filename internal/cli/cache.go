@@ -71,11 +71,7 @@ func registerStack(ctx context.Context, c *cache.Cache, sink events.Sink, st *st
 // registerStackInDefaultCache is registerStack for a command that hasn't
 // opened the cache.
 func registerStackInDefaultCache(cmd *cobra.Command, sink events.Sink, st *stack.Stack, name string) error {
-	root, err := cache.DefaultRoot()
-	if err != nil {
-		return err
-	}
-	c, err := cache.Open(root, cache.Options{Holder: cmd.CommandPath()})
+	c, err := openDefaultCache(cmd, cache.Options{})
 	if err != nil {
 		return err
 	}
@@ -97,12 +93,18 @@ func (a *App) openCache(cmd *cobra.Command, lockTimeout time.Duration) (*cache.C
 	case !errors.Is(err, stack.ErrNotFound) || a.Global.Stack != "":
 		return nil, opts, err
 	}
+	c, err := openDefaultCache(cmd, cache.Options{LockTimeout: lockTimeout})
+	return c, opts, err
+}
+
+// openDefaultCache opens the default cache with opts, held by cmd.
+func openDefaultCache(cmd *cobra.Command, opts cache.Options) (*cache.Cache, error) {
 	root, err := cache.DefaultRoot()
 	if err != nil {
-		return nil, opts, err
+		return nil, err
 	}
-	c, err := cache.Open(root, cache.Options{Holder: cmd.CommandPath(), LockTimeout: lockTimeout})
-	return c, opts, err
+	opts.Holder = cmd.CommandPath()
+	return cache.Open(root, opts)
 }
 
 func (a *App) cacheList(cmd *cobra.Command) error {

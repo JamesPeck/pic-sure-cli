@@ -5,6 +5,6 @@
 // global reactor lock, per image tag), and the name of the pic-sure-m2
 // Maven volume.
 //
-// Ticket 019 wrote cache.go (root and layout), source.go (EnsureSource),
-// lock.go and maven.go. Ticket 057 adds `cache list` and `cache prune`.
+// cache.go has the root and layout, source.go EnsureSource, and prune.go
+// backs `cache list` and `cache prune`.
 package cache

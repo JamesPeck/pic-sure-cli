@@ -2,11 +2,10 @@
 // §10.3), the Sink interface they are emitted to, a Recorder for tests, and
 // LogWriter, which turns subprocess output into Log events.
 //
-// Ticket 001 owns the types and the Sink contract. Ticket 004 owns the
-// plain (plain.go: timestamped stderr) and NDJSON (ndjson.go: --json
-// stdout) renderers, and WriteReport (ndjson.go), which prints a read-only
-// command's single JSON object; ticket 038 adds the TUI renderer in
-// internal/tui.
+// The plain (plain.go: timestamped stderr) and NDJSON (ndjson.go: --json
+// stdout) renderers are here, with WriteReport (ndjson.go), which prints a
+// read-only command's single JSON object. The TUI renderer is in
+// internal/progress.
 //
 // Who emits what: the step engine (internal/steps) emits StepStarted and
 // StepDone; an operation's steps emit Progress, Log and Warning; the cli

@@ -551,12 +551,11 @@ func redactConfigKeys(data []byte) []byte {
 	return out
 }
 
-// configSecretFields are the dotted keys of stack.Fields' secrets, and of
-// the admin email, which the run logs redact as personal data.
+// configSecretFields are the dotted keys of stack.Fields' Private fields.
 var configSecretFields = func() map[string]bool {
 	m := map[string]bool{}
 	for _, f := range stack.Fields {
-		if f.Secret || f.Flag == "admin-email" {
+		if f.Private() {
 			m[f.Key] = true
 		}
 	}
@@ -586,13 +585,6 @@ var configPlainLeaves = func() map[string]bool {
 	return m
 }()
 
-// configPlainField reports whether the dotted key p is a stack.Fields key
-// that isn't secret, such as auth.consent_authorization.
-func configPlainField(p string) bool {
-	f, ok := stack.LookupField(p)
-	return ok && !configSecretFields[f.Key] && !strings.HasSuffix(f.Key, ".*")
-}
-
 // walkSecretKeys calls fn for every value under n, at dotted path prefix,
 // that redactConfigKeys blanks, unless it is an empty scalar:
 // parent.Content[i] is the value, and field says its key is one of
@@ -614,7 +606,7 @@ func walkSecretKeys(n *yaml.Node, prefix string, fn func(parent *yaml.Node, i in
 		}
 		empty := v.Kind == yaml.ScalarNode && v.Value == ""
 		value := v.Kind == yaml.ScalarNode && v.ShortTag() != "!!null" || v.Kind == yaml.SequenceNode
-		if !empty && (configSecretFields[p] || log.IsSecretName(key) && value && !configPlainField(p)) {
+		if !empty && (configSecretFields[p] || value && stack.PrivateKey(p)) {
 			fn(n, i, configSecretFields[p])
 			continue
 		}

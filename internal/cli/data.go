@@ -6,10 +6,6 @@ import (
 	"github.com/JamesPeck/pic-sure-cli/internal/ops"
 )
 
-// Each data subcommand has its own constructor because different tickets
-// implement them: demo (046), load-phenotype (042, 043, 045) and
-// load-genomic (049).
-
 func newDataCmd(a *App) *cobra.Command {
 	return newGroup("data", "Load data into HPDS and the dictionary",
 		newDataDemoCmd(a),

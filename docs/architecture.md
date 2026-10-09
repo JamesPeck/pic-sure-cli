@@ -4,11 +4,10 @@ pic-sure v2 is one Go binary that installs and operates PIC-SURE All-in-One
 stacks by driving the user's `docker` and `git`. This document covers the
 package layout, the interfaces packages share, and the patterns for adding
 a command or an operation. References like §10.1 or D17 point into the v2
-spec, which is kept outside this repo while v2 is built.
+spec, which is kept outside this repo.
 
-v2 is being built as numbered tickets, many in parallel. Every package below
-has its own section, and the ticket that implements a package fills in its
-section. Edit only your own.
+Every package below has its own section. When you change a package, update
+its section.
 
 ## Working in this tree
 
@@ -16,8 +15,7 @@ section. Edit only your own.
   `internal/cli`, each operation its own file in `internal/ops`, and each
   command group its own testscript under `cmd/pic-sure/testdata/script/`.
   `data` is split further (`data_demo.txtar` and so on, with a constructor
-  per subcommand in `data.go`) because different tickets implement its
-  subcommands.
+  per subcommand in `data.go`).
   `internal/cli/root.go` already registers every command, so you shouldn't
   need to edit it.
 - **Shared code goes down, not sideways.** A helper that several operations
@@ -46,7 +44,7 @@ section. Edit only your own.
   can substitute fakes for all of it.
 - **Output goes through events.** Operations emit events to `Deps.Sink`;
   they never print. The output mode (TUI, plain, NDJSON) is the cli layer's
-  business (ticket 004).
+  business.
 - **Tests.** Unit tests use the fake runner, never real Docker. CLI
   behaviour is tested with testscript. A test that needs a real Docker
   daemon skips itself when there isn't one. The ones that run by default
@@ -56,8 +54,7 @@ section. Edit only your own.
 
 ## Adding a command
 
-Every command is registered in root.go (001), and every ticket stub is
-now implemented. To change one, edit its
+Every command is registered in root.go. To change one, edit its
 constructor in its group's file, for example `newUpCmd` in
 `internal/cli/up.go`: add its flags, and make `RunE` build the dependencies
 with `a.newDeps()`, call the operation, and hand the result to the output
@@ -117,11 +114,11 @@ func TestUpStartsTheDatabaseBeforeMigrating(t *testing.T) {
 
 ## cmd/pic-sure
 
-Ticket 001. `main` turns the first SIGINT or SIGTERM into a context
+`main` turns the first SIGINT or SIGTERM into a context
 cancellation whose cause is `exitcode.Signaled(sig)`, so the command can run
 its deferred cleanups and then exit 128+N. A second signal gets the default
 action and kills the process at once. SIGPIPE is caught on a channel of
-its own (068), so a write to a closed stdout or stderr fails with EPIPE
+its own, so a write to a closed stdout or stderr fails with EPIPE
 instead of killing the process; subprocesses still get the default
 SIGPIPE. It then calls `cli.Execute`. The
 version variables are set with `-ldflags` (see the Makefile).
@@ -135,9 +132,6 @@ because `! exec` accepts any failure.
 
 ## internal/cli
 
-Ticket 001; each command group's file belongs to the ticket that implements
-it.
-
 - `app.go`: `App` (build info, global options, streams, and seams for the
   terminal check and the TUI), `Execute`, and the error-to-exit-code
   mapping. A signal received while a command runs decides the exit code,
@@ -145,7 +139,7 @@ it.
   missing `docker` or an unreachable daemon (`docker.IsMissing`,
   `docker.IsUnreachable`), or a missing compose plugin
   (`docker.IsComposeMissing`), becomes exit 3 there, in `dockerPrecondition`
-  (`dockerexit.go`, 091), with doctor's install or start advice, so no
+  (`dockerexit.go`), with doctor's install or start advice, so no
   command maps these itself. With no arguments, pic-sure
   opens the TUI when stdin and stdout are terminals and none of `--json`,
   `--plain`, `--yes` or `--non-interactive` is given. Otherwise it prints
@@ -154,21 +148,21 @@ it.
   confirmation. `--non-interactive` only forbids prompting, so a
   destructive command still needs `--yes`. `--json` implies
   `--non-interactive`, and `--json` and `--plain` are mutually exclusive.
-  `--wait-lock` (007) makes a mutating command wait for the stack lock
+  `--wait-lock` makes a mutating command wait for the stack lock
   instead of failing.
-- `stack.go` (007): `a.openStack(cmd)` finds and opens the stack the command
+- `stack.go`: `a.openStack(cmd)` finds and opens the stack the command
   acts on (exit 3 when there is none) and applies the version gate for
-  `cmd` (009), `a.initDir(args)` resolves init's
+  `cmd`, `a.initDir(args)` resolves init's
   directory, and `a.lockStack(ctx, cmd, st, sink)` takes the stack lock
   for a mutating command: exit 1 if it is held, or a wait with
-  `--wait-lock`. Holding the lock, it applies the gate again (009), since
+  `--wait-lock`. Holding the lock, it applies the gate again, since
   the command it waited for may have been a newer pic-sure, and gives a
-  stack without a stack ID one (`st.EnsureID`, 084). A command that
+  stack without a stack ID one (`st.EnsureID`). A command that
   changes the stack's Docker resources then calls `checkOwned(cmd, d, st,
   cfg)` (`ops.CheckOwnership`) after its own preconditions and before its
   first change; `warnForeign` is the read-only commands' stderr warning
   (`ps`, `logs`).
-- `gate.go` (009): `commandClasses`, the version-gate class of every
+- `gate.go`: `commandClasses`, the version-gate class of every
   command (§10.6; a test keeps it complete): read-only, mutating, or
   `update`'s own class. `openStack` runs `a.gate`, so every command that
   opens a stack is gated, and `lockStack` runs it again under the lock. A
@@ -179,7 +173,7 @@ it.
   `PreRunE` that fails for any other reason must return an
   `*exitcode.Error`. The root's `PersistentPreRunE` is `refuseSkipStep`,
   so no subcommand may set its own.
-- `skipstep.go` (085): `--skip-step` is refused unless the command is
+- `skipstep.go`: `--skip-step` is refused unless the command is
   marked `skippable(c)` (an annotation): init, up, update, build, migrate,
   db bootstrap, the dictionary commands, and the hidden smoke-steps. On
   any other command, a destructive one included, `refuseSkipStep` makes it
@@ -196,15 +190,15 @@ it.
 - `helpers.go`: `newGroup` and the `help`
   command. A group run without a subcommand, or with an unknown one, is a
   usage error, and so is `help` with an unknown topic.
-- `output.go` (004): output mode selection, the run's sink, and how a
+- `output.go`: output mode selection, the run's sink, and how a
   command ends. The mode is JSON for `--json`; plain for `--plain`, when
   stdin or stdout isn't a terminal, or when `CI` is set (`CI=false` and
   `CI=0` don't count); and TUI otherwise. TUI mode draws with
-  `progress.Renderer` (038) when stderr is a terminal and `TERM` isn't
+  `progress.Renderer` when stderr is a terminal and `TERM` isn't
   `dumb`, and as plain otherwise. `newSink` returns the same sink for the
   whole run. That sink (`runSink`) redacts every event's text with
   `log.Redact` before any renderer sees it: step titles, progress, log
-  lines, warnings and the error (093), since compose output and errors can
+  lines, warnings and the error, since compose output and errors can
   quote a secret. The dashboard's warnings and log records, which reach its
   sink another way, go through `redactingSink`, and `warnStderr` redacts
   too, and writes through the TUI renderer while there is one, so it
@@ -235,7 +229,7 @@ it.
   Output the renderer couldn't write (a full disk) fails the run with
   exit 1. `help`, `completion` and `--version` print text even with
   `--json`.
-- `pipe.go` (068): `a.stdout()` and `a.stderr()` are the streams for what
+- `pipe.go`: `a.stdout()` and `a.stderr()` are the streams for what
   the CLI writes itself: the renderers, reports, log records, warnings
   and `logs`. The first write that fails with EPIPE (`| head` went away)
   cancels the command with cause `exitcode.Signaled(SIGPIPE)`, so it runs
@@ -244,13 +238,11 @@ it.
   edit`) gets the raw `a.Stdout`/`a.Stderr`, and so does the TUI, whose
   stderr is a terminal.
 - `deps.go`: `newDeps` assembles `ops.Deps`. Each field comes from a
-  constructor in its owner's file: `runner.go` (003), `output.go` (004, which
-  also reports errors), `logging.go` (005, landed), `engine.go` (016,
-  landed) and `gitclient.go` (018, landed). The runner is built with the
-  logger, so it can log argv. Until the others land, the sink discards
-  events.
+  constructor in its own file: `runner.go`, `output.go` (the sink),
+  `logging.go`, `engine.go` and `gitclient.go`. The runner is built with
+  the logger, so it can log argv.
 
-- `composeverbs.go` (026, 069, 070): `a.stackCompose(cmd, runner, st)` is the
+- `composeverbs.go`: `a.stackCompose(cmd, runner, st)` is the
   compose adapter for every command on a stack, `status`, `doctor` and
   `migrate` included (`stackComposeConfig` also returns the config and
   secrets it read): exit 3 with "run `pic-sure up`", wrapping
@@ -264,7 +256,7 @@ it.
   through `log.Redact`, since compose's errors can quote a secret.
   `down` and `restart` take the stack lock and run as one step
   whose `Log` events are compose's output; `down` first runs
-  `ops.RemoveHelperContainers` (095), since a helper a killed command left
+  `ops.RemoveHelperContainers`, since a helper a killed command left
   keeps the data network; compose down runs even if that fails. `ps --json` uses status's
   service shape (`ops.StatusServices`). `logs` writes the logs to stdout and compose's own
   messages to stderr (a `logs` step under `--json`), and reports Ctrl-C as
@@ -279,10 +271,10 @@ it.
   rendered file's stays when a read-only one can't read the config), whose
   `-p` beats a `name:` in a file added with `-f` or an override and an
   `--env-file`'s `COMPOSE_PROJECT_NAME`, so compose acts on the project the
-  ownership check covered (084). One whose subcommand creates volumes
+  ownership check covered. One whose subcommand creates volumes
   (`up`, `create`, `run`, `watch`, or one it can't place) first runs
   `config --no-interpolate` with the user's global flags and
-  `ops.CheckVolumeLabels` on it (107): exit 3, "run `pic-sure up`", if
+  `ops.CheckVolumeLabels` on it: exit 3, "run `pic-sure up`", if
   that config would give a volume compose made labels it doesn't have,
   since compose would ask on the terminal whether to recreate it. The
   user's own
@@ -290,19 +282,19 @@ it.
   passthrough's output goes straight to the terminal, never to
   the run log.
 
-- `init.go` (034): `init [DIR]`. Its flags come from `stack.Fields` (a
+- `init.go`: `init [DIR]`. Its flags come from `stack.Fields` (a
   secret's is a bool that reads stdin through `readUserSecret`; with both
   `--auth0-client-secret-stdin` and `--db-root-password-stdin`, piped stdin
   holds one secret per line, in that order, and a terminal is asked for
   each), plus `--auto-ports`, `--source
   COMPONENT=PATH`, the gate's `--self-update` and `--ignore-cli-version`,
-  and `--set KEY=VALUE` (072) for any non-secret key, through
+  and `--set KEY=VALUE` for any non-secret key, through
   `ConfigDoc.Set` after the flags; a key a flag also sets must get the same
   value, and a `--set` port or `network.dev_ports.base` is used as given.
   Usage problems are exit 2 naming the flag, before docker is asked
   anything: a client secret under `jwt.MinSecretLen`, a
   `--skip-step` that isn't in `ops.InitStepIDs(cfg)`, `--self-update`
-  with a stdin flag, and (first of all, 096) a stack directory with a
+  with a stdin flag, and (first of all) a stack directory with a
   `:`, CR or LF, which `render.CheckBindSource` refuses as render would.
   With `--hpds-data shared:NAME`, the host check also requires the data
   set (`ops.SharedDataProfile`, exit 3), so a missing set fails before the
@@ -319,7 +311,7 @@ it.
   resources labelled with this directory are named as a deleted stack's
   leftovers with the `docker` commands that remove them, and the rest are
   listed with their directory but no commands, since one whose directory
-  holds no stack now may be a moved stack's (084); on a new stack
+  holds no stack now may be a moved stack's; on a new stack
   `ops.ChoosePorts` and
   `ChooseDevPortsBase`, on a resumed one its ports must be free or its own;
   a loopback remote `--db-host` warns), `release` (`release.Fetch` at a
@@ -330,8 +322,8 @@ it.
   the release and the operation; a resumed stack's pic-sure.yaml is read
   again under the lock, as up does: the flags and `--skip-step` are checked
   against it, changed ports checked again, and a changed proxy used from
-  then on, `rereadConfig`, 096). Then `ops.InitSteps` with `--skip-step`,
-  and `initialized_at` once they succeed. A new stack's ports (077): the
+  then on, `rereadConfig`). Then `ops.InitSteps` with `--skip-step`,
+  and `initialized_at` once they succeed. A new stack's ports: the
   preconditions choose them with the default cache's `ops.ReservedPorts`
   only to check there are some; `claimPorts` chooses them again under the
   cache's `LockPorts`, with the reservations (given ports exempt), then
@@ -344,13 +336,13 @@ it.
   taken port and runs the plan again from `render`, once. `initRun.host`
   replaces the system's ports in tests. `r.compose` builds the adapter
   with a lazy env over init's `*Secrets`, so `compose up` sees the token
-  seed issued; `up` (035) can copy it. `startRunLog` registers
+  seed issued; `up` can copy it. `startRunLog` registers
   `--admin-email` with the redactor before it logs the flags. An
   `initRun`'s leading fields are its options (config, ports, secrets,
   gate options); `initStack` fills them from the flags, and `run` reads
   flags only through `readConfig` and `readSecrets` (the flags path, and a
   resumed stack's config).
-- `up.go` (035): `up`. Usage problems first: a `--skip-step` not in
+- `up.go`: `up`. Usage problems first: a `--skip-step` not in
   `ops.UpStepIDs(cfg)` is exit 2. Under the stack lock: the config with
   `CheckFiles`; a stack without `initialized_at` or without secrets.yaml is
   exit 3 pointing at `init DIR`; outside open mode a client secret that is
@@ -363,7 +355,7 @@ it.
   Composer like init's, recording the `up` operation in state.json. The
   version gate is openStack's: pending config migrations are exit 5 ("run
   `pic-sure update`"); §6.2's up prompt isn't implemented.
-- `update.go` (036): `update`. Usage problems first: `--no-build` with
+- `update.go`: `update`. Usage problems first: `--no-build` with
   `--release-commit` (exit 2: `--no-build` keeps the stack's release),
   `--dry-run` with `--skip-step`, and a `--skip-step` not in
   `ops.UpdateStepIDs(cfg)`. openStack gates it as `update`'s class, so
@@ -387,7 +379,7 @@ it.
   renderer's next program. Run from the dashboard (`App.tuiConfirm`), it
   asks through the TUI's dialog instead. Otherwise only `--self-update`
   replaces the binary (exit 5 without it).
-- `tuiinit.go` (039): `initFromTUI`, the TUI's `Options.Init`, runs
+- `tuiinit.go`: `initFromTUI`, the TUI's `Options.Init`, runs
   `initRun.run` in-process on the wizard's config (its ports given
   explicitly) or, with none, resumes DIR's pic-sure.yaml. For the call it
   swaps the run's output for one whose sink is the TUI's and sends the run
@@ -401,7 +393,7 @@ it.
   `ops.ReservedPorts`. `startTUI` opens on the stack `stack.Find`
   finds, else on init's directory.
 
-- `secretinput.go` (093): `a.readUserSecret` reads a secret for init's
+- `secretinput.go`: `a.readUserSecret` reads a secret for init's
   `--*-stdin` flags and `secrets rotate`. Piped stdin goes to
   `stack.ReadUserSecret` unchanged (to EOF). A terminal stdin gets a prompt
   on stderr ("Paste the ... and press Enter (input is hidden):") and one
@@ -411,7 +403,7 @@ it.
   exit 2, asking for the secret to be piped. `stdinTerminal` and
   `readHidden` are the test seams; `smoke/secret_prompt_pty_test.go` runs it
   on a PTY.
-- `secrets.go` (058): `secrets rotate NAME [--discard-data]`. Usage
+- `secrets.go`: `secrets rotate NAME [--discard-data]`. Usage
   problems first: a NAME not in `ops.RotateNames()` (exit 2, listing them),
   `--discard-data` with another NAME (exit 2) or without `--yes` (exit 4).
   A NAME `ops.RotateReadsStdin` (the Auth0 client secret; `db-root` with a
@@ -422,10 +414,10 @@ it.
   Composer from `upCompose` (env computed per call from the `*Secrets` the
   rotation updates), and `ops.RotateSecret`, recording the `secrets rotate`
   operation in state.json.
-- `data_phenotype.go` (042, 045): `data load-phenotype --file F [--entry E]
+- `data_phenotype.go`: `data load-phenotype --file F [--entry E]
   [--heap MB] [--dictionary auto|custom --datasets F --concepts Z
   [--facets-categories F --facets F --facet-concepts F]] [--skip-weights]`,
-  or `--input-dir D` instead of `--file` (043; `--entry` with it is exit 2,
+  or `--input-dir D` instead of `--file` (`--entry` with it is exit 2,
   and `ops.CheckPhenotypeDir` checks the directory before the stack is
   opened). `phenotypeFlags` checks the flags first, as
   AIO's `etl.sh load_phenotype` does (all exit 2): `--heap` positive,
@@ -443,13 +435,13 @@ it.
   each ends with it; all of them for a step none lists); before that, the
   whole `data load-phenotype` command. `--json`'s data is
   `{"dataset": "phenotype:<sha256>", "dictionary": "auto", "weights": true}`.
-- `data_demo.go` (046): `data demo [nhanes|synthea|1000genomes|all]
+- `data_demo.go`: `data demo [nhanes|synthea|1000genomes|all]
   [--heap MB]`, default nhanes. The same usage checks and refusals as
   load-phenotype, then `ops.DataDemo` with the stack's proxy (the
   environment's when it sets none, as self-update) on the download client,
   recording the `data demo` operation. `--json`'s data is
   `{"dataset": "demo:<name>"}`.
-- `teardown.go` (056): `reset [--keep-db]` and `destroy [--prune-images]`.
+- `teardown.go`: `reset [--keep-db]` and `destroy [--prune-images]`.
   Both open the stack with `openStackUnlogged` (openStack without the run
   log, so a refusal writes nothing) and read the config (exit 2 if
   invalid), then `confirmName`: `--yes` consents; otherwise, when
@@ -467,7 +459,7 @@ it.
   `--prune-images` it doesn't create a missing cache, and one it can't open
   is only a warning.
 
-- `supportbundle.go` (059): `support-bundle [-o FILE]`, read-only (no
+- `supportbundle.go`: `support-bundle [-o FILE]`, read-only (no
   lock; a newer stack only warns). It opens the stack like doctor (none
   found and no `--stack` gives a host-only bundle; a `--stack` that isn't
   one is exit 3), builds one `stackCompose` for status and doctor, and
@@ -479,7 +471,7 @@ it.
   `SupportBundleReport` (docs/json-schemas.md). Exit 0 once written, even
   with problems; 1 when it can't be written.
 
-- `data_genomic.go` (049): `data load-genomic --partition P --vcf-index F
+- `data_genomic.go`: `data load-genomic --partition P --vcf-index F
   [--vcf-dir D] [--heap MB] [--promote [--all-partitions] [--backup]]
   [--enable-profile]`. Usage checks first (`GenomicLoadOptions.Check`, the
   paths made absolute, the index a regular file, `--vcf-dir` a directory
@@ -488,7 +480,7 @@ it.
   cache's `TempDir` and, for `--enable-profile`, up's `ConvergeOptions`
   (cache, CLI version, lazy-env Composer). It records the `data
   load-genomic` operation. `--json`'s data is `{"partition", "promoted":
-  [...], "profile"}`. `--recover` (108) takes none of the load's flags
+  [...], "profile"}`. `--recover` takes none of the load's flags
   (exit 2), so `--partition` and `--vcf-index` are required by hand
   rather than by cobra. Under the stack lock it checks ownership, refuses
   a shared-mode stack before the compose project is needed, and lists the
@@ -497,7 +489,7 @@ it.
   `ops.RecoverGenomic`. `--json`'s data is `{"leftovers": [...],
   "partitions": [{"partition", "result"}], "hpds_started"}`.
 
-- `shareddata.go` (050): `shared-data publish NAME` checks the name
+- `shareddata.go`: `shared-data publish NAME` checks the name
   (`ops.CheckSharedDataName`, exit 2); then,
   under the stack lock, refuses a shared-mode stack
   (`ops.RefusePublishFromShared`, exit 1) and an uninitialised or
@@ -506,7 +498,7 @@ it.
   `list` and `remove NAME` open no stack and take no lock; `list --json` is
   `{"data_sets": [...]}`, `remove --json` is `{"name", "removed": [...]}`.
 
-- `dev.go` (052): `dev list` (`ops.DevList`: every variant with its port
+- `dev.go`: `dev list` (`ops.DevList`: every variant with its port
   on 127.0.0.1, whether it is on, and its component's source; `--json` is
   `{"variants": [...]}`; it reads the config as `config show` does, and on
   a schema this pic-sure can't decode warns and reads `dev.services`,
@@ -522,7 +514,7 @@ it.
   the service keeps the source build while the source is set (§7.3), and
   that unsetting it and running `up` returns it to the release images.
 
-- `docs.go` (065): `WriteCommandDocs(dir)` writes `docs/commands/`, one
+- `docs.go`: `WriteCommandDocs(dir)` writes `docs/commands/`, one
   Markdown page per visible command (help and completion left out) and a
   README.md index, from cobra's Short, Long, use line, examples and flags.
   `tools/gendocs` calls it; `make docs` regenerates and `make docs-check`
@@ -530,38 +522,36 @@ it.
   flag or help text therefore needs `make docs`. The pages hold nothing
   machine-specific, so keep help text free of paths and dates.
 
-| File | Commands | Ticket |
-|---|---|---|
-| `init.go` | `init` | 034 |
-| `up.go` | `up` | 035 |
-| `composeverbs.go` | `down`, `restart`, `ps`, `logs`, `compose` | 026 |
-| `status.go` | `status` | 027, 037 (`--deep`) |
-| `doctor.go` | `doctor` | 025 |
-| `update.go` | `update` | 036 |
-| `build.go` | `build` | 031 |
-| `migrate.go` | `migrate` | 032 |
-| `config.go` | `config show/get/set/edit` | 006 |
-| `secrets.go` | `secrets rotate` | 058 |
-| `data.go`, `data_demo.go`, `data_phenotype.go`, `data_genomic.go` | `data demo`, `load-phenotype`, `load-genomic` | 046, 042/043/045, 049 |
-| `dictionary.go` | `dictionary hydrate/load-csv/load-facets/weights` | 044 |
-| `shareddata.go` | `shared-data publish/list/remove` | 050 |
-| `dev.go` | `dev list/on/off` | 052 |
-| `db.go` | `db bootstrap` | 054 |
-| `teardown.go` | `reset`, `destroy` | 056 |
-| `cache.go` | `cache list/prune` | 057 |
-| `selfupdate.go` | `self-update` | 060 |
-| `supportbundle.go` | `support-bundle` | 059 |
-| `version.go` | `version` | 001 (done) |
+| File | Commands |
+|---|---|
+| `init.go` | `init` |
+| `up.go` | `up` |
+| `composeverbs.go` | `down`, `restart`, `ps`, `logs`, `compose` |
+| `status.go` | `status` |
+| `doctor.go` | `doctor` |
+| `update.go` | `update` |
+| `build.go` | `build` |
+| `migrate.go` | `migrate` |
+| `config.go` | `config show/get/set/edit` |
+| `secrets.go` | `secrets rotate` |
+| `data.go`, `data_demo.go`, `data_phenotype.go`, `data_genomic.go` | `data demo`, `load-phenotype`, `load-genomic` |
+| `dictionary.go` | `dictionary hydrate/load-csv/load-facets/weights` |
+| `shareddata.go` | `shared-data publish/list/remove` |
+| `dev.go` | `dev list/on/off` |
+| `db.go` | `db bootstrap` |
+| `teardown.go` | `reset`, `destroy` |
+| `cache.go` | `cache list/prune` |
+| `selfupdate.go` | `self-update` |
+| `supportbundle.go` | `support-bundle` |
+| `version.go` | `version` |
 
 ## internal/stack
 
-_Tickets 007 (stack directory, state, manifest, lock), 008 (secrets) and
-009 (version gate, config migrations) fill in the rest of this section.
-File ownership is in the package doc._ `ops` imports `stack`, so `stack`
+The package doc lists its files. `ops` imports `stack`, so `stack`
 must not import `ops`: secret generation takes the `io.Reader` as an
 argument.
 
-**Config (ticket 006, `config*.go`).** `Config` is pic-sure.yaml schema 1
+**Config (`config*.go`).** `Config` is pic-sure.yaml schema 1
 (§6.2); `DefaultConfig` has its defaults. YAML is `go.yaml.in/yaml/v3`; use
 it for every YAML file so `yaml.Node`s are interchangeable.
 
@@ -571,7 +561,7 @@ it for every YAML file so `yaml.Node`s are interchangeable.
   value)` parses a command-line value and `SetValue(key, v)` takes a typed
   one; both change only that key, so `Bytes` keeps the user's comments
   (yaml.v3 drops blank lines and normalizes indentation). YAML anchors and
-  aliases are rejected. `Node` is the root for migrations (009).
+  aliases are rejected. `Node` is the root for migrations.
 - `doc.Config()`, `ParseConfig` and `Stack.LoadConfig` decode strictly over
   the defaults: an unknown or duplicate key or a wrong type is a problem, a
   missing or null key keeps its default. They then `Validate`. Problems come
@@ -582,11 +572,17 @@ it for every YAML file so `yaml.Node`s are interchangeable.
   the config names (provided TLS files, component sources).
   `doc.ReadOnlyChanges(before)` refuses edits to `name` and `schema`, even
   when `before` is invalid, unless the old value was empty or unusable.
-- `Fields` is the field table for the wizard (039), init's flags (034) and
-  the docs (065): key path (`*` matches a map key), kind, init flag, help,
+- `Fields` is the field table for the wizard, init's flags and
+  the docs: key path (`*` matches a map key), kind, init flag, help,
   secret, read-only, enum options and `RequiredWhen`. Secrets are in it
   (with `-stdin` flags) but not in `Config`. `Validate` takes required
   fields and enums from it, and a test keeps it in step with `Config`.
+- `PrivateKey(key)` is the one rule for which config values stay out of
+  the run logs and support bundles: a `Field.Private()` field's (a secret
+  or the admin email, personal data), and, for a key that isn't a field or
+  matches a wildcard field such as an env var, a secret-named key's
+  (`log.IsSecretName`). Any other field, such as
+  `auth.consent_authorization`, is never private.
 - `Config.Get(key)` returns a value or section; a `*KeyError` is an unknown,
   secret or read-only key.
 - `DeriveAuthFlags(mode)` is the auth-mode switch table from the bash
@@ -596,14 +592,14 @@ The `config` commands map `*ConfigError` and `*KeyError` to exit 2 and
 `*SchemaVersionError` to exit 5. `set` and `edit` take the stack lock;
 `edit` holds it while the editor is open.
 
-### Stack directory (007)
+### Stack directory
 
 A directory is a stack when it holds `pic-sure.yaml` and `.pic-sure/`.
 `*stack.Stack` is one open stack; operations take it as an argument.
 
 - **Finding it.** `Find(stackFlag, cwd)` returns `--stack DIR` if set,
   otherwise the nearest stack at or above cwd. A stack found that way must
-  belong to the user (100, §6.1): its directory and `pic-sure.yaml` owned
+  belong to the user (§6.1): its directory and `pic-sure.yaml` owned
   by the effective uid, or, for root under sudo, by `SUDO_UID` (as git
   does). Otherwise Find fails with exit 3 wrapping `ErrNotOwned`, naming the
   owner and suggesting `--stack DIR`; `--stack` is never checked.
@@ -637,7 +633,7 @@ A directory is a stack when it holds `pic-sure.yaml` and `.pic-sure/`.
   again if creating it fails, so no failure or crash leaves a CLI-made path
   unrecorded (the stack dir itself is the exception: a crash between
   creating it and starting the manifest loses it). It is what `destroy` may
-  remove (056). Overwriting a file that was already there doesn't record
+  remove. Overwriting a file that was already there doesn't record
   it. `Remove(rel)` deletes a recorded file or empty directory and forgets
   it. It refuses with `ErrNotCreated` a path the manifest doesn't list, or
   one that is no longer the kind (file or dir) the CLI created.
@@ -647,10 +643,10 @@ A directory is a stack when it holds `pic-sure.yaml` and `.pic-sure/`.
 - **State.** `LoadState`/`SaveState` for `.pic-sure/state.json`:
   `cli_version`, `schema_version` (the pic-sure.yaml schema it was
   rendered with), the release commit, component commits (with the local
-  checkout and dirty flag of one built from a source, 031), image tags, what
-  the TLS step installed (`tls`, 024), the last operation and timestamps.
-  `hpds_key` (034) records what the HPDS key step copied, and
-  `initialized_at` (034) when init finished.
+  checkout and dirty flag of one built from a source), image tags, what
+  the TLS step installed (`tls`), the last operation and timestamps.
+  `hpds_key` records what the HPDS key step copied, and
+  `initialized_at` when init finished.
   No secrets. `StartOperation` and
   `FinishOperation` take the time from the caller (`Deps.Clock`).
   `LoadState` wraps `fs.ErrNotExist` before init saves it. `PeekState(dir)`
@@ -661,7 +657,7 @@ A directory is a stack when it holds `pic-sure.yaml` and `.pic-sure/`.
   and pid, from the lock file), or with `Wait` polls until it is free or
   ctx ends. The kernel drops the lock when the holder exits, so it never
   goes stale. The cli layer wraps this as `a.lockStack` (`--wait-lock`).
-- **Removal for destroy (056).** `RemoveCreated()` removes the manifest's
+- **Removal for destroy.** `RemoveCreated()` removes the manifest's
   paths deepest first with `Remove`, `pic-sure.yaml` after the rest (and
   not after a failure, so a failed run leaves a stack destroy can open
   again). Then the lock, last so no other command can create and take a
@@ -682,10 +678,10 @@ A directory is a stack when it holds `pic-sure.yaml` and `.pic-sure/`.
   `org.hms-dbmi.picsure.stack-id=<ID>` (`LabelStack`, `LabelStackDir`,
   `LabelStackID`). `st.VolumeLabels(name, key)` adds compose's
   `com.docker.compose.project` and `com.docker.compose.volume` for a stack
-  volume a helper creates before compose does (024). `st.EnsureVolume(ctx, engine,
+  volume a helper creates before compose does. `st.EnsureVolume(ctx, engine,
   name, vol, key)` creates such a volume with those labels if it's missing
   and refuses (exit 3) one `Owner` calls foreign.
-- **Ownership (084, `ownership.go`).** state.json's `stack_id` is a random
+- **Ownership (`ownership.go`).** state.json's `stack_id` is a random
   ID (`NewID`) init gives the stack; a copy of the directory has the same
   one. `SaveState` keeps the file's ID when the State has none, so a State
   loaded before `EnsureID(rand)` gave one can't drop it. `Owner(id, dir,
@@ -696,7 +692,7 @@ A directory is a stack when it holds `pic-sure.yaml` and `.pic-sure/`.
   can't be read; no ID and another or no stack-dir). `OwnerName` describes
   the owner for messages. ops lists and checks resources (ops, Ownership).
 
-### Secrets (008)
+### Secrets
 
 `secrets*.go`: `.pic-sure/secrets.yaml` and `.pic-sure/hpds/encryption_key`
 (§6.3), both 0600 and written through `WriteFile`, so they are atomic and in
@@ -725,7 +721,7 @@ the manifest.
   salt, lowercase v4 UUIDs, and 32 lowercase hex characters for the HPDS
   key. The introspection token isn't generated: the caller issues it with
   `jwt.Introspection` and saves it with `SaveSecrets`.
-- **Open mode (034).** With `EnsureOptions.OpenAuth` and no client secret
+- **Open mode.** With `EnsureOptions.OpenAuth` and no client secret
   stored or supplied, a random 32-byte hex one is generated and
   `auth0_client_secret_generated` set, since PSAMA signs the introspection
   token with it. Without `OpenAuth`, a generated one is exit 3 asking for
@@ -744,10 +740,9 @@ the manifest.
   or one over 64 KiB.
 - **Redaction.** `LoadSecrets`, `SaveSecrets`, `EnsureSecrets` and
   `LoadHPDSKey` pass every non-empty secret to the function set with
-  `SetSecretRegistrar`. The cli layer sets it to `log.RegisterSecrets`
-  (ticket 005; until then it is a TODO in `internal/cli/deps.go`).
+  `SetSecretRegistrar`. The cli layer sets it to `log.RegisterSecrets`.
 
-### Version gate and config migrations (009)
+### Version gate and config migrations
 
 `gate.go` and `migrate.go`. D13: a stack records the pic-sure version and
 schema that last rendered it, and each command class reacts to a
@@ -784,11 +779,9 @@ difference (§10.6).
 
 ## internal/render
 
-Ticket 020 added the templates; ticket 021 adds rendering and the goldens.
-
 **Templates** (`templates/`, embedded; `templates.go`). Its README maps each
 template to the AIO file it was ported from and records the AIO commit, for
-the drift job (066), and lists every deliberate difference from AIO.
+the drift job, and lists every deliberate difference from AIO.
 
 - `compose/` holds compose fragments, Go `text/template`s that produce YAML.
   `composeFragments(mode, dev)` picks them in merge order: `base`, one per
@@ -802,7 +795,8 @@ the drift job (066), and lists every deliberate difference from AIO.
   fragment.
 - `files/` holds what render writes to `render/files/`: the httpd vhost (a
   template), the Vite dev config, the Flyway scripts, the MySQL init script
-  and the demo facet config, which `DemoFacetConfig()` also returns for `data demo` (046).
+  and the demo facet config, which `DemoFacetConfig()` also returns for
+  `data demo`.
 - Templates are executed with `templateData`: names, labels, ports, image
   references, source and render paths, and the config switches the services
   read. It holds no secrets. A secret appears in the compose file only as
@@ -831,14 +825,14 @@ installed. `aio_test.go` checks that the README maps every template and that
 each AIO source still exists in the AIO checkout beside this repo (or
 `PICSURE_AIO_DIR`); it skips without one.
 
-**Rendering** (ticket 021, `render.go`).
+**Rendering** (`render.go`).
 
 - `Render(Input)` is pure: from the config, state and stack dir it returns
   the `[]File` to write under `.pic-sure/render/` (`ComposeFile` first, then
   `files/*`), each with its path relative to the stack dir and its mode.
   `Write(st, files)` saves them through the stack (atomic, in the manifest)
   and removes the files an earlier render wrote that this one didn't, such
-  as the `files/maven/settings.xml` older versions rendered (096: nothing
+  as the `files/maven/settings.xml` older versions rendered (nothing
   read it; the reactor writes its own copy). Callers record `cli_version`
   and `schema_version` in state.json after a render.
 - `Input`: `StackDir`, `Config`, `State` (image tags from `Images`, node's
@@ -848,7 +842,7 @@ each AIO source still exists in the AIO checkout beside this repo (or
   `HostUser` (httpd-hmr's `user:`, `ops.HostUser()`'s `UID:GID`) and
   `CustomTrust` (the trust dir holds certs) and `SharedProfile` (the shared
   data set's recorded HPDS profile, used when `hpds.profile` is empty).
-  `ExistingVolumeLabels` (107) maps the key of each existing volume of the stack
+  `ExistingVolumeLabels` maps the key of each existing volume of the stack
   to its labels (compose's own left out); render gives it those instead of
   the current labels, so compose's config hash for it is unchanged and
   compose never offers to recreate it ("data will be lost"). Volumes made
@@ -872,7 +866,7 @@ each AIO source still exists in the AIO checkout beside this repo (or
 - `ViteEnv(cfg)` is the frontend's `VITE_*` set: the auth-mode flags, ToS,
   the Auth0 login module when `client_id` is set, analytics, the theme and
   `VITE_ORIGIN=http://localhost` (AIO's value: SSR config fetches go to
-  httpd inside its own container). The frontend build (030) bakes it in and
+  httpd inside its own container). The frontend build bakes it in and
   hashes it for the image tag; httpd-hmr gets it with `VITE_ORIGIN`
   `http://127.0.0.1:3000`, Vite inside its own container (IPv4: Vite
   listens on 0.0.0.0). `HMROrigin(port)` is the browser's URL for it.
@@ -892,7 +886,7 @@ under the oldest compose doctor accepts.
 
 ## internal/catalog
 
-Ticket 010. One table per concept, so nothing else keeps its own list of
+One table per concept, so nothing else keeps its own list of
 repos, images or services. It imports nothing from this module. Each table
 is a function that returns a fresh copy (`Components()`, `Images()`,
 `Services()`, `Networks()`, `Volumes()`, `DevVariants()`), with a
@@ -945,18 +939,17 @@ changed: update the catalog or note the deliberate difference.
 
 ## internal/ops
 
-Ticket 001 owns `Deps` (`deps.go`). Each operation is owned by its ticket;
-the package doc lists the files.
+`Deps` is in `deps.go`; the package doc lists the operations' files.
 
 `Deps` holds the `Runner`, the docker `Engine` (`Docker`), the `Composer`
 for the stack being acted on (`Compose`, nil until the command has a
 rendered stack), the git `Client` (`Git`), a `Clock`, `Rand` (an
 `io.Reader`; `crypto/rand.Reader` in production), the event `Sink` and the
 `*slog.Logger`. `SystemClock` is the real clock; `FixedClock` is for tests.
-Tickets 016, 017 and 018 filled in `docker.Engine`, `docker.Composer` and
-`git.Client` in their own packages, without editing `Deps`.
+`docker.Engine`, `docker.Composer` and `git.Client` are implemented in
+their own packages.
 
-**TLS (024, `tls.go`).** `TLSStep(d, st, cfg)` is §9.1 step 6's first half,
+**TLS (`tls.go`).** `TLSStep(d, st, cfg)` is §9.1 step 6's first half,
 ID `tls`: it fills the stack's `certs` volume with `server.key` (0640),
 `server.crt` and `server.chain` (0644), all owned 2:2 for httpd. Generated
 mode keeps its PEMs in `TLSDir` (`.pic-sure/tls/`, 0600) and makes new ones
@@ -973,14 +966,14 @@ provided certificate isn't re-validated, so its expiry doesn't block `up`.
 The step doesn't restart httpd: a command that runs it on a live stack
 must restart httpd when the step applied.
 
-**Truststore (023, `truststore.go`).** `CustomCerts(st, cfg)` reads the
+**Truststore (`truststore.go`).** `CustomCerts(st, cfg)` reads the
 operator's CA certs from `trust.custom_certs_dir` (relative to the stack;
 `*.crt|*.pem|*.cer|*.der`, PEM bundles split, DER read whole, hidden files
 skipped, a missing directory is none) and names them `custom-<n>-<file>`.
-Every PEM block in a file must decode and be a CERTIFICATE. Render (021)
+Every PEM block in a file must decode and be a CERTIFICATE. Render
 should set `catalog.Mode.CustomTrust` when it returns any.
 `TruststoreStep(d, st, cfg, psamaImage)`, ID `truststore`, is the step
-init/up/update (034–036) add once the psama image is present and before
+init/up/update add once the psama image is present and before
 psama starts: with no certs it does nothing; otherwise it gets
 `<name>_truststore` with `st.EnsureVolume` and runs a helper container from
 the psama image (`--entrypoint sh`, `--network none`, user 0) that copies
@@ -992,7 +985,7 @@ records a hash of the certs, the script and the image ID, plus the volume's
 record before the helper runs. A running psama needs a restart to read a
 new truststore.
 
-**Reactor build** (029, `reactor.go`). `BuildReactor(ctx, d,
+**Reactor build** (`reactor.go`). `BuildReactor(ctx, d,
 ReactorOptions{Cache, SHA, ...})` builds the 11 pic-sure images as
 `hms-dbmi/<image>:<sha12>` (§7.2), labelled `ReactorSrcLabel=<sha>`, and
 does nothing when all of them already carry that label;
@@ -1026,9 +1019,9 @@ monorepo's contexts before running Maven.
   error, plus the bash's Alpine-pin hint for hpds-etl. Maven's module
   lines become `Progress` events. The unexported `partOutput` (log file,
   tail, per-line callback) and `ensureImage` (pull with progress) are
-  there for the other image builds (030) to reuse.
+  there for the other image builds to reuse.
 
-**Status (027, `status.go`).** `Status(ctx, d, st, StatusOptions)` builds
+**Status (`status.go`).** `Status(ctx, d, st, StatusOptions)` builds
 the read-only `StatusReport` (`status --json`, documented field by field in
 `docs/json-schemas.md`; a test keeps the two in step). It reads
 pic-sure.yaml (migrated in memory), the version gate, state.json's release,
@@ -1045,7 +1038,7 @@ builds it with no env, since `ps` needs no secret. Migrations are
 and `render.HMROrigin` (httpd-hmr's Vite origin, which status prints for
 Auth0) for it.
 
-**Deep status (037, `status_deep.go`).** `StatusOptions.Deep` adds
+**Deep status (`status_deep.go`).** `StatusOptions.Deep` adds
 `StatusReport.Deep`: busybox `wget -S` probes through `compose exec -T`
 in the services `compose ps` reports running (wget's `-T` is 5 s, 10 s
 for the gateway; each exec is bounded 15 s beyond that). The gateway's
@@ -1063,7 +1056,7 @@ Deep status still
 exits 0. The cli layer redacts the probe messages, which can quote
 compose's errors.
 
-**Frontend and dictionary-etl images (030, `images.go`).** §7.2 steps 4
+**Frontend and dictionary-etl images (`images.go`).** §7.2 steps 4
 and 5, the two images built outside the reactor.
 `BuildFrontend(ctx, d, cfg, ImageBuildOptions)` builds
 `hms-dbmi/pic-sure-httpd:<sha12>-<cfghash8>`. `FrontendConfigHash` is the
@@ -1075,7 +1068,7 @@ output replaces the copy's `.env` without following a symlink, and the copy
 is removed after the build. Each value is quoted so dotenv and
 dotenv-expand return it unchanged: single quotes (backquotes if it holds a
 `'`), `$` as `\$`; a line break, or both `'` and a backquote, is an error.
-The copy leaves out a root `.git` and `node_modules` (031), which a local
+The copy leaves out a root `.git` and `node_modules`, which a local
 checkout has and the Dockerfile never copies.
 `BuildDictionaryETL(ctx, d, ImageBuildOptions)` builds
 `hms-dbmi/dictionary-etl:<sha12>` from its tree. Both run under the image's
@@ -1083,15 +1076,15 @@ checkout has and the Dockerfile never copies.
 (`FrontendSrcLabel` and `FrontendConfigLabel` with the full hash;
 `DictionaryETLSrcLabel`), pass the proxy build args, take the cache tree
 unless `Source` is set (`Tag` and `Force` serve §7.3 builds), and write
-`<image>.log` to `LogDir` through 029's `partOutput`, showing the tail on
+`<image>.log` to `LogDir` through `partOutput`, showing the tail on
 failure. They return `ImageBuildResult{Tag, Ref, Built}`; 031 records the
 tags in state.json.
 
-**Doctor (025, `doctor.go`).** `Doctor(ctx, d, DoctorOptions)` returns a
+**Doctor (`doctor.go`).** `Doctor(ctx, d, DoctorOptions)` returns a
 `*DoctorReport`: a list of `Check{Name, Status, Message, Detail}` with
 status `ok`, `warn` or `fail`. Names are stable. A failing check is in the
 report, not an error; the command exits 1 when `report.Failed()`. Init's
-preconditions (034) can call it with no `Stack` and `Building: true`.
+preconditions can call it with no `Stack` and `Building: true`.
 
 - Host and Docker: `docker-cli`, `docker-daemon`, `compose-version`
   (`MinComposeVersion`, 2.29.0, the first with `--progress json`),
@@ -1109,7 +1102,7 @@ preconditions (034) can call it with no `Stack` and `Building: true`.
   when it isn't running (only a warning, since `-Xmx` is a ceiling).
 - Doctor's Docker probes (`docker info` and `version`, the disk, memory
   and arm64 probes, `compose config`) each get a `docker.ProbeTimeout`
-  (10 s) deadline through `dockerProbe` (091); `ports` relies on
+  (10 s) deadline through `dockerProbe`; `ports` relies on
   `Compose.Ps`'s own `PsTimeout`, and `--network`'s pull has 2 min. A probe
   that runs out of time fails its check with "the Docker daemon didn't
   answer within 10s", so a hung daemon can't hang doctor or
@@ -1124,7 +1117,7 @@ preconditions (034) can call it with no `Stack` and `Building: true`.
   services are on), `auth0` (tenant, client ID and the client secret
   unless open mode) and `proxy` (warns on an http-only proxy and on
   credentials psama can't use, §9.10).
-- `genomic-leftovers` (105, `genomic_leftovers.go`): fails while the
+- `genomic-leftovers` (`genomic_leftovers.go`): fails while the
   genomic store HPDS loads its partitions from holds what an interrupted
   promote left, with the way to recover it (below). Like `disk-docker` it
   needs alpine already pulled, and warns otherwise.
@@ -1139,17 +1132,17 @@ preconditions (034) can call it with no `Stack` and `Building: true`.
 - `Host` is the seam for PATH lookups, free disk, port binding and HTTP;
   the cli layer's `systemHost` is the real one.
 
-**Build and the image step (031, `build.go`).** `ImagesStep(d, st, cfg,
+**Build and the image step (`build.go`).** `ImagesStep(d, st, cfg,
 state, ImagesOptions{Cache, Components, Force, Refresh})`, ID `images`, is §7.2's
 image step for init, up and update. For each selected component (all by
 default; an unknown name is exit 2) it builds, or pulls, the images at
 the release commit `state.Components` records (exit 3 if none, or if it
-was recorded from a source the config no longer sets), through 029's
-`BuildReactor` and 030's `BuildFrontend`/`BuildDictionaryETL`, which skip
+was recorded from a source the config no longer sets), through
+`BuildReactor` and `BuildFrontend`/`BuildDictionaryETL`, which skip
 what is up to date. It also makes sure the cache has the pic-sure and
 migrations trees, which render bind-mounts. It records each part's commit
 and tags in `state` and saves it as soon as that part is done. Apply holds
-the cache's use lock (057) throughout, so `cache prune` can't remove what
+the cache's use lock throughout, so `cache prune` can't remove what
 it uses before state.json records it. Build logs
 go to `BuildLogDir` (`.pic-sure/logs/build/<part>.log`, made through the stack
 so they are in the manifest; each holds that part's last build). `Check`
@@ -1183,12 +1176,13 @@ those trees exist, which is what `up` needs.
   image as `built`, `pulled` or `up_to_date`. The command holds the stack
   lock, records the operation in state.json and saves it even on failure.
 
-**DB and migrations (032, `migrate.go`).** §9.1 steps 8 and 9, for
+**DB and migrations (`migrate.go`).** §9.1 steps 8 and 9, for
 init, up and update to add, and the `migrate` command.
 
 - `DBStep(d, cfg, sec, DBOptions)`, ID `db`: `compose up -d picsure-db`,
   a poll of `compose ps` until `Health` is exactly `healthy`, then
-  `SELECT 1` as root over TCP (`-h 127.0.0.1`, 014's client), retried
+  `SELECT 1` as root over TCP (`-h 127.0.0.1`, the `sql` package's
+  client), retried
   while the entrypoint's socket-only temporary server runs. `ERROR 1045`
   fails at once with exit 3, naming the `picsure-db-data` volume: MySQL
   sets the root password only when it initialises an empty volume. A
@@ -1196,7 +1190,7 @@ init, up and update to add, and the `migrate` command.
   start into restarts), or the timeout (5 min, wall time), shows its last
   30 log lines.
   Check is a healthy container plus a passing probe. With a remote DB the
-  step only probes it; `BootstrapStep` (054) prepares it.
+  step only probes it; `BootstrapStep` prepares it.
 - `MigrateStep(d, cfg, sec, MigrateOptions{Action, NoRestart})`, ID
   `migrate`: `compose run --rm flyway-init`, then `flyway-dictionary-init`.
   A non-zero exit fails the step and shows the output's last lines. Repair
@@ -1210,7 +1204,7 @@ init, up and update to add, and the `migrate` command.
   config --no-interpolate` (so overrides count) and lists the `V*__*.sql`
   versions in each, then reads the five Flyway histories (four in MySQL,
   checked in `information_schema` first, so a missing table is "not
-  migrated", and the dictionary's in Postgres with 014's new
+  migrated", and the dictionary's in Postgres with the `sql` package's new
   `QueryPostgres`). Up to date means every file version is recorded, or at
   or below the pass's baseline, and no row failed. A database that isn't
   running and healthy, a missing table, an `R__` repeatable migration (no
@@ -1228,12 +1222,12 @@ init, up and update to add, and the `migrate` command.
 - `Migrate` runs `DBSteps` then `migrate` for the command. `migrate` uses the
   existing render; an unrendered stack is exit 3 ("run `pic-sure up`").
 
-**Seed (033, `seed.go`).** `SeedStep(d, st, cfg, sec)`, ID `seed`, is
+**Seed (`seed.go`).** `SeedStep(d, st, cfg, sec)`, ID `seed`, is
 §9.1 step 10, which init, up and update add after `migrate`. There is no
 `seed` command. It fails with exit 3 and the `migrate` / `migrate --repair`
 hint unless both custom Flyway histories exist (looked up in
 `information_schema` first) and have a non-baseline row. It creates the
-admin user with 014's `SeedAdminUser` when no user has
+admin user with the `sql` package's `SeedAdminUser` when no user has
 `auth.admin_email`. Then it makes `auth.application`'s PICSURE token equal
 secrets.yaml's: a stored token valid for more than `TokenRenewBefore` (30
 days) is written back as it is (after `reset`); otherwise `jwt.Introspection`
@@ -1247,14 +1241,15 @@ log redactor. A new token changes `render.ComposeEnv(cfg, sec)`
 (gateway's `PICSURE_INTROSPECTION_TOKEN`), so a Composer whose env was
 computed before the step must recompute it.
 
-**Remote database (054, `db.go`).** §9.1 step 8 for `db.mode: remote`, and
+**Remote database (`db.go`).** §9.1 step 8 for `db.mode: remote`, and
 `db bootstrap`.
 
 - `DBSteps(d, cfg, sec, DBOptions)` is step 8 for init, up, update and
   migrate to put before the migrate step: `[db]` for a local database,
   `[db, db-bootstrap]` for a remote one.
 - `BootstrapStep(d, cfg, sec, BootstrapOptions{SyncPasswords})`, ID
-  `db-bootstrap`: as `db.remote.root_user`, through 014's remote client
+  `db-bootstrap`: as `db.remote.root_user`, through the `sql` package's remote
+  client
   (`docker run --rm mysql:8.0`), it runs `sql.Bootstrap`: the auth and
   picsure databases, the picsure, auth and airflow users from secrets.yaml,
   and all privileges on their databases (AIO's `bootstrap-remote-db.sh`).
@@ -1281,12 +1276,12 @@ computed before the step must recompute it.
   while the user has accounts other than `name@'%'` names them instead of
   suggesting `--sync-passwords`, which changes only `name@'%'`.
 
-**Init and converge steps (034, `init.go`, `hpdskey.go`).** §9.1 for
+**Init and converge steps (`init.go`, `hpdskey.go`).** §9.1 for
 init, and the parts `up` and `update` reuse.
 
 - `InitSteps(d, st, cfg, sec, state, ConvergeOptions{Cache, CLIVersion,
-  Compose})`: `resolve` (`ResolveStep`, 031's), then `planSteps`, the one
-  plan source init, up and update share (096): `images`, `node-image` with
+  Compose})`: `resolve` (`ResolveStep`, build's), then `planSteps`, the one
+  plan source init, up and update share: `images`, `node-image` with
   httpd-hmr, `tls`, `truststore` (`StackTruststoreStep`, which reads the
   psama tag from state when it runs), `render`, then `ConvergeSteps` with
   `hmr-volume` (httpd-hmr, where `HostUser()` is set) before `start`.
@@ -1316,7 +1311,7 @@ init, and the parts `up` and `update` reuse.
   `hpds.data: shared` it does nothing: the data set carries its key.
 - `ChoosePorts(host, http, https, auto)` and `ChooseDevPortsBase(host,
   avoid...)` are §6.5's port rules: a port not given is 80 or 443, or with
-  `auto` the first free pair from 8080/8443. `ReservedPorts(c, dir)` (077)
+  `auto` the first free pair from 8080/8443. `ReservedPorts(c, dir)`
   is the HTTP, HTTPS and dev-block ports that the registry's other stacks
   set in their pic-sure.yaml (a gone or unreadable one counts for
   nothing); `ReservingHost{Host, Reserved}` makes them busy for both
@@ -1330,14 +1325,14 @@ init, and the parts `up` and `update` reuse.
   HTTPS port);
   `stack.PeekState(dir)` reads state.json without opening the stack.
 
-**Up (035, `up.go`).** §9.2. `UpSteps(d, st, cfg, sec, state,
+**Up (`up.go`).** §9.2. `UpSteps(d, st, cfg, sec, state,
 ConvergeOptions)` is init's plan with `genomic-leftovers` after
 `resolve` and a `restart` step before `start`:
 `resolve`, `genomic-leftovers`, `images`[, `node-image`], `tls`,
 `truststore`, `render`, `db`[, `db-bootstrap`], `migrate`, `seed`,
 `hpds-key`, `restart`[, `hmr-volume`], `start`; `UpStepIDs(cfg)` lists the
 IDs (`plan_test.go` runs the whole init, up and update plans through the
-fakes). Its `resolve` (079) is build's, limited to the components state.json records
+fakes). Its `resolve` is build's, limited to the components state.json records
 a local source for that the config no longer sets (`unsetSources`): they
 are resolved at state's recorded release commit (exit 3 if there is none),
 without fetching release-control when the cache has it and without the
@@ -1347,7 +1342,7 @@ running, current stack every step but `render` and `start` is skipped and
 `compose up` recreates nothing. The TLS and truststore steps don't restart
 their readers, and compose doesn't recreate a container whose rendered
 files changed, so up records the services that must restart in state.json's
-`pending_restarts` (added by 035): httpd before `tls` applies, psama
+`pending_restarts`: httpd before `tls` applies, psama
 before `truststore` does, and, when the render changes, adds or removes a
 file under `render/files` (even if it then fails), every service that
 bind-mounts it or a directory holding it per `compose config` (every
@@ -1355,17 +1350,17 @@ start service if that can't be read). `restart` restarts the pending services th
 clears them, so `start`'s `--wait` covers the restarted services, and a
 run that fails before then leaves them pending for the next. `bindMounts`
 (migrate.go) is the shared `compose config` parse.
-Right after `resolve`, `genomic-leftovers` (105) refuses (exit 3) while
+Right after `resolve`, `genomic-leftovers` refuses (exit 3) while
 the genomic store holds an interrupted promote's leftovers
 (`GenomicLeftovers`, below), since HPDS would load them as partitions.
 Starting all but hpds isn't clean (the query service depends on it), and
 a later refusal would let `restart` restart hpds and `update` migrate the
 database first, so nothing after it runs. Like every up step it can be
 skipped (`--skip-step genomic-leftovers`), an explicit override and the
-last resort, after `data load-genomic --recover` (108), which needs no
+last resort, after `data load-genomic --recover`, which needs no
 VCFs.
 
-**Update (036, `update.go`).** §9.3. `PlanUpdate(ctx, d, st, doc, cfg,
+**Update (`update.go`).** §9.3. `PlanUpdate(ctx, d, st, doc, cfg,
 sec, state, UpdateOptions{ConvergeOptions, Release, Components,
 Migrations, NoBuild, StartDB})` is the plan, `update --dry-run --json`'s
 data: the pending config migrations (from `Registry.Plan` on the file as
@@ -1397,7 +1392,7 @@ migrations are up to date, psama for a renewed token, and
 `pending_restarts` are restarted. Only running services are listed.
 `Changes()` says whether the plan does anything; migrations unknown only
 because a database is stopped, and the restarts only they would bring,
-don't count (096).
+don't count.
 PlanUpdate writes nothing to the stack.
 
 `UpdateSteps(d, st, plan, sec, state, opts)` are `config` (Check: nothing
@@ -1411,7 +1406,7 @@ that changes nothing restarts nothing. A failure leaves the old images
 (their tags differ) and data in place, and the step error names the step
 a re-run resumes from.
 
-**Dev variants (052, `dev.go`).** §7.3. `DevSteps(d, st, doc, cfg, state,
+**Dev variants (`dev.go`).** §7.3. `DevSteps(d, st, doc, cfg, state,
 DevOptions{ConvergeOptions, Variant, On})` switches one variant. `on`: the
 image step limited to the variant's component (with the variant already in
 `cfg.Dev.Services`, so it records `dev_images`), up's render step with its
@@ -1425,7 +1420,7 @@ component's source build while the source is set. `dev-start` runs
 variant's services plus, for `on`, the running services built from its
 component (a dirty checkout rebuilds them under the same tag; compose
 recreates only what changed), and on a stack with nothing running only
-warns, leaving the start to `up`. httpd-hmr (053) builds nothing: its `on`
+warns, leaving the start to `up`. httpd-hmr builds nothing: its `on`
 runs `node-image` (`NodeImageStep`: state.json's `images["node"]` from
 `NodeTag`, the frontend source's `.nvmrc` x.y.z plus `-alpine3.23`; anything
 else is exit 3) instead of the image step, and `hmr-volume`
@@ -1444,8 +1439,8 @@ a mount point runc won't create through the bind mount, and would dirty
 the checkout). `DevList(cfg)`, `DevPort`, `LookupDev`,
 `CheckDevOn(stackDir, cfg, v)` and `ComponentSource` serve the command.
 
-**Phenotype loader (042, `loader.go`).** §9.6's one loader, for `data
-demo` (046) and `data load-phenotype`. `LoadPhenotype(ctx, d, st, cfg,
+**Phenotype loader (`loader.go`).** §9.6's one loader, for `data
+demo` and `data load-phenotype`. `LoadPhenotype(ctx, d, st, cfg,
 state, PhenotypeLoadOptions{CSV | InputDir, Dataset, HeapMB, LoaderArgs,
 MkdirTemp, LockUse})` returns the provenance it wrote. The caller holds the stack lock and
 sets `d.Compose`. `RefuseSharedHPDS(cfg)` is its shared-mode refusal (a
@@ -1466,7 +1461,7 @@ steps depend on each other, so the command doesn't take `--skip-step`:
 - `hpds-wipe`: an alpine helper removes `loaderStaleFiles` (the javabins,
   columnMeta files and `.picsure-dataset`) from `hpds-data`, keeping
   `all/` and the key.
-- `hpds-key`: 034's `HPDSKeyStep`.
+- `hpds-key`: `HPDSKeyStep`.
 - `hpds-load`: `hms-dbmi/pic-sure-hpds-etl:<tag>`, uniquely named, `--rm`,
   `--user 0:0`, `--network none`, `hpds-data` at `/opt/local/hpds` and the
   CSV read-only at `/opt/local/hpds/allConcepts.csv`, `HEAPSIZE` (default
@@ -1480,23 +1475,23 @@ steps depend on each other, so the command doesn't take `--skip-step`:
 
 A failure after `hpds-stop` leaves hpds stopped, and the error says how to
 recover: run the load again (or `up` to start HPDS without data), or, when
-only the start failed, an `*HPDSStartError` (095), returned with the
+only the start failed, an `*HPDSStartError`, returned with the
 provenance since the data is loaded, that says to check the logs and run
 `up`. A load holds no cache
 lock for a plain CSV, which isn't in the cache, or an extracted one, which
 is in a fresh `tmp/` dir that prune keeps while it is recent or mounted. A
 copy made because the daemon can't see the input is held under `LockUse`
 (the cache's shared use lock) until it is removed. A caller that reuses an
-older cache file (046's downloads) must hold `c.LockUse` until the loader
+older cache file (the demo's downloads) must hold `c.LockUse` until the loader
 runs.
 
-**Input directory (043, `loader_dir.go`).** With `InputDir` (`data
+**Input directory (`loader_dir.go`).** With `InputDir` (`data
 load-phenotype --input-dir`), AIO's `etl.sh load_multiple`: the sequential
 loader runs before hpds stops, so a failed load leaves HPDS as it was.
 
 - `hpds-input`: as above, for the directory's inputs (`dirInputs`): its
   top-level `*.csv` files and `config.json`, following symlinks, skipping
-  macOS metadata (`phenoinput.MacMetadata`, 095). No CSV, or
+  macOS metadata (`phenoinput.MacMetadata`). No CSV, or
   an `*.sql`/`sql.properties` (D26), is exit 2; other entries get a warning
   that they aren't loaded. The provenance is `phenotype:<sha256 of the
   manifest>`, one `<sha256>  <name>` line per input in name order. The
@@ -1522,10 +1517,10 @@ loader runs before hpds stops, so a failed load leaves HPDS as it was.
 The volume is removed when the load ends, on success, failure or
 interrupt (a warning names it if it can't be).
 
-**Phenotype load (045, `load_phenotype.go`).** `DataLoadPhenotype(ctx, d,
+**Phenotype load (`load_phenotype.go`).** `DataLoadPhenotype(ctx, d,
 st, cfg, sec, state, PhenotypeOptions{Load, Dictionary, Datasets,
 Concepts, Facets, SkipWeights, Cache})` is `data load-phenotype --file`:
-042's `LoadPhenotype`, then one dictionary run on 044's `Dictionary`.
+`LoadPhenotype`, then one dictionary run on `Dictionary`.
 `DictionaryAuto` is `HydrateSteps{Clear, Heap: Load.HeapMB}` (no default
 facets, as AIO's `hydrate-dictionary --clear`); `DictionaryCustom` is
 `LoadCSVSteps{Clear}` plus `FacetSteps` when the facets are given. Then
@@ -1535,21 +1530,21 @@ touched it builds the step list (so a bad custom CSV is exit 2) and runs
 failure or interrupt is a `*PhenotypeDictionaryError{Step, Interrupted,
 Err, HPDSStart}` (its exit code is Err's), returned with the dataset HPDS
 now has. The dictionary-etl reads only the data volume, never HPDS, so an
-`*HPDSStartError` from the load doesn't stop the dictionary steps (095): it
+`*HPDSStartError` from the load doesn't stop the dictionary steps: it
 is returned once they succeed, or kept in the dictionary error's
 `HPDSStart`. The cli then gives no rerun hint for a start failure alone.
 
-**Dictionary (044, `dictionary.go`, `dictionary_csv.go`).** §9.6's
+**Dictionary (`dictionary.go`, `dictionary_csv.go`).** §9.6's
 dictionary operations. `NewDictionary(d, st, cfg, sec, state)` holds one
 dictionary-etl container for all its steps; defer `Close(ctx)`, which
-removes it even after a cancel. The phenotype and demo loads (045, 046)
+removes it even after a cancel. The phenotype and demo loads
 concatenate its step lists with their own and end with one `RefreshStep()`.
 
 - **ETL.** Started by the first step that needs it: `hms-dbmi/dictionary-etl`
   at state.json's tag, `docker run -d` with a unique name
   (`<name>-dictionaryetl-<hex>`) and the stack's labels (no `--rm`, so
   its logs survive a failed start). First `RemoveHelperContainers` removes
-  any such container of this stack an earlier run left (095: a second
+  any such container of this stack an earlier run left (a second
   Ctrl-C, a kill, a failed `Rm`), which would share the alias. It runs on
   `<name>_data` as `dictionaryetl`, with the dictionary DB's `POSTGRES_*` as
   env names, `hpds-data` (or the shared set's volume, read-only) at
@@ -1558,7 +1553,7 @@ concatenate its step lists with their own and end with one `RefreshStep()`.
   inside the container (120 s); an exit or the timeout shows its last 30
   log lines. dictionary-db must be running and healthy (exit 3, "run
   `pic-sure up`"); every operation checks that first.
-- **Swallowed errors (045).** Before `Close` removes the ETL it scans the
+- **Swallowed errors.** Before `Close` removes the ETL it scans the
   ETL's log once (`scanETLLog`) for errors the ETL logged but didn't
   report: anything `DictionaryLoaderService` logs other than "Processing
   Studies" (a hydrate's load exception, logged at INFO before it answers
@@ -1586,31 +1581,32 @@ concatenate its step lists with their own and end with one `RefreshStep()`.
   `dataset_ref` into a temp dir, one pass per 200 datasets (`LoadCSVOptions.TempDir`; the cli
   uses the cache's), then one PUT per dataset, `datasetRef` URL-encoded. `FacetSteps`: `facets`, three PUTs in order.
   It checks the files first and keeps them open until `Close`
-  (`openFacetFiles`, 095), so what is sent is what was checked; each is
+  (`openFacetFiles`), so what is sent is what was checked; each is
   sent from the start, byte order mark dropped (`withoutBOM`). The
   categories and facets files need dictionary-etl's columns
   (`name(unique)`, `facet_name(unique)`; AIO's custom fixtures predate
   them and the ETL answers 400) and at least one row, no row narrower
   than its header (the ETL would skip it), and no file a column twice;
   otherwise exit 2 before HPDS or the dictionary is touched.
-  `FacetConfigSteps(json)` (046): `facet-config`, POST
+  `FacetConfigSteps(json)`: `facet-config`, POST
   `/api/facet/loader/load`; the answer must be the ETL's JSON result.
-  `Preflight(ctx, WeightsOptions)` (046) checks what hydrate and weights
+  `Preflight(ctx, WeightsOptions)` checks what hydrate and weights
   need (dictionary-db healthy, its password, both images, the weights
   file) without changing anything, for loads that replace HPDS data first.
-  `PreflightETL(ctx)` (045) is the same without the weights image and
+  `PreflightETL(ctx)` is the same without the weights image and
   file.
   `WeightsSteps`: `weights`, the reactor's `dictionary-weights` image with
   the file bind-mounted read-only at `/weights.csv`; the default file is
   the pic-sure tree's (`components.pic-sure.source`, else the cache).
 - **Refresh.** Every step that writes marks dictionary-api in
   `pending_restarts` first. `RefreshStep` (`dictionary-refresh`) removes
-  the ETL, touches `dict.update_info` (014's psql client), restarts
+  the ETL, touches `dict.update_info` (the `sql` package's psql
+  client), restarts
   dictionary-api if it is running and polls `compose ps` until it is
   healthy (not `up --wait`, which could recreate it from a newer render),
   then clears the mark; if it never runs, the next `up` restarts it.
 
-**Genomic loader (049, `genomic.go`).** §9.6's genomic load.
+**Genomic loader (`genomic.go`).** §9.6's genomic load.
 `LoadGenomic(ctx, d, st, cfg, state, GenomicLoadOptions{Partition,
 VCFIndex, VCFDir, HeapMB, Promote, AllPartitions, Backup, EnableProfile,
 Converge, MkdirTemp, LockUse})` returns the partitions it promoted. The caller holds
@@ -1682,7 +1678,7 @@ since a re-run loads again from the start, with what state HPDS and its
 data are in. For an interrupted `genomic-promote` it keeps promote's own
 error, which `steps.Run` replaces with the context's cause.
 
-**Promote leftovers (105, `genomic_leftovers.go`).** Recovery can itself
+**Promote leftovers (`genomic_leftovers.go`).** Recovery can itself
 fail, and a SIGKILLed CLI never runs it, so leftovers can outlive a load.
 `GenomicLeftovers(ctx, d, st, cfg)` lists the `.promote-*` and `.old-*`
 directories in the genomic store, `genomicStoreVolume(cfg)`:
@@ -1700,14 +1696,14 @@ names `--recover` first. `all-bak.new`/`all-bak.old` aren't checked: they
 are in the staging volume, which HPDS never reads, and the next `--backup`
 settles them.
 
-**Recover only (108, `genomic_leftovers.go`).** `RecoverGenomic(ctx, d,
+**Recover only (`genomic_leftovers.go`).** `RecoverGenomic(ctx, d,
 st, cfg, leftovers)` is `data load-genomic --recover`, settling what
 `GenomicLeftovers` found: no VCFs, no loader image. A shared-mode stack
 is `RefuseSharedGenomicRecover`'s exit 3 (the set's leftovers in
 `genomicLeftoversError`, or that it holds none). With no leftovers it
 returns without touching anything. Otherwise it runs `hpds-stop` (noting
 from `compose ps` whether hpds was running or restarting, `WasRunning`), `genomic-recover`
-(094's `settleLive`, the same helper a `Promote` load runs), and
+(`settleLive`, the same helper a `Promote` load runs), and
 `hpds-start` only if hpds was running; a stopped one is left for `pic-sure
 up`. `GenomicRecovery.Partitions` maps settle's `completed`/`restored`
 lines onto each leftover's partition, and `discarded` for one settle only
@@ -1716,7 +1712,7 @@ advice with re-running `--recover` (or `pic-sure up` after a failed
 start). Only the stack lock is taken: the cache's use lock guards a VCF
 copy, and there is none.
 
-**Demo data (046, `demo.go`).** `DataDemo(ctx, d, st, cfg, sec, state,
+**Demo data (`demo.go`).** `DataDemo(ctx, d, st, cfg, sec, state,
 DemoOptions{Dataset, HeapMB, Cache, HTTP})` is `data demo` (§9.6).
 
 - **Files.** `DemoFiles` pins each dataset's file in
@@ -1738,10 +1734,10 @@ DemoOptions{Dataset, HeapMB, Cache, HTTP})` is `data demo` (§9.6).
   `render.DemoFacetConfig()`, `WeightsSteps` and `RefreshStep`.
 - A dictionary failure says HPDS has the data and to re-run `data demo`;
   the downloads are reused. HPDS failing to start doesn't stop the
-  dictionary run (095); its `*HPDSStartError` is returned afterwards, or
+  dictionary run; its `*HPDSStartError` is returned afterwards, or
   joined to the dictionary failure.
 
-**Shared data sets (050, `shareddata.go`).** §9.7.
+**Shared data sets (`shareddata.go`).** §9.7.
 `PublishSharedData(ctx, d, st, cfg, state, PublishOptions{Name,
 CLIVersion})` returns the `SharedDataSet`; the caller holds the stack lock
 and sets `d.Compose`. Steps, none skippable:
@@ -1776,7 +1772,7 @@ genomic=<partitions|none>`, `.hpds-profile` (`bch-dev` with genomic data,
 else empty: what hpds runs with when `hpds.profile` is empty), `.picsure-commit`
 (the hpds-etl image's `ReactorSrcLabel`, else state.json's pic-sure commit),
 `.cli-version`, `.source-stack`, `.created`). Never the stack's own labels:
-056's `destroy` removes volumes carrying them.
+`destroy` removes volumes carrying them.
 `ListSharedData(ctx, d)` groups the labelled volumes by set.
 `SharedDataProfile(ctx, d, name)` requires both of a set's volumes,
 labelled as the set's and holding the same `PublishedMarker` (one alpine
@@ -1789,7 +1785,7 @@ in shared mode.
 `RemoveSharedData(ctx, d, name)` removes only volumes labelled as that set,
 and refuses (exit 3) while any container, stopped ones too, mounts either.
 
-**Cache list and prune (057, `cache.go`).** §7.1's in-use rules.
+**Cache list and prune (`cache.go`).** §7.1's in-use rules.
 `CacheInventory(ctx, d, c, CacheOptions{Stacks})` returns a `CacheReport`:
 the stacks it found and every `CacheItem` with a status.
 
@@ -1799,8 +1795,8 @@ the stacks it found and every `CacheItem` with a status.
   `catch-up`), pull-mode refs and third-party images are never listed. The
   rest are `cache.Entries()`.
 - **Stacks.** Every distinct `stack-dir` label on a container (running or
-  stopped), volume or network, every entry of the cache's stack registry
-  (073), plus `CacheOptions.Stacks` (the cli passes the stack the command
+  stopped), volume or network, every entry of the cache's stack registry,
+  plus `CacheOptions.Stacks` (the cli passes the stack the command
   runs in). A stack is readable when `stack.Open` succeeds and `LoadState`
   does too or finds no state.json (a stack not built yet names nothing). A
   registered stack whose directory is no longer a stack, with no labelled
@@ -1833,7 +1829,7 @@ naming them. `Freed` counts an image's size once, and only when its last
 tag goes. It then forgets the gone stacks' registry entries, and with
 `Force` the unparseable ones (`Forgotten`), still under the prune lock.
 
-**Secret rotation (058, `rotate.go`).** §9.11. `RotateSecret(ctx, d, st,
+**Secret rotation (`rotate.go`).** §9.11. `RotateSecret(ctx, d, st,
 cfg, sec, RotateOptions{Name, Value, DiscardData})` returns a
 `RotateReport` (`stack`, `secret`, `restarted`, `discarded_data`,
 `introspection_token_expiry`). `CheckRotateOptions` is its usage check
@@ -1881,7 +1877,7 @@ The new values come from `stack.GeneratePassword` and
 `stack.GenerateHexToken`, added here; `markPendingRestarts` is shared with
 up.
 
-**Ownership (084, `ownership.go`).** §6.1. `StackResources(ctx, d, name,
+**Ownership (`ownership.go`).** §6.1. `StackResources(ctx, d, name,
 id, dir)` lists the containers (`docker ps` with exact stack labels) and
 networks of compose project `name` and the volumes of that project or
 labelled `stack=<name>`, each a `Resource` with its labels and its
@@ -1902,12 +1898,12 @@ carry the stack's labels
 one without stack labels predates them and is taken as the stack's.
 `doctor`'s `stack-name` check reports the same.
 
-**Reset and destroy (056, `teardown.go`).** §9.8. Both run a `down` step
+**Reset and destroy (`teardown.go`).** §9.8. Both run a `down` step
 (`RemoveHelperContainers`, then compose down even if a helper stayed;
 nothing more when `d.Compose` is nil, a never-rendered stack)
 and a `volumes` step over `StackResources`' volumes that are the stack's
-own or adopted (084), selected by label, never by name.
-`RemoveHelperContainers(ctx, d, sink, step, st, name, match)` (095)
+own or adopted, selected by label, never by name.
+`RemoveHelperContainers(ctx, d, sink, step, st, name, match)`
 removes, with a warning each, the containers labelled for the stack that
 compose didn't start and `stack.Owner` calls its own or moved, so a
 copy never removes its original's: a leaked dictionary-etl would
@@ -1928,21 +1924,21 @@ whose `com.docker.compose.volume` is a catalog `SharedData` or
 - `Destroy(d, st, TeardownOptions{Name, PruneImages, Cache})` removes
   every such volume, then (`dev-images`) the `dev-<name>-*` tags of the
   built images, then (`files`) `st.RemoveCreated()`, warning for each
-  kept path, and, once that succeeded, `Cache.UnregisterStack` (073) when
+  kept path, and, once that succeeded, `Cache.UnregisterStack` when
   `Cache` is set; failing that is a warning, as prune forgets a stale
   entry. With `PruneImages` a `prune` step runs `PruneCache`'s body
   with `PruneOptions.CommitImagesOnly`: commit-tagged images only, under
   `LockPrune`, by §7.1's rules, once the stack's state and labelled
   resources are gone. `TeardownReport` is the `--json` data.
 
-**Support bundle (059, `supportbundle.go`).** §9.9. `SupportBundle(ctx, d,
+**Support bundle (`supportbundle.go`).** §9.9. `SupportBundle(ctx, d,
 w, SupportBundleOptions{Stack, Status, Doctor, Prefix})` writes a tar.gz
 to w, every file under `Prefix/` with mode 0600: `status.json` (Status
 with the caller's options, `Deep` set by the cli) and `doctor.json`, as
 `--json` prints them; the newest `BundleRunLogs` (5) run logs, by name;
 `compose/ps.json` and `compose/logs/<service>.log` (`compose logs --tail
 500` per service compose ps lists, `docker.ProbeTimeout` each; after one
-runs out of time the rest are skipped as a problem, 091); `stack/` with pic-sure.yaml,
+runs out of time the rest are skipped as a problem); `stack/` with pic-sure.yaml,
 state.json and manifest.json; and `README.txt`. It only reads. Whatever it
 can't collect is a `Problems` line, in the report and README; only
 failing to write w, or ctx ending, is an error. With no Stack it holds doctor alone.
@@ -1951,12 +1947,12 @@ failing to write w, or ctx ending, is an error. With no Stack it holds doctor al
   pic-sure added counts too (a `stack.Secret` key's value whatever it
   looks like, another secret-named key's any scalar but a boolean, any
   other key's only when it is a string; the UUIDs, the token expiry and
-  the generated flag never); the HPDS key file; and in pic-sure.yaml the
-  secret fields of `stack.Fields`, the admin email (the run logs redact it
-  as personal data) and any other secret-named key (`log.IsSecretName`,
-  env vars included) with a non-null scalar value of any type (093), all
-  shown as `[REDACTED]` in `stack/pic-sure.yaml`. A `stack.Fields` key
-  that isn't secret (`auth.consent_authorization`) stays. A boolean under a
+  the generated flag never); the HPDS key file; and in pic-sure.yaml each
+  private key's value (`stack.PrivateKey`: the secret fields, the admin
+  email, and other secret-named keys, env vars included, with a non-null
+  scalar value of any type), all shown as `[REDACTED]` in
+  `stack/pic-sure.yaml`. A field that isn't private
+  (`auth.consent_authorization`) stays. A boolean under a
   key that is only secret-named is blanked in the file but not redacted
   elsewhere, where every `true` would go; a secret field's is. Values of `log.MinSecret` (4) bytes or more go
   through a `log.Redactor` (escaped forms, plus encoding/json's
@@ -1972,8 +1968,6 @@ failing to write w, or ctx ending, is an error. With no Stack it holds doctor al
   is redacted by key name, line by line and in flow mappings.
 
 ## internal/steps
-
-Ticket 011, on the `Step` type and `Run` signature from 001.
 
 A `Step` has a stable kebab-case `ID` (users pass it to `--skip-step`), a
 `Title`, a `Check` that reports whether the step is already done without
@@ -2019,19 +2013,12 @@ named only in the message.
   the step to resume from; the exit code is still the signal's. A cleanup
   that has to run commands after cancellation needs a live context:
   `context.WithTimeout(context.WithoutCancel(ctx), d)`.
-- **Plan mode.** `steps.Plan(ctx, steps, opts)` returns a `[]Planned`
-  (`ID`, `Title`, `Status`, `Error`, with JSON tags) without applying
-  anything or emitting events. `Status` is `apply`, `done` (`Check` says
-  done), `skipped` (`--skip-step`) or `unknown` (`Check` failed; `Error`
-  says why). A failing `Check` doesn't stop the plan. Plan's `skipped`
-  means `--skip-step` only; `done` is what `Run` reports as
-  `StepDone{skipped}`. `update --dry-run` (036) uses it.
 
 ## internal/docker
 
-Ticket 001 defines the runner contract (`runner.go`). Ticket 003 adds the
-exec runner, ticket 016 the `Engine`, ticket 017 the `Composer`/`Compose`
-adapter.
+The runner contract is in `runner.go`, the exec runner in `exec.go`, the
+`Engine` in `engine*.go` and the `Composer`/`Compose` adapter in
+`compose.go`.
 
 - `Cmd{Argv, Env, Stdin, Dir}`: `Env` entries are added to the runner's
   base environment, and their values are never logged.
@@ -2045,7 +2032,7 @@ adapter.
 - `RunChecked` turns a non-zero exit into an `*ExitError`, whose message
   carries the argv and the last stderr line. `FormatArgv` renders argv for
   messages and logs.
-- **Docker unavailable** (091, `unavailable.go`). `IsMissing(err)` is
+- **Docker unavailable** (`unavailable.go`). `IsMissing(err)` is
   `docker` not found on PATH; `IsUnreachable(err)` is `ErrDaemonUnreachable`
   or an error quoting docker's or compose's socket errors ("Cannot connect
   to the Docker daemon", "failed to connect to the docker API", "permission
@@ -2063,7 +2050,7 @@ tried in order, and a call that none matches fails the test. Recorded
 `Call`s hold argv, env names (never values), stdin and dir. Assertions:
 `AssertCalled`, `AssertNotCalled`, and `AssertOrder` (a subsequence check).
 
-**Engine** (016, `engine*.go`). `docker.NewEngine(runner)` returns the
+**Engine** (`engine*.go`). `docker.NewEngine(runner)` returns the
 `Engine` that `ops.Deps.Docker` holds; tests build one over the fakerunner.
 
 - **System.** `Version` and `Info` parse `docker version|info --format json`.
@@ -2071,10 +2058,10 @@ tried in order, and a call that none matches fails the test. Recorded
   client knows (`Client`, `ClientInfo` with the context and plugin versions)
   and an error matching `ErrDaemonUnreachable`.
 - **Images.** `ImageExists`, `ImageID`, `ImageLabels`, `Build(BuildOpts)`
-  (streams output), `Pull`, `Tag` (031), `RemoveImage`, and `ImageList(ref
-  filter)` (057), one `Image{Ref, ID, RepoTags, Size, Created, Labels}`
+  (streams output), `Pull`, `Tag`, `RemoveImage`, and `ImageList(ref
+  filter)`, one `Image{Ref, ID, RepoTags, Size, Created, Labels}`
   per tag.
-- **Networks.** `NetworkList(labelFilters...)` (057).
+- **Networks.** `NetworkList(labelFilters...)`.
 - **Volumes.** `VolumeCreate(name, labels)` (a no-op if the volume exists,
   whatever its labels), `VolumeInspect`, `VolumeList(labelFilters...)`,
   `VolumeRemove`, and `ContainersUsingVolume`, which includes stopped
@@ -2086,7 +2073,7 @@ tried in order, and a call that none matches fails the test. Recorded
   `*ExitError`. `Create` takes the same
   `RunOpts` minus the run-only fields. There are also `CpFrom` (docker cp's
   layout rules), `Rm`, `ContainerInspect` (compare `Health` exactly) and
-  `ContainerList` (057: every container, stopped ones included, with its
+  `ContainerList` (every container, stopped ones included, with its
   image ID and `Mounts`, the bind sources and volume names).
   `UniqueName(prefix, d.Rand)` names a one-off container.
 - **Logs.** `Logs(container, follow)` is a reader over stdout and stderr
@@ -2097,7 +2084,7 @@ Rules every method follows:
 - **Errors.** A failed query or change returns an `*ExitError` whose message
   is docker's own (its "Run 'docker … --help'" hint is dropped). If docker
   says the object doesn't exist, the error also matches `ErrNotFound`.
-  `PortAllocated(err)` (077) returns the host port a docker or compose
+  `PortAllocated(err)` returns the host port a docker or compose
   command couldn't publish because something else holds it, 0 otherwise.
   Removals (`Rm`, `VolumeRemove`, `RemoveImage`) treat a missing object as
   removed.
@@ -2111,7 +2098,7 @@ Rules every method follows:
   name. A host path must exist, since docker would create a missing one as
   a root-owned directory, and must not contain `:`.
 
-**ExecRunner** (ticket 003, `exec.go`) is the production `Runner`;
+**ExecRunner** (`exec.go`) is the production `Runner`;
 `cli.newRunner` builds it with the command's logger. `&docker.ExecRunner{}`
 is ready to use.
 
@@ -2131,7 +2118,7 @@ is ready to use.
   opens `/dev/tty` to prompt (ssh passphrase, git credentials) stops on
   SIGTTIN until ctx ends. Callers turn prompts off, as the git client does
   with `GIT_TERMINAL_PROMPT=0` and `SSH_ASKPASS_REQUIRE=force`.
-- **Foreground** (026) is for one interactive command (`pic-sure compose --
+- **Foreground** is for one interactive command (`pic-sure compose --
   exec hpds sh`). The child stays in the CLI's process group, so it can
   read the terminal and gets Ctrl-C from it, and `Stream` hands it the
   writers as they are (an `*os.File` becomes its stdout), without line
@@ -2139,7 +2126,7 @@ is ready to use.
   foreground process group is the CLI's, the runner leaves the child alone:
   Ctrl-C has reached it from the terminal already, and a second signal
   would count as a second Ctrl-C (compose's force-kill). A SIGINT from
-  elsewhere (`kill -INT` from a script, 100) is forwarded to the child, and
+  elsewhere (`kill -INT` from a script) is forwarded to the child, and
   if the child is still running `WaitDelay` later, the usual escalation
   follows. Stdin is the only test, so a SIGINT sent to the whole process
   group while the CLI isn't in a terminal's foreground with stdin on it
@@ -2171,7 +2158,7 @@ is ready to use.
 - **Logging.** Argv, dir and env names at debug level, then the exit code
   and duration. Never env values or stdin. `LogArgv`, when set, formats
   the argv in those records and in errors, for a command line that may
-  hold a secret (098, the `compose --` passthrough).
+  hold a secret (the `compose --` passthrough).
 
 **WithTimeout** (`timeout.go`) wraps any `Runner` so each call is cancelled
 after d (over `ExecRunner`, it returns up to `WaitDelay` later):
@@ -2181,7 +2168,7 @@ and end only with their context. A call that runs out of time returns a `*Timeou
 (`"ARGV timed out after 10s"`), which matches `context.DeadlineExceeded`; a
 caller's own cancellation stays a plain context error.
 
-### Compose (ticket 017)
+### Compose
 
 `Composer` (`Deps.Compose`) is the only code that builds `docker compose`
 argv. `Compose` implements it over a `Runner`.
@@ -2195,7 +2182,7 @@ argv. `Compose` implements it over a `Runner`.
   the `-f` list, then `-p <Project>`, runs in the stack directory, and gets
   `Env()`'s entries in `Cmd.Env`. `--env-file /dev/null` stops a stray
   `.env` in the stack directory from renaming the project or supplying
-  values. `NewCompose` sets `Project` to the rendered file's `name:` (107),
+  values. `NewCompose` sets `Project` to the rendered file's `name:`,
   so a top-level `name:` in an override can't move pic-sure to another
   project; `doctor`'s `overrides` check warns about one. The adapter also
   relies on the runner not passing the user's `COMPOSE_*` variables through.
@@ -2207,7 +2194,7 @@ argv. `Compose` implements it over a `Runner`.
   `ComposeLogsOpts.Err` instead) (wrap the sink in
   `events.NewLogWriter`) and return an `*ExitError` carrying compose's
   message when it fails. `Down` always passes `--remove-orphans`.
-- `ComposeRunOpts.Env` (032) sets container variables as bare `-e NAME`,
+- `ComposeRunOpts.Env` sets container variables as bare `-e NAME`,
   values in `Cmd.Env`; a name the stack's `Env()` sets is refused.
 - `Run` (`run [--rm] -T`) and `Exec` (`exec -T`) stream stdout and stderr
   separately and return the command's exit code, plus an `*ExitError` only
@@ -2231,9 +2218,8 @@ argv. `Compose` implements it over a `Runner`.
 - `Ps` runs `ps --all --format json` with a 10 s timeout. `ParseComposePs`
   accepts the JSON-lines form (compose 2.21 and later), the older array
   form, nulls and unknown fields. `Health` is empty for a container without
-  a healthcheck; compare it exactly. `Label(key)` reads one of `Labels`
-  (036).
-- `ConfigHashes(rendered)` (036) runs `config --hash *`: each service's
+  a healthcheck; compare it exactly. `Label(key)` reads one of `Labels`.
+- `ConfigHashes(rendered)` runs `config --hash *`: each service's
   config hash, which compose compares with a container's `ConfigHashLabel`
   to decide whether `up` recreates it. A non-empty `rendered` stands in for
   the rendered compose.yaml, keeping the overrides and env.
@@ -2248,7 +2234,7 @@ In tests, let a glob skip the global flags:
 
 ## internal/git
 
-Ticket 018. `git.New(runner)` returns the `Client` in `ops.Deps.Git`. It
+`git.New(runner)` returns the `Client` in `ops.Deps.Git`. It
 runs the user's `git` through the Runner, so their credential helpers, SSH
 setup and `insteadOf` rewrites apply (D24). Nothing may wait for typed
 input, because a child outside the foreground process group is stopped when
@@ -2272,7 +2258,7 @@ config.
   ref wraps `ErrUnknownRef`, so a caller can fetch and retry.
 - `LsRemote(url)`: branches and tags at `url` as `[]Ref{Name, SHA}`, with
   annotated tags peeled to their commit.
-- `WorkTree(dir)` (031): a user's checkout, not a managed clone. Its HEAD
+- `WorkTree(dir)`: a user's checkout, not a managed clone. Its HEAD
   commit, and `Dirty` when it has modified, staged or untracked (not
   ignored) files, whatever the user's status settings.
 - `Archive(dir, sha)`: `git archive --format=tar` as an `io.ReadCloser`,
@@ -2287,12 +2273,12 @@ config.
   files, directories and symlinks.
 
 Arguments that start with `-` are refused, so a URL or ref can't become a
-git option. The cache (019) owns locking and the `src/<repo>/<sha>`
+git option. The cache owns locking and the `src/<repo>/<sha>`
 layout.
 
 ## internal/cache
 
-Ticket 019; 057 adds `Entries` and `RemoveEntry` for `cache list/prune`. `cache.DefaultRoot()` is
+`Entries` and `RemoveEntry` back `cache list/prune`. `cache.DefaultRoot()` is
 `$XDG_CACHE_HOME/pic-sure`, or `~/.cache/pic-sure` when that is unset or
 relative. It refuses a root inside `$TMPDIR` (symlinks resolved), which
 Colima and Lima don't share with their VMs. `cache.Open(root, Options{Git,
@@ -2314,7 +2300,7 @@ waits are warnings.
   dead run are removed under the lock. Nothing fsyncs the tree, so after a
   power loss a tree may be incomplete; deleting its directory makes the next
   `EnsureSource` rebuild it.
-- `ResolveRef(ctx, component, ref)` (`ref.go`, 028): a tag, branch or
+- `ResolveRef(ctx, component, ref)` (`ref.go`): a tag, branch or
   sha to a full commit sha in `git/<repo>.git`, under the repo's fetch
   lock. It clones, or fetches every branch and tag first so a branch gives
   its current head; a full sha the clone already has skips the fetch.
@@ -2336,22 +2322,22 @@ waits are warnings.
   waits on it would let two holders in. The locks cover one cache root, but
   images and `pic-sure-m2` belong to the Docker daemon, so two users with
   their own caches on one daemon don't exclude each other.
-- `SourceDir(component, sha)` (031) is where `EnsureSource` keeps that
+- `SourceDir(component, sha)` is where `EnsureSource` keeps that
   tree, without making it, for a step's `Check`.
-- `FrontendBuildDir(tag)` (030) is `build/frontend-<tag>`, the frontend
+- `FrontendBuildDir(tag)` is `build/frontend-<tag>`, the frontend
   build's copy of its source, not created.
 - `EnsureMavenVolume(ctx, d.Docker)` creates `MavenVolume` (`pic-sure-m2`).
   Mount the volume only under the reactor lock.
-- `LockPorts(ctx)` (077) is init's lock from choosing a new stack's
+- `LockPorts(ctx)` is init's lock from choosing a new stack's
   ports to registering it; it waits as long as the use lock, which
   registering takes inside it.
-- `LockUse(ctx)` (057) takes the cache's use lock shared, and
+- `LockUse(ctx)` takes the cache's use lock shared, and
   `LockPrune(ctx)` takes it exclusively. Any number of commands hold
   `LockUse`, but never alongside a prune. Hold it from before taking a
   source tree or image from the cache until state.json records it:
   `ImagesStep`'s Apply holds it for its whole run. Both wait up to
   `UseLockTimeout` (15 min).
-- **Stack registry** (073, `stacks.go`): `stacks/<key>` holds the stack
+- **Stack registry** (`stacks.go`): `stacks/<key>` holds the stack
   directory and name, so prune counts a stack that has no labelled
   container, volume or network (after `build`, before the first `up`, or
   after `compose -- down -v`). init (also on a stack already initialised),
@@ -2362,7 +2348,7 @@ waits are warnings.
   can't be parsed comes back with only its `Key`, and `ForgetStack(key)`
   removes an entry (prune). A dead write's `*.tmp-*` file is an
   `EntryTemp`.
-- `Entries()` (057, `prune.go`) lists what prune may remove: source trees
+- `Entries()` (`prune.go`) lists what prune may remove: source trees
   (`EntrySource`), `build/` contexts, `downloads/`, and `EntryTemp` for
   `tmp/` entries and the `*.tmp-*` siblings in `src/<repo>/`, `git/` and the
   root, with `Repo` set for those under a fetch lock. Clones, the
@@ -2374,7 +2360,7 @@ waits are warnings.
 
 ## internal/release
 
-Ticket 028; 060 adds the gate's self-update action. Release-control (§8)
+Release-control (§8)
 is read in three calls that `init` and `update` make in order, before any
 stack mutation:
 
@@ -2404,18 +2390,16 @@ stack mutation:
 - `rel.ResolveComponents(ctx, cache, sink, step, cfg.Components)` resolves
   each component's ref to a commit with `cache.ResolveRef` (see
   internal/cache), leaving out a component with a local `source`, and
-  any not named in its optional `only` list (031):
+  any not named in its optional `only` list:
   `components.<name>.ref` from pic-sure.yaml if set, else the build-spec's
   key, else `main` with a warning. An unknown ref is exit 3. The commits are
   then in the cache's clones, so `EnsureSource` doesn't fetch again.
-- `rel.Record(state, components)` sets state.json's release and
-  components; the caller saves the state.
 
 
 ## internal/pki
 
-Ticket 012. Pure functions over PEM bytes; the caller does the file I/O and
-fills the certs volume (024).
+Pure functions over PEM bytes; the caller does the file I/O and
+fills the certs volume.
 
 - `Generate(rand, hostname, now) (Files, error)` makes an RSA-2048 key
   (PKCS #8) and a self-signed server certificate valid for `Validity`
@@ -2442,7 +2426,7 @@ fills the certs volume (024).
 
 ## internal/jwt
 
-Ticket 013. `jwt.Introspection(secret, appUUID, now, ttl)` returns the
+`jwt.Introspection(secret, appUUID, now, ttl)` returns the
 PSAMA introspection token and its expiry (§9.4), or an error. It replaces
 v1's jwt-creator container. Pass `ops.Deps.Clock`'s time as `now` and
 `jwt.DefaultTTL` (365 days) as `ttl`.
@@ -2466,7 +2450,7 @@ v1's jwt-creator container. Pass `ops.Deps.Clock`'s time as `now` and
 
 ## internal/sql
 
-Ticket 014. Statement builders, escaping, and the clients that run the
+Statement builders, escaping, and the clients that run the
 statements. Every value reaches the database inside SQL text on the
 client's stdin, and the password reaches the client as `MYSQL_PWD` or
 `PGPASSWORD` through `Cmd.Env` with a bare `-e`, so neither ever appears in
@@ -2491,7 +2475,7 @@ than `ops.Deps` so that operations can import this package.
   - `User` defaults to root.
   - `ExecPostgres` runs psql in the dictionary-db container with
     `PGPASSWORD`, and with `ON_ERROR_STOP`, so that a failure exits
-    non-zero. `QueryPostgres` (032) returns rows, tab-separated, so query
+    non-zero. `QueryPostgres` returns rows, tab-separated, so query
     only values without tabs or newlines.
   - A statement's trailing semicolon is optional.
 - **Escaping.** `QuoteMySQL` doubles single quotes and backslash-escapes
@@ -2505,15 +2489,15 @@ than `ops.Deps` so that operations can import this package.
 - **Builders** return SQL text containing escaped secrets. Never log it.
   A server error can quote part of a statement, so treat an error's stderr
   with the same care.
-  - Seed (033): `AppliedMigrationsQuery`, `CountUsersWithEmail`,
+  - Seed: `AppliedMigrationsQuery`, `CountUsersWithEmail`,
     `SeedAdminUser(email, id)` and `SetApplicationToken`. `SeedAdminUser`
     is one transaction that inserts the user only if the email is absent,
     and gives it the Top Admin and User roles only when it inserted it. A
     replay with the same id changes nothing.
-  - Bootstrap (054): `Bootstrap(AppUsers(AppPasswords{...}), syncPasswords)`.
+  - Bootstrap: `Bootstrap(AppUsers(AppPasswords{...}), syncPasswords)`.
     It creates the databases and users with `IF NOT EXISTS`, plus the
     grants. With `syncPasswords` it adds an `ALTER USER` for each user.
-  - Rotation (058): `AlterUserPassword(Account{User, Host}, pw)` for MySQL
+  - Rotation: `AlterUserPassword(Account{User, Host}, pw)` for MySQL
     and `AlterPostgresPassword(role, pw)` for Postgres. The local
     picsure-db has both `root@localhost` and `root@%`, so rotating root
     needs a statement for each account.
@@ -2524,7 +2508,7 @@ than `ops.Deps` so that operations can import this package.
 
 ## internal/netproxy
 
-Ticket 015. `netproxy.New(cfg, services)` resolves the config's `proxy`
+`netproxy.New(cfg, services)` resolves the config's `proxy`
 block (`netproxy.Config` has the fields of `stack.Proxy`) into a `*Proxy`
 with an output for each egress path (§9.10). `services` are the compose
 service names in the rendered stack; callers without one pass
@@ -2543,7 +2527,7 @@ just `proxy.http` set, https traffic goes direct.
   also in lower case, for git (`git.Client.WithEnv`), cosign, node, compose
   (`render.ComposeEnv`) and runtime containers. A scheme the config doesn't
   set, and `ALL_PROXY` always, are present and empty, so the entries
-  replace a proxy inherited from the user's shell (100): with just
+  replace a proxy inherited from the user's shell: with just
   `proxy.http`, https really goes direct. Without a proxy, `Env` is nil and
   children keep the shell's.
   `BuildArgs()` are the same `NAME=value` entries for
@@ -2553,8 +2537,8 @@ just `proxy.http` set, https traffic goes direct.
 - `JVMOpts()`: `-Dhttp.proxyHost/Port`, `-Dhttps.proxyHost/Port` and
   `-Dhttp.nonProxyHosts` for `JAVA_OPTS`, without white space or
   credentials (the JVM has no property for them). The JVM and Maven speak
-  plain HTTP to the proxy, so `ParseURL` refuses an `https://` proxy URL
-  (025): validation fails with a hint to write `http://`.
+  plain HTTP to the proxy, so `ParseURL` refuses an `https://` proxy URL:
+  validation fails with a hint to write `http://`.
 - `MavenSettings()`: a `settings.xml` with a `<proxy>` per scheme, for the
   reactor container's `/root/.m2`. It holds the credentials: write it 0600.
   Maven sends https through an http proxy when it has no https one, so with
@@ -2579,7 +2563,7 @@ package imports only the catalog and `hostname`.
 
 ## internal/hostname
 
-Ticket 100. The one host name rule, used by `stack.Validate`
+The one host name rule, used by `stack.Validate`
 (`network.hostname`, `auth.auth0.tenant`, `db.remote.host`), `pki` and
 `netproxy`. `Check(s)` accepts an IP address (`net.ParseIP`) or a name
 `ValidName` accepts, and says why it refuses one. A name is RFC 1123:
@@ -2593,9 +2577,9 @@ entries).
 
 ## internal/selfupdate
 
-Ticket 060. `selfupdate.Updater` replaces the running binary with a GitHub
+`selfupdate.Updater` replaces the running binary with a GitHub
 release (§8, D12). The cli builds it with `a.newSelfUpdater(proxyURL, sink,
-step)` (`internal/cli/selfupdate.go`); `init` and `update` (034, 036) are
+step)` (`internal/cli/selfupdate.go`); `init` and `update` are
 to build it with their config's `*netproxy.Proxy` and set it as
 `release.GateOptions.Updater`. The `self-update` command uses the proxy of
 the stack it runs in. Without a stack, or when the stack sets no proxy, it
@@ -2651,8 +2635,8 @@ GitHub API root (mirrors, tests).
 
 ## internal/events
 
-Ticket 001 defines the event types and `Sink`; ticket 004 adds the plain
-and NDJSON renderers. The TUI renderer (038) is in `internal/progress`.
+The event types, `Sink`, and the plain and NDJSON renderers are here. The
+TUI renderer is in `internal/progress`.
 
 - Events: `StepStarted{ID, Title}`, `Progress{ID, Text, Pct}` (`Pct` is
   0–100, or nil when unknown), `Log{ID, Stream, Line}`, `Warning{ID, Text}`,
@@ -2669,7 +2653,7 @@ and NDJSON renderers. The TUI renderer (038) is in `internal/progress`.
 - `NewLogWriter(sink, id, stream)` is an `io.Writer` that emits one `Log`
   per line; `Close` flushes a final partial line.
 
-Ticket 004 added the plain and NDJSON renderers, both Sinks:
+The plain and NDJSON renderers are both Sinks:
 
 - `NewPlain(w, PlainOptions{Color, Now})` writes one line per event,
   `15:04:05 [MARK] text`, to stderr. The marks are `[ .. ]` (a step
@@ -2693,7 +2677,7 @@ them.
 
 ## internal/progress
 
-Ticket 038. The TUI renderer for an operation's events (§10.3).
+The TUI renderer for an operation's events (§10.3).
 
 - `Model` is a Bubble Tea v2 model fed `EventMsg{Event}` and ended with
   `DoneMsg{OK, LogPath}`. It shows each step with a spinner (a static `•`
@@ -2720,7 +2704,7 @@ Ticket 038. The TUI renderer for an operation's events (§10.3).
   failure. With `Options.NoColor` the prints are stripped of color, which
   Bubble Tea doesn't do for them. `Init` doesn't query the terminal's
   background: a short run could exit before the reply arrives. Without it (a screen embedding the
-  model, tickets 039/040/047), `View` keeps every row and `DoneMsg` doesn't
+  model, such as the TUI's run screen), `View` keeps every row and `DoneMsg` doesn't
   quit; `Done()` reports it.
 - `Renderer` is an `events.Sink` that runs the model as an inline program
   (not the alt-screen) on the given terminal, with Bubble Tea's signal
@@ -2750,7 +2734,7 @@ build the binary with that tag.
 
 ## internal/log
 
-Ticket 005. Debug logging that is safe to attach to a bug report (§6.1,
+Debug logging that is safe to attach to a bug report (§6.1,
 §6.3).
 
 - **A run.** `log.New(Options{Level, Stderr, File})` starts one command's
@@ -2774,7 +2758,7 @@ Ticket 005. Debug logging that is safe to attach to a bug report (§6.1,
   Go-quoted forms are caught too. Register a secret as soon as it is read
   or generated (008 does it when secrets load; whoever reads one from stdin
   does it there). `log.Redact(s)` applies the registry to any string, for
-  `support-bundle` (059). Values shorter than 4 bytes aren't registered:
+  `support-bundle`. Values shorter than 4 bytes aren't registered:
   they would match all through unrelated text. The registry also scrubs the
   userinfo of every URL (`http://user:pw@host` becomes
   `http://[REDACTED]@host`), so a proxy or Git password reaches no log
@@ -2791,16 +2775,15 @@ Ticket 005. Debug logging that is safe to attach to a bug report (§6.1,
 **Wiring (`internal/cli/logging.go`).** `markRunning` starts the run's
 logging when a command's `RunE` starts, and `App.Run` closes it, writing
 the exit code and error as the last record. The first record has the
-version, OS, command, flags and arguments. `config set` of a secret field,
-the admin email, or a secret-named key that isn't a plain field
-(`privateConfigKey`) logs the key with `[REDACTED]` for the value, and
+version, OS, command, flags and arguments. `config set` of a private key
+(`stack.PrivateKey`) logs the key with `[REDACTED]` for the value, and
 registers the value unless it is `true` or `false`, since config set may
-refuse it before it reaches secrets.yaml (093); each `--set KEY=VALUE` is
+refuse it before it reaches secrets.yaml; each `--set KEY=VALUE` is
 recorded by the same rule. `compose -- ARGS` records only the compose
 subcommand and how many arguments follow it (`compose_command`,
-`compose_args`), since a password can be typed there (098); its runner's
+`compose_args`), since a password can be typed there; its runner's
 `docker.ExecRunner.LogArgv` does the same for the exec records.
-`a.openStack` calls `a.openRunLog(st)` once the stack passes the version gate; `init` (034)
+`a.openStack` calls `a.openRunLog(st)` once the stack passes the version gate; `init`
 must call it once `.pic-sure/` exists. Until something
 calls it, nothing is written to disk. The version gate's read-only
 commands (`commandClass`, so `compose`'s read-only subcommands too) get a
@@ -2812,17 +2795,16 @@ file only at `--log-level debug`, so polling never fills the directory. A bad
 The TUI shell: landing, setup wizard, run screen and load wizard.
 `tui.Run` takes the command's context and turns off Bubble Tea's signal
 handler, so SIGINT and SIGTERM end the TUI through the context and the CLI
-exits 128+N. Ticket 040 rewired the dashboard (see its section), 047 the
-load wizard, and 083 the landing's actions.
+exits 128+N.
 
-- **Landing (039).** It reads its directory (`detectStack`): no
+- **Landing.** It reads its directory (`detectStack`): no
   pic-sure.yaml offers set up; a pic-sure.yaml whose state.json lacks
   `initialized_at` offers "Resume setup"; a finished stack offers the
   dashboard, update and load data. Without a stack it also offers the
   preflight check (`doctor`), sent with `Action.NoStack`: the command
   then finds no stack, even one above the current directory, and checks
   only the host and Docker.
-- **Landing actions (083).** Every item runs one pic-sure command line as a
+- **Landing actions.** Every item runs one pic-sure command line as a
   `dashboard.Action` (`dashboard.RunMsg`), on the run screen through
   `Options.Command`, as the dashboard's do. Update, migrate, reset and
   destroy share the dashboard's `UpdateAction`, `MigrateAction`,
@@ -2834,7 +2816,7 @@ load wizard, and 083 the landing's actions.
   the teardown asks for come from `readConfig` (pic-sure.yaml), read when
   the dialog opens. A picked value, a typed branch or a yes is the consent;
   esc cancels every dialog.
-- **Setup (039).** The wizard screen hosts `wizard.Form`, opened with
+- **Setup.** The wizard screen hosts `wizard.Form`, opened with
   `Options.Defaults(root)`. On consent it sends the config and secrets to
   the run screen, which calls `Options.Init` in a goroutine and shows its
   events in an embedded `progress.Model`. The operation's events, the
@@ -2850,9 +2832,9 @@ load wizard, and 083 the landing's actions.
   summary as one body (wrapped before it is measured), opening on the
   result line; the `Log file:` line and the footer stay below it. The
   block is never wider than the terminal, and each footer has a short
-  form for one too narrow for the long one (090). A later
-  in-process operation (040, 047) can reuse `runScreen`.
-- **Load wizard (047).** `loadScreen` asks for one load: a phenotype CSV
+  form for one too narrow for the long one. A later
+  in-process operation can reuse `runScreen`.
+- **Load wizard.** `loadScreen` asks for one load: a phenotype CSV
   or archive (`phenoinput.ListCSVEntries` checks the pick and lists its
   CSVs; two or more open an entry picker for `--entry`), a directory
   (`ops.CheckPhenotypeDir`, for `--input-dir`), a demo dataset, or a
@@ -2865,18 +2847,18 @@ load wizard, and 083 the landing's actions.
   landing's "Load your data…" opens it on the kind step, the developer
   menu's demo entry on the datasets, and the dashboard's `l` over the
   dashboard, which it returns to.
-- **Leaving a form (090).** The setup and load wizards take esc and
+- **Leaving a form.** The setup and load wizards take esc and
   Ctrl-C (which huh would take as abort) themselves: a form with answers
   asks "Discard ...? (y/n)" first, and n, esc or Ctrl-C keeps it. A setup
   reopened after a failed init gets the `Defaults` config too
   (`wizard.NewFormFrom`), so its summary marks only real defaults. The landing
   always opens first; there is no start-on-dashboard option.
-- **One run at a time (087).** A screen that hands the app its result
+- **One run at a time.** A screen that hands the app its result
   enters a terminal state first, so keys or huh ticks that arrive before
   the app acts can't send it again: the setup wizard's `wizardDone`, the
   load screen's `done` (set by `dispatch` and `closeLoad`), the
   landing's `leaving`, which `openLandingCmd` clears, and the dashboard's
-  `sent` (104), which `ActionDoneMsg` clears. Behind them, while
+  `sent`, which `ActionDoneMsg` clears. Behind them, while
   the run screen is open the app drops every other screen's request to
   navigate or start a run (`leavesScreen`), so a run is never hidden or
   replaced and left running unseen, and a second `runClosedMsg` is a
@@ -2884,7 +2866,7 @@ load wizard, and 083 the landing's actions.
   already stopped itself, and the run returns to the landing.
 
 It runs on the Charm v2 modules (`charm.land/bubbletea/v2`, `bubbles/v2`,
-`huh/v2`, `lipgloss/v2`; ticket 002). The root model's `View` returns a
+`huh/v2`, `lipgloss/v2`). The root model's `View` returns a
 `tea.View` with `AltScreen` set; embedded models (the dashboard) leave
 terminal modes to it. `Init` sends `tea.RequestBackgroundColor`, and the
 reply is passed to `styles.SetDarkBackground`. Any non-empty `NO_COLOR`
@@ -2895,7 +2877,7 @@ still ships esc disabled, so the screens handle esc themselves.
 
 ## internal/dashboard
 
-Ticket 040. The dashboard screen, embedded in the TUI (alt-screen).
+The dashboard screen, embedded in the TUI (alt-screen).
 
 - **Reads.** `dashboard.Backend` is `Services` (`compose ps`), `Status`
   (the `status` report, `--deep` with `deep`) and `FollowLogs` (`logs -f`
@@ -2918,10 +2900,10 @@ Ticket 040. The dashboard screen, embedded in the TUI (alt-screen).
   selected service, `u` update, `m` migrate (each after a yes/no dialog),
   `R` reset (with a keep-the-database choice) and `X` destroy, both after
   the user types the stack's name, and then run with `--yes`. `l` sends
-  `LoadMsg`, and the embedder opens its load wizard (047). The dashboard sends
+  `LoadMsg`, and the embedder opens its load wizard. The dashboard sends
   `RunMsg`; the embedder runs it and sends `ActionDoneMsg` back, which drops
   the deep check, polls again and restarts an ended log follower at once.
-  Between the two the dashboard ignores keys (104): one in the same read as
+  Between the two the dashboard ignores keys: one in the same read as
   the confirm could otherwise quit, which Bubble Tea handles before the
   embedder sees it, and close the run that just started. An embedder that
   can't run the action still sends `ActionDoneMsg`.
@@ -2931,7 +2913,7 @@ Ticket 040. The dashboard screen, embedded in the TUI (alt-screen).
   by the next.
 
 **Wiring.** `tui.Options.Dashboard` is the backend and `Options.Command`
-runs an action; the app shows it on the run screen (039's `runScreen`,
+runs an action; the app shows it on the run screen (`runScreen`,
 which takes a success line) and returns to the dashboard when it closes, or
 to the landing when the stack is gone (destroy). In `internal/cli`
 (`tuidashboard.go`), `dashBackend` opens the stack as `ps`, `status` and
@@ -2950,7 +2932,7 @@ non-interactive run.
 
 ## internal/wizard
 
-Ticket 039. The setup form for a new stack. `Groups` lists the pages and
+The setup form for a new stack. `Groups` lists the pages and
 the config keys each asks for (init's flag fields, plus `hpds.java_opts`);
 kind, help, enum options, secrecy and requiredness come from
 `stack.Fields`. Each input validates its value against the whole config
@@ -3000,14 +2982,14 @@ option grays (huh v2.0.3 swaps their light and dark values).
 
 ## internal/exitcode
 
-Ticket 001. The exit codes (§10.4), the `Error` type that carries one, the
+The exit codes (§10.4), the `Error` type that carries one, the
 constructors `Failed`, `Usage`, `Precondition`, `ConfirmRequired`,
 `Incompatible` and `Signaled`, and `FromError`, which maps any error to its
 code. The constructors take `fmt.Errorf` arguments, so `%w` wraps a cause.
 
 ## internal/phenoinput
 
-Ticket 041. Turns the file given to `data load-phenotype --file` into a CSV
+Turns the file given to `data load-phenotype --file` into a CSV
 the loader can mount (§9.6), using only Go's archive libraries.
 
 - **Formats**, detected by content, never by name: a plain CSV, a gzip of
@@ -3035,7 +3017,7 @@ the loader can mount (§9.6), using only Go's archive libraries.
   missing or unknown `--entry` is an `*EntryError` listing the entries.
   A problem with the file itself (empty, binary, unsupported or corrupt,
   no usable entry, a truncated or corrupt stream, the file unreadable) is
-  an `*InputError` (095), unless `ctx` ended; the cli makes both exit 2.
+  an `*InputError`, unless `ctx` ended; the cli makes both exit 2.
   `--entry` for a non-archive becomes a warning in `Input.Warnings` for the
   caller to emit. Reads stop when `ctx` ends, with its cause as the error.
 - Gzip input may hold several members and trailing zero padding, as GNU
@@ -3047,7 +3029,7 @@ the loader can mount (§9.6), using only Go's archive libraries.
 
 ## internal/fakecmd
 
-Ticket 001. The fake `docker` and `git` the testscript harness puts on
+The fake `docker` and `git` the testscript harness puts on
 `PATH`. Each reads rules from `$HOME/<name>.scenario` and appends every
 call's argv to `$HOME/<name>.log` (quoting arguments with spaces, as
 `docker.FormatArgv` does); the harness sets `HOME` to the script's work
@@ -3065,12 +3047,12 @@ waits before answering, so `sleep=1h` plays a hung daemon. A call that no
 rule matches exits 97 with the reason on stderr.
 `cmd/pic-sure/testdata/script/fakes.txtar` is a worked example.
 
-The fakes find their scenario through `HOME`, which the exec runner (003)
+The fakes find their scenario through `HOME`, which the exec runner
 passes through to subprocesses.
 
 ## internal/testfixtures/genomic
 
-Ticket 048. Generates the synthetic genomic fixture checked into
+Generates the synthetic genomic fixture checked into
 `testdata/genomic`: two single-contig VCFs (one BGZF, one plain),
 `vcfIndex.tsv`, a phenotype CSV for the same patients, and
 `expected.json`, the patients each documented genomic query returns.
@@ -3085,8 +3067,8 @@ image.
 
 ## tools/templatedrift
 
-The drift check behind `.github/workflows/template-drift.yml` (ticket 066,
-spec §14). It reads the AIO commit and the template → AIO source table from
+The drift check behind `.github/workflows/template-drift.yml` (spec
+§14). It reads the AIO commit and the template → AIO source table from
 `internal/render/templates/README.md` (so that table's format is its input),
 diffs an AIO git checkout between that commit and `-to`, and prints a
 Markdown report: exit 0 for no drift, 1 for drift, 2 for an error. It only
@@ -3159,12 +3141,14 @@ They restore the core job's caches and save none; the dev suite always
 restores the Maven volume, since it builds the reactor whatever the images
 cache holds.
 
-## v1 leftovers
+## internal/tty
 
-These packages exist only until the TUI tickets replace what uses them:
+The terminal check behind `App.IsTerminal`, which output mode selection
+also uses. It uses isatty, so `/dev/null` on stdin doesn't count as a
+terminal.
 
-- `internal/contract`: the v1 status and compose-ps JSON types the dashboard
-  renders (040 removes them).
-- `internal/tty`: the terminal check behind `App.IsTerminal`, which output
-  mode selection (004) also uses. It uses isatty, so `/dev/null` on stdin
-  doesn't count as a terminal.
+## internal/ctxio
+
+`ctxio.Reader(ctx, r)` fails with `ctx`'s cause once `ctx` is done, so a
+long copy, checksum or extraction (the phenotype loader, `phenoinput`,
+the demo data) ends promptly on Ctrl-C.

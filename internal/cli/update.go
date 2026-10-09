@@ -345,9 +345,9 @@ func writeUpdatePlan(w io.Writer, p *ops.UpdatePlan) error {
 		}
 	}
 	if p.Release.From == p.Release.To {
-		fmt.Fprintf(&b, "  release:     %s (unchanged)\n", short(p.Release.To))
+		fmt.Fprintf(&b, "  release:     %s (unchanged)\n", shortSHA(p.Release.To))
 	} else {
-		fmt.Fprintf(&b, "  release:     %s → %s\n", short(p.Release.From), short(p.Release.To))
+		fmt.Fprintf(&b, "  release:     %s → %s\n", shortSHA(p.Release.From), shortSHA(p.Release.To))
 	}
 	b.WriteString("  components:\n")
 	for _, c := range p.Components {
@@ -396,18 +396,11 @@ func writeUpdatePlan(w io.Writer, p *ops.UpdatePlan) error {
 func describeCommit(ref, commit, source string) string {
 	switch {
 	case source != "":
-		return short(commit) + " from " + source
+		return shortSHA(commit) + " from " + source
 	case commit == "":
 		return "(none)"
 	case ref == "" || strings.HasPrefix(commit, ref):
-		return short(commit)
+		return shortSHA(commit)
 	}
-	return ref + " (" + short(commit) + ")"
-}
-
-func short(sha string) string {
-	if len(sha) > 12 {
-		return sha[:12]
-	}
-	return sha
+	return ref + " (" + shortSHA(commit) + ")"
 }

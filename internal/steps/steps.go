@@ -26,7 +26,7 @@ type Step struct {
 	Apply func(ctx context.Context, sink events.Sink) error
 }
 
-// Options controls a Run or a Plan.
+// Options controls a Run.
 type Options struct {
 	// Skip holds the step IDs given to --skip-step. An ID that names none
 	// of the steps is a usage error.
@@ -97,7 +97,7 @@ func runStep(ctx context.Context, sink events.Sink, s Step, skipped bool) (event
 	return events.StepOK, nil
 }
 
-// Error is the error Run and Plan return when a step fails or the run is
+// Error is the error Run returns when a step fails or the run is
 // interrupted. The cli layer finds it with errors.As to fill in
 // events.ErrorInfo.Step.
 type Error struct {
@@ -139,7 +139,7 @@ func interrupted(ctx context.Context, id string) error {
 
 var kebabCase = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 
-// Validate reports what Run and Plan would reject before running anything:
+// Validate reports what Run would reject before running anything:
 // a malformed step list (an empty, duplicate or non-kebab-case ID, or a nil
 // Apply), which is a bug, and a Skip ID that names none of the steps, which
 // is an exitcode.Usage error. An operation that does work before calling

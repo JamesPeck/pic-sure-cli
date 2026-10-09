@@ -7,7 +7,7 @@ fixes the bash's behaviour (spec §6.4, §13).
 
 AIO commit: `f7ff8b8fc8363511f30f788095d48e42df869971`
 
-The drift job (`.github/workflows/template-drift.yml`, ticket 066) runs
+The drift job (`.github/workflows/template-drift.yml`) runs
 weekly. It diffs each AIO source below, plus any other AIO compose file,
 `config/` file or `.env.example`, between this commit and the head of
 `aio-compose`, and keeps one "Template drift" issue open while they differ.

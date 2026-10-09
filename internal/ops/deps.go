@@ -19,13 +19,12 @@ type Deps struct {
 	// built on it; use Runner directly only for a program none of them
 	// wraps.
 	Runner docker.Runner
-	// Docker drives the docker CLI (ticket 016).
+	// Docker drives the docker CLI.
 	Docker docker.Engine
-	// Compose drives `docker compose` for the stack the command acts on
-	// (ticket 017). It is nil until the command has found or created a
-	// rendered stack.
+	// Compose drives `docker compose` for the stack the command acts on.
+	// It is nil until the command has found or created a rendered stack.
 	Compose docker.Composer
-	// Git drives the user's git (ticket 018).
+	// Git drives the user's git.
 	Git git.Client
 	// Clock is the time source.
 	Clock Clock
@@ -34,7 +33,7 @@ type Deps struct {
 	Rand io.Reader
 	// Sink receives the operation's events.
 	Sink events.Sink
-	// Log is the debug logger (ticket 005). Event text is for the user;
+	// Log is the debug logger. Event text is for the user;
 	// Log is for bug reports.
 	Log *slog.Logger
 }

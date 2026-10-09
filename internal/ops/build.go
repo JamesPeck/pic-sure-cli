@@ -229,7 +229,7 @@ func imagesStep(d *Deps, st *stack.Stack, cfg *stack.Config, state *stack.State,
 		},
 		Apply: func(ctx context.Context, sink events.Sink) error {
 			// Until state.json names the trees and images this uses, only the
-			// use lock keeps cache prune from removing them (057).
+			// use lock keeps cache prune from removing them.
 			if opts.Cache != nil {
 				lock, err := opts.Cache.WithEvents(sink, ImagesStepID).LockUse(ctx)
 				if err != nil {

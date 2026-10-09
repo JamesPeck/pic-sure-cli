@@ -10,9 +10,9 @@ import (
 	"github.com/JamesPeck/pic-sure-cli/internal/stack"
 )
 
-// A SelfUpdater replaces the running binary with another release (ticket
-// 060). The gate calls it only when the user asked: on a TTY by accepting
-// the offer, otherwise with --self-update.
+// A SelfUpdater replaces the running binary with another release. The
+// gate calls it only when the user asked: on a TTY by accepting the offer,
+// otherwise with --self-update.
 type SelfUpdater interface {
 	// SelfUpdate installs version and re-executes the command with its
 	// original arguments, so it returns only on failure. A binary it may

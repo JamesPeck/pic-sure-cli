@@ -1,6 +1,6 @@
 // Command templatedrift reports how the bash All-in-One's compose and config
 // files changed since the commit the embedded stack templates were ported
-// from (ticket 066, spec §14). It reads that commit and the template → AIO
+// from (spec §14). It reads that commit and the template → AIO
 // source table from internal/render/templates/README.md, diffs the AIO
 // checkout between the commit and a later revision, and prints a Markdown
 // report.

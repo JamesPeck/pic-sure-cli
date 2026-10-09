@@ -150,7 +150,7 @@ func (r *upRestarts) readers(ctx context.Context, paths []string) ([]string, err
 	var out []string
 	for svc, m := range mounts {
 		for _, src := range m {
-			if slices.ContainsFunc(paths, func(p string) bool { return within(p, src) }) {
+			if slices.ContainsFunc(paths, func(p string) bool { return withinLexically(p, src) }) {
 				out = append(out, svc)
 				break
 			}

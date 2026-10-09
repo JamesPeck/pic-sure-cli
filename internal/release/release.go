@@ -216,13 +216,6 @@ func (r *Release) ResolveComponents(ctx context.Context, c *cache.Cache, sink ev
 	return out, nil
 }
 
-// Record stores the release commit and the resolved component commits in
-// state, replacing the ones recorded before. The caller saves state.
-func (r *Release) Record(state *stack.State, components map[string]stack.Component) {
-	state.Release = stack.Release{Repo: r.Repo, Branch: r.Branch, Commit: r.Commit}
-	state.Components = components
-}
-
 // short abbreviates a commit sha for messages.
 func short(sha string) string {
 	if len(sha) > 12 {

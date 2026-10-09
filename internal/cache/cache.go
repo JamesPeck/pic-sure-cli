@@ -66,16 +66,17 @@ func DefaultRoot() (string, error) {
 		base = filepath.Join(home, ".cache")
 	}
 	root := filepath.Join(base, "pic-sure")
-	if tmp := os.TempDir(); within(root, tmp) {
+	if tmp := os.TempDir(); withinResolved(root, tmp) {
 		return "", fmt.Errorf("the host cache %s is inside the temporary directory %s, which Docker can't always mount; "+
 			"set XDG_CACHE_HOME to a directory under your home directory", root, tmp)
 	}
 	return root, nil
 }
 
-// within reports whether path is dir or inside it, comparing their real
-// locations so that a symlink (macOS's /var is /private/var) can't hide it.
-func within(path, dir string) bool {
+// withinResolved reports whether path is dir or inside it, comparing their
+// real locations so that a symlink (macOS's /var is /private/var) can't
+// hide it.
+func withinResolved(path, dir string) bool {
 	rel, err := filepath.Rel(realPath(dir), realPath(path))
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }

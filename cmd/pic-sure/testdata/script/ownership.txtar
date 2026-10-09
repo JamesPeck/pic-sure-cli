@@ -1,7 +1,7 @@
 # A copy of a stack directory has the original's stack ID, and its name
 # selects the original's Docker resources (§6.1): every command that
 # changes them refuses, read-only ones say so, and destroy removes only
-# the copy's files. The real run is in ticket 084's Outcome.
+# the copy's files.
 env XDG_CACHE_HOME=$WORK/cache
 
 # Stack a's container and volume carry its directory and ID.

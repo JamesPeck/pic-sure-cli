@@ -485,6 +485,8 @@ func TestComposeWithoutFilesRefusesToRun(t *testing.T) {
 	errs = append(errs, err)
 	_, err = c.Passthrough(ctx, []string{"ps"}, nil, nil, nil)
 	errs = append(errs, err)
+	_, err = c.ConfigHashes(ctx, "/stack/next.yaml")
+	errs = append(errs, err)
 	for i, err := range errs {
 		if err == nil {
 			t.Errorf("call %d: no error", i)

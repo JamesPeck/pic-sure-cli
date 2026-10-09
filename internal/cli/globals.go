@@ -12,7 +12,7 @@ type GlobalOptions struct {
 	// wait for it instead of failing.
 	WaitLock bool
 	// JSON is --json: NDJSON events on stdout, or one JSON object for
-	// read-only reports (ticket 004). It implies NonInteractive.
+	// read-only reports. It implies NonInteractive.
 	JSON bool
 	// Plain is --plain: timestamped plain output instead of the TUI.
 	Plain bool

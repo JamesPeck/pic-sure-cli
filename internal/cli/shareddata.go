@@ -121,7 +121,7 @@ func (a *App) listSharedData(cmd *cobra.Command, _ []string) error {
 		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 		_, _ = fmt.Fprintln(tw, "NAME\tCONTENTS\tPROFILE\tCREATED\tFROM STACK\tVOLUMES")
 		for _, s := range sets {
-			_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", s.Name, s.Contents, dash(s.HPDSProfile), s.Created, dash(s.SourceStack), strings.Join(s.Volumes, ","))
+			_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", s.Name, s.Contents, orDash(s.HPDSProfile), s.Created, orDash(s.SourceStack), strings.Join(s.Volumes, ","))
 		}
 		return tw.Flush()
 	})
@@ -136,11 +136,4 @@ func (a *App) removeSharedData(cmd *cobra.Command, args []string) error {
 		_, err := fmt.Fprintf(w, "Removed data set %s (%s).\n", args[0], strings.Join(removed, ", "))
 		return err
 	})
-}
-
-func dash(s string) string {
-	if s == "" {
-		return "-"
-	}
-	return s
 }

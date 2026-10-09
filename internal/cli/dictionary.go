@@ -83,7 +83,7 @@ dataset_ref column.` + dictionaryLong,
 			ids = append([]string{ops.StepDictionaryClear}, ids...)
 		}
 		return a.dictionary(cmd, ids, "Dictionary loaded.", func(ctx context.Context, x *dictionaryRun) error {
-			c, err := openCache(cmd)
+			c, err := openDefaultCache(cmd, cache.Options{})
 			if err != nil {
 				return err
 			}
@@ -151,7 +151,7 @@ The default weights file is the one in the stack's pic-sure source.`,
 		return a.dictionary(cmd, []string{ops.StepWeights}, "Search weights recomputed.", func(ctx context.Context, x *dictionaryRun) error {
 			if opts.Weights == "" {
 				var err error
-				if opts.Cache, err = openCache(cmd); err != nil {
+				if opts.Cache, err = openDefaultCache(cmd, cache.Options{}); err != nil {
 					return err
 				}
 			}
@@ -159,14 +159,6 @@ The default weights file is the one in the stack's pic-sure source.`,
 		})
 	}
 	return skippable(c)
-}
-
-func openCache(cmd *cobra.Command) (*cache.Cache, error) {
-	root, err := cache.DefaultRoot()
-	if err != nil {
-		return nil, err
-	}
-	return cache.Open(root, cache.Options{Holder: cmd.CommandPath()})
 }
 
 // inputFile returns path made absolute, which must be a regular file we

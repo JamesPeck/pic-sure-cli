@@ -7,6 +7,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/JamesPeck/pic-sure-cli/internal/ctxio"
 )
 
 // sniffLen is how much of a file, or of its decompressed content, detect
@@ -51,7 +53,7 @@ func detect(ctx context.Context, file string) (Format, error) {
 		return "", &InputError{Err: err}
 	}
 	defer func() { _ = f.Close() }()
-	head, err := sniff(ctxReader{ctx, f})
+	head, err := sniff(ctxio.Reader(ctx, f))
 	if err != nil {
 		return "", readErr(ctx, file, err)
 	}
@@ -79,7 +81,7 @@ func detectGzip(ctx context.Context, file string, f *os.File) (Format, error) {
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		return "", err
 	}
-	gz, err := newGzipReader(ctxReader{ctx, f})
+	gz, err := newGzipReader(ctxio.Reader(ctx, f))
 	if err != nil {
 		return "", inputErr("reading %s as gzip: %w", file, err)
 	}

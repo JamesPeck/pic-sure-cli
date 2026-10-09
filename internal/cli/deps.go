@@ -7,10 +7,9 @@ import (
 )
 
 // newDeps assembles the dependencies for one command run. Each comes from a
-// constructor in its owning ticket's wiring file (see the package doc), so
-// wiring a new implementation never touches this function. Deps.Compose is
+// constructor in its wiring file (see the package doc). Deps.Compose is
 // left nil: it belongs to one rendered stack, so the command sets it once it
-// has found or created the stack (tickets 007, 017, 021).
+// has found or created the stack.
 func (a *App) newDeps() *ops.Deps {
 	log := a.newLogger()
 	runner := a.newRunner(log)

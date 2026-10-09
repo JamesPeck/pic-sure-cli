@@ -9,7 +9,7 @@
 // arguments that contain spaces as docker.FormatArgv does. The harness sets
 // HOME to the script's work directory, so a script supplies the scenario as
 // a txtar file and checks the log with `cmp` or `grep`. HOME is used because
-// the CLI's runner passes it through to subprocesses (ticket 003).
+// the CLI's runner passes it through to subprocesses.
 //
 // Scenario syntax, one rule per line; blank lines and # comments are
 // ignored:

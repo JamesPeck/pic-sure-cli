@@ -350,12 +350,6 @@ func TestResolveComponents(t *testing.T) {
 	if _, err := w.cache.EnsureSource(context.Background(), catalog.Migrations, migTagged); err != nil {
 		t.Errorf("EnsureSource: %v", err)
 	}
-
-	var state stack.State
-	rel.Record(&state, got)
-	if state.Release != (stack.Release{Repo: w.url(), Branch: "james_mono", Commit: rel.Commit}) || len(state.Components) != 4 {
-		t.Errorf("recorded state = %+v", state)
-	}
 }
 
 func TestResolveComponentsUnknownRef(t *testing.T) {

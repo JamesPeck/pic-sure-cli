@@ -1,6 +1,6 @@
 # compose -- runs on the stack's own project, and refuses a subcommand that
 # creates volumes when the config it would use relabels an existing volume:
-# compose would ask on the terminal whether to recreate it (ticket 107).
+# compose would ask on the terminal whether to recreate it.
 cd stack
 
 # The render gives demo_hpds-data, made in the directory the stack moved

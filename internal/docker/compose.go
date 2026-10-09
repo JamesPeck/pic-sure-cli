@@ -390,7 +390,7 @@ const ConfigHashLabel = "com.docker.compose.config-hash"
 // overrides, to hash a render not written to the stack yet.
 func (c *Compose) ConfigHashes(ctx context.Context, rendered string) (map[string]string, error) {
 	files := c
-	if rendered != "" {
+	if rendered != "" && len(c.Files) > 0 {
 		next := *c
 		next.Files = append([]string{rendered}, c.Files[1:]...)
 		files = &next

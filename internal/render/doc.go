@@ -4,7 +4,6 @@
 // per-call compose environment (spec §6.4). Render is a pure function and
 // golden-tested.
 //
-// The embedded templates, ported from AIO, are in templates/ (ticket 020; its
-// README maps each one to its AIO source). Ticket 021 implements rendering
-// and the goldens.
+// The embedded templates, ported from AIO, are in templates/; its README
+// maps each one to its AIO source.
 package render

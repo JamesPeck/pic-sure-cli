@@ -1,6 +1,6 @@
 # load-genomic --recover settles what an interrupted promote left in the
 # live genomic volume, without VCFs. The settle script itself runs in the
-# ops tests and the real run (ticket 108's Outcome); here docker is faked.
+# ops tests; here docker is faked.
 env XDG_CACHE_HOME=$WORK/cache
 
 # It takes none of the load's flags, and nothing is touched.

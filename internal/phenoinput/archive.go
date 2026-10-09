@@ -9,6 +9,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/JamesPeck/pic-sure-cli/internal/ctxio"
 )
 
 // errStop ends a walk early without an error.
@@ -30,7 +32,7 @@ func walk(ctx context.Context, file string, format Format, fn func(name string, 
 		return walkZip(ctx, file, f, fn)
 	}
 
-	var r io.Reader = ctxReader{ctx, f}
+	r := ctxio.Reader(ctx, f)
 	if format == TarGz {
 		gz, err := newGzipReader(r)
 		if err != nil {
@@ -88,7 +90,7 @@ func walkZip(ctx context.Context, file string, f *os.File, fn func(string, func(
 			return struct {
 				io.Reader
 				io.Closer
-			}{inputReader{ctx, ctxReader{ctx, rc}}, rc}, nil
+			}{inputReader{ctx, ctxio.Reader(ctx, rc)}, rc}, nil
 		}
 		if err := fn(zf.Name, open); err != nil {
 			return err
@@ -169,7 +171,7 @@ func gunzip(ctx context.Context, file, dir string) (string, error) {
 		return "", err
 	}
 	defer func() { _ = f.Close() }()
-	gz, err := newGzipReader(ctxReader{ctx, f})
+	gz, err := newGzipReader(ctxio.Reader(ctx, f))
 	if err != nil {
 		return "", readErr(ctx, file+" as gzip", err)
 	}

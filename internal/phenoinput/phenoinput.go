@@ -228,20 +228,6 @@ func selectEntry(file string, entries []string, want string) (string, error) {
 	return "", &EntryError{File: file, Entry: want, Entries: entries}
 }
 
-// ctxReader stops reading once ctx is done, so a long extraction ends
-// promptly on Ctrl-C.
-type ctxReader struct {
-	ctx context.Context
-	r   io.Reader
-}
-
-func (c ctxReader) Read(p []byte) (int, error) {
-	if c.ctx.Err() != nil {
-		return 0, context.Cause(c.ctx)
-	}
-	return c.r.Read(p)
-}
-
 // inputReader makes r's read errors, a corrupt or truncated archive or
 // stream, *InputErrors, unless ctx has ended, so they stay apart from
 // errors writing the extracted CSV.

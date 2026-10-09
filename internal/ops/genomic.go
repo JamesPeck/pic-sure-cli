@@ -351,7 +351,7 @@ func vcfIndexFiles(index string, data []byte, vcfDir string) ([]string, []int64,
 		switch {
 		case !filepath.IsAbs(name):
 			return nil, nil, bad("%q isn't an absolute path; the loaders open each VCF by the path in the index", name)
-		case !within(filepath.Clean(name), vcfDir):
+		case !withinLexically(filepath.Clean(name), vcfDir):
 			return nil, nil, bad("%s isn't under --vcf-dir %s, the only directory the loaders see", name, vcfDir)
 		}
 		fi, err := os.Stat(name)

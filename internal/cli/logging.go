@@ -49,7 +49,7 @@ func (a *App) startRunLog(cmd *cobra.Command, args []string) {
 		if sv, ok := f.Value.(pflag.SliceValue); ok && f.Name == "set" {
 			for _, kv := range sv.GetSlice() {
 				key, v, _ := strings.Cut(kv, "=")
-				if privateConfigKey(key) {
+				if stack.PrivateKey(key) {
 					registerConfigValue(v)
 					kv = key + "=" + log.Redacted
 				}
@@ -82,26 +82,11 @@ func logArgs(path string, args []string) []any {
 			sub, after = args[i], len(args)-i-1
 		}
 		return []any{"compose_command", sub, "compose_args", after}
-	case path == "config set" && len(args) >= 2 && privateConfigKey(args[0]):
+	case path == "config set" && len(args) >= 2 && stack.PrivateKey(args[0]):
 		registerConfigValue(args[1])
 		return []any{"args", append([]string{args[0], log.Redacted}, args[2:]...)}
 	}
 	return []any{"args", args}
-}
-
-// privateConfigKey reports whether a config key's value is kept out of the
-// logs: a secret field, the admin email (personal data), or a secret-named
-// key such as an env var's (log.IsSecretName), unless it is a field that
-// isn't secret (auth.consent_authorization).
-func privateConfigKey(key string) bool {
-	field, ok := stack.LookupField(key)
-	if field.Secret || field.Flag == "admin-email" {
-		return true
-	}
-	if ok && !strings.HasSuffix(field.Key, ".*") {
-		return false
-	}
-	return log.IsSecretName(key)
 }
 
 // registerConfigValue registers a private key's value with the redactor,
