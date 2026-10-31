@@ -207,7 +207,7 @@ func (a *App) reportError(cmd *cobra.Command, err error) {
 		o.final = true
 		step := o.sink.failedStep()
 		var stepErr *steps.Error
-		if step == "" && errors.As(err, &stepErr) {
+		if step == "" && errors.As(err, &stepErr) && !stepErr.Interrupted {
 			step = stepErr.Step
 		}
 		o.sink.Emit(events.Result{Error: &events.ErrorInfo{
