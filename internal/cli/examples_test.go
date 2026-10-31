@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -80,7 +81,7 @@ func TestEveryCommandHasExamples(t *testing.T) {
 			pending = ""
 			examples++
 			for _, args := range picSureInvocations(line) {
-				if err := checkInvocation(args); err != nil {
+				if err := checkExample(args); err != nil {
 					t.Errorf("%s: example %q: %v", path, line, err)
 					continue
 				}
@@ -99,4 +100,36 @@ func TestEveryCommandHasExamples(t *testing.T) {
 			t.Errorf("%s: no example runs %s", path, path)
 		}
 	}
+}
+
+// checkExample is checkInvocation without its allowance for prose: an
+// example must run as written, so it fails on a missing argument and on
+// a missing required or conflicting flag too. It runs nothing, so it
+// can't see requirements a command checks only when it runs.
+func checkExample(args []string) error {
+	cmd, rest, err := newDocRoot().Find(args)
+	if err != nil {
+		return err
+	}
+	cmd.InitDefaultHelpFlag()
+	if err := cmd.ParseFlags(rest); err != nil {
+		return err
+	}
+	if help, _ := cmd.Flags().GetBool("help"); help {
+		return nil
+	}
+	pos := cmd.Flags().Args()
+	if cmd.HasAvailableSubCommands() {
+		if len(pos) > 0 {
+			return fmt.Errorf("%s has no subcommand %q", cmd.CommandPath(), pos[0])
+		}
+		return fmt.Errorf("%s needs a subcommand", cmd.CommandPath())
+	}
+	if err := cmd.ValidateArgs(pos); err != nil {
+		return err
+	}
+	if err := cmd.ValidateRequiredFlags(); err != nil {
+		return err
+	}
+	return cmd.ValidateFlagGroups()
 }
