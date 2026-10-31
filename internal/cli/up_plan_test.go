@@ -14,6 +14,7 @@ func TestUpPreviewRejectsUnsafeProbe(t *testing.T) {
 		{Network: "none"},
 		{Remove: true, Network: "none", Mounts: []docker.Mount{{Source: "volume", Target: "/data"}}},
 	} {
+		opts.Name = "demo-genomic-list-rejected"
 		engine := &upProbeEngine{report: &upPlan{}, sink: events.Discard}
 		if _, err := engine.Run(context.Background(), opts); err == nil {
 			t.Fatal("unsafe probe reached Docker")

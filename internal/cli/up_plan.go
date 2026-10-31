@@ -178,6 +178,11 @@ func (e *upProbeEngine) Run(ctx context.Context, opts docker.RunOpts) (int, erro
 	e.sink.Emit(events.Warning{ID: ops.GenomicLeftoversStepID, Text: "Running read-only probe container " + opts.Name + " (" + opts.Image + ")"})
 	code, err := e.Engine.Run(ctx, opts)
 	e.report.Probes = append(e.report.Probes, upProbe{Name: opts.Name, Image: opts.Image})
+	if errors.Is(err, docker.ErrNotFound) {
+		if present, inspectErr := e.Engine.ImageExists(ctx, opts.Image); inspectErr == nil && !present {
+			return code, exitcode.Precondition("dry-run needs local probe image %s; pull it explicitly with `docker pull %s` and retry: %w", opts.Image, opts.Image, err)
+		}
+	}
 	return code, err
 }
 

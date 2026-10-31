@@ -47,6 +47,17 @@ stdout 'render: always_runs'
 stdout 'restart: depends_on_earlier_step'
 stdout 'Partial preview of current inputs'
 
+# A missing local probe image is actionable and must not trigger a pull.
+cp missing-image.scenario docker.scenario
+rm docker.log
+exitcode 3 pic-sure --stack stack --json up --dry-run
+stdout '"exit_code":3'
+stdout 'step genomic-leftovers failed'
+stderr 'pull it explicitly with `docker pull alpine:3.23` and retry'
+grep -count=1 'docker run .*--pull never ' docker.log
+! grep 'docker pull' docker.log
+cp clean.scenario docker.scenario
+
 # Missing HPDS keys keep real up's precondition code and recovery guidance.
 rm stack/.pic-sure/hpds/encryption_key
 exitcode 3 pic-sure --stack stack --json up --dry-run
@@ -129,3 +140,11 @@ a
 .promote-a
 -- absent.txt --
 Error response from daemon: get demo_hpds-genomic: no such volume
+
+-- missing-image.scenario --
+docker volume inspect demo_hpds-genomic => 0 stdout=volume.json
+docker run * --pull never --name demo-genomic-list-* => 125 stderr=missing-image.txt
+docker image inspect alpine:3.23 => 1 stderr=missing-image.txt
+docker rm * => 0
+-- missing-image.txt --
+Error response from daemon: No such image: alpine:3.23
