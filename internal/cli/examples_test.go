@@ -62,22 +62,22 @@ func TestEveryCommandHasExamples(t *testing.T) {
 			continue
 		}
 		var examples, own int
-		pending := false
+		pending := ""
 		for _, line := range strings.Split(c.Example, "\n") {
 			line = strings.TrimSpace(line)
 			switch {
 			case line == "":
 				continue
 			case strings.HasPrefix(line, "#"):
-				if pending {
-					t.Errorf("%s: comment %q has no example below it", path, line)
+				if pending != "" {
+					t.Errorf("%s: comment %q has no example below it", path, pending)
 				}
-				pending = true
+				pending = line
 				continue
-			case !pending:
+			case pending == "":
 				t.Errorf("%s: example %q has no # comment above it", path, line)
 			}
-			pending = false
+			pending = ""
 			examples++
 			for _, args := range picSureInvocations(line) {
 				if err := checkInvocation(args); err != nil {
@@ -89,8 +89,8 @@ func TestEveryCommandHasExamples(t *testing.T) {
 				}
 			}
 		}
-		if pending {
-			t.Errorf("%s: its last comment has no example below it", path)
+		if pending != "" {
+			t.Errorf("%s: comment %q has no example below it", path, pending)
 		}
 		if examples < 2 || examples > 4 {
 			t.Errorf("%s has %d examples, want 2 to 4", path, examples)
