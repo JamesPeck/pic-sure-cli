@@ -16,6 +16,10 @@ type GlobalOptions struct {
 	JSON bool
 	// Plain is --plain: timestamped plain output instead of the TUI.
 	Plain bool
+	// Quiet is --quiet: drop the narration (step, progress and subprocess
+	// output) in every mode, keeping data, warnings and errors (output.go).
+	// With --log-level left at its default, it also lowers that to error.
+	Quiet bool
 	// Yes is --yes: answer yes to every confirmation, destructive ones
 	// included, and never prompt. It never implies --self-update (D12).
 	Yes bool
@@ -39,6 +43,7 @@ func (g *GlobalOptions) register(cmd *cobra.Command) {
 	f.BoolVar(&g.WaitLock, "wait-lock", false, "if another pic-sure command is changing the stack, wait for it instead of failing")
 	f.BoolVar(&g.JSON, "json", false, "machine-readable JSON on stdout; implies --non-interactive")
 	f.BoolVar(&g.Plain, "plain", false, "plain timestamped output instead of the TUI")
+	f.BoolVarP(&g.Quiet, "quiet", "q", false, "drop progress and step output, keeping data, warnings and errors; the default --log-level becomes error")
 	f.BoolVar(&g.Yes, "yes", false, "answer yes to every confirmation, including destructive ones")
 	f.BoolVar(&g.NonInteractive, "non-interactive", false, "never prompt; fail when an answer is needed")
 	f.BoolVar(&g.NoAnimations, "no-animations", false, "static TUI, without animation")

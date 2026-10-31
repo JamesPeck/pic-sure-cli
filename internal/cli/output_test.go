@@ -239,6 +239,64 @@ func TestJSONStreamEndsWithResult(t *testing.T) {
 	})
 }
 
+func TestQuiet(t *testing.T) {
+	t.Run("json keeps the warnings, the logs step's lines and the result", func(t *testing.T) {
+		a, stdout, _ := testApp(t)
+		root := withRunE(t, a, []string{"up"}, func(*cobra.Command, []string) error {
+			sink := a.newDeps().Sink
+			pct := 50.0
+			sink.Emit(events.StepStarted{ID: "db", Title: "Start the database"})
+			sink.Emit(events.Progress{ID: "db", Text: "1/2", Pct: &pct})
+			sink.Emit(events.Log{ID: "db", Stream: events.StreamStdout, Line: "started"})
+			sink.Emit(events.Warning{ID: "db", Text: "slow start"})
+			sink.Emit(events.StepDone{ID: "db", Status: events.StepOK})
+			sink.Emit(events.Log{ID: "logs", Stream: events.StreamStdout, Line: "hpds-1  | started"})
+			return a.finish(map[string]string{"url": "https://localhost:8443"}, nil)
+		})
+		if code := a.execute(context.Background(), root, []string{"up", "--json", "--quiet"}); code != 0 {
+			t.Errorf("exit = %d", code)
+		}
+		objs := jsonLines(t, stdout.String())
+		want := []map[string]any{
+			{"type": "warning", "id": "db", "text": "slow start"},
+			{"type": "log", "id": "logs", "stream": "stdout", "line": "hpds-1  | started"},
+			{"type": "result", "ok": true, "data": map[string]any{"url": "https://localhost:8443"}},
+		}
+		if len(objs) != len(want) {
+			t.Fatalf("stdout = %s", stdout)
+		}
+		for i := range want {
+			if !jsonEqual(objs[i], want[i]) {
+				t.Errorf("line %d = %v, want %v", i, objs[i], want[i])
+			}
+		}
+	})
+	t.Run("a failed step still names itself in the result", func(t *testing.T) {
+		a, stdout, _ := testApp(t)
+		root := withRunE(t, a, []string{"up"}, streamingUp(a, true, exitcode.Failed("boom"), nil))
+		if code := a.execute(context.Background(), root, []string{"up", "-q", "--json"}); code != exitcode.CodeFailed {
+			t.Errorf("exit = %d", code)
+		}
+		objs := jsonLines(t, stdout.String())
+		want := map[string]any{"type": "result", "ok": false, "error": map[string]any{
+			"exit_code": 1, "message": "boom", "step": "db",
+		}}
+		if len(objs) != 1 || !jsonEqual(objs[0], want) {
+			t.Errorf("stdout = %s", stdout)
+		}
+	})
+	t.Run("plain prints only the error", func(t *testing.T) {
+		a, stdout, stderr := testApp(t)
+		root := withRunE(t, a, []string{"up"}, streamingUp(a, true, exitcode.Failed("boom"), nil))
+		if code := a.execute(context.Background(), root, []string{"up", "--quiet"}); code != exitcode.CodeFailed {
+			t.Errorf("exit = %d", code)
+		}
+		if stdout.Len() != 0 || stderr.String() != "pic-sure: boom\n" {
+			t.Errorf("stdout %q, stderr %q", stdout, stderr)
+		}
+	})
+}
+
 func TestReports(t *testing.T) {
 	t.Run("version --json is one object", func(t *testing.T) {
 		a, stdout, _ := testApp(t)

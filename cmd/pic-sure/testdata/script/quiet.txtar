@@ -1,0 +1,141 @@
+# --quiet (-q) drops the narration (step, progress and step output events,
+# and the plain lines for them) but never data, warnings or errors.
+
+cd stack
+
+# --json on a streaming command: down's step and compose's lines are gone;
+# the result is the one line left.
+exec pic-sure --quiet --json down
+jsonlines stdout
+stdout -count=1 '^\{'
+stdout '^\{"type":"result","ok":true\}$'
+! stderr .
+
+# Plain: no step lines.
+exec pic-sure -q --plain down
+! stdout .
+! stderr .
+
+# logs' lines are its data, carried as log events of the step logs, so they
+# survive; its step events don't.
+exec pic-sure -q --json logs hpds
+jsonlines stdout
+stdout '^\{"type":"log","id":"logs","stream":"stdout","line":"hpds-1  \| started"\}$'
+stdout '"type":"result","ok":true'
+! stdout 'step_'
+exec pic-sure -q logs hpds
+stdout '^hpds-1  \| started$'
+
+# Whatever else a command prints on stdout as its output survives too.
+exec pic-sure -q config get name
+stdout '^demo$'
+exec pic-sure -q compose -- ps -a
+stdout 'raw compose ps'
+
+# A report command's object is unchanged.
+exec pic-sure --json ps
+cp stdout $WORK/ps.report
+exec pic-sure --quiet --json ps
+cmp stdout $WORK/ps.report
+exec pic-sure version --json
+cp stdout $WORK/version.report
+exec pic-sure --quiet version --json
+cmp stdout $WORK/version.report
+
+# Warnings survive.
+exec pic-sure -q --stack $WORK/newer ps
+stderr 'warning: '
+
+# A failure keeps its error line and its exit code, and with --json its
+# result, naming the failed step.
+exitcode 1 pic-sure --quiet --plain restart nosuch
+! stdout .
+stderr '^pic-sure: .*no such service: nosuch'
+exitcode 1 pic-sure --quiet --json restart nosuch
+jsonlines stdout
+stdout -count=1 '^\{'
+stdout '^\{"type":"result","ok":false,"error":\{"exit_code":1,.*"step":"restart"\}\}$'
+stderr '^pic-sure: .*no such service: nosuch'
+exitcode 3 pic-sure --quiet --stack /nowhere up
+stderr '^pic-sure: no pic-sure stack found in /nowhere'
+
+# The run log under .pic-sure/logs still records debug.
+rm .pic-sure/logs
+exec pic-sure --quiet down
+exec sh -c 'grep -rq "\"level\":\"DEBUG\",\"msg\":\"pic-sure run\"" .pic-sure/logs'
+
+# --quiet lowers the default --log-level to error: a warning record that
+# info would print is gone.
+cd $WORK/nolog
+exec pic-sure --plain down
+stderr 'level=WARN msg="can''t write the run log"'
+exec pic-sure --quiet down
+! stderr .
+
+# An explicit --log-level wins, before or after --quiet.
+exec pic-sure --quiet --log-level warn down
+stderr 'level=WARN msg="can''t write the run log"'
+exec pic-sure --log-level warn --quiet down
+stderr 'level=WARN msg="can''t write the run log"'
+exec pic-sure --log-level DEBUG -q version
+stderr 'level=DEBUG msg="pic-sure run"'
+
+-- docker.scenario --
+docker compose * --progress plain down --remove-orphans => 0 stderr=down.txt
+docker compose * --progress json down --remove-orphans => 0 stderr=down.json
+docker compose * restart nosuch => 1 stderr=nosuch.json
+docker compose * ps --all --format json => 0 stdout=ps.json
+docker compose * logs* => 0 stdout=logs.txt
+docker compose * ps -a => 0 stdout=raw.txt
+docker ps --all --no-trunc --filter label=com.docker.compose.project=* --format * => 0
+docker ps --all --no-trunc --filter label=org.hms-dbmi.picsure.stack=* --format * => 0
+docker volume ls -q --filter label=com.docker.compose.project=* => 0
+docker volume ls -q --filter label=org.hms-dbmi.picsure.stack=* => 0
+docker network ls -q --no-trunc --filter label=com.docker.compose.project=* => 0
+-- down.txt --
+ Container demo-hpds-1  Removed
+-- down.json --
+{"id":"Container demo-hpds-1","status":"Removed"}
+-- nosuch.json --
+{"error":true,"message":"no such service: nosuch"}
+-- ps.json --
+{"ID":"aaa","Name":"demo-hpds-1","Project":"demo","Service":"hpds","State":"running","Status":"Up 2 minutes (healthy)","Health":"healthy","ExitCode":0}
+-- logs.txt --
+hpds-1  | started
+-- raw.txt --
+raw compose ps
+-- stack/pic-sure.yaml --
+schema: 1
+name: demo
+auth: {mode: open, admin_email: admin@example.com}
+-- stack/.pic-sure/state.json --
+{"cli_version": "dev", "schema_version": 1}
+-- stack/.pic-sure/secrets.yaml --
+db_root_password: rootpw
+-- stack/.pic-sure/render/compose.yaml --
+name: demo
+services: {}
+-- stack/overrides/10-local.yaml --
+services: {}
+-- nolog/pic-sure.yaml --
+schema: 1
+name: nolog
+auth: {mode: open, admin_email: admin@example.com}
+-- nolog/.pic-sure/state.json --
+{"cli_version": "dev", "schema_version": 1}
+-- nolog/.pic-sure/secrets.yaml --
+db_root_password: rootpw
+-- nolog/.pic-sure/render/compose.yaml --
+name: nolog
+services: {}
+-- nolog/.pic-sure/logs --
+not a directory, so the run log can't be written
+-- newer/pic-sure.yaml --
+schema: 2
+name: newer
+auth: {mode: open, admin_email: admin@example.com}
+-- newer/.pic-sure/state.json --
+{"cli_version": "v9.0.0", "schema_version": 2}
+-- newer/.pic-sure/render/compose.yaml --
+name: newer
+services: {}
