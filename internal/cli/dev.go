@@ -194,7 +194,7 @@ func (a *App) dev(cmd *cobra.Command, name string, on bool) (err error) {
 	}
 	proxy, err := netproxy.New(netproxy.Config(cfg.Proxy), netproxy.CatalogServices())
 	if err != nil {
-		return exitcode.Usage("%w", err)
+		return exitcode.InvalidConfig.Errorf("%w", err)
 	}
 	d.Git = d.Git.WithEnv(proxy.Env()...)
 	root, err := cache.DefaultRoot()

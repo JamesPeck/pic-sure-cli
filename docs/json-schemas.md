@@ -215,7 +215,7 @@ its own gets its exit code's: `failed`, `usage`, `precondition`,
 | `step_failed` | 1 | A step failed with no more specific code; `error.step` names it, and re-running the command retries it. |
 | `stack_locked` | 1 | Another pic-sure command holds the stack's lock. Wait for it, or pass `--wait-lock`. |
 | `usage` | 2 | Any other usage error, such as an unknown command or flag. |
-| `invalid_config` | 2 | A bad config key or value, in `pic-sure.yaml` or on the command line. |
+| `invalid_config` | 2 | A bad config key or value, in `pic-sure.yaml` or on the command line, such as an `https://` proxy URL. |
 | `invalid_secret` | 2 | A secret given on stdin that is empty, too long or has a line break, or an Auth0 client secret under 32 bytes. |
 | `precondition` | 3 | Any other unmet precondition. |
 | `docker_unavailable` | 3 | Docker isn't on PATH, or its daemon isn't reachable. |
@@ -235,8 +235,10 @@ its own gets its exit code's: `failed`, `usage`, `precondition`,
 | `interrupted` | 128+N | Stopped by signal N: Ctrl-C (130), SIGTERM (143), or a closed stdout or stderr (141). |
 
 `init` checks the host before it changes anything, and reports every check
-that failed in one message with exit 3 and `precondition`, a too-old
-docker compose included; `doctor --json` names each failing check.
+that failed in one message with exit 3: `docker_unavailable` when Docker
+is missing or its daemon unreachable, otherwise `precondition`, a missing
+or too-old docker compose included. `doctor --json` names each failing
+check.
 
 ### `result.data`
 

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"syscall"
 )
 
@@ -132,38 +133,37 @@ func (c Condition) Errorf(format string, args ...any) error {
 	return &Error{Code: c.Code, Slug: c.Slug, Err: fmt.Errorf(format, args...)}
 }
 
-// The conditions. Add new ones to Conditions too.
+// The conditions, in exit code order.
 var (
-	StepFailed  = Condition{"step_failed", CodeFailed}
-	StackLocked = Condition{"stack_locked", CodeFailed}
+	StepFailed  = condition("step_failed", CodeFailed)
+	StackLocked = condition("stack_locked", CodeFailed)
 
-	InvalidConfig = Condition{"invalid_config", CodeUsage}
-	InvalidSecret = Condition{"invalid_secret", CodeUsage}
+	InvalidConfig = condition("invalid_config", CodeUsage)
+	InvalidSecret = condition("invalid_secret", CodeUsage)
 
-	DockerUnavailable   = Condition{"docker_unavailable", CodePrecondition}
-	ComposeNotInstalled = Condition{"compose_not_installed", CodePrecondition}
-	NoStack             = Condition{"no_stack", CodePrecondition}
-	WrongOwner          = Condition{"wrong_owner", CodePrecondition}
-	StackNotInitialised = Condition{"stack_not_initialised", CodePrecondition}
-	StackNotRendered    = Condition{"stack_not_rendered", CodePrecondition}
-	PortsBusy           = Condition{"ports_busy", CodePrecondition}
-	GeneratedOpenSecret = Condition{"generated_open_secret", CodePrecondition}
-	ForeignResources    = Condition{"foreign_resources", CodePrecondition}
+	DockerUnavailable   = condition("docker_unavailable", CodePrecondition)
+	ComposeNotInstalled = condition("compose_not_installed", CodePrecondition)
+	NoStack             = condition("no_stack", CodePrecondition)
+	WrongOwner          = condition("wrong_owner", CodePrecondition)
+	StackNotInitialised = condition("stack_not_initialised", CodePrecondition)
+	StackNotRendered    = condition("stack_not_rendered", CodePrecondition)
+	PortsBusy           = condition("ports_busy", CodePrecondition)
+	GeneratedOpenSecret = condition("generated_open_secret", CodePrecondition)
+	ForeignResources    = condition("foreign_resources", CodePrecondition)
 
-	ConfirmationRequired = Condition{"confirmation_required", CodeConfirmRequired}
+	ConfirmationRequired = condition("confirmation_required", CodeConfirmRequired)
 
-	CLITooOld               = Condition{"cli_too_old", CodeIncompatible}
-	ConfigMigrationsPending = Condition{"config_migrations_pending", CodeIncompatible}
+	CLITooOld               = condition("cli_too_old", CodeIncompatible)
+	ConfigMigrationsPending = condition("config_migrations_pending", CodeIncompatible)
 )
 
-// Conditions returns every Condition, in exit code order.
-func Conditions() []Condition {
-	return []Condition{
-		StepFailed, StackLocked,
-		InvalidConfig, InvalidSecret,
-		DockerUnavailable, ComposeNotInstalled, NoStack, WrongOwner,
-		StackNotInitialised, StackNotRendered, PortsBusy, GeneratedOpenSecret, ForeignResources,
-		ConfirmationRequired,
-		CLITooOld, ConfigMigrationsPending,
-	}
+var conditions []Condition
+
+func condition(slug string, code int) Condition {
+	c := Condition{Slug: slug, Code: code}
+	conditions = append(conditions, c)
+	return c
 }
+
+// Conditions returns every Condition, in exit code order.
+func Conditions() []Condition { return slices.Clone(conditions) }

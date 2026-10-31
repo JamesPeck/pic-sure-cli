@@ -57,6 +57,9 @@ stderr 'flags="\[--admin-email=\[REDACTED\] '
 stdin short.txt
 exitcode 2 pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --auth0-client-secret-stdin
 stderr '--auth0-client-secret-stdin: the client secret is 5 bytes; PSAMA needs at least 32'
+exitcode 2 pic-sure --json init new --name demo --admin-email admin@example.com --auth-mode open --auto-ports --set network.http_port=eighty
+stdout '"exit_code":2,"code":"invalid_config","message":"--set network.http_port=eighty: '
+! exists new
 stdin short.txt
 exitcode 2 pic-sure --json init new --name demo --admin-email admin@example.com --auth-mode open --auth0-client-secret-stdin
 stdout '"exit_code":2,"code":"invalid_secret",'

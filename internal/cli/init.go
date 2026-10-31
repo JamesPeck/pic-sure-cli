@@ -395,7 +395,7 @@ func (r *initRun) configFlags() ([]configFlag, error) {
 			keys: []string{key}, values: []string{abs},
 			apply: func(d *stack.ConfigDoc) error {
 				if err := d.SetValue(key, abs); err != nil {
-					return exitcode.Usage("--source %s: %v", s, err)
+					return exitcode.InvalidConfig.Errorf("--source %s: %v", s, err)
 				}
 				return nil
 			}})
@@ -405,7 +405,7 @@ func (r *initRun) configFlags() ([]configFlag, error) {
 			keys: []string{s.key}, values: []string{s.value},
 			apply: func(d *stack.ConfigDoc) error {
 				if err := d.Set(s.key, s.value); err != nil {
-					return exitcode.Usage("--set %s: %v", s.arg, err)
+					return exitcode.InvalidConfig.Errorf("--set %s: %v", s.arg, err)
 				}
 				return nil
 			}})
@@ -521,10 +521,10 @@ func setFlag(doc *stack.ConfigDoc, f stack.Field, v string) error {
 			}
 			return doc.SetValue("hpds.shared_name", name)
 		}
-		return exitcode.Usage("--hpds-data %s: want local or shared:NAME", v)
+		return exitcode.InvalidConfig.Errorf("--hpds-data %s: want local or shared:NAME", v)
 	}
 	if err := doc.Set(f.Key, v); err != nil {
-		return exitcode.Usage("--%s: %v", f.Flag, err)
+		return exitcode.InvalidConfig.Errorf("--%s: %v", f.Flag, err)
 	}
 	return nil
 }
@@ -537,8 +537,9 @@ func componentNames() []string {
 	return out
 }
 
-// flagProblems turns the config's validation problems into a usage error
-// that names the --set or init's flag for each key that has one.
+// flagProblems turns the config's validation problems into an
+// invalid_config error that names the --set or init's flag for each key
+// that has one.
 func (r *initRun) flagProblems(err error) error {
 	var ce *stack.ConfigError
 	if !errors.As(err, &ce) {
@@ -556,7 +557,7 @@ func (r *initRun) flagProblems(err error) error {
 			msgs = append(msgs, fmt.Sprintf("%s: %s", p.Path, p.Msg))
 		}
 	}
-	return exitcode.Usage("%s", strings.Join(msgs, "; "))
+	return exitcode.InvalidConfig.Errorf("%s", strings.Join(msgs, "; "))
 }
 
 // readGateFlags sets the gate's options from the command line. On a
@@ -660,18 +661,22 @@ func (r *initRun) preconditions(ctx context.Context, sink events.Sink) error {
 	opts.CacheDir, opts.CacheErr = cache.DefaultRoot()
 	report := ops.Doctor(ctx, r.d, opts)
 	var failed []string
+	notReady := exitcode.Precondition
 	for _, c := range report.Checks {
 		msg := log.Redact(c.Message)
 		switch {
 		case c.Status == ops.CheckFail && c.Name != "memory":
 			failed = append(failed, c.Name+": "+msg)
+			if c.Name == "docker-cli" || c.Name == "docker-daemon" {
+				notReady = exitcode.DockerUnavailable.Errorf
+			}
 		case c.Status != ops.CheckOK:
 			// Memory is only a warning: -Xmx is a ceiling, not a reservation.
 			sink.Emit(events.Warning{ID: initPreconditions, Text: c.Name + ": " + msg})
 		}
 	}
 	if len(failed) > 0 {
-		return exitcode.Precondition("the host isn't ready:\n  %s\nRun `pic-sure doctor` for details", strings.Join(failed, "\n  "))
+		return notReady("the host isn't ready:\n  %s\nRun `pic-sure doctor` for details", strings.Join(failed, "\n  "))
 	}
 
 	owned, err := r.checkName(ctx)
@@ -836,12 +841,12 @@ func (r *initRun) portFlag(name, key string) (int, error) {
 		if p, _ := v.(int); p >= 1 && p <= 65535 {
 			return p, nil
 		}
-		return 0, exitcode.Usage("--set %s=%v: not a port number", key, v)
+		return 0, exitcode.InvalidConfig.Errorf("--set %s=%v: not a port number", key, v)
 	}
 	v, _ := flags.GetString(name)
 	p, err := strconv.Atoi(v)
 	if err != nil || p < 1 || p > 65535 {
-		return 0, exitcode.Usage("--%s %s: not a port number", name, v)
+		return 0, exitcode.InvalidConfig.Errorf("--%s %s: not a port number", name, v)
 	}
 	return p, nil
 }
@@ -867,7 +872,7 @@ func (r *initRun) useProxy() error {
 	}
 	var err error
 	if r.proxy, err = netproxy.New(netproxy.Config(r.cfg.Proxy), netproxy.CatalogServices()); err != nil {
-		return exitcode.Usage("%w", err)
+		return exitcode.InvalidConfig.Errorf("%w", err)
 	}
 	r.d.Git = r.git.WithEnv(r.proxy.Env()...)
 	var root string

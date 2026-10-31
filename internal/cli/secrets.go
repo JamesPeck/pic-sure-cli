@@ -126,7 +126,7 @@ func (a *App) rotateSecret(cmd *cobra.Command, args []string) error {
 	}
 	if d.Compose, err = a.upCompose(d, st, cfg, sec)(); err != nil {
 		if errors.Is(err, docker.ErrNotRendered) {
-			return exitcode.Precondition("%w; run `pic-sure up`", err)
+			return exitcode.StackNotRendered.Errorf("%w; run `pic-sure up`", err)
 		}
 		return err
 	}

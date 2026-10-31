@@ -30,6 +30,8 @@ exitcode 3 sh $WORK/nodocker.sh reset --yes
 stderr 'docker is not on PATH'
 exitcode 3 sh $WORK/nodocker.sh up
 stderr 'docker is not on PATH'
+exitcode 3 sh $WORK/nodocker.sh --json init $WORK/new --name demo --admin-email admin@example.com --auth-mode open --auto-ports
+stdout '"exit_code":3,"code":"docker_unavailable","message":"step preconditions failed: the host isn''t ready:'
 exitcode 3 sh $WORK/nodocker.sh --json down
 stdout '"exit_code":3,"code":"docker_unavailable","message":"docker is not on PATH: '
 
