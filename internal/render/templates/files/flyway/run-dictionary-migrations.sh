@@ -37,7 +37,7 @@ has_sql() {
 
 if ! has_sql "$MIGRATIONS_DIR"; then
   echo "[flyway-dict] Missing required dictionary migrations at $MIGRATIONS_DIR." >&2
-  echo "[flyway-dict] Check the pic-sure source tree (pic-sure migrate --check)." >&2
+  echo "[flyway-dict] Check the pic-sure source tree (pic-sure migrate --dry-run)." >&2
   exit 1
 fi
 

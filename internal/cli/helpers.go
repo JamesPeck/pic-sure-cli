@@ -43,7 +43,8 @@ func rejectUnknownHelpTopics(root *cobra.Command) {
 	}
 }
 
-// addDryRunFlag optionally accepts a hidden legacy spelling for the same value.
+// addDryRunFlag optionally accepts hidden aliases for the same value.
+// With aliases it reserves PreRunE to reject passing both spellings.
 func addDryRunFlag(cmd *cobra.Command, usage string, aliases ...string) {
 	flags := cmd.Flags()
 	value := flags.Bool("dry-run", false, usage)

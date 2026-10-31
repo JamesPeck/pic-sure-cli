@@ -150,6 +150,9 @@ different flag.
 | `pic-sure doctor [--network]` | Check the host, Docker, the stack and the network. |
 | `pic-sure support-bundle` | A redacted diagnostics archive to attach to an issue. |
 
+`migrate --dry-run` and `db bootstrap --dry-run` preview without changing
+the database; `--check` remains an accepted older spelling.
+
 The [command reference](docs/commands/README.md) has every command.
 
 ## The TUI
@@ -357,9 +360,6 @@ proxy end-to-end test.
   `pic-sure config set components.pic-sure.source '' && pic-sure up`.
 
 ## Updating
-
-`migrate --dry-run` and `db bootstrap --dry-run` preview without changing
-the database; `--check` remains an accepted older spelling.
 
 `pic-sure update` moves the stack to the head of its release branch
 (`release.branch`; `--release-commit SHA` for a specific one). Run

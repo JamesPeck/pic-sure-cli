@@ -1,8 +1,5 @@
 # JSON output
 
-`migrate --dry-run` and `db bootstrap --dry-run` preview without changing
-the database; `--check` remains an accepted older spelling.
-
 `status --json`, `doctor --json`, `ps --json`, `support-bundle --json`,
 `version --json`, `cache list --json`, `dev list --json`, `shared-data
 list --json`, `migrate --dry-run --json` and `db bootstrap --dry-run --json`
@@ -11,6 +8,9 @@ print one JSON object on stdout with `schema_version` first, and no
 with a `result` event. Within `schema_version` 2,
 changes are additive only: fields are added, never renamed, removed or
 retyped. Ignore fields you don't know.
+
+The database previews also accept the older `--check` spelling and emit
+the same report with either spelling.
 
 ## `status --json`
 
