@@ -123,7 +123,10 @@ func checkExample(args []string) error {
 		if len(pos) > 0 {
 			return fmt.Errorf("%s has no subcommand %q", cmd.CommandPath(), pos[0])
 		}
-		return fmt.Errorf("%s needs a subcommand", cmd.CommandPath())
+		if cmd.HasParent() {
+			// Root alone opens the TUI; a group alone is an error.
+			return fmt.Errorf("%s needs a subcommand", cmd.CommandPath())
+		}
 	}
 	if err := cmd.ValidateArgs(pos); err != nil {
 		return err
