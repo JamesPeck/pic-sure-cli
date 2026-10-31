@@ -235,7 +235,7 @@ it started may still be running, so check with `pic-sure status`.
 | To get | Use |
 |---|---|
 | Plain timestamped lines instead of the live view | `--plain`; also the default off a terminal, or when `CI` is set (to anything but `false` or `0`) |
-| Only data, warnings and errors: no live view or step lines, and log records only at `error` | `--quiet` (`-q`) |
+| Only data, warnings and errors: no live view or step lines, and stderr logging defaults to `error` | `--quiet` (`-q`) |
 | No animation | `--no-animations` or `PIC_SURE_NO_ANIMATIONS=1`. Off by default over SSH; `PIC_SURE_NO_ANIMATIONS=0` turns it back on |
 | No colour | `NO_COLOR` set to any value |
 
