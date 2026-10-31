@@ -10,6 +10,7 @@ import (
 
 	"github.com/JamesPeck/pic-sure-cli/internal/catalog"
 	"github.com/JamesPeck/pic-sure-cli/internal/docker/fakerunner"
+	"github.com/JamesPeck/pic-sure-cli/internal/events"
 	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
 	"github.com/JamesPeck/pic-sure-cli/internal/ops"
 	"github.com/JamesPeck/pic-sure-cli/internal/stack"
@@ -114,4 +115,55 @@ func TestUpWontResolveWithoutARecordedRelease(t *testing.T) {
 		t.Errorf("err = %v, want exit 3", err)
 	}
 	x.f.AssertNotCalled(fakerunner.Glob("git *"))
+}
+
+func TestUpPlanCurrentStackReachesRenderWithoutApplying(t *testing.T) {
+	x := newBuildFixture(t)
+	x.reactorFresh(psSHA[:12], psSHA)
+	x.frontendFresh()
+	x.etlFresh(etlSHA[:12], etlSHA)
+	if err := x.upImages(); err != nil {
+		t.Fatal(err)
+	}
+	tls := newTLSFixture(t)
+	tls.st, tls.cfg = x.st, x.cfg
+	tls.apply(t)
+	state, err := x.st.LoadState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	x.d.Clock = tls.d.Clock
+	x.f.On(fakerunner.Exact("docker", "volume", "inspect", "demo_certs")).Stdout(`[{"Name":"demo_certs","CreatedAt":"2026-10-06T12:00:00Z"}]`)
+	x.f.On(fakerunner.Exact("docker", "volume", "inspect", "demo_hpds-genomic")).Stdout(`[{"Name":"demo_hpds-genomic"}]`)
+	x.f.On(fakerunner.Glob("docker run * --name demo-genomic-list-* --network none * -v demo_hpds-genomic:/data:ro *")).Stdout("partition\n")
+	before, err := x.st.ReadFile(stack.StateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	list := ops.UpSteps(x.d, x.st, x.cfg, &stack.Secrets{}, state, ops.ConvergeOptions{Cache: x.cache})
+	// An accidental Apply or post-render Check must fail, including restart,
+	// whose empty PendingRestarts would otherwise look already done.
+	for i := range list {
+		list[i].Apply = func(context.Context, events.Sink) error { t.Fatal("Plan called Apply"); return nil }
+		if i > 5 && list[i].Check != nil {
+			list[i].Check = func(context.Context) (bool, error) { t.Fatal("Plan checked past render"); return false, nil }
+		}
+	}
+	got, err := steps.Plan(context.Background(), list, steps.PlanOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []steps.PlanStatus{steps.WouldSkip, steps.WouldSkip, steps.WouldSkip, steps.WouldSkip, steps.WouldSkip, steps.AlwaysRuns, steps.DependsOnEarlierStep, steps.DependsOnEarlierStep, steps.DependsOnEarlierStep, steps.DependsOnEarlierStep, steps.DependsOnEarlierStep, steps.AlwaysRuns}
+	if len(got) != len(want) {
+		t.Fatalf("plan = %+v", got)
+	}
+	for i, p := range got {
+		if p.Status != want[i] {
+			t.Errorf("%s = %s, want %s", p.ID, p.Status, want[i])
+		}
+	}
+	after, err := x.st.ReadFile(stack.StateFile)
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("state changed: %v", err)
+	}
 }

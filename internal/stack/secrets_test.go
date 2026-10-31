@@ -381,3 +381,26 @@ func TestEnsureSecretsOpenModeClientSecret(t *testing.T) {
 		t.Errorf("open mode with a supplied secret: err %v, generated %v", err, sec.Auth0ClientSecretGenerated)
 	}
 }
+
+func TestNeedsGenerationLeavesSecretsUnchanged(t *testing.T) {
+	s := newStack(t)
+	sec, err := s.EnsureSecrets(seeded(1), EnsureOptions{OpenAuth: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := *sec
+	if sec.NeedsGeneration(true) {
+		t.Fatal("complete secrets need generation")
+	}
+	sec.LoggingAPIKey = ""
+	missing := *sec
+	if !sec.NeedsGeneration(true) || *sec != missing {
+		t.Fatal("missing secret was not detected without changing inputs")
+	}
+	*sec = before
+	sec.Auth0ClientSecret = ""
+	missing = *sec
+	if !sec.NeedsGeneration(true) || sec.NeedsGeneration(false) || *sec != missing {
+		t.Fatal("open-mode client secret detection changed inputs or ignored auth mode")
+	}
+}

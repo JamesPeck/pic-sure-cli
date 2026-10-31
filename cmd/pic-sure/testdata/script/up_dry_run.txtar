@@ -1,0 +1,124 @@
+env XDG_CACHE_HOME=$WORK/cache
+
+exitcode 3 pic-sure up --dry-run
+stderr 'no pic-sure stack found'
+exitcode 2 pic-sure --stack stack up --dry-run --skip-step invalid
+stderr 'up has no such step'
+! exists docker.log
+
+cp stack/.pic-sure/state.json state.before
+cp stack/.pic-sure/secrets.yaml secrets.before
+cp stack/pic-sure.yaml config.before
+cp stack/.pic-sure/hpds/encryption_key key.before
+cp clean.scenario docker.scenario
+
+# JSON includes the partial plan in result.data, with the actual named probe.
+exec pic-sure --stack stack --json --log-level debug up --dry-run
+jsonlines stdout
+stdout '"type":"result".*"data":\{"stack":"demo","dry_run":true,"partial":true'
+stdout '"id":"resolve"[^}]*"status":"would_skip"'
+stdout '"id":"genomic-leftovers"[^}]*"status":"would_skip"'
+stdout '"id":"images"[^}]*"status":"would_act"'
+stdout '"id":"tls"[^}]*"status":"depends_on_earlier_step"'
+stdout '"id":"render"[^}]*"status":"always_runs"'
+stdout '"id":"restart"[^}]*"status":"depends_on_earlier_step"'
+stdout '"id":"start"[^}]*"status":"always_runs"'
+stdout '"id":"stack-id","would_write":true'
+stdout '"id":"secrets","would_write":true'
+stdout '"probes":\[\{"name":"demo-genomic-list-[0-9a-f]+","image":"alpine:3.23"\}\]'
+stdout 'Running read-only probe container demo-genomic-list-'
+! stdout 'synthetic-secret|admin@example.com|0123456789abcdef0123456789abcdef'
+! stderr 'synthetic-secret|admin@example.com|0123456789abcdef0123456789abcdef'
+grep -count=1 'docker run .*--rm --name demo-genomic-list-.*--network none .*demo_hpds-genomic:/data:ro ' docker.log
+! grep 'docker (build|pull|compose|exec|volume create)' docker.log
+! exists stack/.pic-sure/logs
+! exists stack/.pic-sure/lock
+! exists stack/.pic-sure/manifest.json
+! exists cache
+cmp stack/.pic-sure/state.json state.before
+cmp stack/.pic-sure/secrets.yaml secrets.before
+cmp stack/pic-sure.yaml config.before
+cmp stack/.pic-sure/hpds/encryption_key key.before
+
+exec pic-sure --stack stack --plain up --dry-run
+stdout 'Read-only probe container was run: demo-genomic-list-'
+stdout 'images: would_act'
+stdout 'render: always_runs'
+stdout 'restart: depends_on_earlier_step'
+stdout 'Partial preview of current inputs'
+
+# A positive leftovers Check stops before image inspection and never recovers.
+cp leftovers.scenario docker.scenario
+rm docker.log
+exec pic-sure --stack stack --json up --dry-run
+stdout '"id":"genomic-leftovers"[^}]*"status":"would_act"[^}]*interrupted genomic promote leftovers would block up'
+stdout '"id":"images"[^}]*"status":"depends_on_earlier_step"'
+! grep 'docker image|genomic-recover|docker compose' docker.log
+
+# Skipping render must not let networked remote database probes run.
+cp clean.scenario docker.scenario
+cp remote.yaml stack/pic-sure.yaml
+rm docker.log
+exec pic-sure --stack stack --json up --dry-run --skip-step images --skip-step tls --skip-step truststore --skip-step render
+stdout '"id":"db"[^}]*"status":"depends_on_earlier_step"[^}]*client container with networking'
+! grep 'docker compose|mysql' docker.log
+
+# Missing generated secrets also stop dependent Checks when render is skipped.
+cp config.before stack/pic-sure.yaml
+exec pic-sure --stack stack --json up --dry-run --skip-step images --skip-step tls --skip-step truststore --skip-step render
+stdout '"id":"db"[^}]*"status":"depends_on_earlier_step"[^}]*skipped secret generation'
+
+# A pending resolve stops even the probe. An absent volume never gets created.
+cp unresolved.json stack/.pic-sure/state.json
+rm docker.log
+exec pic-sure --stack stack --json up --dry-run
+stdout '"id":"resolve"[^}]*"status":"would_act"'
+stdout '"probes":\[\]'
+! exists docker.log
+cp state.before stack/.pic-sure/state.json
+cp absent.scenario docker.scenario
+exec pic-sure --stack stack --json up --dry-run
+stdout '"id":"genomic-leftovers"[^}]*"status":"would_skip"'
+stdout '"probes":\[\]'
+! grep 'docker run|docker volume create' docker.log
+! exists cache
+! exists stack/.pic-sure/logs
+cmp stack/.pic-sure/secrets.yaml secrets.before
+
+-- stack/pic-sure.yaml --
+schema: 1
+name: demo
+auth: {mode: open, admin_email: admin@example.com}
+-- remote.yaml --
+schema: 1
+name: demo
+auth: {mode: open, admin_email: admin@example.com}
+db: {mode: remote, remote: {host: db.example.com, port: 3306, root_user: root}}
+-- stack/.pic-sure/state.json --
+{"cli_version":"dev","schema_version":1,"initialized_at":"2026-10-07T12:00:00Z","components":{"pic-sure":{"commit":"1111111111111111111111111111111111111111"},"frontend":{"commit":"2222222222222222222222222222222222222222"},"migrations":{"commit":"3333333333333333333333333333333333333333"},"dictionary-etl":{"commit":"4444444444444444444444444444444444444444"}}}
+-- unresolved.json --
+{"cli_version":"dev","schema_version":1,"initialized_at":"2026-10-07T12:00:00Z","components":{"pic-sure":{"source":"/old/source"}}}
+-- stack/.pic-sure/secrets.yaml --
+auth0_client_secret: synthetic-secret-0123456789abcdef0123456789abcdef
+db_remote_root_password: synthetic-secret-remote
+-- stack/.pic-sure/hpds/encryption_key --
+0123456789abcdef0123456789abcdef
+-- clean.scenario --
+docker volume inspect demo_hpds-genomic => 0 stdout=volume.json
+docker run * --name demo-genomic-list-* => 0 stdout=clean.txt
+docker * => 1
+-- leftovers.scenario --
+docker volume inspect demo_hpds-genomic => 0 stdout=volume.json
+docker run * --name demo-genomic-list-* => 0 stdout=leftovers.txt
+docker * => 1
+-- absent.scenario --
+docker volume inspect demo_hpds-genomic => 1 stderr=absent.txt
+docker * => 1
+-- volume.json --
+[{"Name":"demo_hpds-genomic"}]
+-- clean.txt --
+a
+-- leftovers.txt --
+.promote-a
+-- absent.txt --
+Error response from daemon: get demo_hpds-genomic: no such volume

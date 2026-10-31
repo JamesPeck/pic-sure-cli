@@ -39,6 +39,41 @@ turns this page into a task-oriented guide; the README's
 8. **Don't edit `.pic-sure/`.** Change config with `pic-sure config set
    KEY VALUE` (validated), then `pic-sure up`.
 
+## Previewing up
+
+`pic-sure up --dry-run --json` puts a **partial** step plan in the final
+`result.data`. It never prompts or needs `--yes`. It reuses the real Checks
+until the first step requiring work, including that step. Later Checks
+are not run: their inputs could change after the earlier action. On a
+current stack, resolve, genomic-leftovers, images, TLS and truststore can
+all report `would_skip`; render and start still report `always_runs`.
+Database, migration, seed, HPDS-key and restart outcomes then remain
+`depends_on_earlier_step`. A successful preview does not promise that a
+real `up` will succeed, or that the stack needs no changes.
+
+The preview takes no stack lock and writes no stack files, run logs or
+cache directories/registry entries. Its `preparation` list reports skipped
+ID backfill, secret generation and operation bookkeeping. Checks use the
+existing inputs; missing generated secrets are not simulated, and dependent
+Checks are withheld even if earlier steps are explicitly skipped. The
+snapshot can become stale if another command changes the stack. Ownership
+and host-port preflight checks still run only during real `up`.
+
+When the genomic volume exists, its Check runs a self-removing Alpine
+container to list directories. Every mount is read-only and networking is
+disabled. The output names this read-only probe container, including a
+warning before it runs and the successful plan's `probes` list. Nothing in
+the volume, stack directory or database is changed. An interrupted promote
+is reported as `would_act` with a reason explaining that real `up` would
+refuse until recovery; the preview never recovers it.
+
+`--skip-step ID` is honored without calling that step's Check. If skipping
+render makes remote-database Checks reachable, those remain
+`depends_on_earlier_step`: their client containers require networking and
+are outside the read-only probe contract. `always_runs` means the step has
+no Check, not that it will be reached after an earlier failure. See the
+[plan schema](json-schemas.md#up---dry-run-plan) for the status meanings.
+
 ## Global flags
 
 | Flag | Meaning |

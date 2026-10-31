@@ -95,6 +95,17 @@ type filler struct {
 	err    error
 }
 
+// NeedsGeneration reports whether EnsureSecrets would fill a missing value.
+// It shares generate's field list but stops before generating any secret.
+func (sec Secrets) NeedsGeneration(openAuth bool) bool {
+	_, err := sec.generate(missingSecretReader{})
+	return err != nil || openAuth && sec.Auth0ClientSecret == ""
+}
+
+type missingSecretReader struct{}
+
+func (missingSecretReader) Read([]byte) (int, error) { return 0, io.EOF }
+
 // fill sets an empty *f from gen, unless an earlier fill failed.
 func fill[T ~string](g *filler, f *T, gen func(io.Reader) (string, error)) {
 	if g.err != nil || *f != "" {

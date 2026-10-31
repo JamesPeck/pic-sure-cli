@@ -17,10 +17,31 @@ A component whose components.<c>.source was unset goes back to its release
 images: up resolves it at the stack's recorded release, builds or pulls
 the images and recreates its services. It never moves the stack to
 another release; that is pic-sure update.
+
+--dry-run previews Checks until the first step that would act. Later steps
+depend on that change; render and start always run. Nothing is written.
+A read-only, network-disabled genomic probe container may run and is named
+in the output.
 ```
 
 ```
-pic-sure up
+pic-sure up [flags]
+```
+
+## Examples
+
+```
+  # Preview the partial step plan without changing the stack
+  pic-sure up --dry-run
+
+  # Read the plan from the JSON result's data
+  pic-sure up --dry-run --json
+```
+
+## Flags
+
+```
+      --dry-run   Preview the partial step plan without writing anything
 ```
 
 The [global flags](pic-sure.md#flags) apply too.
