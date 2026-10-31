@@ -10,7 +10,7 @@ all privileges on their databases. What already exists is left alone, so an
 existing user keeps its password; --sync-passwords sets each user's password
 to the one in secrets.yaml. init, up, update and migrate run the same step.
 
---check reports the databases, users, grants and logins without changing
+--dry-run reports the databases, users, grants and logins without changing
 anything, and exits 3 when bootstrap has work to do.
 
 The mysql client runs in a mysql:8.0 container, and the stack's services
@@ -27,7 +27,7 @@ pic-sure db bootstrap [flags]
 ## Flags
 
 ```
-      --check            report schemas, users and grants without changing anything
+      --dry-run          report schemas, users and grants without changing anything
       --sync-passwords   set the users' passwords to match secrets.yaml
 ```
 

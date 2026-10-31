@@ -1,3 +1,23 @@
+# Preview has one visible spelling, including completion.
+exec pic-sure migrate --help
+stdout '--dry-run'
+! stdout '--check'
+exec pic-sure __complete migrate --
+stdout '--dry-run'
+! stdout '--check'
+
+# Both spellings name the same flag, even with explicit false values.
+exitcode 2 pic-sure migrate --dry-run --check
+stderr 'same flag'
+exitcode 2 pic-sure migrate --check=false --dry-run=false
+stderr 'same flag'
+exitcode 2 pic-sure migrate --dry-run --repair
+stderr 'none of the others can be'
+exitcode 2 pic-sure migrate --dry-run --skip-step db
+stderr '--dry-run.*runs no steps'
+exitcode 2 pic-sure migrate --check --skip-step db
+stderr '--dry-run.*runs no steps'
+
 # --check and --repair are mutually exclusive.
 exitcode 2 pic-sure migrate --check --repair
 
@@ -20,6 +40,14 @@ exitcode 3 pic-sure --stack stack --json migrate --check
 stdout '^\{"schema_version":2,"ok":false,"inputs":\[\{"name":"compose config","ok":false,"problem":"[^"]+"\},'
 stdout '"name":"project UUIDs","ok":false,"problem":"secrets.yaml lacks application_uuid, resource_uuid, visualization_uuid"'
 ! stdout '"type"'
+cp stdout check.json
+cp stderr check.stderr
+! stderr deprecat
+exitcode 3 pic-sure --stack stack --json migrate --dry-run
+cmp stdout check.json
+cmp stderr check.stderr
+! stderr deprecat
+! exists stack/.pic-sure/lock
 exitcode 3 pic-sure --stack stack --plain migrate --check
 stdout '^FAIL compose config'
 stdout '^FAIL project UUIDs \(secrets.yaml lacks application_uuid, resource_uuid, visualization_uuid\)$'
