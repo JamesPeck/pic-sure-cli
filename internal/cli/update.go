@@ -251,7 +251,7 @@ func checkSecrets(cfg *stack.Config, sec *stack.Secrets) error {
 func (r *updateRun) fetchRelease(ctx context.Context, sink events.Sink) error {
 	var err error
 	if r.proxy, err = netproxy.New(netproxy.Config(r.cfg.Proxy), netproxy.CatalogServices()); err != nil {
-		return exitcode.Usage("%w", err)
+		return exitcode.InvalidConfig.Errorf("%w", err)
 	}
 	r.d.Git = r.d.Git.WithEnv(r.proxy.Env()...)
 	root, err := cache.DefaultRoot()
