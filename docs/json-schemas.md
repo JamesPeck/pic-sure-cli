@@ -207,6 +207,7 @@ the same additive-only rule:
 | Command | `data` |
 |---|---|
 | `init`, `up` | `{"stack", "dir", "already_initialized" (omitted unless true), "url", "auth0", "token_expiry" (omitted when the stack has no token), "next_steps"}`; `auth0` is `status --json`'s object, and `up`'s `next_steps` is empty. |
+| `up --dry-run` | The partial step plan described below. |
 | `update` | The plan: `{"stack", "dry_run", "config": {"from", "to", "migrations"}, "release": {"repo", "branch", "from", "to"}, "components": [{"name", "from_ref", "from_commit", "to_ref", "to_commit", "source", "changed"}] (`from_ref`, `to_ref` and `source` omitted when empty), "images": [{"name", "component", "from", "to", "action"}], "migrations": {"status", "detail" (omitted when empty), "started_db"}, "token": {"expiry" (omitted when there is no token), "renew"}, "restarts": [{"service", "action", "reasons"}]}`. `images[].action` is `build`, `pull`, `up_to_date`, or `keep` (with `--no-build`); `migrations.status` is `pending`, `up_to_date` or `unknown`; `restarts[].action` is `recreate` or `restart`. |
 | `data demo` | `{"dataset": "demo:<name>"}`, where `<name>` is the argument, `all` included. |
 | `data load-phenotype` | `{"dataset": "phenotype:<sha256>", "dictionary": "auto" or "custom", "weights": bool}` |
@@ -223,3 +224,39 @@ Other commands' `data` isn't listed here yet; treat it as informational.
 `cache list`, `dev list` and `shared-data list` are reports, not streams:
 `dev list --json` is `{"schema_version": 2, "variants": [...]}` and
 `shared-data list --json` is `{"schema_version": 2, "data_sets": [...]}`.
+
+### `up --dry-run` plan
+
+The final successful `result.data` contains the following fields. A failed
+Check uses the normal failed result and exit code; any probe warning already
+emitted remains in the NDJSON stream.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `stack` | string | Stack name. |
+| `dry_run` | bool | Always true. |
+| `partial` | bool | True when at least one step could not be checked because of an earlier action or an unsafe/missing-input Check. False does not guarantee real up will succeed. |
+| `notice` | string | Human explanation of current-input and concurrency limitations. |
+| `preparation` | array | Skipped preparation, each with `id`, `would_write` (bool) and human `reason`. |
+| `probes` | array | Read-only containers run during the preview, each with its actual `name` and `image`. Empty when no probe ran. All mounts are read-only; networking is disabled and containers self-remove. |
+| `steps` | array | Ordered plan, each with `id`, human `title`, `status` and human `reason`. |
+
+Preparation IDs are `stack-lock`, `stack-id`, `secrets`, `cache`, `state`
+and `run-log`. All are skipped. `would_write` describes the corresponding
+real-up preparation if reached; ID backfill and secret generation are false
+when no values are missing. Secret values and generated IDs are never
+included. Database Checks that depend on missing generated secrets are not
+run. Remote-database Checks are not run because their client containers
+require networking.
+
+| `steps[].status` | Meaning |
+|---|---|
+| `would_skip` | The Check found the step done, or `--skip-step` explicitly skips it (distinguished by `reason`). |
+| `would_act` | The Check found work required. No Apply ran. For genomic leftovers, the action would refuse the real up until recovery. |
+| `always_runs` | No Check exists. Render and start have this status unless explicitly skipped; they are not predictions that earlier steps will succeed. |
+| `depends_on_earlier_step` | The Check was not run because earlier work could change its inputs, preparation was skipped, or it requires an unsafe probe. `reason` explains the boundary. |
+
+Branch on status, not the human reason text. A regular current stack's
+preview remains partial because render always runs. Skipping steps can
+move the boundary; it does not allow unsafe Checks. This preview makes no
+writes and provides no guarantee against concurrent changes.

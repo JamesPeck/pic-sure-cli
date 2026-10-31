@@ -21,7 +21,7 @@ import (
 )
 
 func newUpCmd(a *App) *cobra.Command {
-	return skippable(&cobra.Command{
+	cmd := skippable(&cobra.Command{
 		Use:   "up",
 		Short: "Converge an existing stack to running",
 		Long: `Bring the stack to running: build any missing images, install the TLS
@@ -37,13 +37,24 @@ are restarted before the services are started and waited for.
 A component whose components.<c>.source was unset goes back to its release
 images: up resolves it at the stack's recorded release, builds or pulls
 the images and recreates its services. It never moves the stack to
-another release; that is pic-sure update.`,
-		Args: cobra.NoArgs,
-		RunE: a.up,
+another release; that is pic-sure update.
+
+--dry-run previews Checks until the first step that would act. Later steps
+depend on that change; render and start always run. Nothing is written.
+A read-only, network-disabled genomic probe container may run and is named
+in the output.`,
+		Example: "  # Preview the partial step plan without changing the stack\n  pic-sure up --dry-run\n\n  # Read the plan from the JSON result's data\n  pic-sure up --dry-run --json",
+		Args:    cobra.NoArgs,
+		RunE:    a.up,
 	})
+	cmd.Flags().Bool("dry-run", false, "Preview the partial step plan without writing anything")
+	return cmd
 }
 
 func (a *App) up(cmd *cobra.Command, _ []string) (err error) {
+	if dry, _ := cmd.Flags().GetBool("dry-run"); dry {
+		return a.upDryRun(cmd)
+	}
 	ctx := cmd.Context()
 	st, err := a.openStackToCheckSkips(cmd)
 	if err != nil {

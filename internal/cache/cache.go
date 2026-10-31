@@ -123,6 +123,15 @@ func Open(root string, opts Options) (*Cache, error) {
 	return &Cache{root: root, git: opts.Git, holder: holder, lockTimeout: opts.LockTimeout}, nil
 }
 
+// Inspect provides cache paths for read-only inspection without creating
+// directories or taking locks. Callers must not invoke mutating methods.
+func Inspect(root string) (*Cache, error) {
+	if !filepath.IsAbs(root) {
+		return nil, fmt.Errorf("cache root %q is not an absolute path", root)
+	}
+	return &Cache{root: filepath.Clean(root)}, nil
+}
+
 // WithEvents returns a Cache that reports to sink as step: its progress
 // while fetching and unpacking, and its waits for locks other commands
 // hold. With an empty step, outside any step, they are warnings.

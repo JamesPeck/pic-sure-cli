@@ -170,3 +170,20 @@ func TestEnsureMavenVolumeCreatesTheCatalogsHostVolume(t *testing.T) {
 		t.Errorf("the catalog's %s is %+v, %v; want a host-scoped volume", cache.MavenVolume, v, ok)
 	}
 }
+
+func TestInspectDoesNotCreateCache(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "absent", "cache")
+	c, err := cache.Inspect(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.SourceDir(catalog.PicSure, strings.Repeat("a", 40)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Dir(root)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("inspection created cache parent: %v", err)
+	}
+	if _, err := cache.Inspect("relative"); err == nil {
+		t.Fatal("accepted relative cache root")
+	}
+}
