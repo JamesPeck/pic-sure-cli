@@ -2,9 +2,12 @@ package stack
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -52,7 +55,7 @@ func TestRemoveCreatedKeepsOperatorFiles(t *testing.T) {
 	// Dropped into a directory the CLI made.
 	writeOperatorFile(t, s, "data/mine.csv")
 
-	r, err := s.RemoveCreated()
+	r, err := s.RemoveCreated(false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +94,7 @@ func TestRemoveCreatedRemovesTheDirInitCreated(t *testing.T) {
 	// A crashed write's temp file beside the config.
 	writeOperatorFile(t, s, ".pic-sure.yaml.tmp-123-4")
 
-	r, err := s.RemoveCreated()
+	r, err := s.RemoveCreated(false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +121,7 @@ func TestRemoveCreatedKeepsTheDirInitCreatedWhenNotEmpty(t *testing.T) {
 	// Temp-named, but not beside a recorded path: the operator's.
 	writeOperatorFile(t, s, ".notes.tmp-1-2")
 
-	r, err := s.RemoveCreated()
+	r, err := s.RemoveCreated(false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +153,7 @@ func TestRemoveCreatedNeverFollowsSymlinks(t *testing.T) {
 	}
 	writeOperatorFile(t, s, ConfigFile+"/inside")
 
-	r, err := s.RemoveCreated()
+	r, err := s.RemoveCreated(false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +169,7 @@ func TestRemoveCreatedKeepsTheManifestWhileCLIDirHoldsOtherFiles(t *testing.T) {
 	populate(t, s)
 	writeOperatorFile(t, s, ".pic-sure/mine")
 
-	r, err := s.RemoveCreated()
+	r, err := s.RemoveCreated(false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +205,7 @@ func TestLockFailsWhenTheStackIsDestroyedWhileWaiting(t *testing.T) {
 			got <- err
 		}()
 		<-waiting // it has the old lock file open
-		if _, err := s.RemoveCreated(); err != nil {
+		if _, err := s.RemoveCreated(false); err != nil {
 			t.Fatal(err)
 		}
 		_ = held.Unlock()
@@ -229,7 +232,7 @@ func TestRemoveCreatedKeepsTheStackOpenableAfterAFailure(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(s.Path("data"), 0o755) })
 
-	if _, err := s.RemoveCreated(); err == nil || !strings.Contains(err.Error(), "data/readme.txt") {
+	if _, err := s.RemoveCreated(false); err == nil || !strings.Contains(err.Error(), "data/readme.txt") {
 		t.Fatalf("err = %v, want a failure naming data/readme.txt", err)
 	}
 	for _, p := range []string{ConfigFile, ManifestFile, LockFile} {
@@ -242,5 +245,280 @@ func TestRemoveCreatedKeepsTheStackOpenableAfterAFailure(t *testing.T) {
 	}
 	if m, _ := s.Manifest(); !m.Has("data/readme.txt") || !m.Has(ConfigFile) {
 		t.Errorf("manifest lost what is left: %v", m.Entries)
+	}
+}
+
+// These complete reports are pinned against ba5b055 before adding dry mode.
+func TestRemoveCreatedBaselineReports(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		createdRoot bool
+		setup       func(*testing.T, *Stack)
+		want        string
+		wantError   string
+	}{
+		{
+			name: "existing root",
+			want: `{"removed":[".pic-sure/render/files/httpd.conf",".pic-sure/render/files",".pic-sure/render/compose.yaml","data/readme.txt",".pic-sure/state.json",".pic-sure/render",".pic-sure/logs","data","pic-sure.yaml",".pic-sure/lock",".pic-sure/manifest.json",".pic-sure"],"dir_removed":false}`,
+		},
+		{
+			name:        "created root and interrupted writes",
+			createdRoot: true,
+			setup: func(t *testing.T, s *Stack) {
+				for _, p := range []string{".pic-sure.yaml.tmp-123-4", ".pic-sure/.manifest.json.tmp-123-4", ".pic-sure/render/files/.httpd.conf.tmp-123-4", "data/.readme.txt.tmp-123-4"} {
+					writeOperatorFile(t, s, p)
+				}
+			},
+			want: `{"removed":[".pic-sure.yaml.tmp-123-4",".pic-sure/.manifest.json.tmp-123-4",".pic-sure/render/files/.httpd.conf.tmp-123-4","data/.readme.txt.tmp-123-4",".pic-sure/render/files/httpd.conf",".pic-sure/render/files",".pic-sure/render/compose.yaml","data/readme.txt",".pic-sure/state.json",".pic-sure/render",".pic-sure/logs","data","pic-sure.yaml",".pic-sure/lock",".pic-sure/manifest.json",".pic-sure","."],"dir_removed":true}`,
+		},
+		{
+			name:        "operator files keep nested directories and root",
+			createdRoot: true,
+			setup: func(t *testing.T, s *Stack) {
+				writeOperatorFile(t, s, "data/nested/mine")
+				writeOperatorFile(t, s, ".notes.tmp-1-2")
+			},
+			want: `{"removed":[".pic-sure/render/files/httpd.conf",".pic-sure/render/files",".pic-sure/render/compose.yaml","data/readme.txt",".pic-sure/state.json",".pic-sure/render",".pic-sure/logs","pic-sure.yaml",".pic-sure/lock",".pic-sure/manifest.json",".pic-sure"],"kept":["data","."],"remaining":[".notes.tmp-1-2","data/"],"dir_removed":false}`,
+		},
+		{
+			name:        "operator file keeps CLI directory and manifest",
+			createdRoot: true,
+			setup:       func(t *testing.T, s *Stack) { writeOperatorFile(t, s, ".pic-sure/mine") },
+			want:        `{"removed":[".pic-sure/render/files/httpd.conf",".pic-sure/render/files",".pic-sure/render/compose.yaml","data/readme.txt",".pic-sure/state.json",".pic-sure/render",".pic-sure/logs","data","pic-sure.yaml",".pic-sure/lock"],"kept":[".pic-sure"],"remaining":[".pic-sure/"],"dir_removed":false}`,
+		},
+		{
+			name: "missing recorded file",
+			setup: func(t *testing.T, s *Stack) {
+				if err := os.Remove(s.Path("data/readme.txt")); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: `{"removed":[".pic-sure/render/files/httpd.conf",".pic-sure/render/files",".pic-sure/render/compose.yaml",".pic-sure/state.json",".pic-sure/render",".pic-sure/logs","data","pic-sure.yaml",".pic-sure/lock",".pic-sure/manifest.json",".pic-sure"],"dir_removed":false}`,
+		},
+		{
+			name: "operator replaces directory with symlink and config with directory",
+			setup: func(t *testing.T, s *Stack) {
+				if err := os.RemoveAll(s.Path("data")); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(".pic-sure/render", s.Path("data")); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Remove(s.Path(ConfigFile)); err != nil {
+					t.Fatal(err)
+				}
+				writeOperatorFile(t, s, ConfigFile+"/inside")
+			},
+			want: `{"removed":[".pic-sure/render/files/httpd.conf",".pic-sure/render/files",".pic-sure/render/compose.yaml",".pic-sure/state.json",".pic-sure/render",".pic-sure/logs",".pic-sure/lock",".pic-sure/manifest.json",".pic-sure"],"kept":["data/readme.txt","data","pic-sure.yaml"],"remaining":["data","pic-sure.yaml/"],"dir_removed":false}`,
+		},
+		{
+			name: "operator replaces lock with directory",
+			setup: func(t *testing.T, s *Stack) {
+				if err := os.Remove(s.Path(LockFile)); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Mkdir(s.Path(LockFile), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: `{"removed":[".pic-sure/render/files/httpd.conf",".pic-sure/render/files",".pic-sure/render/compose.yaml","data/readme.txt",".pic-sure/state.json",".pic-sure/render",".pic-sure/logs","data","pic-sure.yaml"],"kept":[".pic-sure/lock",".pic-sure"],"remaining":[".pic-sure/"],"dir_removed":false}`,
+		},
+		{
+			name:      "file removal failure preserves config lock and manifest",
+			setup:     func(t *testing.T, s *Stack) { removeTestReadOnly(t, s, "data") },
+			want:      `{"removed":[".pic-sure/render/files/httpd.conf",".pic-sure/render/files",".pic-sure/render/compose.yaml",".pic-sure/state.json",".pic-sure/render",".pic-sure/logs"],"kept":["data"],"dir_removed":false}`,
+			wantError: "data/readme.txt:",
+		},
+		{
+			name: "temp failure stops temp loop but continues recorded removals",
+			setup: func(t *testing.T, s *Stack) {
+				writeOperatorFile(t, s, "data/.readme.txt.tmp-123-4")
+				removeTestReadOnly(t, s, "data")
+			},
+			want:      `{"removed":[".pic-sure/render/files/httpd.conf",".pic-sure/render/files",".pic-sure/render/compose.yaml",".pic-sure/state.json",".pic-sure/render",".pic-sure/logs"],"kept":["data"],"dir_removed":false}`,
+			wantError: "temp files:",
+		},
+		{
+			name:      "manifest update failure omits already unlinked files from report",
+			setup:     func(t *testing.T, s *Stack) { removeTestReadOnly(t, s, CLIDir) },
+			want:      `{"removed":null,"dir_removed":false}`,
+			wantError: "couldn't remove .pic-sure/render/files/httpd.conf:",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := tempDir(t)
+			if tt.createdRoot {
+				dir = filepath.Join(dir, "stack")
+			}
+			s, err := Create(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = s.Close() })
+			populate(t, s)
+			if tt.setup != nil {
+				tt.setup(t, s)
+			}
+			var preview RemoveReport
+			if tt.wantError == "" {
+				before := snapshotRemovalTree(t, s.Dir)
+				preview, err = s.RemoveCreated(true)
+				if err != nil {
+					t.Fatal(err)
+				}
+				wantRemovalTreeUnchanged(t, before, snapshotRemovalTree(t, s.Dir))
+			}
+			r, err := s.RemoveCreated(false)
+			if tt.wantError == "" && !reflect.DeepEqual(preview, r) {
+				t.Errorf("dry report = %+v, real report = %+v", preview, r)
+			}
+			if tt.wantError == "" && err != nil || tt.wantError != "" && (err == nil || !strings.Contains(err.Error(), tt.wantError)) {
+				t.Fatalf("error = %v, want %q", err, tt.wantError)
+			}
+			got, err := json.Marshal(r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != tt.want {
+				t.Errorf("report = %s\nwant   = %s", got, tt.want)
+			}
+		})
+	}
+}
+
+func removeTestReadOnly(t *testing.T, s *Stack, rel string) {
+	t.Helper()
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	if err := os.Chmod(s.Path(rel), 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(s.Path(rel), 0o755) })
+}
+
+type removalTreeEntry struct {
+	info    fs.FileInfo
+	content string
+}
+
+// Snapshot identities and timestamps as well as bytes: a preview must not
+// rewrite the manifest with identical contents or recreate a removed file.
+func snapshotRemovalTree(t *testing.T, dir string) map[string]removalTreeEntry {
+	t.Helper()
+	out := make(map[string]removalTreeEntry)
+	err := filepath.WalkDir(dir, func(p string, de fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		info, err := de.Info()
+		if err != nil {
+			return err
+		}
+		entry := removalTreeEntry{info: info}
+		switch {
+		case info.Mode().IsRegular():
+			data, err := os.ReadFile(p)
+			if err != nil {
+				return err
+			}
+			entry.content = string(data)
+		case info.Mode()&fs.ModeSymlink != 0:
+			target, err := os.Readlink(p)
+			if err != nil {
+				return err
+			}
+			entry.content = target
+		}
+		out[p] = entry
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func wantRemovalTreeUnchanged(t *testing.T, before, after map[string]removalTreeEntry) {
+	t.Helper()
+	if len(before) != len(after) {
+		t.Errorf("preview changed entry count: before %d, after %d", len(before), len(after))
+	}
+	for p, a := range before {
+		b, ok := after[p]
+		if !ok || !os.SameFile(a.info, b.info) || a.info.Mode() != b.info.Mode() || a.info.Size() != b.info.Size() || !a.info.ModTime().Equal(b.info.ModTime()) || a.content != b.content {
+			t.Errorf("preview changed %s", p)
+		}
+	}
+}
+
+func TestRemoveCreatedDryRunSymlinksAndOperatorTemps(t *testing.T) {
+	for _, keepTemps := range []bool{false, true} {
+		name := "file symlinks removed without following targets"
+		if keepTemps {
+			name = "operator temps keep their parent directory"
+		}
+		t.Run(name, func(t *testing.T) {
+			s := newStack(t)
+			populate(t, s)
+			outside := tempDir(t)
+			target := filepath.Join(outside, "operator")
+			if err := os.WriteFile(target, []byte("outside"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			for _, p := range []string{ConfigFile, LockFile, "data/readme.txt"} {
+				if err := os.Remove(s.Path(p)); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, s.Path(p)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if keepTemps {
+				if err := os.Symlink(target, s.Path("data/.readme.txt.tmp-1-2")); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Mkdir(s.Path("data/.readme.txt.tmp-1-3"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				writeOperatorFile(t, s, "data/.unknown.tmp-1-4")
+			}
+			before := snapshotRemovalTree(t, s.Dir)
+			outsideBefore := snapshotRemovalTree(t, outside)
+			preview, err := s.RemoveCreated(true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantRemovalTreeUnchanged(t, before, snapshotRemovalTree(t, s.Dir))
+			wantRemovalTreeUnchanged(t, outsideBefore, snapshotRemovalTree(t, outside))
+			again, err := s.RemoveCreated(true)
+			if err != nil || !reflect.DeepEqual(preview, again) {
+				t.Fatalf("second preview = %+v, %v; first = %+v", again, err, preview)
+			}
+			wantRemovalTreeUnchanged(t, before, snapshotRemovalTree(t, s.Dir))
+			real, err := s.RemoveCreated(false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(preview, real) {
+				t.Errorf("dry report = %+v, real report = %+v", preview, real)
+			}
+			for _, p := range []string{ConfigFile, LockFile, "data/readme.txt"} {
+				if !slices.Contains(real.Removed, p) {
+					t.Errorf("missing removal of %s: %+v", p, real)
+				}
+			}
+			if keepTemps {
+				if !slices.Equal(real.Kept, []string{"data"}) || !slices.Equal(real.Remaining, []string{"data/"}) {
+					t.Errorf("operator temps not kept: %+v", real)
+				}
+				for _, p := range []string{"data/.readme.txt.tmp-1-2", "data/.readme.txt.tmp-1-3", "data/.unknown.tmp-1-4"} {
+					if _, err := os.Lstat(s.Path(p)); err != nil {
+						t.Errorf("operator temp %s: %v", p, err)
+					}
+				}
+			}
+			wantRemovalTreeUnchanged(t, outsideBefore, snapshotRemovalTree(t, outside))
+		})
 	}
 }

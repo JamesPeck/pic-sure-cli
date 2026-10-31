@@ -26,6 +26,8 @@ const (
 
 // TeardownOptions configures Reset and Destroy.
 type TeardownOptions struct {
+	// DryRun selects resources without changing Docker, files or state.
+	DryRun bool
 	// Name is the stack's name: its compose project and the value of its
 	// stack label.
 	Name string
@@ -42,6 +44,9 @@ type TeardownOptions struct {
 // TeardownReport is reset's and destroy's report.
 type TeardownReport struct {
 	Stack string `json:"stack"`
+	// DryRun and Containers are preview-only additions; real reports retain their wire format.
+	DryRun     bool     `json:"dry_run,omitempty"`
+	Containers []string `json:"containers,omitempty"`
 	// Volumes lists the volumes removed.
 	Volumes []string `json:"volumes"`
 	// KeptVolumes lists the stack's volumes reset kept.
@@ -67,7 +72,7 @@ type TeardownReport struct {
 // stack's name selecting another stack's resources (in a copy, the
 // original's) is exit 3, before anything changes.
 func Reset(ctx context.Context, d *Deps, st *stack.Stack, opts TeardownOptions) (*TeardownReport, error) {
-	report := &TeardownReport{Stack: opts.Name, Volumes: []string{}}
+	report := &TeardownReport{Stack: opts.Name, DryRun: opts.DryRun, Volumes: []string{}}
 	owned, err := CheckOwnership(ctx, d, st, opts.Name)
 	if err != nil {
 		return nil, err
@@ -78,14 +83,14 @@ func Reset(ctx context.Context, d *Deps, st *stack.Stack, opts TeardownOptions) 
 		state = nil
 	case err != nil:
 		return nil, err
-	default:
+	case !opts.DryRun:
 		state.StartOperation("reset", d.Clock.Now())
 		if err := st.SaveState(state); err != nil {
 			return nil, err
 		}
 	}
 	plan := []steps.Step{
-		downStep(d, st, opts.Name),
+		downStep(d, st, opts.Name, owned, report),
 		volumesStep(d, owned, report, func(v catalog.Volume) bool {
 			switch v.Kind {
 			case catalog.KindData, catalog.KindTLS:
@@ -97,7 +102,7 @@ func Reset(ctx context.Context, d *Deps, st *stack.Stack, opts TeardownOptions) 
 		}),
 	}
 	runErr := steps.Run(ctx, d.Sink, plan, steps.Options{})
-	if state == nil {
+	if state == nil || opts.DryRun {
 		return report, runErr
 	}
 	// Forget the copies even after a failure: some volumes may be gone.
@@ -114,14 +119,15 @@ func Reset(ctx context.Context, d *Deps, st *stack.Stack, opts TeardownOptions) 
 // manifest.json lists. Shared data sets, operator files and other stacks'
 // resources are never touched. With PruneImages it then prunes the
 // commit-tagged images nothing uses any more. The caller holds the stack
-// lock; st is unusable afterwards except for Close.
+// lock; st is unusable afterwards except for Close. DryRun only selects
+// resources and simulates file removals, leaving the stack usable.
 //
 // When the stack's name selects another stack's resources, st is a copy of
 // that stack (or shares its name), and compose down, the volumes and the
 // dev images would all be the other stack's: destroy removes only st's
 // files and lists the rest in LeftAlone.
 func Destroy(ctx context.Context, d *Deps, st *stack.Stack, opts TeardownOptions) (*TeardownReport, error) {
-	report := &TeardownReport{Stack: opts.Name, Volumes: []string{}, Images: []string{}}
+	report := &TeardownReport{Stack: opts.Name, DryRun: opts.DryRun, Volumes: []string{}, Images: []string{}}
 	owned, err := StackResources(ctx, d, opts.Name, st.ID(), st.Dir)
 	if err != nil {
 		return nil, err
@@ -138,7 +144,7 @@ func Destroy(ctx context.Context, d *Deps, st *stack.Stack, opts TeardownOptions
 		}
 	} else {
 		plan = []steps.Step{
-			downStep(d, st, opts.Name),
+			downStep(d, st, opts.Name, owned, report),
 			volumesStep(d, owned, report, func(catalog.Volume) bool { return true }),
 			{
 				ID:    StepDevImages,
@@ -154,12 +160,12 @@ func Destroy(ctx context.Context, d *Deps, st *stack.Stack, opts TeardownOptions
 			ID:    StepFiles,
 			Title: "Remove the files pic-sure created",
 			Apply: func(ctx context.Context, sink events.Sink) error {
-				files, err := st.RemoveCreated()
+				files, err := st.RemoveCreated(opts.DryRun)
 				report.Files = &files
 				for _, p := range files.Kept {
 					sink.Emit(events.Warning{ID: StepFiles, Text: "kept " + st.Path(p) + ": it holds files pic-sure didn't create, or isn't what pic-sure created"})
 				}
-				if err != nil || opts.Cache == nil {
+				if err != nil || opts.Cache == nil || opts.DryRun {
 					return err
 				}
 				// The stack is gone either way; a stale entry is one prune
@@ -175,7 +181,19 @@ func Destroy(ctx context.Context, d *Deps, st *stack.Stack, opts TeardownOptions
 			ID:    StepPrune,
 			Title: "Remove shared images no other stack uses",
 			Apply: func(ctx context.Context, sink events.Sink) error {
-				pruned, err := pruneCache(ctx, d, opts.Cache, sink, PruneOptions{CommitImagesOnly: true})
+				pruneOpts := PruneOptions{CommitImagesOnly: true, DryRun: opts.DryRun}
+				if opts.DryRun {
+					projection := &teardownProjection{dir: st.Dir, report: report}
+					if len(report.LeftAlone) == 0 && d.Compose != nil {
+						for _, r := range owned.Resources {
+							if r.Kind == "network" {
+								projection.networks = append(projection.networks, r.Name)
+							}
+						}
+					}
+					pruneOpts.teardown = projection
+				}
+				pruned, err := pruneCache(ctx, d, opts.Cache, sink, pruneOpts)
 				report.Pruned = pruned
 				return err
 			},
@@ -187,12 +205,34 @@ func Destroy(ctx context.Context, d *Deps, st *stack.Stack, opts TeardownOptions
 // downStep removes the stack's helper containers, then runs compose down,
 // even if a helper couldn't be removed. A stack that was never rendered
 // has no compose file, and no containers compose started.
-func downStep(d *Deps, st *stack.Stack, name string) steps.Step {
+func downStep(d *Deps, st *stack.Stack, name string, owned *Ownership, report *TeardownReport) steps.Step {
 	return steps.Step{
 		ID:    StepTeardownDown,
 		Title: "Stop and remove the stack's containers",
 		Apply: func(ctx context.Context, sink events.Sink) error {
-			helperErr := RemoveHelperContainers(ctx, d, sink, StepTeardownDown, st, name, nil)
+			helpers, helperErr := selectHelperContainers(ctx, d, st, name, nil)
+			if report.DryRun {
+				if helperErr != nil {
+					return helperErr
+				}
+				for _, c := range helpers {
+					report.Containers = append(report.Containers, c.Names)
+				}
+				if d.Compose != nil {
+					for _, r := range owned.Resources {
+						if r.Kind == "container" {
+							report.Containers = append(report.Containers, r.Name)
+						}
+					}
+				}
+				for _, name := range report.Containers {
+					sink.Emit(events.Progress{ID: StepTeardownDown, Text: "would remove container " + name})
+				}
+				return nil
+			}
+			if helperErr == nil {
+				helperErr = removeHelperContainers(ctx, d, sink, StepTeardownDown, helpers)
+			}
 			if d.Compose == nil {
 				sink.Emit(events.Progress{ID: StepTeardownDown, Text: "the stack was never rendered, so compose started nothing"})
 				return helperErr
@@ -212,16 +252,27 @@ func downStep(d *Deps, st *stack.Stack, name string) steps.Step {
 // hpds-data. With match, only those whose name it accepts. Another stack's
 // (a copy's original) are never touched.
 func RemoveHelperContainers(ctx context.Context, d *Deps, sink events.Sink, step string, st *stack.Stack, name string, match func(container string) bool) error {
-	cs, err := helperContainers(ctx, d, name)
+	cs, err := selectHelperContainers(ctx, d, st, name, match)
 	if err != nil {
 		return err
 	}
+	return removeHelperContainers(ctx, d, sink, step, cs)
+}
+
+func selectHelperContainers(ctx context.Context, d *Deps, st *stack.Stack, name string, match func(string) bool) ([]psContainer, error) {
+	cs, err := helperContainers(ctx, d, name)
+	if err != nil {
+		return nil, err
+	}
 	dir := CanonicalDir(st.Dir)
+	return slices.DeleteFunc(cs, func(c psContainer) bool {
+		return match != nil && !match(c.Names) || stack.Owner(st.ID(), dir, c.Labels) == stack.Foreign
+	}), nil
+}
+
+func removeHelperContainers(ctx context.Context, d *Deps, sink events.Sink, step string, cs []psContainer) error {
 	var failed []string
 	for _, c := range cs {
-		if match != nil && !match(c.Names) || stack.Owner(st.ID(), dir, c.Labels) == stack.Foreign {
-			continue
-		}
 		if err := d.Docker.Rm(ctx, c.Names, true); err != nil {
 			failed = append(failed, c.Names)
 			sink.Emit(events.Warning{ID: step, Text: fmt.Sprintf("couldn't remove container %s, which an earlier run left: %v", c.Names, err)})
@@ -243,26 +294,22 @@ func volumesStep(d *Deps, owned *Ownership, report *TeardownReport, remove func(
 		ID:    StepVolumes,
 		Title: "Remove the stack's volumes",
 		Apply: func(ctx context.Context, sink events.Sink) error {
+			selected, kept := selectVolumes(owned, remove)
+			report.KeptVolumes = append(report.KeptVolumes, kept...)
 			var failed []string
-			for _, v := range owned.Resources {
-				if v.Kind != "volume" || v.Claim == stack.Foreign {
+			for _, name := range selected {
+				if report.DryRun {
+					report.Volumes = append(report.Volumes, name)
+					sink.Emit(events.Progress{ID: StepVolumes, Text: "would remove volume " + name})
 					continue
 				}
-				cv, known := catalog.LookupVolume(v.Labels[stack.LabelComposeVolume])
-				if known && cv.Scope != catalog.StackScoped {
+				if err := d.Docker.VolumeRemove(ctx, name); err != nil {
+					failed = append(failed, name)
+					sink.Emit(events.Warning{ID: StepVolumes, Text: fmt.Sprintf("couldn't remove volume %s: %v", name, err)})
 					continue
 				}
-				if !remove(cv) {
-					report.KeptVolumes = append(report.KeptVolumes, v.Name)
-					continue
-				}
-				if err := d.Docker.VolumeRemove(ctx, v.Name); err != nil {
-					failed = append(failed, v.Name)
-					sink.Emit(events.Warning{ID: StepVolumes, Text: fmt.Sprintf("couldn't remove volume %s: %v", v.Name, err)})
-					continue
-				}
-				report.Volumes = append(report.Volumes, v.Name)
-				sink.Emit(events.Progress{ID: StepVolumes, Text: "removed volume " + v.Name})
+				report.Volumes = append(report.Volumes, name)
+				sink.Emit(events.Progress{ID: StepVolumes, Text: "removed volume " + name})
 			}
 			if len(failed) > 0 {
 				return fmt.Errorf("couldn't remove volumes %s", strings.Join(failed, ", "))
@@ -272,16 +319,60 @@ func volumesStep(d *Deps, owned *Ownership, report *TeardownReport, remove func(
 	}
 }
 
+func selectVolumes(owned *Ownership, remove func(catalog.Volume) bool) (selected, kept []string) {
+	for _, v := range owned.Resources {
+		if v.Kind != "volume" || v.Claim == stack.Foreign {
+			continue
+		}
+		cv, known := catalog.LookupVolume(v.Labels[stack.LabelComposeVolume])
+		if known && cv.Scope != catalog.StackScoped {
+			continue
+		}
+		if remove(cv) {
+			selected = append(selected, v.Name)
+		} else {
+			kept = append(kept, v.Name)
+		}
+	}
+	return selected, kept
+}
+
 // removeDevImages removes the dev-<name>-* images of the built catalog
 // images that are st's: labelled for it by the ownership rule, or from
 // before dev images had stack labels.
 func removeDevImages(ctx context.Context, d *Deps, sink events.Sink, st *stack.Stack, name string, report *TeardownReport) error {
+	selected, err := selectDevImages(ctx, d, sink, st, name)
+	if err != nil {
+		return err
+	}
+	var failed []string
+	for _, ref := range selected {
+		if report.DryRun {
+			report.Images = append(report.Images, ref)
+			sink.Emit(events.Progress{ID: StepDevImages, Text: "would remove image " + ref})
+			continue
+		}
+		if err := d.Docker.RemoveImage(ctx, ref); err != nil {
+			failed = append(failed, ref)
+			sink.Emit(events.Warning{ID: StepDevImages, Text: fmt.Sprintf("couldn't remove image %s: %v", ref, err)})
+			continue
+		}
+		report.Images = append(report.Images, ref)
+		sink.Emit(events.Progress{ID: StepDevImages, Text: "removed image " + ref})
+	}
+	if len(failed) > 0 {
+		return fmt.Errorf("couldn't remove images %s", strings.Join(failed, ", "))
+	}
+	return nil
+}
+
+func selectDevImages(ctx context.Context, d *Deps, sink events.Sink, st *stack.Stack, name string) ([]string, error) {
 	imgs, err := d.Docker.ImageList(ctx, catalog.Namespace+"/*")
 	if err != nil {
-		return fmt.Errorf("listing images: %w", err)
+		return nil, fmt.Errorf("listing images: %w", err)
 	}
 	id := st.ID()
-	var failed []string
+	var selected []string
 	for _, img := range imgs {
 		if devStack, ok := cachedImage(img.Ref); !ok || devStack != name {
 			continue
@@ -290,16 +381,7 @@ func removeDevImages(ctx context.Context, d *Deps, sink events.Sink, st *stack.S
 			sink.Emit(events.Warning{ID: StepDevImages, Text: fmt.Sprintf("left image %s alone: it belongs to %s", img.Ref, stack.OwnerName(img.Labels))})
 			continue
 		}
-		if err := d.Docker.RemoveImage(ctx, img.Ref); err != nil {
-			failed = append(failed, img.Ref)
-			sink.Emit(events.Warning{ID: StepDevImages, Text: fmt.Sprintf("couldn't remove image %s: %v", img.Ref, err)})
-			continue
-		}
-		report.Images = append(report.Images, img.Ref)
-		sink.Emit(events.Progress{ID: StepDevImages, Text: "removed image " + img.Ref})
+		selected = append(selected, img.Ref)
 	}
-	if len(failed) > 0 {
-		return fmt.Errorf("couldn't remove images %s", strings.Join(failed, ", "))
-	}
-	return nil
+	return selected, nil
 }

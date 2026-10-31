@@ -13,8 +13,8 @@ import (
 	"syscall"
 )
 
-// RemoveReport is what RemoveCreated did. Paths are slash-separated and
-// relative to the stack directory.
+// RemoveReport is what RemoveCreated did, or would do in dry mode. Paths
+// are slash-separated and relative to the stack directory.
 type RemoveReport struct {
 	// Removed lists the temp files of interrupted writes, then the
 	// recorded paths removed, deepest first.
@@ -41,15 +41,29 @@ type RemoveReport struct {
 // it and it is empty. Any other failure doesn't stop the rest, and is
 // returned at the end, with the manifest kept.
 //
-// The caller holds the stack lock, whose file is removed with the rest; a
-// command waiting for the lock then fails (see Lock). The Stack is unusable
-// afterwards except for Close.
-func (s *Stack) RemoveCreated() (RemoveReport, error) {
+// For a real removal, the caller holds the stack lock, whose file is removed
+// with the rest; a command waiting for the lock then fails (see Lock). The
+// Stack is then unusable except for Close. With dryRun, no files or manifest
+// entries are changed: removals are simulated in order, including directory
+// emptiness. Errors that occur only when writing cannot be predicted.
+func (s *Stack) RemoveCreated(dryRun bool) (RemoveReport, error) {
+	return (&removal{Stack: s, dryRun: dryRun, removed: make(map[string]bool)}).run()
+}
+
+type removal struct {
+	*Stack
+	dryRun   bool
+	removed  map[string]bool
+	manifest Manifest
+}
+
+func (s *removal) run() (RemoveReport, error) {
 	var r RemoveReport
 	m, err := s.Manifest()
 	if err != nil {
 		return r, err
 	}
+	s.manifest = Manifest{Version: m.Version, Entries: slices.Clone(m.Entries)}
 	var failed []string
 	fail := func(p string, err error) { failed = append(failed, fmt.Sprintf("%s: %v", p, err)) }
 
@@ -77,9 +91,9 @@ func (s *Stack) RemoveCreated() (RemoveReport, error) {
 			r.Kept = append(r.Kept, e.Path)
 			continue
 		}
-		_, lerr := s.root.Lstat(p)
+		_, lerr := s.lstat(p)
 		existed := lerr == nil
-		switch err := s.Remove(e.Path); {
+		switch err := s.removeRecorded(e.Path); {
 		case err == nil:
 			if existed {
 				r.Removed = append(r.Removed, e.Path)
@@ -116,7 +130,7 @@ func (s *Stack) RemoveCreated() (RemoveReport, error) {
 
 // removeTemps removes WriteFile's temp files whose target is a recorded
 // path, from every directory holding a recorded path.
-func (s *Stack) removeTemps(m Manifest, r *RemoveReport) error {
+func (s *removal) removeTemps(m Manifest, r *RemoveReport) error {
 	dirs := map[string]bool{}
 	for _, e := range m.Entries {
 		if e.Path != "." {
@@ -141,7 +155,7 @@ func (s *Stack) removeTemps(m Manifest, r *RemoveReport) error {
 				continue
 			}
 			rel := path.Join(dir, de.Name())
-			if err := s.root.Remove(filepath.FromSlash(rel)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			if err := s.remove(filepath.FromSlash(rel)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 				return err
 			}
 			r.Removed = append(r.Removed, rel)
@@ -155,14 +169,14 @@ func (s *Stack) removeTemps(m Manifest, r *RemoveReport) error {
 // The lock goes this late so no other command can take a new one while
 // destroy runs, and goes even when .pic-sure/ stays, so a command waiting
 // for it fails (see Lock) instead of running on a stack without its config.
-func (s *Stack) removeCLIDir(m Manifest, r *RemoveReport) (bool, error) {
+func (s *removal) removeCLIDir(m Manifest, r *RemoveReport) (bool, error) {
 	if s.noSymlinks(CLIDir) != nil {
 		r.Kept = append(r.Kept, CLIDir)
 		return false, nil
 	}
 	if m.Has(LockFile) {
-		_, lerr := s.root.Lstat(filepath.FromSlash(LockFile))
-		switch err := s.Remove(LockFile); {
+		_, lerr := s.lstat(filepath.FromSlash(LockFile))
+		switch err := s.removeRecorded(LockFile); {
 		case err == nil:
 			if lerr == nil {
 				r.Removed = append(r.Removed, LockFile)
@@ -183,10 +197,10 @@ func (s *Stack) removeCLIDir(m Manifest, r *RemoveReport) (bool, error) {
 			return false, nil
 		}
 	}
-	if err := s.root.Remove(filepath.FromSlash(ManifestFile)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+	if err := s.remove(filepath.FromSlash(ManifestFile)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return false, err
 	}
-	if err := s.root.Remove(CLIDir); err != nil {
+	if err := s.remove(CLIDir); err != nil {
 		return false, err
 	}
 	r.Removed = append(r.Removed, ManifestFile, CLIDir)
@@ -196,13 +210,16 @@ func (s *Stack) removeCLIDir(m Manifest, r *RemoveReport) (bool, error) {
 // removeStackDir removes the stack directory if it is empty. rmdir never
 // removes a file or a non-empty directory, and s.Dir has its symlinks
 // resolved.
-func (s *Stack) removeStackDir() error {
+func (s *removal) removeStackDir() error {
+	if s.dryRun {
+		return s.remove(".")
+	}
 	return syscall.Rmdir(s.Dir)
 }
 
 // topLevel lists the stack directory's entries, directories with a
 // trailing slash.
-func (s *Stack) topLevel() ([]string, error) {
+func (s *removal) topLevel() ([]string, error) {
 	names, err := s.readDir(".")
 	if err != nil {
 		return nil, err
@@ -216,6 +233,103 @@ func (s *Stack) topLevel() ([]string, error) {
 		out = append(out, n)
 	}
 	return out, nil
+}
+
+// removeRecorded applies Remove's ownership checks in both modes. Real
+// removals keep its per-path manifest updates: a failed update still leaves
+// that removal out of the report.
+func (s *removal) removeRecorded(rel string) error {
+	p, err := local(rel)
+	if err != nil {
+		return err
+	}
+	path := filepath.ToSlash(p)
+	m := s.manifest
+	if !s.dryRun {
+		m, err = s.Manifest()
+		if err != nil {
+			return err
+		}
+	}
+	e, ok := m.entry(path)
+	if !ok {
+		if _, err := s.lstat(p); err != nil {
+			return err
+		}
+		return fmt.Errorf("removing %s: %w", s.Path(p), ErrNotCreated)
+	}
+	if err := s.noSymlinks(filepath.Dir(p)); err != nil {
+		return err
+	}
+	fi, err := s.lstat(p)
+	switch {
+	case errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR):
+		return s.forget(path)
+	case err != nil:
+		return err
+	case fi.IsDir() != (e.Type == EntryDir):
+		return fmt.Errorf("removing %s: it is no longer the %s pic-sure created: %w", s.Path(p), e.Type, ErrNotCreated)
+	}
+	if err := s.remove(p); err != nil {
+		return err
+	}
+	return s.forget(path)
+}
+
+func (s *removal) forget(path string) error {
+	if !s.dryRun {
+		return s.Stack.forget(path)
+	}
+	if err := s.noSymlinks(CLIDir); err != nil {
+		return err
+	}
+	s.manifest.Entries = slices.DeleteFunc(s.manifest.Entries, func(e Entry) bool { return e.Path == path })
+	return nil
+}
+
+func (s *removal) lstat(p string) (fs.FileInfo, error) {
+	if s.dryRun {
+		for parent := p; ; parent = filepath.Dir(parent) {
+			if s.removed[parent] {
+				return nil, &fs.PathError{Op: "lstat", Path: p, Err: fs.ErrNotExist}
+			}
+			if parent == filepath.Dir(parent) || parent == "." {
+				break
+			}
+		}
+	}
+	return s.root.Lstat(p)
+}
+
+func (s *removal) remove(p string) error {
+	if !s.dryRun {
+		return s.root.Remove(p)
+	}
+	fi, err := s.lstat(p)
+	if err != nil {
+		return err
+	}
+	if fi.IsDir() {
+		names, err := s.readDir(p)
+		if err != nil {
+			return err
+		}
+		if len(names) > 0 {
+			return &fs.PathError{Op: "remove", Path: p, Err: syscall.ENOTEMPTY}
+		}
+	}
+	s.removed[p] = true
+	return nil
+}
+
+func (s *removal) readDir(dir string) ([]fs.DirEntry, error) {
+	names, err := s.Stack.readDir(dir)
+	if s.dryRun {
+		names = slices.DeleteFunc(names, func(de fs.DirEntry) bool {
+			return s.removed[filepath.Join(dir, de.Name())]
+		})
+	}
+	return names, err
 }
 
 func (s *Stack) readDir(dir string) ([]fs.DirEntry, error) {

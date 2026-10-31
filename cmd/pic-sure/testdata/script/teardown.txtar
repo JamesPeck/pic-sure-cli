@@ -31,6 +31,55 @@ stderr '^pic-sure: --skip-step: reset has no steps to skip; only build, db boots
 exec sh -c 'sed "s|@DIR@|$(pwd -P)|g" $WORK/vols.tmpl >$WORK/vols.json'
 exec sh -c 'sed "s|@DIR@|$(pwd -P)|g" $WORK/helpers.tmpl >$WORK/helpers.json'
 
+# Preview needs no consent, even non-interactively, and writes no log,
+# lock, ID, state or manifest (including at debug level).
+cp pic-sure.yaml $WORK/config.before
+cp .pic-sure/state.json $WORK/state.before
+cp .pic-sure/manifest.json $WORK/manifest.before
+exec pic-sure --plain --non-interactive --log-level debug destroy --dry-run
+stdout '^Dry run: would destroy stack demo. Nothing was changed.$'
+stdout '^Would remove container demo-dictionaryetl-0a1b2c3d.$'
+stdout '^Would remove volume demo_hpds-data.$'
+stdout '^Would remove dev image hms-dbmi/pic-sure-psama:dev-demo-0123456789ab.$'
+stdout '^Would remove path .pic-sure/render.$'
+stdout '^  notes.txt$'
+! stdout 'rootpw'
+! stderr 'rootpw'
+! stderr 'Type the stack name'
+! grep '^docker (rm|run|volume rm|image rm|compose)' $WORK/docker.log
+! exists .pic-sure/logs
+! exists .pic-sure/lock
+! exists .pic-sure/stack-id
+cmp pic-sure.yaml $WORK/config.before
+cmp .pic-sure/state.json $WORK/state.before
+cmp .pic-sure/manifest.json $WORK/manifest.before
+exists .pic-sure/secrets.yaml
+exists .pic-sure/render/compose.yaml
+
+exec pic-sure --json destroy --dry-run
+jsonlines stdout
+stdout '"type":"result","ok":true,"data":\{"stack":"demo","dry_run":true,"containers":\["demo-dictionaryetl-0a1b2c3d"\],"volumes":\["demo_hpds-data","demo_hpds-logs","demo_picsure-db-data"\]'
+stdout '"images":\["hms-dbmi/pic-sure-psama:dev-demo-0123456789ab"\]'
+! stdout 'rootpw'
+! grep '^docker (rm|run|volume rm|image rm|compose)' $WORK/docker.log
+cmp .pic-sure/manifest.json $WORK/manifest.before
+
+# Optional pruning remains read-only even when the cache does not exist.
+! exists $WORK/cache
+exec pic-sure --json destroy --dry-run --prune-images
+stdout '"pruned":\{.*"dry_run":true'
+! exists $WORK/cache
+! grep '^docker (rm|run|volume rm|image rm|compose)' $WORK/docker.log
+cmp .pic-sure/manifest.json $WORK/manifest.before
+
+exec pic-sure --json reset --dry-run --keep-db
+stdout '"dry_run":true'
+stdout '"volumes":\["demo_hpds-data"\],"kept_volumes":\["demo_hpds-logs","demo_picsure-db-data"\]'
+! grep '^docker (rm|run|volume rm|image rm|compose)' $WORK/docker.log
+cmp .pic-sure/state.json $WORK/state.before
+! exists .pic-sure/logs
+rm $WORK/docker.log
+
 # reset --yes: the dictionary-etl a killed load left (it holds the data
 # network and hpds-data), compose down, then the stack's labelled data
 # volumes; the logs volume, the config and the secrets stay.
@@ -93,6 +142,9 @@ stderr 'warning: compose down runs without the stack''s secrets'
 grep 'down --remove-orphans$' $WORK/docker.log
 
 -- docker.scenario --
+docker volume ls -q --filter label=org.hms-dbmi.picsure.stack-dir => 0
+docker ps -a -q --no-trunc => 0
+docker network ls -q --no-trunc --filter label=org.hms-dbmi.picsure.stack-dir => 0
 docker volume ls -q --filter label=org.hms-dbmi.picsure.stack=demo => 0 stdout=vols.txt
 docker compose * down --remove-orphans => 0
 docker volume inspect * => 0 stdout=vols.json
@@ -101,7 +153,7 @@ docker image ls --filter reference=hms-dbmi/* * => 0 stdout=images.txt
 docker image inspect * => 0 stdout=images.json
 docker image rm * => 0
 docker ps --all --no-trunc --filter label=com.docker.compose.project=* --format * => 0
-docker ps --all --no-trunc --filter label=org.hms-dbmi.picsure.stack=demo --format * => 0 stdout=helpers.json times=1
+docker ps --all --no-trunc --filter label=org.hms-dbmi.picsure.stack=demo --format * => 0 stdout=helpers.json
 docker ps --all --no-trunc --filter label=org.hms-dbmi.picsure.stack=* --format * => 0
 docker rm -v -f demo-dictionaryetl-* => 0
 docker volume ls -q --filter label=com.docker.compose.project=* => 0

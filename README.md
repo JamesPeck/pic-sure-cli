@@ -381,7 +381,14 @@ one rendered (exit 5).
 | `pic-sure reset [--keep-db]` | containers and the stack's volumes: HPDS, dictionary, staging, certs, truststore, and the database unless `--keep-db` | config, secrets, logs and TLS sources: `up` sets it up again, empty |
 | `pic-sure destroy [--prune-images]` | containers, every volume and dev image of this stack, and the files pic-sure created in the stack directory | files you added (listed), shared data sets, other stacks |
 
-`reset` and `destroy` ask you to type the stack name on a terminal;
+Preview with `pic-sure destroy --dry-run` (or `reset --dry-run --keep-db`)
+to list what would be removed. Previews never prompt or need `--yes`, take
+no stack lock, and write no files, even with debug logging. Add `--json`
+for the report in the final result's `data`; `--prune-images` also previews
+shared images that would become unused. A preview assumes removals succeed;
+permissions, resources in use, and concurrent changes can affect a later run.
+
+Without `--dry-run`, `reset` and `destroy` ask you to type the stack name on a terminal;
 otherwise pass `--yes`. Images are shared between stacks, so `destroy`
 leaves them; `pic-sure cache prune` removes images, source trees and
 downloads that no stack uses (`--dry-run` first to see what). It keeps
