@@ -10,15 +10,18 @@ import (
 
 // Fit prepares an embedded form for the region it renders in:
 //
+//   - the width. huh.NewForm pins a form to 80 columns when TERM is dumb,
+//     and a pinned form ignores the width of every WindowSizeMsg, so Fit
+//     sets the width itself.
 //   - a synthetic resize to width×height. huh recomputes group viewport
-//     geometry only in its WindowSizeMsg handler, and only while no explicit
-//     WithWidth was set: WithWidth freezes the viewports at their
-//     construction-time width-80 measurement, so a field whose description
-//     wraps taller at the real width gets clipped below the fold. Never call
-//     WithWidth on these forms; call Fit again on every terminal resize.
+//     heights only in its WindowSizeMsg handler; without it, the viewports
+//     keep their construction-time measurement at 80 columns, and a field
+//     whose description wraps taller at the real width gets clipped below
+//     the fold. Call Fit again on every terminal resize.
 //   - Theme, so the form follows the terminal background.
 func Fit(f *huh.Form, width, height int) *huh.Form {
 	f.WithTheme(Theme)
+	f.WithWidth(width)
 	// Form.Update has a pointer receiver and returns the form itself.
 	f.Update(tea.WindowSizeMsg{Width: width, Height: height})
 	return f

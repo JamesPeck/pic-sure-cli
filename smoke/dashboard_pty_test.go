@@ -69,12 +69,18 @@ func startPTY(t *testing.T, dir string, args ...string) *ptySession {
 // startPTYEnv is startPTY with extra NAME=value entries in the environment.
 func startPTYEnv(t *testing.T, dir string, env []string, args ...string) *ptySession {
 	t.Helper()
+	return startPTYSize(t, dir, &pty.Winsize{Rows: 40, Cols: 120}, env, args...)
+}
+
+// startPTYSize is startPTYEnv on a pseudo-terminal of the given size.
+func startPTYSize(t *testing.T, dir string, size *pty.Winsize, env []string, args ...string) *ptySession {
+	t.Helper()
 	cmd := exec.Command(bin, args...)
 	cmd.Dir = dir
 	if env != nil {
 		cmd.Env = append(os.Environ(), env...)
 	}
-	master, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 40, Cols: 120})
+	master, err := pty.StartWithSize(cmd, size)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,6 +196,22 @@ func TestWizardOpensAndClosesUnderPTY(t *testing.T) {
 	s.waitFor("Stack name", "esc cancel")
 	s.send("\x1b") // a pristine form closes without asking
 	s.waitFor("setup cancelled")
+	s.send("q")
+	s.waitExit0()
+}
+
+// On a TERM=dumb terminal (agent sandboxes, some editors' shells) the setup
+// wizard still wraps its text at the terminal's width rather than at 80
+// columns, which a 60-column terminal would cut off at its right edge.
+func TestWizardFitsANarrowDumbTerminal(t *testing.T) {
+	skipUnlessPTYAllowed(t)
+	s := startPTYSize(t, t.TempDir(), &pty.Winsize{Rows: 30, Cols: 60}, []string{"TERM=dumb"}, "--no-animations")
+	w := &screenWatch{t: t, s: s, scr: newScreen(30, 60), rows: 30}
+	w.wait(15*time.Second, "Set up PIC-SURE")
+	s.send(keyEnter)
+	w.wait(15*time.Second, "Stack name", "esc cancel", "control branch picks the component versions.")
+	s.send(keyEsc)
+	w.wait(15*time.Second, "setup cancelled")
 	s.send("q")
 	s.waitExit0()
 }

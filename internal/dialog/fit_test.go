@@ -6,6 +6,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/huh/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/styles"
 )
@@ -60,6 +61,32 @@ func TestThemeFollowsBackgroundInEveryGroup(t *testing.T) {
 		send(f, tea.KeyPressMsg{Code: tea.KeyEnter})
 		if v := f.View(); !strings.Contains(v, "Second") || !strings.Contains(v, tc.want) {
 			t.Errorf("dark=%v, second group: want %q in\n%q", tc.dark, tc.want, v)
+		}
+	}
+}
+
+// huh.NewForm pins a form to 80 columns when TERM is dumb, as agent sandboxes
+// and some editors' terminals set it. Fit still sizes the form to the region
+// it renders in, there as on any other terminal, and on every resize.
+func TestFitHonoursTheWidthOnADumbTerminal(t *testing.T) {
+	form := func() *huh.Form {
+		return huh.NewForm(huh.NewGroup(huh.NewInput().
+			Title("Stack name").
+			Description(strings.Repeat("A description that wraps at the dialog's width. ", 4))))
+	}
+	t.Setenv("TERM", "xterm-256color")
+	want := Fit(form(), 40, 20).View()
+	t.Setenv("TERM", "dumb")
+	f := Fit(form(), 40, 20)
+	if got := f.View(); got != want {
+		t.Errorf("TERM=dumb renders differently from xterm-256color:\n%s\nwant:\n%s", got, want)
+	}
+	for _, width := range []int{40, 60, 30} {
+		Fit(f, width, 20)
+		for _, line := range strings.Split(f.View(), "\n") {
+			if w := lipgloss.Width(line); w > width {
+				t.Errorf("TERM=dumb, width %d: line %q is %d wide", width, line, w)
+			}
 		}
 	}
 }
