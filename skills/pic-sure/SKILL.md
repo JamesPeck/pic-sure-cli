@@ -26,7 +26,10 @@ References, when this file isn't enough:
    NDJSON events and end with one `result` line, so read the last line
    (`tail -n1 out.ndjson | jq .`), and pass on any `warning` events'
    `text` to the user. Reports (`status`, `doctor`, `ps`,
-   `version`, `support-bundle`) print one object.
+   `version`, `support-bundle`) print one object. Add `--quiet` (`-q`)
+   to keep a stream short: it drops `step_started`, `progress`, `log`
+   and `step_done`, leaving the `warning`s and the `result` (`logs
+   --json` keeps its `log` lines). It never hides data or errors.
 3. **Decide on the exit code first**, then read the JSON for detail (see
    the table below). A failed `result` line carries the same code as
    `.error.exit_code`, which is how you get it for a command you ran in

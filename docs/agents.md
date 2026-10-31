@@ -46,6 +46,7 @@ turns this page into a task-oriented guide; the README's
 | `--stack DIR` | Act on the stack in DIR. Default: the stack containing the current directory. |
 | `--json` | NDJSON events, or one report object, on stdout. Implies `--non-interactive`. Not with `--plain`. |
 | `--plain` | Timestamped human lines on stderr instead of the TUI progress view. Chosen automatically without a terminal or when `CI` is set (`CI=false` and `CI=0` don't count). |
+| `--quiet`, `-q` | Drop the narration, never data or errors. With `--json`, streams keep only `warning` and `result` events (and `logs`' own `log` events); reports are unchanged. Otherwise, no TUI progress view or step lines. What a command prints on stdout, warnings, and the `pic-sure: MESSAGE` error line still print. Lowers the default `--log-level` to `error`; an explicit `--log-level` wins. Doesn't change prompting. |
 | `--non-interactive` | Never prompt; fail when an answer is needed (exit 4 for a missing confirmation). |
 | `--yes` | Answer yes to every confirmation, including destructive ones. |
 | `--wait-lock` | If another pic-sure command is changing the stack, wait for it instead of failing with exit 1. |

@@ -92,7 +92,9 @@ func (a *App) output() *output {
 		switch {
 		case mode == modeJSON:
 			sink = events.NewNDJSON(a.stdout())
-		case mode == modeTUI && isTerminalWriter(a.Stderr) && os.Getenv("TERM") != "dumb":
+		// --quiet has no progress view: what survives it, the warnings,
+		// prints as plain lines.
+		case mode == modeTUI && !a.Global.Quiet && isTerminalWriter(a.Stderr) && os.Getenv("TERM") != "dumb":
 			o.tui = progress.NewRenderer(progress.RendererOptions{
 				Animations: tui.AnimationsEnabled(a.Global.NoAnimations, os.Getenv),
 				Interrupt:  a.interrupt,
@@ -111,7 +113,7 @@ func (a *App) output() *output {
 				Color: useColor(isTerminalWriter(a.Stderr), os.Getenv),
 			})
 		}
-		o.sink = &runSink{Sink: sink}
+		o.sink = &runSink{Sink: sink, quiet: a.Global.Quiet}
 		a.out = o
 	}
 	return a.out
@@ -250,9 +252,11 @@ func jsonRequested(args []string) bool {
 // runSink is the run's sink: the renderer, plus the first step that failed
 // (for the failed Result) and the renderer's write error. Every event's text
 // is redacted before the renderer sees it, since compose output and errors
-// can quote a secret.
+// can quote a secret. With quiet (--quiet), the narration never reaches the
+// renderer.
 type runSink struct {
 	events.Sink
+	quiet bool
 
 	mu     sync.Mutex
 	failed string
@@ -267,7 +271,24 @@ func (s *runSink) Emit(e events.Event) {
 		}
 		s.mu.Unlock()
 	}
+	if s.quiet && narration(e) {
+		return
+	}
 	s.Sink.Emit(e)
+}
+
+// narration reports whether --quiet drops e: a step's start, progress and
+// end, and its subprocess output. The log lines of the step logs are the
+// logs command's data (composeverbs.go), so they stay, as do warnings and
+// the Result.
+func narration(e events.Event) bool {
+	switch e := e.(type) {
+	case events.StepStarted, events.Progress, events.StepDone:
+		return true
+	case events.Log:
+		return e.ID != "logs"
+	}
+	return false
 }
 
 // redactEvent returns e with every registered secret in its text replaced

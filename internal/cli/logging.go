@@ -33,6 +33,9 @@ func (a *App) startRunLog(cmd *cobra.Command, args []string) {
 	if err != nil {
 		level = slog.LevelInfo // only for an App built without the flag
 	}
+	if a.Global.Quiet && !cmd.Flags().Changed("log-level") {
+		level = slog.LevelError
+	}
 	path := commandName(cmd)
 	a.runLog = log.New(log.Options{
 		Level:  level,
