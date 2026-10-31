@@ -14,6 +14,22 @@ use --tail all --since DUR for every line since that time.
 pic-sure logs [SERVICE] [flags]
 ```
 
+## Examples
+
+```
+  # Show the last 200 lines of every service
+  pic-sure logs
+
+  # Follow HPDS's log until Ctrl-C
+  pic-sure logs -f hpds
+
+  # Show every line from the last ten minutes
+  pic-sure logs --tail all --since 10m
+
+  # Show HPDS's last 50 lines as JSON log events, without progress output
+  pic-sure -q --json logs --tail 50 hpds
+```
+
 ## Flags
 
 ```

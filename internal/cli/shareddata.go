@@ -23,20 +23,38 @@ func newSharedDataCmd(a *App) *cobra.Command {
 				"NAME_hpds-genomic, which any stack on this Docker host can mount read-only\n" +
 				"(hpds.data: shared, hpds.shared_name: NAME). HPDS is stopped during the copy.\n" +
 				"Data sets are immutable: an existing NAME is refused, so publish a new name instead.",
+			Example: `  # Publish this stack's HPDS data as nhanes-2026
+  pic-sure shared-data publish nhanes-2026
+
+  # The same, as JSON
+  pic-sure shared-data publish nhanes-2026 --json
+
+  # Create a stack that mounts it read-only
+  pic-sure init ~/picsure/team --name team --auth-mode open --admin-email you@example.com --auto-ports --hpds-data shared:nhanes-2026`,
 			Args: cobra.ExactArgs(1),
 			RunE: a.publishSharedData,
 		},
 		&cobra.Command{
 			Use:   "list",
 			Short: "List the published data sets",
-			Args:  cobra.NoArgs,
-			RunE:  a.listSharedData,
+			Example: `  # List the published data sets
+  pic-sure shared-data list
+
+  # Print their names from the JSON report
+  pic-sure shared-data list --json | jq -r '.data_sets[].name'`,
+			Args: cobra.NoArgs,
+			RunE: a.listSharedData,
 		},
 		&cobra.Command{
 			Use:   "remove NAME",
 			Short: "Remove a data set no container uses",
-			Args:  cobra.ExactArgs(1),
-			RunE:  a.removeSharedData,
+			Example: `  # Remove a data set no container uses
+  pic-sure shared-data remove nhanes-2026
+
+  # The same, as JSON
+  pic-sure shared-data remove nhanes-2026 --json`,
+			Args: cobra.ExactArgs(1),
+			RunE: a.removeSharedData,
 		},
 	)
 }

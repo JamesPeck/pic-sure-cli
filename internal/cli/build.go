@@ -24,6 +24,14 @@ records, and record their tags. Built images that are already up to date
 are kept; pull mode pulls each time, since a ref can be a branch. A component with components.<name>.source set is built from that
 checkout, tagged dev-<stack>-<sha12>, and rebuilt every time while the
 checkout has uncommitted changes. Build logs go to .pic-sure/logs/build/.`,
+		Example: `  # Build or pull any images the stack is missing
+  pic-sure build
+
+  # Rebuild the pic-sure and frontend images even if they exist
+  pic-sure build --force pic-sure frontend
+
+  # Build as a JSON event stream
+  pic-sure build --json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			force, _ := cmd.Flags().GetBool("force")
 			return a.build(cmd, args, force)

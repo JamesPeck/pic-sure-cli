@@ -24,6 +24,14 @@ and dictionary-api are restarted if they are running.
 schema, the project UUIDs, the remote database settings and the compose
 config) without touching the database. --repair runs Flyway repair, which
 removes failed entries from the history so a fixed migration can run again.`,
+		Example: `  # Run the database migrations
+  pic-sure migrate
+
+  # Verify the migration inputs without running them, as JSON
+  pic-sure migrate --dry-run --json
+
+  # Run Flyway repair after a failed migration
+  pic-sure migrate --repair`,
 		Args: cobra.NoArgs,
 		RunE: a.migrate,
 	}

@@ -43,6 +43,14 @@ stack, restarting only the services that need it.
 --dry-run prints the plan and changes nothing in the stack, though it may
 start the stack's database to compare its migrations. --no-build keeps the
 components and images the stack runs and doesn't move its release.`,
+		Example: `  # Show the update plan and change nothing
+  pic-sure update --dry-run
+
+  # Print the plan as JSON
+  pic-sure update --dry-run --json | tail -n1 | jq '.data'
+
+  # Update unattended, replacing this binary if the release needs a newer one
+  pic-sure update --json --self-update`,
 		Args: cobra.NoArgs,
 		RunE: a.update,
 	}

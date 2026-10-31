@@ -37,6 +37,19 @@ HPDS fails to start after the load; the error then says to check
 pic-sure data load-phenotype (--file F [--entry E] | --input-dir D) [flags]
 ```
 
+## Examples
+
+```
+  # Load a gzipped phenotype CSV, as JSON
+  pic-sure data load-phenotype --file allConcepts.csv.gz --json
+
+  # Load one CSV from an archive that holds several
+  pic-sure data load-phenotype --file phenotypes.tar.gz --entry allConcepts.csv
+
+  # Load a directory of CSVs with the sequential loader
+  pic-sure data load-phenotype --input-dir ~/picsure/csvs
+```
+
 ## Flags
 
 ```

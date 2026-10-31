@@ -17,6 +17,19 @@ sums and kept in the cache's downloads/. "all" loads every dataset as one.
 pic-sure data demo [nhanes|synthea|1000genomes|all] [flags]
 ```
 
+## Examples
+
+```
+  # Load the NHANES demo data
+  pic-sure data demo
+
+  # Load every demo dataset with a larger loader heap
+  pic-sure data demo all --heap 8192
+
+  # Load NHANES into the stack in another directory, as JSON
+  pic-sure --stack ~/picsure/demo data demo nhanes --json
+```
+
 ## Flags
 
 ```

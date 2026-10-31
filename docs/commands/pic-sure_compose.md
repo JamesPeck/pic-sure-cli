@@ -22,7 +22,10 @@ pic-sure compose -- ARGS...
 ## Examples
 
 ```
+  # List the stack's containers, stopped ones too
   pic-sure compose -- ps -a
+
+  # Open a shell in the HPDS container
   pic-sure compose -- exec hpds sh
 ```
 

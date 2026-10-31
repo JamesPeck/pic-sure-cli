@@ -44,9 +44,19 @@ depend on that change; render, start and HMR volume setup have no Check.
 Nothing is written and no images are pulled.
 A read-only, network-disabled genomic probe container may run and is named
 in the output.`,
-		Example: "  # Preview the partial step plan without changing the stack\n  pic-sure up --dry-run\n\n  # Read the plan from the JSON result's data\n  pic-sure up --dry-run --json",
-		Args:    cobra.NoArgs,
-		RunE:    a.up,
+		Example: `  # Start the stack, or converge it after a change
+  pic-sure up
+
+  # Preview the partial step plan without changing the stack
+  pic-sure up --dry-run
+
+  # Apply a config change, as a JSON event stream
+  pic-sure config set hpds.java_opts -Xmx8g && pic-sure up --json
+
+  # Start it without progress output, keeping warnings and the result
+  pic-sure -q up`,
+		Args: cobra.NoArgs,
+		RunE: a.up,
 	})
 	cmd.Flags().Bool("dry-run", false, "Preview the partial step plan without writing anything")
 	return cmd

@@ -20,6 +20,19 @@ it couldn't be collected.
 pic-sure support-bundle [flags]
 ```
 
+## Examples
+
+```
+  # Write a redacted diagnostics archive
+  pic-sure support-bundle
+
+  # Write it to a chosen file
+  pic-sure support-bundle -o /tmp/pic-sure-support.tar.gz
+
+  # Print the archive's path from the JSON result
+  pic-sure support-bundle --json | jq -r .path
+```
+
 ## Flags
 
 ```

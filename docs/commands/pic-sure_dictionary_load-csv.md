@@ -15,6 +15,16 @@ then removes it, touches dict.update_info and restarts dictionary-api.
 pic-sure dictionary load-csv --datasets FILE --concepts ZIP [flags]
 ```
 
+## Examples
+
+```
+  # Load a custom dictionary
+  pic-sure dictionary load-csv --datasets datasets.csv --concepts concepts.zip
+
+  # Replace the dictionary with it, as JSON
+  pic-sure dictionary load-csv --clear --datasets datasets.csv --concepts concepts.zip --json
+```
+
 ## Flags
 
 ```

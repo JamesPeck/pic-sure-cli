@@ -19,6 +19,19 @@ components and images the stack runs and doesn't move its release.
 pic-sure update [flags]
 ```
 
+## Examples
+
+```
+  # Show the update plan and change nothing
+  pic-sure update --dry-run
+
+  # Print the plan as JSON
+  pic-sure update --dry-run --json | tail -n1 | jq '.data'
+
+  # Update unattended, replacing this binary if the release needs a newer one
+  pic-sure update --json --self-update
+```
+
 ## Flags
 
 ```

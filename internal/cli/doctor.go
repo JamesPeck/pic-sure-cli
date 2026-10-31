@@ -32,6 +32,14 @@ func newDoctorCmd(a *App) *cobra.Command {
 
 Without a stack (no --stack, and none at or above the current directory)
 only the host and Docker are checked. Exits 1 if any check fails.`,
+		Example: `  # Check the host, Docker and the stack
+  pic-sure doctor
+
+  # Also check reachability through the proxy
+  pic-sure doctor --network
+
+  # List the failed checks
+  pic-sure doctor --json | jq -r '.checks[] | select(.status == "fail") | .name'`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return a.doctor(cmd, network)

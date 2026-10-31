@@ -26,6 +26,14 @@ the error then says to run ` + "`pic-sure up`" + `.
 The files come from hms-dbmi/pic-sure-public-datasets at a commit pinned in
 pic-sure, through the stack's proxy, and are checked against pinned SHA-256
 sums and kept in the cache's downloads/. "all" loads every dataset as one.`,
+		Example: `  # Load the NHANES demo data
+  pic-sure data demo
+
+  # Load every demo dataset with a larger loader heap
+  pic-sure data demo all --heap 8192
+
+  # Load NHANES into the stack in another directory, as JSON
+  pic-sure --stack ~/picsure/demo data demo nhanes --json`,
 		ValidArgs: ops.DemoDatasets(),
 		Args:      cobra.MatchAll(cobra.MaximumNArgs(1), cobra.OnlyValidArgs),
 		RunE:      a.dataDemo,
@@ -66,6 +74,14 @@ the dictionary commands that finish the load.
 The dictionary is built from the data volume, so it is rebuilt even when
 HPDS fails to start after the load; the error then says to check
 ` + "`pic-sure logs hpds`" + ` and run ` + "`pic-sure up`" + `.`,
+		Example: `  # Load a gzipped phenotype CSV, as JSON
+  pic-sure data load-phenotype --file allConcepts.csv.gz --json
+
+  # Load one CSV from an archive that holds several
+  pic-sure data load-phenotype --file phenotypes.tar.gz --entry allConcepts.csv
+
+  # Load a directory of CSVs with the sequential loader
+  pic-sure data load-phenotype --input-dir ~/picsure/csvs`,
 		Args: cobra.NoArgs,
 		RunE: a.loadPhenotype,
 	}
@@ -110,6 +126,14 @@ update refuse to start it. --recover settles them without loading
 anything, and needs no VCFs: each partition is put back whole, either the
 promoted copy or the one from before. HPDS is stopped for it, and started
 again if it was running. Without leftovers it changes nothing.`,
+		Example: `  # Stage the VCFs an index names into the chr21 partition
+  pic-sure data load-genomic --partition chr21 --vcf-index ~/vcfs/vcfIndex.tsv
+
+  # Load, make the partition live and switch HPDS to the genomic profile, as JSON
+  pic-sure data load-genomic --partition chr21 --vcf-index ~/vcfs/vcfIndex.tsv --promote --enable-profile --json
+
+  # Settle what an interrupted promote left behind
+  pic-sure data load-genomic --recover`,
 		Args: cobra.NoArgs,
 		RunE: a.loadGenomic,
 	}

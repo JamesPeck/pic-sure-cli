@@ -13,6 +13,16 @@ exit without saving to give up. Needs a terminal.
 pic-sure config edit
 ```
 
+## Examples
+
+```
+  # Edit this stack's config in $VISUAL or $EDITOR
+  pic-sure config edit
+
+  # Edit the config of the stack in another directory
+  pic-sure --stack ~/picsure/demo config edit
+```
+
 The [global flags](pic-sure.md#flags) apply too.
 
 See also: [`pic-sure config`](pic-sure_config.md)

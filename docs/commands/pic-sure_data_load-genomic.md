@@ -29,6 +29,19 @@ again if it was running. Without leftovers it changes nothing.
 pic-sure data load-genomic (--partition P --vcf-index F [--vcf-dir D] [--promote] [--enable-profile] | --recover) [flags]
 ```
 
+## Examples
+
+```
+  # Stage the VCFs an index names into the chr21 partition
+  pic-sure data load-genomic --partition chr21 --vcf-index ~/vcfs/vcfIndex.tsv
+
+  # Load, make the partition live and switch HPDS to the genomic profile, as JSON
+  pic-sure data load-genomic --partition chr21 --vcf-index ~/vcfs/vcfIndex.tsv --promote --enable-profile --json
+
+  # Settle what an interrupted promote left behind
+  pic-sure data load-genomic --recover
+```
+
 ## Flags
 
 ```

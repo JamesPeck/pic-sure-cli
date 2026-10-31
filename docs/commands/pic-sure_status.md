@@ -19,6 +19,19 @@ HTML gets.
 pic-sure status [flags]
 ```
 
+## Examples
+
+```
+  # Show the stack's services, URL and data
+  pic-sure status
+
+  # Also probe inside the running containers
+  pic-sure status --deep
+
+  # Fail unless HPDS has data ready
+  pic-sure status --deep --json | jq -e '.deep.data.ready == true'
+```
+
 ## Flags
 
 ```

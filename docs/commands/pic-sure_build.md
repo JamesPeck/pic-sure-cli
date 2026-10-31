@@ -15,6 +15,19 @@ checkout has uncommitted changes. Build logs go to .pic-sure/logs/build/.
 pic-sure build [COMPONENT...] [flags]
 ```
 
+## Examples
+
+```
+  # Build or pull any images the stack is missing
+  pic-sure build
+
+  # Rebuild the pic-sure and frontend images even if they exist
+  pic-sure build --force pic-sure frontend
+
+  # Build as a JSON event stream
+  pic-sure build --json
+```
+
 ## Flags
 
 ```
