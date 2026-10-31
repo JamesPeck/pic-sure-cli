@@ -116,7 +116,6 @@ type CacheOptions struct {
 	teardown *teardownProjection
 }
 
-// teardownProjection removes only the selected resources from a cache inventory.
 // Leftover labelled resources must still protect the images they may use.
 type teardownProjection struct {
 	dir      string

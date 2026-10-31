@@ -70,7 +70,6 @@ terminal by typing the stack name; otherwise pass --yes.`,
 	return c
 }
 
-// Preview bypasses confirmation, run logs and the mutating stack lock.
 func (a *App) teardown(cmd *cobra.Command, opts ops.TeardownOptions) error {
 	destroy := cmd.Name() == "destroy"
 	st, err := a.openStackUnlogged(cmd)
