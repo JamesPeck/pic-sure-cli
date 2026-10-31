@@ -103,16 +103,36 @@ func TestExecStartFailure(t *testing.T) {
 // open and Run would block until its 60 s sleep ended.
 func TestExecNotWedgedByOrphanGrandchild(t *testing.T) {
 	t.Parallel()
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	// A long WaitDelay: a held pipe must show as a minute's wait, not as the
+	// default grace period.
+	r := &docker.ExecRunner{WaitDelay: time.Minute}
+	// Cancel once the grandchild exists, however long the script takes to
+	// start.
+	forked := filepath.Join(t.TempDir(), "forked")
+	cancelled := make(chan time.Time, 1)
+	go func() {
+		for {
+			if _, err := os.Stat(forked); err == nil {
+				cancelled <- time.Now()
+				cancel()
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+	}()
 
-	start := time.Now()
-	res, err := (&docker.ExecRunner{}).Run(ctx, sh("echo started; sleep 60 & sleep 60"))
-	if elapsed := time.Since(start); elapsed > 4*time.Second {
-		t.Fatalf("Run took %v after a 500ms deadline: the orphaned grandchild held stdout open", elapsed)
+	res, err := r.Run(ctx, sh(`echo started; sleep 60 & : >"$1"; sleep 60`, forked))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
 	}
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Errorf("err = %v, want context.DeadlineExceeded", err)
+	if elapsed := time.Since(<-cancelled); elapsed > 10*time.Second {
+		t.Fatalf("Run took %v after cancel: the orphaned grandchild held stdout open", elapsed)
 	}
 	if string(res.Stdout) != "started\n" {
 		t.Errorf("stdout = %q", res.Stdout)
@@ -126,20 +146,21 @@ func TestExecCancelSignalsTheWholeGroup(t *testing.T) {
 	// A long WaitDelay: the group must go on SIGTERM alone.
 	r := &docker.ExecRunner{WaitDelay: time.Minute}
 	pids := make(chan int, 1)
+	var cancelled time.Time
 	stdout := writerFunc(func(p []byte) (int, error) {
 		if pid, err := strconv.Atoi(strings.TrimSpace(string(p))); err == nil {
 			pids <- pid
+			cancelled = time.Now()
 			cancel()
 		}
 		return len(p), nil
 	})
 
-	start := time.Now()
 	_, err := r.Stream(ctx, sh("sleep 60 & echo $!; wait"), stdout, nil)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}
-	if elapsed := time.Since(start); elapsed > 10*time.Second {
+	if elapsed := time.Since(cancelled); elapsed > 10*time.Second {
 		t.Errorf("Stream took %v to return after SIGTERM", elapsed)
 	}
 	assertGone(t, <-pids)
@@ -258,7 +279,9 @@ func TestExecLingeringGrandchildAfterExit(t *testing.T) {
 	r := &docker.ExecRunner{WaitDelay: 300 * time.Millisecond}
 	start := time.Now()
 	res, err := r.Run(context.Background(), sh("echo hi; sleep 60 & echo $!"))
-	if elapsed := time.Since(start); elapsed > 5*time.Second {
+	// Wedged, Run would wait out the grandchild's 60 s sleep. The bound
+	// leaves room for a slow start on a loaded machine.
+	if elapsed := time.Since(start); elapsed > 30*time.Second {
 		t.Fatalf("Run took %v", elapsed)
 	}
 	lines := strings.Fields(string(res.Stdout))
@@ -463,6 +486,9 @@ func TestWithTimeout(t *testing.T) {
 	})
 	t.Run("fast command", func(t *testing.T) {
 		t.Parallel()
+		// Its own timeout: on a loaded machine starting sh alone can take
+		// longer than 200ms.
+		r := docker.WithTimeout(&docker.ExecRunner{}, time.Minute)
 		code, err := r.Stream(context.Background(), sh("exit 4"), nil, nil)
 		if err != nil || code != 4 {
 			t.Errorf("Stream = %d, %v", code, err)

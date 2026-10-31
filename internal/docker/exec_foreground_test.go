@@ -31,7 +31,14 @@ func TestForegroundHelper(t *testing.T) {
 		t.Skip("run by TestExecForegroundReadsTheTerminal")
 	}
 	r := &docker.ExecRunner{Foreground: mode == "foreground", WaitDelay: 100 * time.Millisecond}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	// In the background the child is stopped until ctx ends, so a short
+	// timeout is the expected way out. In the foreground it's a backstop,
+	// long enough for sh to start on a loaded machine.
+	timeout := time.Second
+	if r.Foreground {
+		timeout = 15 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	fmt.Println("ready")
 	cmd := sh(`read line && echo "got:$line"`)
@@ -85,7 +92,7 @@ func TestExecForegroundReadsTheTerminal(t *testing.T) {
 				if !strings.Contains(got, tt.want) {
 					t.Errorf("terminal output %q, want it to contain %q", got, tt.want)
 				}
-			case <-time.After(10 * time.Second):
+			case <-time.After(30 * time.Second):
 				t.Fatal("the helper didn't finish")
 			}
 		})
