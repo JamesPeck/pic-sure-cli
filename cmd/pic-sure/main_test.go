@@ -107,8 +107,11 @@ func cmdTeardownMatch(ts *testscript.TestScript, neg bool, args []string) {
 			OK   bool
 			Data ops.TeardownReport
 		}
-		if err := json.Unmarshal([]byte(lines[len(lines)-1]), &result); err != nil || result.Type != "result" || !result.OK || result.Data.Files == nil {
-			ts.Fatalf("%s: invalid teardown result: %v", name, err)
+		if err := json.Unmarshal([]byte(lines[len(lines)-1]), &result); err != nil {
+			ts.Fatalf("%s: invalid teardown JSON: %v", name, err)
+		}
+		if result.Type != "result" || !result.OK || result.Data.Files == nil {
+			ts.Fatalf("%s: expected a successful teardown result with files, got %s", name, lines[len(lines)-1])
 		}
 		return result.Data
 	}
