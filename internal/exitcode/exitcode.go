@@ -1,7 +1,8 @@
 // Package exitcode defines the CLI's process exit codes (spec §10.4) and an
-// error type that carries one. Commands return these errors, and the cli
-// package turns whatever error a command returns into the process exit code
-// with FromError.
+// error type that carries one, with a slug naming the condition. Commands
+// return these errors, and the cli package turns whatever error a command
+// returns into the process exit code with FromError, and into the JSON
+// error's code with SlugOf.
 package exitcode
 
 import (
@@ -27,6 +28,9 @@ const (
 // Error is an error with an exit code.
 type Error struct {
 	Code int
+	// Slug names the condition for --json callers (see Condition); "" means
+	// SlugOf falls back to the exit code's slug.
+	Slug string
 	Err  error
 }
 
@@ -49,9 +53,9 @@ func Usage(format string, args ...any) error { return newf(CodeUsage, format, ar
 func Precondition(format string, args ...any) error { return newf(CodePrecondition, format, args...) }
 
 // ConfirmRequired reports a destructive command that needs a TTY
-// confirmation or --yes (exit 4).
+// confirmation or --yes (exit 4), as ConfirmationRequired.
 func ConfirmRequired(format string, args ...any) error {
-	return newf(CodeConfirmRequired, format, args...)
+	return ConfirmationRequired.Errorf(format, args...)
 }
 
 // Incompatible reports a version mismatch the CLI refuses to work across
@@ -64,7 +68,7 @@ func Signaled(sig os.Signal) error {
 	if s, ok := sig.(syscall.Signal); ok {
 		code = 128 + int(s)
 	}
-	return &Error{Code: code, Err: fmt.Errorf("interrupted (%v)", sig)}
+	return &Error{Code: code, Slug: slugInterrupted, Err: fmt.Errorf("interrupted (%v)", sig)}
 }
 
 // FromError returns the exit code for err: 0 for nil, the code of the
@@ -82,4 +86,84 @@ func FromError(err error) int {
 		return CodeInterrupted
 	}
 	return CodeFailed
+}
+
+// SlugOf returns the slug for err: "" for nil, else the slug of the
+// outermost *Error in the chain, the error FromError takes the exit code
+// from. When that error has no slug, or there is none, the slug is the exit
+// code's: failed, usage, precondition, confirm_required, incompatible or
+// interrupted.
+func SlugOf(err error) string {
+	if err == nil {
+		return ""
+	}
+	var e *Error
+	if errors.As(err, &e) && e.Slug != "" {
+		return e.Slug
+	}
+	switch code := FromError(err); {
+	case code == CodeUsage:
+		return "usage"
+	case code == CodePrecondition:
+		return "precondition"
+	case code == CodeConfirmRequired:
+		return "confirm_required"
+	case code == CodeIncompatible:
+		return "incompatible"
+	case code > 128:
+		return slugInterrupted
+	}
+	return "failed"
+}
+
+const slugInterrupted = "interrupted"
+
+// A Condition is a failure that --json callers can tell apart from others
+// with the same exit code: a slug, which never changes within v2, and the
+// exit code that goes with it. docs/json-schemas.md lists them.
+type Condition struct {
+	Slug string
+	Code int
+}
+
+// Errorf returns an *Error for c. The arguments are as for fmt.Errorf, so %w
+// wraps a cause.
+func (c Condition) Errorf(format string, args ...any) error {
+	return &Error{Code: c.Code, Slug: c.Slug, Err: fmt.Errorf(format, args...)}
+}
+
+// The conditions. Add new ones to Conditions too.
+var (
+	StepFailed  = Condition{"step_failed", CodeFailed}
+	StackLocked = Condition{"stack_locked", CodeFailed}
+
+	InvalidConfig = Condition{"invalid_config", CodeUsage}
+	InvalidSecret = Condition{"invalid_secret", CodeUsage}
+
+	DockerUnavailable   = Condition{"docker_unavailable", CodePrecondition}
+	ComposeNotInstalled = Condition{"compose_not_installed", CodePrecondition}
+	NoStack             = Condition{"no_stack", CodePrecondition}
+	WrongOwner          = Condition{"wrong_owner", CodePrecondition}
+	StackNotInitialised = Condition{"stack_not_initialised", CodePrecondition}
+	StackNotRendered    = Condition{"stack_not_rendered", CodePrecondition}
+	PortsBusy           = Condition{"ports_busy", CodePrecondition}
+	GeneratedOpenSecret = Condition{"generated_open_secret", CodePrecondition}
+	ForeignResources    = Condition{"foreign_resources", CodePrecondition}
+
+	ConfirmationRequired = Condition{"confirmation_required", CodeConfirmRequired}
+
+	CLITooOld               = Condition{"cli_too_old", CodeIncompatible}
+	ConfigMigrationsPending = Condition{"config_migrations_pending", CodeIncompatible}
+)
+
+// Conditions returns every Condition, in exit code order.
+func Conditions() []Condition {
+	return []Condition{
+		StepFailed, StackLocked,
+		InvalidConfig, InvalidSecret,
+		DockerUnavailable, ComposeNotInstalled, NoStack, WrongOwner,
+		StackNotInitialised, StackNotRendered, PortsBusy, GeneratedOpenSecret, ForeignResources,
+		ConfirmationRequired,
+		CLITooOld, ConfigMigrationsPending,
+	}
 }

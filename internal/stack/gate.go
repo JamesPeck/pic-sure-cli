@@ -129,7 +129,7 @@ func (v *VersionCheck) Gate(class CommandClass) (warning string, err error) {
 		if class == ReadOnly {
 			return reason + "; upgrade pic-sure before changing the stack", nil
 		}
-		return "", exitcode.Incompatible("%s; upgrade pic-sure (see pic-sure self-update) to change the stack", reason)
+		return "", exitcode.CLITooOld.Errorf("%s; upgrade pic-sure (see pic-sure self-update) to change the stack", reason)
 	}
 	if class == ReadOnly || !v.configOK || v.ConfigSchema >= v.Schema {
 		return "", nil
@@ -140,7 +140,7 @@ func (v *VersionCheck) Gate(class CommandClass) (warning string, err error) {
 	if class == Migrating {
 		return "", nil
 	}
-	return "", exitcode.Incompatible("this stack's %s is schema %d, and this pic-sure (%s) uses schema %d; run pic-sure update to migrate it, which backs it up first",
+	return "", exitcode.ConfigMigrationsPending.Errorf("this stack's %s is schema %d, and this pic-sure (%s) uses schema %d; run pic-sure update to migrate it, which backs it up first",
 		ConfigFile, v.ConfigSchema, v.CLI, v.Schema)
 }
 

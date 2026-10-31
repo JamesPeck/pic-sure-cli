@@ -39,7 +39,7 @@ func recorded() []Event {
 		StepStarted{ID: "migrate", Title: "Run <flyway> migrations & seed"},
 		Log{ID: "migrate", Stream: StreamStderr, Line: "ERROR: Validate failed: \"V3\" checksum mismatch"},
 		StepDone{ID: "migrate", Status: StepFailed},
-		Result{Error: &ErrorInfo{ExitCode: 1, Message: "step migrate failed", Step: "migrate"}},
+		Result{Error: &ErrorInfo{ExitCode: 1, Code: "step_failed", Message: "step migrate failed", Step: "migrate"}},
 	}
 }
 

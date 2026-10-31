@@ -114,6 +114,16 @@ func TestGateMatrix(t *testing.T) {
 			if tt.wantErr != "" && !strings.Contains(err.Error(), tt.wantErr) {
 				t.Errorf("error = %q, want it to contain %q", err, tt.wantErr)
 			}
+			// Every refusal is the release needing a newer pic-sure, except
+			// strict's, which refuses an older release.
+			if want := "cli_too_old"; tt.wantCode == exitcode.CodeIncompatible {
+				if tt.strict {
+					want = "incompatible"
+				}
+				if got := exitcode.SlugOf(err); got != want {
+					t.Errorf("slug = %q, want %q", got, want)
+				}
+			}
 			if got := len(u.got) > 0; got != tt.wantUpdate {
 				t.Errorf("self-updated = %v (%q), want %v", got, u.got, tt.wantUpdate)
 			}

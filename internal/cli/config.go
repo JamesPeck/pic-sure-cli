@@ -255,7 +255,7 @@ func (a *App) configEdit(cmd *cobra.Command) error {
 		edited = bytes.TrimPrefix(edited, header)
 		if bytes.Equal(edited, content) {
 			if problem != nil {
-				return exitcode.Usage("%w\n%s is unchanged", problem, stack.ConfigFile)
+				return exitcode.InvalidConfig.Errorf("%w\n%s is unchanged", problem, stack.ConfigFile)
 			}
 			_, err := fmt.Fprintf(a.stderr(), "%s is unchanged\n", stack.ConfigFile)
 			return err
@@ -328,7 +328,7 @@ func configError(err error) error {
 	case errors.As(err, &se):
 		return exitcode.Incompatible("%w", err)
 	case isConfigProblem(err):
-		return exitcode.Usage("%w", err)
+		return exitcode.InvalidConfig.Errorf("%w", err)
 	}
 	return err
 }

@@ -16,7 +16,9 @@ exitcode 3 pic-sure --stack nosecrets down
 stderr 'no secrets.yaml; run `pic-sure init`'
 exitcode 3 pic-sure --stack nosecrets compose -- up -d
 exitcode 3 pic-sure --stack unrendered --json ps
-stdout '"exit_code":3'
+stdout '"exit_code":3,"code":"stack_not_rendered",'
+exitcode 3 pic-sure --stack nosecrets --json down
+stdout '"exit_code":3,"code":"stack_not_initialised",'
 ! exists docker.log
 
 # Invalid bounds fail before opening even a missing stack or calling Docker.
@@ -67,7 +69,7 @@ grep 'down --remove-orphans$' $WORK/docker.log
 exitcode 1 pic-sure --json restart nosuch
 stderr 'no such service: nosuch'
 stdout '"type":"step_done","id":"restart","status":"failed"'
-stdout '"ok":false,"error":\{"exit_code":1,.*"step":"restart"\}'
+stdout '"ok":false,"error":\{"exit_code":1,"code":"step_failed",.*"step":"restart"\}'
 
 # restart: all services, or the ones named.
 exec pic-sure --plain restart
@@ -190,6 +192,8 @@ exitcode 1 pic-sure --stack stack compose -- up -d
 stderr 'pass --wait-lock'
 exitcode 1 pic-sure --stack stack compose -- --dry-run wait --down-project hpds
 stderr 'pass --wait-lock'
+exitcode 1 pic-sure --stack stack --json down
+stdout '"exit_code":1,"code":"stack_locked",'
 
 # Its read-only subcommands, like logs, take no lock, so they run.
 exec pic-sure --stack stack compose -- ps -a

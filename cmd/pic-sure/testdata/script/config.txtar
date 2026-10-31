@@ -48,6 +48,8 @@ cmp stack/pic-sure.yaml want.yaml
 # Invalid values are usage errors, and the file is left alone.
 exitcode 2 pic-sure --stack stack config set network.http_port eighty
 stderr '^pic-sure: invalid pic-sure.yaml: network.http_port: want a whole number, got "eighty"$'
+exitcode 2 pic-sure --stack stack --json config set network.http_port eighty
+stdout '"exit_code":2,"code":"invalid_config",'
 exitcode 2 pic-sure --stack stack config set network.http_port 70000
 stderr '^pic-sure: invalid pic-sure.yaml: network.http_port \(line 6\): must be a port from 1 to 65535, got 70000$'
 exitcode 2 pic-sure --stack stack config set network.http_port 9443

@@ -333,7 +333,7 @@ func (a *App) stackComposeConfig(cmd *cobra.Command, r docker.Runner, st *stack.
 	}
 	c, err := docker.NewCompose(r, st.Dir, nil)
 	if errors.Is(err, docker.ErrNotRendered) {
-		return nil, nil, nil, exitcode.Precondition("%w yet; run `pic-sure up`", docker.ErrNotRendered)
+		return nil, nil, nil, exitcode.StackNotRendered.Errorf("%w yet; run `pic-sure up`", docker.ErrNotRendered)
 	}
 	if err != nil {
 		return nil, nil, nil, err
@@ -368,7 +368,7 @@ func (a *App) stackComposeInputs(cmd *cobra.Command, st *stack.Stack) (*stack.Co
 	if err != nil {
 		if !readOnly {
 			if errors.Is(err, fs.ErrNotExist) {
-				return nil, nil, exitcode.Precondition("the stack has no secrets.yaml; run `pic-sure init` to finish creating it")
+				return nil, nil, exitcode.StackNotInitialised.Errorf("the stack has no secrets.yaml; run `pic-sure init` to finish creating it")
 			}
 			return nil, nil, err
 		}

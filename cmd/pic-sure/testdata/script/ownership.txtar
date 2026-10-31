@@ -13,6 +13,8 @@ exec cp -R a b
 exitcode 3 pic-sure --stack b --yes reset
 stderr 'the stack name demo is in use by another stack''s Docker resources, which pic-sure won''t touch:'
 stderr '^  stack demo in .*/a: container demo-hpds-1, volume demo_hpds-data$'
+exitcode 3 pic-sure --stack b --yes --json reset
+stdout '"exit_code":3,"code":"foreign_resources",'
 exitcode 3 pic-sure --stack b --yes secrets rotate hpds-key --discard-data
 stderr 'stack demo in .*/a: container demo-hpds-1, volume demo_hpds-data'
 exitcode 3 pic-sure --stack b data load-phenotype --file pheno.csv

@@ -33,7 +33,10 @@ References, when this file isn't enough:
 3. **Decide on the exit code first**, then read the JSON for detail (see
    the table below). A failed `result` line carries the same code as
    `.error.exit_code`, which is how you get it for a command you ran in
-   the background.
+   the background, and `.error.code`, which names the condition within it
+   (`no_stack`, `ports_busy`, …; the full list is in
+   [json-schemas.md](https://github.com/JamesPeck/pic-sure-cli/blob/main/docs/json-schemas.md#error-codes)).
+   New codes may be added: treat one you don't know as its exit code.
 4. **`--yes` is consent, not a formality.** Only add it when the user asked
    for that destructive action.
 5. **Secrets go on stdin, never in arguments, files you write, or logs:**
@@ -132,12 +135,12 @@ Other datasets: `pic-sure data demo synthea --json`, `1000genomes` or
 | Code | Meaning | Do this |
 |---|---|---|
 | 0 | Success | Read the JSON. `status` is 0 whenever it finds the stack, so check its fields. |
-| 1 | The operation failed | Read `.error.step` and `.error.message` in the last `result` line. If the stack is locked by another pic-sure command, wait for it or re-run with `--wait-lock`. Otherwise look at `pic-sure logs --json SERVICE` or the run log in `.pic-sure/logs/`, fix the cause and re-run the same command (it resumes). If you can't fix it, run `support-bundle` and report. |
-| 2 | Usage error | Fix the command line: see `pic-sure COMMAND --help`. On a resumed `init`, a flag that differs from the saved config is exit 2: re-run with the original flags and change the setting with `config set`. |
-| 3 | Precondition unmet | Fix what the message names: start Docker, free the ports (or `--auto-ports` at init), run `init` (no stack) or `up` (not rendered), or supply the real Auth0 secret. |
-| 4 | Confirmation required | Nothing changed. Ask the user; add `--yes` only if they agree. |
-| 5 | Incompatible | Pending config migrations: run `update`. The release needs a newer pic-sure: with the user's consent, run the `pic-sure self-update --to VERSION` the message names and re-run the command (or add `--self-update`, which init refuses alongside a `--*-stdin` flag). A newer pic-sure rendered the stack: update this binary. |
-| 130, 143 | Interrupted (Ctrl-C, SIGTERM) | Cleanups ran. Re-run the same command to resume. |
+| 1 | The operation failed | Read `.error.step` and `.error.message` in the last `result` line (`step_failed` when a step failed). If the stack is locked by another pic-sure command (`stack_locked`), wait for it or re-run with `--wait-lock`. Otherwise look at `pic-sure logs --json SERVICE` or the run log in `.pic-sure/logs/`, fix the cause and re-run the same command (it resumes). If you can't fix it, run `support-bundle` and report. |
+| 2 | Usage error | Fix the command line: see `pic-sure COMMAND --help`. `invalid_config` is a bad config key or value; `invalid_secret` a secret on stdin that is empty, has a line break, or (Auth0) is under 32 bytes. On a resumed `init`, a flag that differs from the saved config is exit 2: re-run with the original flags and change the setting with `config set`. |
+| 3 | Precondition unmet | Fix what the message names: start or install Docker (`docker_unavailable`, `compose_not_installed`), free the ports (`ports_busy`; or `--auto-ports` at init), run `init` (`no_stack`, `stack_not_initialised`) or `up` (`stack_not_rendered`), pass `--stack DIR` for another user's stack you trust (`wrong_owner`), or supply the real Auth0 secret (`generated_open_secret`). For `foreign_resources`, remove nothing yourself: show the user the message, which names whose resources they are. |
+| 4 | Confirmation required | `confirmation_required`. Nothing changed. Ask the user; add `--yes` only if they agree. |
+| 5 | Incompatible | Pending config migrations (`config_migrations_pending`): run `update`. The release needs a newer pic-sure (`cli_too_old`): with the user's consent, run the `pic-sure self-update --to VERSION` the message names and re-run the command (or add `--self-update`, which init refuses alongside a `--*-stdin` flag). A newer pic-sure rendered the stack (also `cli_too_old`): update this binary. |
+| 130, 143 | Interrupted (Ctrl-C, SIGTERM) | `interrupted`. Cleanups ran. Re-run the same command to resume. |
 
 ## Common tasks
 

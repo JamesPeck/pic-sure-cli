@@ -289,8 +289,8 @@ func TestFindNotOwned(t *testing.T) {
 			owned[p] = me + 1
 			for _, cwd := range []string{planted, deep} {
 				_, err := Find("", cwd)
-				if !errors.Is(err, ErrNotOwned) || exitcode.FromError(err) != exitcode.CodePrecondition {
-					t.Fatalf("Find from %s: err = %v, want ErrNotOwned with exit 3", cwd, err)
+				if !errors.Is(err, ErrNotOwned) || exitcode.FromError(err) != exitcode.CodePrecondition || exitcode.SlugOf(err) != "wrong_owner" {
+					t.Fatalf("Find from %s: err = %v, want ErrNotOwned with exit 3 and wrong_owner", cwd, err)
 				}
 				for _, want := range []string{p, "uid " + strconv.Itoa(me+1), "--stack DIR"} {
 					if !strings.Contains(err.Error(), want) {

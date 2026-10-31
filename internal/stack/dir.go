@@ -68,7 +68,7 @@ func Find(dir, cwd string) (string, error) {
 			return d, nil
 		}
 		if filepath.Dir(d) == d {
-			return "", exitcode.Precondition("%w in %s or any directory above it; pass --stack DIR, or create one with pic-sure init", ErrNotFound, cwd)
+			return "", exitcode.NoStack.Errorf("%w in %s or any directory above it; pass --stack DIR, or create one with pic-sure init", ErrNotFound, cwd)
 		}
 	}
 }
@@ -213,7 +213,7 @@ func checkStack(dir string) error {
 		return err
 	}
 	if !ok {
-		return exitcode.Precondition("%w in %s: it has no %s; create one with pic-sure init", ErrNotFound, dir, missing)
+		return exitcode.NoStack.Errorf("%w in %s: it has no %s; create one with pic-sure init", ErrNotFound, dir, missing)
 	}
 	return nil
 }

@@ -17,6 +17,8 @@ stderr 'warning: this stack uses pic-sure.yaml schema 2'
 exitcode 5 pic-sure --stack newer config set network.http_port 80
 stderr '^pic-sure: this stack uses pic-sure.yaml schema 2, last rendered by pic-sure v9.0.0, but this pic-sure \(dev\) reads schema 1; upgrade pic-sure \(see pic-sure self-update\) to change the stack$'
 ! stderr warning
+exitcode 5 pic-sure --stack newer --json config set network.http_port 80
+stdout '"exit_code":5,"code":"cli_too_old",'
 cmp newer/pic-sure.yaml newer.yaml
 
 # state.json alone is enough to tell: here pic-sure.yaml says schema 1.

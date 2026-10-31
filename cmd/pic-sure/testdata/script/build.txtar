@@ -31,6 +31,8 @@ cp docker-fail.scenario docker.scenario
 exitcode 1 pic-sure --stack stack build --force dictionary-etl
 stderr 'step images failed: building hms-dbmi/dictionary-etl:444444444444: .*did not complete successfully'
 grep '"status": "failed"' stack/.pic-sure/state.json
+exitcode 1 pic-sure --stack stack --json build --force dictionary-etl
+stdout '"exit_code":1,"code":"step_failed",.*"step":"images"'
 
 # build registered the stack in the cache, so a prune run from elsewhere
 # keeps its image and source tree though no container or volume of it

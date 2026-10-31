@@ -57,6 +57,9 @@ stderr 'flags="\[--admin-email=\[REDACTED\] '
 stdin short.txt
 exitcode 2 pic-sure init new --name demo --admin-email admin@example.com --auth-mode open --auth0-client-secret-stdin
 stderr '--auth0-client-secret-stdin: the client secret is 5 bytes; PSAMA needs at least 32'
+stdin short.txt
+exitcode 2 pic-sure --json init new --name demo --admin-email admin@example.com --auth-mode open --auth0-client-secret-stdin
+stdout '"exit_code":2,"code":"invalid_secret",'
 
 # --self-update re-runs init, which can't read stdin again.
 stdin one-line.txt
@@ -66,8 +69,9 @@ stderr 'run pic-sure self-update first'
 # Stdin holds one secret, read with the shared reader: one trailing newline
 # is stripped, any other line break is exit 2.
 stdin two-lines.txt
-exitcode 2 pic-sure init new --name demo --admin-email admin@example.com --auth0-client-id abc --auth0-client-secret-stdin
+exitcode 2 pic-sure --json init new --name demo --admin-email admin@example.com --auth0-client-id abc --auth0-client-secret-stdin
 stderr '--auth0-client-secret-stdin'
+stdout '"exit_code":2,"code":"invalid_secret",'
 
 # With both secret flags, stdin holds one secret per line.
 stdin one-line.txt

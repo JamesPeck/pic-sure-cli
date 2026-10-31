@@ -31,7 +31,12 @@ its section.
 
 - **Exit codes** (§10.4) come from `internal/exitcode`. Return
   `exitcode.Usage`, `Precondition`, `ConfirmRequired`, `Incompatible` or
-  `Failed` from a command; any other error exits 1. Errors cobra raises
+  `Failed` from a command; any other error exits 1. A condition `--json`
+  callers branch on gets a `Condition` instead, such as
+  `exitcode.NoStack.Errorf(...)`, which carries both the exit code and the
+  stable slug the failed result's `error.code` reports; add new ones to
+  `Conditions` and to `docs/json-schemas.md`, whose table a test checks.
+  Errors cobra raises
   while parsing the command line (unknown command or flag, wrong argument
   count, missing required flag, unknown help topic) exit 2. SIGINT and
   SIGTERM cancel the command's context, and the CLI then exits 128+N even
@@ -1992,7 +1997,8 @@ It stops at the first failure and returns a `*steps.Error` with the step's
 resumes there because `Check` skips what is done. The error wraps what
 `Check` or `Apply` returned, so a step that returns
 `exitcode.Precondition(...)` makes the command exit 3. The cli layer
-fills `ErrorInfo.Step` from the first `StepDone{failed}`. When the run was
+fills `ErrorInfo.Step` from the first `StepDone{failed}`, and gives an
+exit-1 error with no slug of its own the code `step_failed`. When the run was
 interrupted between steps, no step failed: `Error.Step` is the next step,
 named only in the message.
 
@@ -2646,7 +2652,7 @@ TUI renderer is in `internal/progress`.
 - Events: `StepStarted{ID, Title}`, `Progress{ID, Text, Pct}` (`Pct` is
   0–100, or nil when unknown), `Log{ID, Stream, Line}`, `Warning{ID, Text}`,
   `StepDone{ID, Status}` (`ok`, `skipped` or `failed`), and
-  `Result{OK, Data, Error}` with `ErrorInfo{ExitCode, Message, Step}`. Each
+  `Result{OK, Data, Error}` with `ErrorInfo{ExitCode, Code, Message, Step}`. Each
   event's `Type()` is its NDJSON `type` value, and its JSON tags are the
   wire format.
 - Who emits what: the step engine emits `StepStarted` and `StepDone`, an

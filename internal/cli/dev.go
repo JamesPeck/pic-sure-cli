@@ -175,7 +175,7 @@ func (a *App) dev(cmd *cobra.Command, name string, on bool) (err error) {
 	}
 	state, err := st.LoadState()
 	if errors.Is(err, fs.ErrNotExist) || err == nil && state.InitializedAt.IsZero() {
-		return exitcode.Precondition("the stack in %s isn't initialised; run `pic-sure init %s` to finish it", st.Dir, st.Dir)
+		return exitcode.StackNotInitialised.Errorf("the stack in %s isn't initialised; run `pic-sure init %s` to finish it", st.Dir, st.Dir)
 	}
 	if err != nil {
 		return err
@@ -288,7 +288,7 @@ func checkDevStack(cmd *cobra.Command, d *ops.Deps, st *stack.Stack, cfg *stack.
 		return err
 	}
 	if port := ops.DevPort(cfg, v); on && port != 0 && !owned.Published[port] && !(systemHost{}).PortFree(port) {
-		return exitcode.Precondition("port %d, dev %s's port from network.dev_ports.base (%d), is in use", port, v.Name, cfg.Network.DevPorts.Base)
+		return exitcode.PortsBusy.Errorf("port %d, dev %s's port from network.dev_ports.base (%d), is in use", port, v.Name, cfg.Network.DevPorts.Base)
 	}
 	return nil
 }

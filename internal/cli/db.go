@@ -75,7 +75,7 @@ func (a *App) dbBootstrap(cmd *cobra.Command, _ []string) error {
 	}
 	sec, err := st.LoadSecrets()
 	if errors.Is(err, fs.ErrNotExist) {
-		return exitcode.Precondition("the stack has no secrets.yaml; run `pic-sure init` to finish creating it")
+		return exitcode.StackNotInitialised.Errorf("the stack has no secrets.yaml; run `pic-sure init` to finish creating it")
 	}
 	if err != nil {
 		return err

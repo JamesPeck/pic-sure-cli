@@ -96,7 +96,7 @@ func (r *Release) newerCLI(ctx context.Context, want string, opts GateOptions) e
 		retry = "the command"
 	}
 	if opts.Updater == nil {
-		return exitcode.Incompatible("%s. Install pic-sure %s, then run %s again, "+
+		return exitcode.CLITooOld.Errorf("%s. Install pic-sure %s, then run %s again, "+
 			"or pass --ignore-cli-version to use this one", gap, want, retry)
 	}
 	update := opts.SelfUpdate
@@ -106,13 +106,13 @@ func (r *Release) newerCLI(ctx context.Context, want string, opts GateOptions) e
 			return err
 		}
 		if !yes {
-			return exitcode.Incompatible("%s. Run `pic-sure self-update --to %s`, "+
+			return exitcode.CLITooOld.Errorf("%s. Run `pic-sure self-update --to %s`, "+
 				"or pass --ignore-cli-version to use this one", gap, want)
 		}
 		update = true
 	}
 	if !update {
-		return exitcode.Incompatible("%s. Run %s --self-update to update and continue, "+
+		return exitcode.CLITooOld.Errorf("%s. Run %s --self-update to update and continue, "+
 			"or `pic-sure self-update --to %s` first, or pass --ignore-cli-version to use this one", gap, retry, want)
 	}
 	if err := opts.Updater.SelfUpdate(ctx, want); err != nil {
@@ -120,7 +120,7 @@ func (r *Release) newerCLI(ctx context.Context, want string, opts GateOptions) e
 	}
 	// SelfUpdate re-executes on success, so returning means this old binary
 	// is still running and mustn't go on to change the stack.
-	return exitcode.Incompatible("pic-sure was updated to %s; run %s again", want, retry)
+	return exitcode.CLITooOld.Errorf("pic-sure was updated to %s; run %s again", want, retry)
 }
 
 // isVersion reports whether CompareVersions can order v.

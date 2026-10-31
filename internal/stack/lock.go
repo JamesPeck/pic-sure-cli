@@ -117,7 +117,7 @@ func (s *Stack) stillLockFile(f *os.File) error {
 	if err == nil && os.SameFile(held, cur) {
 		return nil
 	}
-	return exitcode.Precondition("%w: the stack in %s was destroyed while this command waited for its lock", ErrNotFound, s.Dir)
+	return exitcode.NoStack.Errorf("%w: the stack in %s was destroyed while this command waited for its lock", ErrNotFound, s.Dir)
 }
 
 // openLockFile opens .pic-sure/lock, creating and recording it the first

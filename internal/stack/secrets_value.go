@@ -96,11 +96,11 @@ func ReadUserSecret(r io.Reader, source string) (Secret, error) {
 	}
 	switch {
 	case len(s) > maxUserSecret:
-		return "", exitcode.Usage("%s: the secret is longer than %d bytes", source, maxUserSecret)
+		return "", exitcode.InvalidSecret.Errorf("%s: the secret is longer than %d bytes", source, maxUserSecret)
 	case strings.ContainsAny(s, "\r\n"):
-		return "", exitcode.Usage("%s: the secret contains a line break; give it on a single line", source)
+		return "", exitcode.InvalidSecret.Errorf("%s: the secret contains a line break; give it on a single line", source)
 	case s == "":
-		return "", exitcode.Usage("%s: the secret is empty", source)
+		return "", exitcode.InvalidSecret.Errorf("%s: the secret is empty", source)
 	}
 	return Secret(s), nil
 }

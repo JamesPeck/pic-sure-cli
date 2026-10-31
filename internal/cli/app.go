@@ -140,7 +140,7 @@ func (a *App) execute(ctx context.Context, root *cobra.Command, args []string) i
 	switch cause := context.Cause(ctx); {
 	case cause != nil && errors.As(cause, &coded):
 		if errors.Is(err, cause) {
-			err = &exitcode.Error{Code: coded.Code, Err: err}
+			err = &exitcode.Error{Code: coded.Code, Slug: coded.Slug, Err: err}
 		} else {
 			err = cause
 		}

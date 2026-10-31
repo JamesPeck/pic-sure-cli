@@ -83,7 +83,7 @@ func (o *Ownership) Err(name string) error {
 	if len(f) == 0 {
 		return nil
 	}
-	return exitcode.Precondition("the stack name %s is in use by another stack's Docker resources, which pic-sure won't touch:\n%s",
+	return exitcode.ForeignResources.Errorf("the stack name %s is in use by another stack's Docker resources, which pic-sure won't touch:\n%s",
 		name, ResourceList(Refs(f)))
 }
 
@@ -288,7 +288,7 @@ func checkImageOwner(ctx context.Context, d *Deps, ref string, labels map[string
 		return err
 	}
 	if have[stack.LabelStackDir] != "" && stack.Owner(labels[stack.LabelStackID], dir, have) == stack.Foreign {
-		return exitcode.Precondition("image %s belongs to %s, so pic-sure won't build over it", ref, stack.OwnerName(have))
+		return exitcode.ForeignResources.Errorf("image %s belongs to %s, so pic-sure won't build over it", ref, stack.OwnerName(have))
 	}
 	return nil
 }

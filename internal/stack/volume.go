@@ -25,7 +25,7 @@ func (s *Stack) EnsureVolume(ctx context.Context, e docker.Engine, name, vol, ke
 		return docker.Volume{}, err
 	}
 	if Owner(s.ID(), s.Dir, v.Labels) == Foreign {
-		return docker.Volume{}, exitcode.Precondition("volume %s belongs to %s, not this one, so pic-sure won't write to it",
+		return docker.Volume{}, exitcode.ForeignResources.Errorf("volume %s belongs to %s, not this one, so pic-sure won't write to it",
 			vol, OwnerName(v.Labels))
 	}
 	return v, nil

@@ -81,7 +81,7 @@ func (a *App) lockStack(ctx context.Context, cmd *cobra.Command, st *stack.Stack
 		},
 	})
 	if errors.Is(err, stack.ErrLocked) {
-		return nil, exitcode.Failed("%w; try again when it finishes, or pass --wait-lock to wait for it", err)
+		return nil, exitcode.StackLocked.Errorf("%w; try again when it finishes, or pass --wait-lock to wait for it", err)
 	}
 	if err != nil {
 		return nil, err

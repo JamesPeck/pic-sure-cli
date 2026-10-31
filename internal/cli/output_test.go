@@ -91,14 +91,15 @@ func TestJSONFailureIsAResultLine(t *testing.T) {
 	tests := []struct {
 		args    []string
 		code    int
+		slug    string
 		message string
 	}{
-		{[]string{"--stack", "/nowhere", "up", "--json"}, 3, "no pic-sure stack found in /nowhere: it has no pic-sure.yaml; create one with pic-sure init"},
-		{[]string{"--json", "up", "extra-arg"}, 2, `unknown command "extra-arg" for "pic-sure up"`},
-		{[]string{"--json", "--plain", "up"}, 2, "if any flags in the group [json plain] are set none of the others can be; [json plain] were all set"},
-		{[]string{"up", "--bogus", "--json"}, 2, "unknown flag: --bogus"},
-		{[]string{"up", "--bogus", "--json=false", "--json=1"}, 2, "unknown flag: --bogus"},
-		{[]string{"help", "frobnicate", "--json"}, 2, `unknown help topic "frobnicate"`},
+		{[]string{"--stack", "/nowhere", "up", "--json"}, 3, "no_stack", "no pic-sure stack found in /nowhere: it has no pic-sure.yaml; create one with pic-sure init"},
+		{[]string{"--json", "up", "extra-arg"}, 2, "usage", `unknown command "extra-arg" for "pic-sure up"`},
+		{[]string{"--json", "--plain", "up"}, 2, "usage", "if any flags in the group [json plain] are set none of the others can be; [json plain] were all set"},
+		{[]string{"up", "--bogus", "--json"}, 2, "usage", "unknown flag: --bogus"},
+		{[]string{"up", "--bogus", "--json=false", "--json=1"}, 2, "usage", "unknown flag: --bogus"},
+		{[]string{"help", "frobnicate", "--json"}, 2, "usage", `unknown help topic "frobnicate"`},
 	}
 	for _, tt := range tests {
 		t.Run(strings.Join(tt.args, " "), func(t *testing.T) {
@@ -108,7 +109,7 @@ func TestJSONFailureIsAResultLine(t *testing.T) {
 			}
 			objs := jsonLines(t, stdout.String())
 			want := map[string]any{"type": "result", "ok": false, "error": map[string]any{
-				"exit_code": float64(tt.code), "message": tt.message,
+				"exit_code": float64(tt.code), "code": tt.slug, "message": tt.message,
 			}}
 			if len(objs) != 1 || !jsonEqual(objs[0], want) {
 				t.Errorf("stdout = %s, want one line %v", stdout, want)
@@ -227,7 +228,7 @@ func TestJSONStreamEndsWithResult(t *testing.T) {
 		}
 		objs := jsonLines(t, stdout.String())
 		want := map[string]any{"type": "result", "ok": false, "error": map[string]any{
-			"exit_code": 3, "message": "docker daemon unreachable", "step": "db",
+			"exit_code": 3, "code": "precondition", "message": "docker daemon unreachable", "step": "db",
 		}}
 		if len(objs) != 4 || !jsonEqual(objs[3], want) {
 			t.Errorf("stdout = %s", stdout)
@@ -369,7 +370,7 @@ func TestJSONSignalResult(t *testing.T) {
 		t.Errorf("exit = %d", code)
 	}
 	objs := jsonLines(t, stdout.String())
-	if len(objs) != 1 || !jsonEqual(objs[0]["error"], map[string]any{"exit_code": 130, "message": "interrupted (interrupt)"}) {
+	if len(objs) != 1 || !jsonEqual(objs[0]["error"], map[string]any{"exit_code": 130, "code": "interrupted", "message": "interrupted (interrupt)"}) {
 		t.Errorf("stdout = %q", stdout)
 	}
 }

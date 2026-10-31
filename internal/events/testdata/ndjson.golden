@@ -13,4 +13,4 @@
 {"type":"step_started","id":"migrate","title":"Run <flyway> migrations & seed"}
 {"type":"log","id":"migrate","stream":"stderr","line":"ERROR: Validate failed: \"V3\" checksum mismatch"}
 {"type":"step_done","id":"migrate","status":"failed"}
-{"type":"result","ok":false,"error":{"exit_code":1,"message":"step migrate failed","step":"migrate"}}
+{"type":"result","ok":false,"error":{"exit_code":1,"code":"step_failed","message":"step migrate failed","step":"migrate"}}
