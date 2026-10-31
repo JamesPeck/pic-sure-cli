@@ -107,6 +107,8 @@ stdout '"type":"result","ok":true,"data":\{"stack":"demo","volumes":\["demo_hpds
 # destroy --yes: every labelled volume, the dev images of this stack, and
 # the files pic-sure created. The operator's files survive and are listed.
 exec pic-sure --json destroy --dry-run
+stdout '"\.pic-sure/lock"'
+stdout '"\.pic-sure/logs"'
 cp stdout $WORK/before-destroy.json
 rm $WORK/docker.log
 exec pic-sure --json --yes destroy
