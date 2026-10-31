@@ -196,15 +196,16 @@ because `! exec` accepts any failure.
   `CI=0` don't count); and TUI otherwise. TUI mode draws with
   `progress.Renderer` when stderr is a terminal and `TERM` isn't
   `dumb`, and as plain otherwise, which it also is with `--quiet`.
-  `newSink` returns the same sink for the
-  whole run. That sink (`runSink`) redacts every event's text with
-  `log.Redact` before any renderer sees it: step titles, progress, log
-  lines, warnings and the error, since compose output and errors can
-  quote a secret. With `--quiet` it drops the narration (`narration`)
-  after noting a failed step, so no renderer sees `step_started`,
-  `progress`, `step_done` or a `log` event, except those of the step
-  `logs`, which are the `logs` command's data. The dashboard's warnings and log records, which reach its
-  sink another way, go through `redactingSink`, and `warnStderr` redacts
+  `newSink` returns the same sink for the whole run. That sink
+  (`runSink`) redacts every event's text with `log.Redact` before any
+  renderer sees it: step titles, progress, log lines, warnings and the
+  error, since compose output and errors can quote a secret. With
+  `--quiet` it drops the narration (`narration`) after noting a failed
+  step, so no renderer sees `step_started`, `progress`, `step_done` or a
+  `log` event, except those of the step `logs`, which are the `logs`
+  command's data. The full-screen TUI's run screen is its own view, so
+  the commands it runs keep their narration. The dashboard's warnings
+  and log records, which reach its sink another way, go through `redactingSink`, and `warnStderr` redacts
   too, and writes through the TUI renderer while there is one, so it
   doesn't draw over the frame. Only
   `output.go` emits `Result`. A command ends in one of three ways:
