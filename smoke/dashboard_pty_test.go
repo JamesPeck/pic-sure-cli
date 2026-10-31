@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/creack/pty"
 
@@ -50,8 +51,8 @@ func skipUnlessPTYAllowed(t *testing.T) {
 	}
 }
 
-// ptySession runs the binary on a 120x40 pseudo-terminal and collects its
-// output.
+// ptySession runs the binary on a pseudo-terminal (120x40 unless
+// startPTYSize sets another size) and collects its output.
 type ptySession struct {
 	t      *testing.T
 	cmd    *exec.Cmd
@@ -202,14 +203,23 @@ func TestWizardOpensAndClosesUnderPTY(t *testing.T) {
 
 // On a TERM=dumb terminal (agent sandboxes, some editors' shells) the setup
 // wizard still wraps its text at the terminal's width rather than at 80
-// columns, which a 60-column terminal would cut off at its right edge.
+// columns, which a 60-column terminal would cut off at its right edge. The
+// wizard is narrower than the terminal, so no line reaches that edge.
 func TestWizardFitsANarrowDumbTerminal(t *testing.T) {
 	skipUnlessPTYAllowed(t)
-	s := startPTYSize(t, t.TempDir(), &pty.Winsize{Rows: 30, Cols: 60}, []string{"TERM=dumb"}, "--no-animations")
-	w := &screenWatch{t: t, s: s, scr: newScreen(30, 60), rows: 30}
+	const cols = 60
+	s := startPTYSize(t, t.TempDir(), &pty.Winsize{Rows: 30, Cols: cols}, []string{"TERM=dumb"}, "--no-animations")
+	w := &screenWatch{t: t, s: s, scr: newScreen(30, cols), rows: 30}
 	w.wait(15*time.Second, "Set up PIC-SURE")
 	s.send(keyEnter)
-	w.wait(15*time.Second, "Stack name", "esc cancel", "control branch picks the component versions.")
+	w.wait(15*time.Second, "Stack name", "esc cancel")
+	time.Sleep(300 * time.Millisecond) // let the frame settle
+	text := w.frame()
+	for _, line := range strings.Split(text, "\n") {
+		if utf8.RuneCountInString(line) >= cols {
+			t.Fatalf("the wizard was laid out wider than the %d-column terminal and cut off at its edge:\n%s", cols, text)
+		}
+	}
 	s.send(keyEsc)
 	w.wait(15*time.Second, "setup cancelled")
 	s.send("q")

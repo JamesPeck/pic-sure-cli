@@ -125,9 +125,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.layout()
-		// Re-size an open dialog to the new pane width; huh recomputes its
-		// group viewport geometry only in its WindowSizeMsg handler, and this
-		// branch returns without routing the resize to the form.
+		// Re-fit an open dialog to the new pane width: this branch returns
+		// without routing the resize to the form.
 		if m.form != nil {
 			m.form = m.sizeForm(m.form)
 		}
