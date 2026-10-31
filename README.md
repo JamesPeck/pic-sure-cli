@@ -81,7 +81,7 @@ the same checks (`--to VERSION` for a specific one). It honours
 `PIC_SURE_REQUIRE_SIGNATURE` too, as does `--require-signature`, and
 inside a stack cosign uses the stack's proxy.
 
-**From source** (Go 1.26, or let `GOTOOLCHAIN=auto` fetch it):
+**From source** (Go 1.26.10, or let `GOTOOLCHAIN=auto` fetch it):
 
 ```sh
 git clone https://github.com/JamesPeck/pic-sure-cli.git
@@ -463,7 +463,7 @@ curl -fsSL -o ~/.claude/skills/pic-sure/SKILL.md \
 
 Package layout, the shared interfaces and how to add a command or an
 operation are in [docs/architecture.md](docs/architecture.md). Requires
-Go 1.26. CI and releases build with the patch release on go.mod's
+Go 1.26.10. CI and releases build with the patch release on go.mod's
 `toolchain` line, which `GOTOOLCHAIN=auto` fetches.
 
 | Target | Does |
