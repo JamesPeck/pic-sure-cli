@@ -65,6 +65,10 @@ container to list directories. Every mount is read-only and networking is
 disabled. The probe uses `--pull never`, so its Alpine image must already
 be available locally; a missing image exits 3 with an explicit pull command,
 without downloading anything.
+The probe binds the existing volume mountpoint read-only; if a concurrent
+reset deletes it, the preview fails without recreating the volume or its
+directory. This requires a local volume without driver options; unsupported
+volume layouts fail with exit 3 instead of being mounted by name.
 The output names this read-only probe container, including a
 warning before it runs and the successful plan's `probes` list. Nothing in
 the volume, stack directory or database is changed. An interrupted promote

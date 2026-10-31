@@ -50,14 +50,18 @@ type RunOpts struct {
 	Stdout, Stderr io.Writer
 }
 
-// Mount is a volume or bind mount, passed as -v SOURCE:TARGET[:ro].
+// Mount is a volume or bind mount, normally passed as -v SOURCE:TARGET[:ro].
 type Mount struct {
 	// Source is an absolute host path, for a bind mount, or a volume name.
-	// A bind source must exist and must not contain ':'.
+	// Unless ExistingBind is set, bind sources are checked on the CLI host
+	// and must not contain ':'.
 	Source string
 	// Target is the absolute path in the container.
 	Target   string
 	ReadOnly bool
+	// ExistingBind uses --mount type=bind: Source must exist on the daemon
+	// host, not the CLI host, and Docker must never create it.
+	ExistingBind bool
 }
 
 // ExecOpts is a command for Exec.
@@ -190,7 +194,15 @@ func containerFlags(opts RunOpts) (flags, env []string, err error) {
 		flags = append(flags, "-e", n)
 	}
 	for _, m := range opts.Mounts {
-		flags = append(flags, "-v", m.arg())
+		if m.ExistingBind {
+			arg := "type=bind,source=" + m.Source + ",target=" + m.Target
+			if m.ReadOnly {
+				arg += ",readonly"
+			}
+			flags = append(flags, "--mount", arg)
+		} else {
+			flags = append(flags, "-v", m.arg())
+		}
 	}
 	return flags, env, nil
 }
@@ -201,6 +213,12 @@ var volumeNameRE = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]+$`)
 func (m Mount) validate() error {
 	if !path.IsAbs(m.Target) || strings.Contains(m.Target, ":") {
 		return fmt.Errorf("mount target %q must be an absolute container path without ':'", m.Target)
+	}
+	if m.ExistingBind {
+		if !path.IsAbs(m.Source) || strings.ContainsAny(m.Source+m.Target, ",\"\n\r") {
+			return errors.New("existing bind mount needs an absolute daemon path and paths without commas, quotes or newlines")
+		}
+		return nil
 	}
 	if !filepath.IsAbs(m.Source) {
 		if !volumeNameRE.MatchString(m.Source) {

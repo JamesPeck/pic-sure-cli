@@ -17,6 +17,7 @@ import (
 	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
 	"github.com/JamesPeck/pic-sure-cli/internal/log"
 	"github.com/JamesPeck/pic-sure-cli/internal/progress"
+	"github.com/JamesPeck/pic-sure-cli/internal/steps"
 	"github.com/JamesPeck/pic-sure-cli/internal/tui"
 )
 
@@ -204,10 +205,15 @@ func (a *App) reportError(cmd *cobra.Command, err error) {
 	msg := log.Redact(err.Error())
 	if o := a.output(); !o.final {
 		o.final = true
+		step := o.sink.failedStep()
+		var stepErr *steps.Error
+		if step == "" && errors.As(err, &stepErr) {
+			step = stepErr.Step
+		}
 		o.sink.Emit(events.Result{Error: &events.ErrorInfo{
 			ExitCode: code,
 			Message:  msg,
-			Step:     o.sink.failedStep(),
+			Step:     step,
 		}})
 	}
 	_, _ = fmt.Fprintf(a.stderr(), "pic-sure: %s\n", msg)

@@ -507,3 +507,21 @@ func TestRunNeverPullsWhenRequested(t *testing.T) {
 		t.Fatalf("missing local image = %d, %v", code, err)
 	}
 }
+
+func TestRunExistingBindUsesDaemonPath(t *testing.T) {
+	f, e := newEngine(t)
+	f.On(fakerunner.Exact("docker", "run", "--mount",
+		"type=bind,source=/daemon/volumes/demo/_data,target=/data,readonly", "alpine", "true"))
+	opts := docker.RunOpts{Image: "alpine", Args: []string{"true"}, Mounts: []docker.Mount{
+		{Source: "/daemon/volumes/demo/_data", Target: "/data", ReadOnly: true, ExistingBind: true},
+	}}
+	if _, err := e.Run(context.Background(), opts); err != nil {
+		t.Fatal(err)
+	}
+	for _, source := range []string{"demo-volume", "/data,bind-create-src", "/data\"", "/data\n"} {
+		opts.Mounts[0].Source = source
+		if _, err := e.Run(context.Background(), opts); err == nil {
+			t.Errorf("invalid existing bind source %q accepted", source)
+		}
+	}
+}

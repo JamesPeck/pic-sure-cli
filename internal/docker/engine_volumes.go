@@ -17,6 +17,7 @@ type Volume struct {
 	Driver     string
 	Labels     map[string]string
 	Mountpoint string
+	Options    map[string]string
 	// CreatedAt is as docker reports it, e.g. "2026-10-06T20:20:28Z".
 	CreatedAt string
 }
