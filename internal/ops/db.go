@@ -28,7 +28,7 @@ type BootstrapOptions struct {
 	SyncPasswords bool
 }
 
-// BootstrapReport is `db bootstrap --check`: whether the remote server has
+// BootstrapReport is `db bootstrap --dry-run`: whether the remote server has
 // the databases, users and grants the stack needs, and whether each user
 // logs in with its password from secrets.yaml.
 type BootstrapReport struct {

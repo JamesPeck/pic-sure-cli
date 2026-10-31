@@ -647,7 +647,7 @@ func bindMounts(ctx context.Context, c docker.Composer) (map[string]map[string]s
 	return mounts, nil
 }
 
-// MigrateCheckReport is `migrate --check`: whether the migrations' inputs
+// MigrateCheckReport is `migrate --dry-run`: whether the migrations' inputs
 // are in place, ported from AIO's `run-migrations.sh --check`.
 type MigrateCheckReport struct {
 	OK     bool                `json:"ok"`
