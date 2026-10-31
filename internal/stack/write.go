@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
-	"syscall"
 )
 
 // ErrNotCreated is returned by Remove for a path the manifest doesn't list,
@@ -131,38 +130,7 @@ func (s *Stack) CreateFile(rel string, perm fs.FileMode) (*os.File, error) {
 // One under a symlinked directory is refused with an error naming the
 // symlink. A symlink is removed, not its target.
 func (s *Stack) Remove(rel string) error {
-	p, err := local(rel)
-	if err != nil {
-		return err
-	}
-	path := filepath.ToSlash(p)
-	m, err := s.Manifest()
-	if err != nil {
-		return err
-	}
-	e, ok := m.entry(path)
-	if !ok {
-		if _, err := s.root.Lstat(p); err != nil {
-			return err
-		}
-		return fmt.Errorf("removing %s: %w", s.Path(p), ErrNotCreated)
-	}
-	if err := s.noSymlinks(filepath.Dir(p)); err != nil {
-		return err
-	}
-	fi, err := s.root.Lstat(p)
-	switch {
-	case errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR):
-		return s.forget(path)
-	case err != nil:
-		return err
-	case fi.IsDir() != (e.Type == EntryDir):
-		return fmt.Errorf("removing %s: it is no longer the %s pic-sure created: %w", s.Path(p), e.Type, ErrNotCreated)
-	}
-	if err := s.root.Remove(p); err != nil {
-		return err
-	}
-	return s.forget(path)
+	return (&removal{Stack: s}).removeRecorded(rel)
 }
 
 // ReadFile reads rel, confined to the stack like the writes.

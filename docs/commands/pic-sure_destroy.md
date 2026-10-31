@@ -11,7 +11,9 @@ left, and listed. Shared data sets and other stacks are never touched.
 Commit-tagged images are shared between stacks and left for `cache prune`;
 --prune-images removes those no other stack uses, by cache prune's rules.
 
-On a terminal you confirm by typing the stack name; otherwise pass --yes.
+Use --dry-run to list what would be removed without changing anything.
+A preview never prompts or needs --yes. For a real removal, confirm on a
+terminal by typing the stack name; otherwise pass --yes.
 ```
 
 ```
@@ -21,6 +23,7 @@ pic-sure destroy [flags]
 ## Flags
 
 ```
+      --dry-run        preview removals without changing anything or asking for confirmation
       --prune-images   also remove shared images no other stack uses
 ```
 

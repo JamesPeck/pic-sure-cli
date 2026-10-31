@@ -112,6 +112,16 @@ type CacheOptions struct {
 	// such as the one the command runs in, which may have built images
 	// before it has any containers or volumes.
 	Stacks []string
+	// teardown projects successful destroy selections for its prune preview.
+	teardown *teardownProjection
+}
+
+// teardownProjection removes only the selected resources from a cache inventory.
+// Leftover labelled resources must still protect the images they may use.
+type teardownProjection struct {
+	dir      string
+	report   *TeardownReport
+	networks []string
 }
 
 // CacheInventory lists the cache's source trees, build contexts, downloads
@@ -132,6 +142,11 @@ func CacheInventory(ctx context.Context, d *Deps, c *cache.Cache, opts CacheOpti
 	if err != nil {
 		return nil, fmt.Errorf("listing networks: %w", err)
 	}
+	if p := opts.teardown; p != nil {
+		containers = slices.DeleteFunc(containers, func(c docker.ContainerInfo) bool { return slices.Contains(p.report.Containers, c.Name) })
+		vols = slices.DeleteFunc(vols, func(v docker.Volume) bool { return slices.Contains(p.report.Volumes, v.Name) })
+		nets = slices.DeleteFunc(nets, func(n docker.Network) bool { return slices.Contains(p.networks, n.Name) })
+	}
 	labelled := make([]map[string]string, 0, len(containers)+len(vols)+len(nets))
 	for _, ct := range containers {
 		labelled = append(labelled, ct.Labels)
@@ -146,11 +161,34 @@ func CacheInventory(ctx context.Context, d *Deps, c *cache.Cache, opts CacheOpti
 	if err != nil {
 		return nil, fmt.Errorf("reading the stack registry: %w", err)
 	}
+	if p := opts.teardown; p != nil {
+		registry = slices.DeleteFunc(registry, func(r cache.RegisteredStack) bool { return filepath.Clean(r.Dir) == p.dir })
+	}
 	stacks := readStacks(labelled, registry, opts.Stacks)
+
+	if p := opts.teardown; p != nil && p.report.Files != nil {
+		for i := range stacks {
+			st := &stacks[i]
+			if st.Dir != p.dir {
+				continue
+			}
+			if slices.Contains(p.report.Files.Removed, stack.ConfigFile) {
+				st.Readable, st.state, st.Error = false, nil, stack.ErrNotFound.Error()
+			} else if slices.Contains(p.report.Files.Removed, stack.StateFile) {
+				st.Readable, st.state, st.Error = true, &stack.State{}, ""
+			}
+		}
+	}
 
 	imgs, err := d.Docker.ImageList(ctx, catalog.Namespace+"/*")
 	if err != nil {
 		return nil, fmt.Errorf("listing images: %w", err)
+	}
+	if p := opts.teardown; p != nil {
+		imgs = slices.DeleteFunc(imgs, func(img docker.Image) bool { return slices.Contains(p.report.Images, img.Ref) })
+		for i := range imgs {
+			imgs[i].RepoTags = slices.DeleteFunc(imgs[i].RepoTags, func(ref string) bool { return slices.Contains(p.report.Images, ref) })
+		}
 	}
 	entries, err := c.Entries()
 	if err != nil {

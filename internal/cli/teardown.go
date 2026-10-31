@@ -28,14 +28,18 @@ dictionary, staging, certs, truststore, and the database unless --keep-db.
 The config, secrets, logs and TLS sources are kept, so the next ` + "`pic-sure up`" + `
 sets the stack up again, empty.
 
-On a terminal you confirm by typing the stack name; otherwise pass --yes.`,
+Use --dry-run to list what would be removed without changing anything.
+A preview never prompts or needs --yes. For a real removal, confirm on a
+terminal by typing the stack name; otherwise pass --yes.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			keepDB, _ := cmd.Flags().GetBool("keep-db")
-			return a.teardown(cmd, ops.TeardownOptions{KeepDB: keepDB})
+			dryRun, _ := cmd.Flags().GetBool("dry-run")
+			return a.teardown(cmd, ops.TeardownOptions{KeepDB: keepDB, DryRun: dryRun})
 		},
 	}
 	c.Flags().Bool("keep-db", false, "keep the database volume")
+	addDryRunFlag(c, "preview removals without changing anything or asking for confirmation")
 	return c
 }
 
@@ -51,19 +55,22 @@ left, and listed. Shared data sets and other stacks are never touched.
 Commit-tagged images are shared between stacks and left for ` + "`cache prune`" + `;
 --prune-images removes those no other stack uses, by cache prune's rules.
 
-On a terminal you confirm by typing the stack name; otherwise pass --yes.`,
+Use --dry-run to list what would be removed without changing anything.
+A preview never prompts or needs --yes. For a real removal, confirm on a
+terminal by typing the stack name; otherwise pass --yes.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			prune, _ := cmd.Flags().GetBool("prune-images")
-			return a.teardown(cmd, ops.TeardownOptions{PruneImages: prune})
+			dryRun, _ := cmd.Flags().GetBool("dry-run")
+			return a.teardown(cmd, ops.TeardownOptions{PruneImages: prune, DryRun: dryRun})
 		},
 	}
 	c.Flags().Bool("prune-images", false, "also remove shared images no other stack uses")
+	addDryRunFlag(c, "preview removals without changing anything or asking for confirmation")
 	return c
 }
 
-// teardown runs reset or destroy, after the confirmation, under the stack
-// lock.
+// Preview bypasses confirmation, run logs and the mutating stack lock.
 func (a *App) teardown(cmd *cobra.Command, opts ops.TeardownOptions) error {
 	destroy := cmd.Name() == "destroy"
 	st, err := a.openStackUnlogged(cmd)
@@ -84,25 +91,28 @@ func (a *App) teardown(cmd *cobra.Command, opts ops.TeardownOptions) error {
 	if destroy {
 		what = fmt.Sprintf("This removes stack %s in %s: its containers, volumes and dev images, and the files pic-sure created there.", cfg.Name, st.Dir)
 	}
-	if err := a.confirmName(cmd, cfg.Name, what); err != nil {
-		return err
+	if !opts.DryRun {
+		if err := a.confirmName(cmd, cfg.Name, what); err != nil {
+			return err
+		}
+		a.openRunLog(st)
 	}
-	a.openRunLog(st)
-
 	d := a.newDeps()
-	lock, err := a.lockStack(cmd.Context(), cmd, st, d.Sink)
-	if err != nil {
-		return err
+	if !opts.DryRun {
+		lock, err := a.lockStack(cmd.Context(), cmd, st, d.Sink)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = lock.Unlock() }()
 	}
-	defer func() { _ = lock.Unlock() }()
 	if d.Compose, err = a.teardownCompose(d.Runner, st, cfg); err != nil {
 		return err
 	}
-	if destroy {
+	if destroy && (!opts.DryRun || opts.PruneImages) {
 		// For --prune-images, and to drop the stack from the cache's
 		// registry; without --prune-images a cache that can't be opened
 		// only leaves a stale entry, which prune forgets.
-		if opts.Cache, err = openTeardownCache(cmd, opts.PruneImages); err != nil {
+		if opts.Cache, err = openTeardownCache(cmd, opts.PruneImages, opts.DryRun); err != nil {
 			if opts.PruneImages {
 				return err
 			}
@@ -125,8 +135,9 @@ func (a *App) teardown(cmd *cobra.Command, opts ops.TeardownOptions) error {
 }
 
 // openTeardownCache opens the default cache. Unless create, a cache that
-// doesn't exist yet has no registry to update, and isn't created.
-func openTeardownCache(cmd *cobra.Command, create bool) (*cache.Cache, error) {
+// doesn't exist yet has no registry to update, and isn't created. Dry runs
+// also avoid creating directories when inspecting a missing cache.
+func openTeardownCache(cmd *cobra.Command, create, dryRun bool) (*cache.Cache, error) {
 	root, err := cache.DefaultRoot()
 	if err != nil {
 		return nil, err
@@ -134,7 +145,7 @@ func openTeardownCache(cmd *cobra.Command, create bool) (*cache.Cache, error) {
 	if _, err := os.Stat(root); !create && errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}
-	return cache.Open(root, cache.Options{Holder: cmd.CommandPath(), LockTimeout: pruneLockTimeout})
+	return cache.Open(root, cache.Options{Holder: cmd.CommandPath(), LockTimeout: pruneLockTimeout, ReadOnly: dryRun})
 }
 
 // confirmName asks the user to type the stack name (§9.8). --yes answers
@@ -189,6 +200,9 @@ func (a *App) teardownCompose(r docker.Runner, st *stack.Stack, cfg *stack.Confi
 }
 
 func writeResetSummary(w io.Writer, r *ops.TeardownReport) error {
+	if r.DryRun {
+		return writeTeardownPreview(w, "reset", "", r)
+	}
 	var b bytes.Buffer
 	fmt.Fprintf(&b, "Reset stack %s: removed %s.\n", r.Stack, countOf(len(r.Volumes), "volume"))
 	if len(r.KeptVolumes) > 0 {
@@ -200,6 +214,9 @@ func writeResetSummary(w io.Writer, r *ops.TeardownReport) error {
 }
 
 func writeDestroySummary(w io.Writer, dir string, r *ops.TeardownReport) error {
+	if r.DryRun {
+		return writeTeardownPreview(w, "destroy", dir, r)
+	}
 	var b bytes.Buffer
 	fmt.Fprintf(&b, "Destroyed stack %s: removed %s and %s", r.Stack, countOf(len(r.Volumes), "volume"), countOf(len(r.Images), "dev image"))
 	if r.Files != nil {
@@ -231,4 +248,49 @@ func countOf(n int, noun string) string {
 		return "1 " + noun
 	}
 	return fmt.Sprintf("%d %ss", n, noun)
+}
+
+func writeTeardownPreview(w io.Writer, command, dir string, r *ops.TeardownReport) error {
+	var b bytes.Buffer
+	fmt.Fprintf(&b, "Dry run: would %s stack %s. Nothing was changed.\n", command, r.Stack)
+	for _, group := range []struct {
+		kind  string
+		names []string
+	}{
+		{"container", r.Containers}, {"volume", r.Volumes}, {"dev image", r.Images},
+	} {
+		for _, name := range group.names {
+			fmt.Fprintf(&b, "Would remove %s %s.\n", group.kind, name)
+		}
+	}
+	if len(r.KeptVolumes) > 0 {
+		fmt.Fprintf(&b, "Kept %s.\n", strings.Join(r.KeptVolumes, ", "))
+	}
+	if len(r.LeftAlone) > 0 {
+		fmt.Fprintf(&b, "Left another stack's Docker resources alone:\n%s\n", ops.ResourceList(r.LeftAlone))
+	}
+	if len(r.LeftOwn) > 0 {
+		fmt.Fprintf(&b, "Left this stack's Docker resources with them:\n%s\n", ops.ResourceList(r.LeftOwn))
+	}
+	if r.Files != nil {
+		for _, path := range r.Files.Removed {
+			fmt.Fprintf(&b, "Would remove path %s.\n", path)
+		}
+		for _, path := range r.Files.Kept {
+			fmt.Fprintf(&b, "Kept path %s.\n", path)
+		}
+		if len(r.Files.Remaining) > 0 {
+			fmt.Fprintf(&b, "Left in %s:\n", dir)
+			for _, path := range r.Files.Remaining {
+				fmt.Fprintf(&b, "  %s\n", path)
+			}
+		}
+	}
+	if r.Pruned != nil {
+		for _, item := range r.Pruned.Removed {
+			fmt.Fprintf(&b, "Would remove shared image %s.\n", item.Name)
+		}
+	}
+	_, err := w.Write(b.Bytes())
+	return err
 }

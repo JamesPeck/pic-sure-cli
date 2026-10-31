@@ -6,6 +6,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -21,11 +22,15 @@ import (
 // downComposer records compose down.
 type downComposer struct {
 	docker.Composer
-	downs int
+	downs  int
+	onDown func()
 }
 
 func (c *downComposer) Down(context.Context, docker.ComposeDownOpts) error {
 	c.downs++
+	if c.onDown != nil {
+		c.onDown()
+	}
 	return nil
 }
 
@@ -448,5 +453,176 @@ func TestResetRunsComposeDownWhenAHelperStays(t *testing.T) {
 	}
 	if comp.downs != 1 {
 		t.Errorf("compose down ran %d times, want once despite the helper", comp.downs)
+	}
+}
+
+func TestDestroyLegacyReportBytes(t *testing.T) {
+	fx := newCacheFixture(t)
+	fx.daemon.volumes = teardownVolumes(fx.alpha)
+	st := openFixtureStack(t, fx.alpha)
+	f := teardownRunner(t, fx.daemon)
+	d := &ops.Deps{Runner: f, Docker: docker.NewEngine(f), Compose: &downComposer{}, Clock: ops.FixedClock(cacheNow), Sink: events.Discard}
+	report, err := ops.Destroy(context.Background(), d, st, ops.TeardownOptions{Name: "alpha"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = `{"stack":"alpha","volumes":["alpha_certs","alpha_custom","alpha_genomic-staging","alpha_hpds-data","alpha_hpds-logs","alpha_picsure-db-data","alpha_truststore"],"images":["hms-dbmi/pic-sure-psama:dev-alpha-aaaaaaaaaaaa"],"files":{"removed":[".pic-sure/state.json","pic-sure.yaml",".pic-sure/manifest.json",".pic-sure","."],"dir_removed":true}}`
+	if string(got) != want {
+		t.Fatalf("report = %s; want %s", got, want)
+	}
+}
+
+// teardownSnapshot catches incidental writes as well as removals.
+func teardownSnapshot(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	files := map[string]string{}
+	err := filepath.WalkDir(dir, func(path string, e os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		info, err := e.Info()
+		if err != nil {
+			return err
+		}
+		value := info.Mode().String() + " " + info.ModTime().String()
+		if !e.IsDir() {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			value += " " + string(data)
+		}
+		files[path] = value
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return files
+}
+
+func TestTeardownDryRunMatchesReal(t *testing.T) {
+	for _, command := range []string{"destroy", "destroy-unreadable-registry", "reset", "reset-keep-db"} {
+		t.Run(command, func(t *testing.T) {
+			fx := newCacheFixture(t)
+			fx.daemon.volumes = teardownVolumes(fx.alpha)
+			// Ordinary stack resources, with no falsely stack-labelled shared volume.
+			delete(fx.daemon.volumes, "demo_hpds-data")
+			fx.daemon.containers = slices.DeleteFunc(fx.daemon.containers, func(c fakeContainer) bool { return c.name == "gone-hpds-1" })
+			labels := map[string]string{stack.LabelStack: "alpha", stack.LabelStackDir: fx.alpha}
+			fx.daemon.containers = append(fx.daemon.containers, fakeContainer{name: "alpha-helper", image: "hms-dbmi/pic-sure-hpds:aaaaaaaaaaaa", imageID: "sha256:hpds-a", labels: labels})
+			composeLabels := maps.Clone(labels)
+			composeLabels[stack.LabelComposeProject] = "alpha"
+			fx.daemon.containers = append(fx.daemon.containers, fakeContainer{name: "alpha-hpds-1", image: "hms-dbmi/pic-sure-hpds:aaaaaaaaaaaa", imageID: "sha256:hpds-a", labels: composeLabels})
+			st := openFixtureStack(t, fx.alpha)
+			if err := fx.cache.RegisterStack(context.Background(), fx.alpha, "alpha"); err != nil {
+				t.Fatal(err)
+			}
+			f := teardownRunner(t, fx.daemon)
+			comp := &downComposer{onDown: func() {
+				fx.daemon.containers = slices.DeleteFunc(fx.daemon.containers, func(c fakeContainer) bool { return c.labels[stack.LabelComposeProject] == "alpha" })
+			}}
+			d := &ops.Deps{Runner: f, Docker: docker.NewEngine(f), Compose: comp, Clock: ops.FixedClock(cacheNow), Sink: events.Discard}
+			if command == "destroy-unreadable-registry" {
+				t.Chdir(fx.alpha)
+				if err := os.WriteFile(filepath.Join(fx.cache.Root(), "stacks", "broken"), []byte("{"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before := teardownSnapshot(t, fx.alpha)
+			cacheBefore := teardownSnapshot(t, fx.cache.Root())
+			volumesBefore := maps.Clone(fx.daemon.volumes)
+			imagesBefore := slices.Clone(fx.daemon.images)
+			containersBefore := slices.Clone(fx.daemon.containers)
+			opts := ops.TeardownOptions{Name: "alpha", DryRun: true, KeepDB: command == "reset-keep-db", PruneImages: strings.HasPrefix(command, "destroy"), Cache: fx.cache}
+			run := ops.Reset
+			if strings.HasPrefix(command, "destroy") {
+				run = ops.Destroy
+			}
+			preview, err := run(context.Background(), d, st, opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !preview.DryRun || !slices.Equal(preview.Containers, []string{"alpha-helper", "alpha-hpds-1"}) {
+				t.Fatalf("preview=%+v", preview)
+			}
+			if comp.downs != 0 {
+				t.Fatal("preview ran compose down")
+			}
+			if !reflect.DeepEqual(volumesBefore, fx.daemon.volumes) || !reflect.DeepEqual(imagesBefore, fx.daemon.images) || !reflect.DeepEqual(containersBefore, fx.daemon.containers) {
+				t.Fatal("preview changed Docker resources")
+			}
+			if !maps.Equal(before, teardownSnapshot(t, fx.alpha)) || !maps.Equal(cacheBefore, teardownSnapshot(t, fx.cache.Root())) {
+				t.Fatal("preview wrote files")
+			}
+			for _, pattern := range []string{"docker rm *", "docker run *", "docker volume rm *", "docker image rm *"} {
+				f.AssertNotCalled(fakerunner.Glob(pattern))
+			}
+			if strings.HasPrefix(command, "destroy") {
+				var names []string
+				for _, item := range preview.Pruned.Removed {
+					names = append(names, item.Name)
+				}
+				want := []string{"hms-dbmi/pic-sure-hpds:aaaaaaaaaaaa", "hms-dbmi/pic-sure-psama:cccccccccccc"}
+				if command == "destroy-unreadable-registry" {
+					want = nil
+				}
+				if !slices.Equal(names, want) {
+					t.Fatalf("prune preview = %v", names)
+				}
+			}
+			opts.DryRun = false
+			real, err := run(context.Background(), d, st, opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			preview.DryRun = false
+			preview.Containers = nil
+			if preview.Pruned != nil {
+				preview.Pruned.DryRun = false
+			}
+			a, _ := json.Marshal(preview)
+			b, _ := json.Marshal(real)
+			if string(a) != string(b) {
+				t.Fatalf("preview = %s\nreal = %s", a, b)
+			}
+		})
+	}
+}
+
+func TestDestroyDryRunForeignResources(t *testing.T) {
+	fx := newCacheFixture(t)
+	fx.daemon.volumes = map[string]map[string]string{
+		"foreign": {stack.LabelStack: "alpha", stack.LabelStackDir: fx.alpha + "-original"},
+		"own":     {stack.LabelStack: "alpha", stack.LabelStackDir: fx.alpha},
+	}
+	st := openFixtureStack(t, fx.alpha)
+	f := teardownRunner(t, fx.daemon)
+	comp := &downComposer{}
+	d := &ops.Deps{Runner: f, Docker: docker.NewEngine(f), Compose: comp, Clock: ops.FixedClock(cacheNow), Sink: events.Discard}
+	before := teardownSnapshot(t, fx.alpha)
+	preview, err := ops.Destroy(context.Background(), d, st, ops.TeardownOptions{Name: "alpha", DryRun: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(preview.LeftAlone) != 1 || len(preview.LeftOwn) != 1 || len(preview.Volumes) != 0 || len(preview.Images) != 0 || len(preview.Containers) != 0 {
+		t.Fatalf("preview=%+v", preview)
+	}
+	if comp.downs != 0 || !maps.Equal(before, teardownSnapshot(t, fx.alpha)) {
+		t.Fatal("preview mutated stack")
+	}
+	real, err := ops.Destroy(context.Background(), d, st, ops.TeardownOptions{Name: "alpha"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	preview.DryRun = false
+	a, _ := json.Marshal(preview)
+	b, _ := json.Marshal(real)
+	if string(a) != string(b) {
+		t.Fatalf("preview %s; real %s", a, b)
 	}
 }

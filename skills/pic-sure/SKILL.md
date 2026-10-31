@@ -201,6 +201,13 @@ Run these inside the stack directory, or add `--stack DIR`.
   `pic-sure config set --json proxy.https http://HOST:PORT` and `pic-sure up --json`. See the README's
   [Proxy](https://github.com/JamesPeck/pic-sure-cli/blob/main/README.md#proxy)
   section; `doctor --network` explains the Docker daemon's own proxy.
+- **Preview teardown:** `pic-sure --stack DIR destroy --dry-run --json`
+  lists the containers, volumes, dev images and manifest paths it would remove;
+  `--prune-images` includes shared images that would become unused.
+  `pic-sure reset --dry-run --keep-db --json` previews a reset preserving the
+  database. Both return a final `result.data` with `dry_run: true`, never
+  prompt or need `--yes`, and change no files or Docker resources. Preview
+  assumes removals succeed; it cannot guarantee a later write will succeed.
 - **Tear down** (only when asked): `pic-sure --stack DIR destroy --yes --json`
   removes the stack's containers, volumes and the files pic-sure created.
   `pic-sure reset --yes --json` removes the stack's volumes (its data,

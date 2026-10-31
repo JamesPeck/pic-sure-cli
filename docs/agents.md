@@ -15,8 +15,8 @@ turns this page into a task-oriented guide; the README's
    pass `--non-interactive` (or run without a terminal on stdin and stdout).
 2. **`--yes` is separate consent.** `--json` and `--non-interactive` forbid
    prompts but never consent: `reset`, `destroy` and `secrets rotate` exit 4
-   without `--yes`. `--yes` never replaces the pic-sure binary; that takes
-   `--self-update`.
+   without `--yes`, except read-only `reset --dry-run` and `destroy --dry-run`.
+   `--yes` never replaces the pic-sure binary; that takes `--self-update`.
 3. **Parse only JSON.** Human output, plain-mode lines and stderr change
    freely. The JSON shapes are in [json-schemas.md](json-schemas.md) and
    change additively within `schema_version` 2: ignore fields you don't know.
@@ -111,7 +111,7 @@ explicit `--plain` conflicts with it. `NO_COLOR` is honoured.
 
 | Command | Prompt on a terminal | Without one |
 |---|---|---|
-| `reset`, `destroy` | type the stack name | `--yes`, else exit 4, nothing changed |
+| `reset`, `destroy` | type the stack name, unless `--dry-run` | `--yes`, else exit 4; `--dry-run` needs no consent |
 | `secrets rotate NAME` | `[y/N]` | `--yes`, else exit 4. Names that read stdin always need `--yes`. |
 | `init`, `update` when the release needs a newer pic-sure | `[y/N]` to self-update | `--self-update` installs it and continues; else exit 5. `--ignore-cli-version` goes on with this one. |
 | `pic-sure` with no arguments | opens the TUI | prints help |
@@ -160,6 +160,17 @@ prints the failed `result` instead. Re-running a failed converging command (`ini
   combine it with `--tail all` for every line since that time.
 
 Both are specified in [json-schemas.md](json-schemas.md).
+
+`destroy --dry-run --json` and `reset --dry-run --json` return a streaming
+`result` whose `data` lists the selected removals and `dry_run: true`.
+They never prompt or require `--yes`, including with `--non-interactive`.
+No Docker mutation, stack lock, run log, state write or cache registration
+occurs. Destroy includes helper and compose containers, volumes, dev images,
+and manifest paths; `--prune-images` previews shared images after those
+removals. Files and resources kept by ownership rules remain listed.
+Preview assumes the selected removals succeed; a later run may encounter
+write failures or concurrent changes. Real teardown reports retain their
+existing format: absent `dry_run` means false.
 
 `migrate --dry-run` and `db bootstrap --dry-run` preview without changing
 the database; `--check` remains an accepted older spelling.
