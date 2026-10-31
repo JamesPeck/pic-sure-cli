@@ -32,30 +32,23 @@ pic-sure up [flags]
 ## Examples
 
 ```
-  # Preview the partial step plan without changing the stack
-  pic-sure up --dry-run
-
-  # Read the plan from the JSON result's data
-  pic-sure up --dry-run --json
-```
-
-## Flags
-
-```
-      --dry-run   Preview the partial step plan without writing anything
-```
-
-## Examples
-
-```
   # Start the stack, or converge it after a change
   pic-sure up
+
+  # Preview the partial step plan without changing the stack
+  pic-sure up --dry-run
 
   # Apply a config change, as a JSON event stream
   pic-sure config set hpds.java_opts -Xmx8g && pic-sure up --json
 
   # Start it without progress output, keeping warnings and the result
   pic-sure -q up
+```
+
+## Flags
+
+```
+      --dry-run   Preview the partial step plan without writing anything
 ```
 
 The [global flags](pic-sure.md#flags) apply too.
