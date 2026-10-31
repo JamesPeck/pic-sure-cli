@@ -262,7 +262,7 @@ func TestSignalKeepsTheStepToResumeFrom(t *testing.T) {
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &result); err != nil {
 		t.Fatalf("last stdout line %q: %v", lines[len(lines)-1], err)
 	}
-	want := events.ErrorInfo{ExitCode: exitcode.CodeInterrupted, Message: msg, Step: "db-migrate"}
+	want := events.ErrorInfo{ExitCode: exitcode.CodeInterrupted, Code: "interrupted", Message: msg, Step: "db-migrate"}
 	if result.Error != want {
 		t.Errorf("result error = %+v, want %+v", result.Error, want)
 	}

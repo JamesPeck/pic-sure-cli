@@ -2,7 +2,7 @@
 exitcode 3 pic-sure status
 stderr 'no pic-sure stack found'
 exitcode 3 pic-sure --json status
-stdout '"exit_code":3'
+stdout '"exit_code":3,"code":"no_stack",'
 
 # --deep with no answer from docker: the probes don't run, and each says
 # why. Without --deep there is no deep section.

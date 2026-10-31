@@ -147,7 +147,7 @@ func CheckRotateOptions(cfg *stack.Config, opts RotateOptions) error {
 	case !RotateReadsStdin(cfg, opts.Name) && opts.Value != "":
 		return exitcode.Usage("%s is generated, not read from stdin", opts.Name)
 	case opts.Name == SecretAuth0ClientSecret && len(opts.Value) < jwt.MinSecretLen:
-		return exitcode.Usage("the Auth0 client secret must be at least %d bytes; PSAMA can't sign with a shorter one", jwt.MinSecretLen)
+		return exitcode.InvalidSecret.Errorf("the Auth0 client secret must be at least %d bytes; PSAMA can't sign with a shorter one", jwt.MinSecretLen)
 	}
 	return nil
 }

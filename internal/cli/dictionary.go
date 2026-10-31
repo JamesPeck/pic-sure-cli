@@ -220,7 +220,7 @@ func (a *App) dictionary(cmd *cobra.Command, ids []string, done string, op func(
 	d.Compose = c
 	state, err := st.LoadState()
 	if errors.Is(err, fs.ErrNotExist) || err == nil && state.InitializedAt.IsZero() {
-		return exitcode.Precondition("the stack in %s isn't initialised; run `pic-sure init %s` to finish it", st.Dir, st.Dir)
+		return exitcode.StackNotInitialised.Errorf("the stack in %s isn't initialised; run `pic-sure init %s` to finish it", st.Dir, st.Dir)
 	}
 	if err != nil {
 		return err

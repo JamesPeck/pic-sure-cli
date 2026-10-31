@@ -202,7 +202,7 @@ func (s *Stack) EnsureSecrets(rnd io.Reader, opts EnsureOptions) (*Secrets, erro
 		return nil, exitcode.Precondition("the stack uses a remote database, but no root password was given for it")
 	}
 	if !opts.OpenAuth && sec.Auth0ClientSecretGenerated {
-		return nil, exitcode.Precondition("auth.mode is no longer open, but the stack's Auth0 client secret is a random one made for open mode; " +
+		return nil, exitcode.GeneratedOpenSecret.Errorf("auth.mode is no longer open, but the stack's Auth0 client secret is a random one made for open mode; " +
 			"give the Auth0 application's client secret with --auth0-client-secret-stdin")
 	}
 	filled, err := sec.generate(rnd)

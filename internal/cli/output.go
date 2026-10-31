@@ -198,9 +198,11 @@ func (a *App) succeed() error {
 // reportError tells the user why cmd failed: "pic-sure: <err>" on stderr.
 // Unless the run already ended with a Result or a report, it also emits a
 // failed Result, which --json prints as the last line on stdout: the exit
-// code, the message, and the first step that failed. A usage error gets the
-// "Run --help" hint when the command line itself was wrong: cobra rejected
-// it, or the command marked its error with withUsageHint. The message is
+// code, its slug (exitcode.SlugOf, or step_failed for an exit-1 error with
+// no slug of its own once a step has failed), the message, and the first
+// step that failed. A usage error gets the "Run --help" hint when the
+// command line itself was wrong: cobra rejected it, or the command marked
+// its error with withUsageHint. The message is
 // redacted as logs are (log.Redact), since an error can quote a secret.
 func (a *App) reportError(cmd *cobra.Command, err error) {
 	code := exitcode.FromError(err)
@@ -212,8 +214,13 @@ func (a *App) reportError(cmd *cobra.Command, err error) {
 		if step == "" && errors.As(err, &stepErr) && !stepErr.Interrupted {
 			step = stepErr.Step
 		}
+		slug := exitcode.SlugOf(err)
+		if step != "" && slug == "failed" {
+			slug = exitcode.StepFailed.Slug
+		}
 		o.sink.Emit(events.Result{Error: &events.ErrorInfo{
 			ExitCode: code,
+			Code:     slug,
 			Message:  msg,
 			Step:     step,
 		}})

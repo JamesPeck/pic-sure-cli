@@ -181,6 +181,7 @@ it beyond what's below.
 | `step_done` | `id`, `status` | A step ended: `ok`, `skipped` (already done, or `--skip-step`) or `failed`. |
 | `result` | `ok`, `data` (omitted when none), `error` (omitted on success) | The last line. |
 | | `error.exit_code` | The process's exit code (see docs/agents.md). |
+| | `error.code` | The condition within that exit code, such as `no_stack`; never empty. See [Error codes](#error-codes). |
 | | `error.message` | What went wrong, the same text as the `pic-sure: ` line on stderr. |
 | | `error.step` | The ID of the step that failed, when one did. |
 
@@ -198,6 +199,44 @@ For example, `pic-sure up --json` on a running stack:
 
 A command that fails before it starts any step (a usage error, no stack)
 prints only the `result` line.
+
+### Error codes
+
+`error.code` refines `error.exit_code`: decide on the exit code first, then
+use the code to tell apart conditions that share it. Codes are lower snake
+case and never change within `schema_version` 2, but new ones may be added,
+so treat a code you don't know as its exit code. A failure with no code of
+its own gets its exit code's: `failed`, `usage`, `precondition`,
+`confirm_required`, `incompatible` or `interrupted`.
+
+| Code | Exit | Condition |
+|---|---|---|
+| `failed` | 1 | Any other failure. |
+| `step_failed` | 1 | A step failed with no more specific code; `error.step` names it, and re-running the command retries it. |
+| `stack_locked` | 1 | Another pic-sure command holds the stack's lock. Wait for it, or pass `--wait-lock`. |
+| `usage` | 2 | Any other usage error, such as an unknown command or flag. |
+| `invalid_config` | 2 | A bad config key or value, in `pic-sure.yaml` or on the command line. |
+| `invalid_secret` | 2 | A secret given on stdin that is empty, too long or has a line break, or an Auth0 client secret under 32 bytes. |
+| `precondition` | 3 | Any other unmet precondition. |
+| `docker_unavailable` | 3 | Docker isn't on PATH, or its daemon isn't reachable. |
+| `compose_not_installed` | 3 | The docker compose plugin isn't installed. |
+| `no_stack` | 3 | No stack at `--stack DIR`, or in or above the working directory. |
+| `wrong_owner` | 3 | The stack found without `--stack` belongs to another user. Pass `--stack DIR` to use it. |
+| `stack_not_initialised` | 3 | `init` hasn't finished the stack (it has no `state.json` or `secrets.yaml`). Run `init` again. |
+| `stack_not_rendered` | 3 | `up` hasn't rendered the stack yet. |
+| `ports_busy` | 3 | A port the stack needs is in use. |
+| `generated_open_secret` | 3 | `auth.mode` isn't `open`, but the Auth0 client secret is the one generated for open mode. Run `secrets rotate auth0-client-secret`. |
+| `foreign_resources` | 3 | Docker resources the stack would use belong to another stack, or were left by one deleted without `destroy`. |
+| `confirmation_required` | 4 | A destructive command wasn't confirmed: no `--yes` where it can't ask, or the answer was no. Nothing was changed. |
+| `confirm_required` | 4 | Any other exit 4. pic-sure doesn't give it today: every exit 4 is `confirmation_required`. |
+| `incompatible` | 5 | Any other version mismatch, such as `release.cli_compat: strict` with a release validated with an older pic-sure. |
+| `cli_too_old` | 5 | A newer pic-sure rendered the stack, or the release needs a newer pic-sure. |
+| `config_migrations_pending` | 5 | `pic-sure.yaml` has an older schema that this pic-sure must migrate (the config file, not the databases). Run `pic-sure update`. |
+| `interrupted` | 128+N | Stopped by signal N: Ctrl-C (130), SIGTERM (143), or a closed stdout or stderr (141). |
+
+`init` checks the host before it changes anything, and reports every check
+that failed in one message with exit 3 and `precondition`, a too-old
+docker compose included; `doctor --json` names each failing check.
 
 ### `result.data`
 

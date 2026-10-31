@@ -259,8 +259,8 @@ func (h busyHost) PortFree(p int) bool { return !slices.Contains(h.ports, p) }
 func TestResumedInitChecksPortsChangedBeforeTheLock(t *testing.T) {
 	r := resumedInit(t, map[string]string{"network.http_port": "8090"})
 	r.host = busyHost{ports: []int{8090}}
-	if err := r.writeConfig(context.Background(), r.d.Sink); exitcode.FromError(err) != exitcode.CodePrecondition || !strings.Contains(err.Error(), "port 8090") {
-		t.Errorf("writeConfig = %v, want port 8090 in use", err)
+	if err := r.writeConfig(context.Background(), r.d.Sink); exitcode.SlugOf(err) != "ports_busy" || !strings.Contains(err.Error(), "port 8090") {
+		t.Errorf("writeConfig = %v, want port 8090 in use (ports_busy)", err)
 	}
 }
 

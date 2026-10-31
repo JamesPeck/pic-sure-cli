@@ -146,7 +146,7 @@ func (a *App) loadPhenotype(cmd *cobra.Command, args []string) error {
 	}
 	state, err := st.LoadState()
 	if errors.Is(err, fs.ErrNotExist) || err == nil && state.InitializedAt.IsZero() {
-		return exitcode.Precondition("the stack in %s isn't initialised; run `pic-sure init %s` to finish it", st.Dir, st.Dir)
+		return exitcode.StackNotInitialised.Errorf("the stack in %s isn't initialised; run `pic-sure init %s` to finish it", st.Dir, st.Dir)
 	}
 	if err != nil {
 		return err

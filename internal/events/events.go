@@ -67,6 +67,7 @@ type Result struct {
 // ErrorInfo describes a failed command.
 type ErrorInfo struct {
 	ExitCode int    `json:"exit_code"`
+	Code     string `json:"code"` // the condition's slug, such as no_stack (exitcode.SlugOf); never empty
 	Message  string `json:"message"`
 	Step     string `json:"step,omitempty"` // the failed step's ID, when a step failed
 }

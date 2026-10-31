@@ -86,7 +86,7 @@ func (a *App) up(cmd *cobra.Command, _ []string) (err error) {
 	}
 	state, err := st.LoadState()
 	if errors.Is(err, fs.ErrNotExist) || err == nil && state.InitializedAt.IsZero() {
-		return exitcode.Precondition("the stack in %s isn't initialised; run `pic-sure init %s` to finish it", st.Dir, st.Dir)
+		return exitcode.StackNotInitialised.Errorf("the stack in %s isn't initialised; run `pic-sure init %s` to finish it", st.Dir, st.Dir)
 	}
 	if err != nil {
 		return err
@@ -146,7 +146,7 @@ func (a *App) up(cmd *cobra.Command, _ []string) (err error) {
 func upSecrets(d *ops.Deps, st *stack.Stack, cfg *stack.Config) (*stack.Secrets, error) {
 	sec, err := st.LoadSecrets()
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil, exitcode.Precondition("the stack in %s has no %s; run `pic-sure init %s` to finish it", st.Dir, stack.SecretsFile, st.Dir)
+		return nil, exitcode.StackNotInitialised.Errorf("the stack in %s has no %s; run `pic-sure init %s` to finish it", st.Dir, stack.SecretsFile, st.Dir)
 	}
 	if err != nil {
 		return nil, err
@@ -182,7 +182,7 @@ func refuseClientSecret(cfg *stack.Config, sec *stack.Secrets) error {
 	}
 	switch {
 	case sec.Auth0ClientSecretGenerated:
-		return exitcode.Precondition("auth.mode is %s, but the stack's Auth0 client secret is a random one made for open mode; %s", cfg.Auth.Mode, rotateClientSecret)
+		return exitcode.GeneratedOpenSecret.Errorf("auth.mode is %s, but the stack's Auth0 client secret is a random one made for open mode; %s", cfg.Auth.Mode, rotateClientSecret)
 	case sec.Auth0ClientSecret == "":
 		return exitcode.Precondition("auth.mode is %s, but the stack has no Auth0 client secret; %s", cfg.Auth.Mode, rotateClientSecret)
 	}
@@ -199,7 +199,7 @@ func checkUpPorts(cmd *cobra.Command, d *ops.Deps, st *stack.Stack, cfg *stack.C
 	}
 	for _, p := range []int{cfg.Network.HTTPPort, cfg.Network.HTTPSPort} {
 		if !owned.Published[p] && !(systemHost{}).PortFree(p) {
-			return exitcode.Precondition("port %d, which %s sets, is in use", p, stack.ConfigFile)
+			return exitcode.PortsBusy.Errorf("port %d, which %s sets, is in use", p, stack.ConfigFile)
 		}
 	}
 	return nil

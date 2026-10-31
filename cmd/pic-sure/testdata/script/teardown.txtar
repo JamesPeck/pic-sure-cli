@@ -14,7 +14,7 @@ stderr '^pic-sure: pic-sure reset needs confirmation: pass --yes, or run it on a
 exitcode 4 pic-sure --non-interactive reset --keep-db
 exitcode 4 pic-sure destroy
 exitcode 4 pic-sure --json destroy --prune-images
-stdout '"type":"result","ok":false,"error":\{"exit_code":4,'
+stdout '"type":"result","ok":false,"error":\{"exit_code":4,"code":"confirmation_required",'
 ! exists $WORK/docker.log
 ! exists .pic-sure/logs
 exists pic-sure.yaml

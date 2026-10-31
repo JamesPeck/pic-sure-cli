@@ -15,7 +15,7 @@ stderr 'isn''t reachable'
 exitcode 3 pic-sure up
 stderr 'isn''t reachable'
 exitcode 3 pic-sure --json down
-stdout '"exit_code":3,"message":"the Docker daemon isn''t reachable: '
+stdout '"exit_code":3,"code":"docker_unavailable","message":"the Docker daemon isn''t reachable: '
 
 # Without docker on PATH: exit 3, saying to install it.
 exitcode 3 sh $WORK/nodocker.sh down
@@ -30,11 +30,15 @@ exitcode 3 sh $WORK/nodocker.sh reset --yes
 stderr 'docker is not on PATH'
 exitcode 3 sh $WORK/nodocker.sh up
 stderr 'docker is not on PATH'
+exitcode 3 sh $WORK/nodocker.sh --json down
+stdout '"exit_code":3,"code":"docker_unavailable","message":"docker is not on PATH: '
 
 # Without the compose plugin: exit 3, naming the compose pic-sure needs.
 cp $WORK/nocompose.scenario $WORK/docker.scenario
 exitcode 3 pic-sure ps
 stderr '^pic-sure: docker compose isn''t installed; pic-sure needs 2.29.0 or later \('
+exitcode 3 pic-sure --json ps
+stdout '"exit_code":3,"code":"compose_not_installed",'
 cp $WORK/unreachable.scenario $WORK/docker.scenario
 
 # doctor keeps its own contract: a failed check is exit 1.

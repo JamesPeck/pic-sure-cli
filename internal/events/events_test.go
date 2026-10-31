@@ -21,8 +21,8 @@ func TestEventJSON(t *testing.T) {
 		{StepDone{ID: "db", Status: StepSkipped}, `{"id":"db","status":"skipped"}`},
 		{Result{OK: true}, `{"ok":true}`},
 		{
-			Result{Error: &ErrorInfo{ExitCode: 3, Message: "docker daemon unreachable", Step: "preconditions"}},
-			`{"ok":false,"error":{"exit_code":3,"message":"docker daemon unreachable","step":"preconditions"}}`,
+			Result{Error: &ErrorInfo{ExitCode: 3, Code: "docker_unavailable", Message: "docker daemon unreachable", Step: "preconditions"}},
+			`{"ok":false,"error":{"exit_code":3,"code":"docker_unavailable","message":"docker daemon unreachable","step":"preconditions"}}`,
 		},
 	}
 	for _, tt := range tests {

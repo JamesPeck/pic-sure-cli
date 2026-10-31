@@ -337,7 +337,7 @@ func ChoosePorts(h Host, httpPort, httpsPort int, auto bool) (int, int, error) {
 		port int
 	}{{"--http-port", httpPort}, {"--https-port", httpsPort}} {
 		if p.port != 0 && !h.PortFree(p.port) {
-			return 0, 0, exitcode.Precondition("port %d (%s) is in use", p.port, p.flag)
+			return 0, 0, exitcode.PortsBusy.Errorf("port %d (%s) is in use", p.port, p.flag)
 		}
 	}
 	// pair returns the ports to use given defaults hp and sp, or ok false
@@ -368,7 +368,7 @@ func ChoosePorts(h Host, httpPort, httpsPort int, auto bool) (int, int, error) {
 		if len(busy) == 0 {
 			return 0, 0, exitcode.Usage("port %d is the other port's default; pass both --http-port and --https-port, or --auto-ports", httpPort+httpsPort)
 		}
-		return 0, 0, exitcode.Precondition("port %s is in use; pass --http-port and --https-port, or --auto-ports to pick free ones",
+		return 0, 0, exitcode.PortsBusy.Errorf("port %s is in use; pass --http-port and --https-port, or --auto-ports to pick free ones",
 			strings.Join(busy, " and "))
 	}
 	for i := range autoPortTries {
@@ -376,7 +376,7 @@ func ChoosePorts(h Host, httpPort, httpsPort int, auto bool) (int, int, error) {
 			return hp, sp, nil
 		}
 	}
-	return 0, 0, exitcode.Precondition("no free port pair from %d/%d to %d/%d; pass --http-port and --https-port",
+	return 0, 0, exitcode.PortsBusy.Errorf("no free port pair from %d/%d to %d/%d; pass --http-port and --https-port",
 		AutoHTTPPort, AutoHTTPSPort, AutoHTTPPort+autoPortTries-1, AutoHTTPSPort+autoPortTries-1)
 }
 
@@ -458,7 +458,7 @@ next:
 		}
 		return base, nil
 	}
-	return 0, exitcode.Precondition("no free block of %d dev ports from %d", catalog.DevPortSpan, DevPortsStart)
+	return 0, exitcode.PortsBusy.Errorf("no free block of %d dev ports from %d", catalog.DevPortSpan, DevPortsStart)
 }
 
 // CanonicalDir is dir as stack.Stack.Dir has it, absolute with symlinks

@@ -208,7 +208,7 @@ func (r *updateRun) preconditions() error {
 	}
 	state, err := r.st.LoadState()
 	if errors.Is(err, fs.ErrNotExist) || err == nil && state.InitializedAt.IsZero() {
-		return exitcode.Precondition("the stack in %s isn't initialised; run `pic-sure init %s` to finish it", r.st.Dir, r.st.Dir)
+		return exitcode.StackNotInitialised.Errorf("the stack in %s isn't initialised; run `pic-sure init %s` to finish it", r.st.Dir, r.st.Dir)
 	}
 	if err != nil {
 		return err
@@ -216,7 +216,7 @@ func (r *updateRun) preconditions() error {
 	r.state = state
 	sec, err := r.st.LoadSecrets()
 	if errors.Is(err, fs.ErrNotExist) {
-		return exitcode.Precondition("the stack in %s has no %s; run `pic-sure init %s` to finish it", r.st.Dir, stack.SecretsFile, r.st.Dir)
+		return exitcode.StackNotInitialised.Errorf("the stack in %s has no %s; run `pic-sure init %s` to finish it", r.st.Dir, stack.SecretsFile, r.st.Dir)
 	}
 	if err != nil {
 		return err

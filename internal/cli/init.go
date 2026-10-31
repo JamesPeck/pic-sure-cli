@@ -628,7 +628,7 @@ func (r *initRun) readSecrets() error {
 			// PSAMA signs the introspection token with it, and refuses a
 			// shorter key.
 			if len(v) < jwt.MinSecretLen {
-				return exitcode.Usage("--%s: the client secret is %d bytes; PSAMA needs at least %d", f.Flag, len(v), jwt.MinSecretLen)
+				return exitcode.InvalidSecret.Errorf("--%s: the client secret is %d bytes; PSAMA needs at least %d", f.Flag, len(v), jwt.MinSecretLen)
 			}
 			r.supplied.Auth0ClientSecret = v
 		case "db.remote.root_password":
@@ -710,7 +710,7 @@ func (r *initRun) preconditions(ctx context.Context, sink events.Sink) error {
 func (r *initRun) checkResumedPorts() error {
 	for _, p := range []int{r.cfg.Network.HTTPPort, r.cfg.Network.HTTPSPort} {
 		if !r.published[p] && !r.portHost().PortFree(p) {
-			return exitcode.Precondition("port %d, which %s sets, is in use", p, stack.ConfigFile)
+			return exitcode.PortsBusy.Errorf("port %d, which %s sets, is in use", p, stack.ConfigFile)
 		}
 	}
 	return nil
@@ -768,7 +768,7 @@ func (r *initRun) checkName(ctx context.Context) (*ops.Ownership, error) {
 	if len(others) == 0 {
 		closing = "Or choose another --name"
 	}
-	return nil, exitcode.Precondition("%s\n%s", strings.Join(msg, "\n"), closing)
+	return nil, exitcode.ForeignResources.Errorf("%s\n%s", strings.Join(msg, "\n"), closing)
 }
 
 // removeCommands are the docker commands that remove resources: containers

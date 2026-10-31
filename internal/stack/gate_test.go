@@ -77,6 +77,8 @@ func TestGate(t *testing.T) {
 		want [3]outcome
 		// Part of the warning or error.
 		msg string
+		// The refusal's slug.
+		slug string
 	}{{
 		name:  "fresh stack, not rendered yet",
 		stack: stackSide{configSchema: 1},
@@ -97,28 +99,33 @@ func TestGate(t *testing.T) {
 		stack: stackSide{"v2.1.0", 1, 1},
 		cli:   side{"v2.0.0", 1},
 		want:  [3]outcome{warns, refused, refused},
+		slug:  "cli_too_old",
 		msg:   "this stack was last rendered by pic-sure v2.1.0, which is newer than this pic-sure (v2.0.0)",
 	}, {
 		name:  "newer prerelease rendered it",
 		stack: stackSide{"v2.1.0-rc.1", 1, 1},
 		cli:   side{"v2.0.0", 1},
 		want:  [3]outcome{warns, refused, refused},
+		slug:  "cli_too_old",
 	}, {
 		name:  "rendered with a newer schema",
 		stack: stackSide{"v3.0.0", 2, 2},
 		cli:   side{"v2.0.0", 1},
 		want:  [3]outcome{warns, refused, refused},
+		slug:  "cli_too_old",
 		msg:   "this stack uses pic-sure.yaml schema 2, last rendered by pic-sure v3.0.0, but this pic-sure (v2.0.0) reads schema 1",
 	}, {
 		name:  "state.json alone is newer",
 		stack: stackSide{"dev", 2, 1},
 		cli:   side{"v2.0.0", 1},
 		want:  [3]outcome{warns, refused, refused},
+		slug:  "cli_too_old",
 	}, {
 		name:  "pic-sure.yaml alone is newer, no state",
 		stack: stackSide{configSchema: 2},
 		cli:   side{"v2.0.0", 1},
 		want:  [3]outcome{warns, refused, refused},
+		slug:  "cli_too_old",
 		msg:   "this stack uses pic-sure.yaml schema 2, but this pic-sure (v2.0.0) reads schema 1",
 	}, {
 		name:  "dev build on a release's stack",
@@ -135,6 +142,7 @@ func TestGate(t *testing.T) {
 		stack: stackSide{"v2.0.0", 1, 1},
 		cli:   side{"v2.1.0", 2},
 		want:  [3]outcome{runs, refused, runs},
+		slug:  "config_migrations_pending",
 		msg:   "this stack's pic-sure.yaml is schema 1, and this pic-sure (v2.1.0) uses schema 2; run pic-sure update",
 	}, {
 		name:  "older stack, migrated but not yet rendered",
@@ -146,11 +154,13 @@ func TestGate(t *testing.T) {
 		stack: stackSide{"dev", 1, 1},
 		cli:   side{"dev", 2},
 		want:  [3]outcome{runs, refused, runs},
+		slug:  "config_migrations_pending",
 	}, {
 		name:  "pic-sure.yaml older than any migration",
 		stack: stackSide{configSchema: 0},
 		cli:   side{"v2.1.0", 2},
 		want:  [3]outcome{runs, refused, refused},
+		slug:  "incompatible",
 		msg:   "pic-sure.yaml is schema 0",
 	}} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -172,6 +182,9 @@ func TestGate(t *testing.T) {
 				}
 				if got != tc.want[i] {
 					t.Errorf("class %d %s (%q, %v), want it to be %s", class, got, warning, err, tc.want[i])
+				}
+				if got == refused && exitcode.SlugOf(err) != tc.slug {
+					t.Errorf("class %d: slug %q, want %q", class, exitcode.SlugOf(err), tc.slug)
 				}
 				msg := warning
 				if err != nil {

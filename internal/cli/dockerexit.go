@@ -17,11 +17,11 @@ func dockerPrecondition(err error) error {
 	}
 	switch {
 	case docker.IsMissing(err):
-		return exitcode.Precondition("docker is not on PATH: %s (%w)", docker.InstallHint, err)
+		return exitcode.DockerUnavailable.Errorf("docker is not on PATH: %s (%w)", docker.InstallHint, err)
 	case docker.IsUnreachable(err):
-		return exitcode.Precondition("the Docker daemon isn't reachable: %w\n%s", err, docker.StartHint)
+		return exitcode.DockerUnavailable.Errorf("the Docker daemon isn't reachable: %w\n%s", err, docker.StartHint)
 	case docker.IsComposeMissing(err):
-		return exitcode.Precondition("docker compose isn't installed; pic-sure needs %s or later (%w)", ops.MinComposeVersion, err)
+		return exitcode.ComposeNotInstalled.Errorf("docker compose isn't installed; pic-sure needs %s or later (%w)", ops.MinComposeVersion, err)
 	}
 	return err
 }

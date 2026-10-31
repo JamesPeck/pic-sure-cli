@@ -184,14 +184,14 @@ func (u *Updater) Install(ctx context.Context, version string) (*Result, error) 
 // exit-5 error that says what to do.
 func (u *Updater) SelfUpdate(ctx context.Context, version string) error {
 	if prev := u.getenv(ReexecEnv); prev != "" {
-		return exitcode.Incompatible("pic-sure updated itself to %s and re-ran, but this release still needs pic-sure %s; "+
+		return exitcode.CLITooOld.Errorf("pic-sure updated itself to %s and re-ran, but this release still needs pic-sure %s; "+
 			"install it with %s, or pass --ignore-cli-version", prev, version, installCommand(normalize(version), ""))
 	}
 	res, err := u.Install(ctx, version)
 	if err != nil {
 		var r *refusal
 		if errors.As(err, &r) {
-			return exitcode.Incompatible("%v, or pass --ignore-cli-version to keep using this pic-sure", r)
+			return exitcode.CLITooOld.Errorf("%v, or pass --ignore-cli-version to keep using this pic-sure", r)
 		}
 		return err
 	}
