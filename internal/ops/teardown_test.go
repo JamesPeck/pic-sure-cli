@@ -47,8 +47,9 @@ func teardownRunner(t *testing.T, fd *fakeDaemon) *fakerunner.Runner {
 				if a != "--filter" {
 					continue
 				}
-				k, v, _ := strings.Cut(strings.TrimPrefix(argv[i+1], "label="), "=")
-				if labels[k] != v {
+				k, v, equal := strings.Cut(strings.TrimPrefix(argv[i+1], "label="), "=")
+				value, exists := labels[k]
+				if !exists || equal && value != v {
 					ok = false
 				}
 			}
@@ -175,7 +176,6 @@ func TestResetRemovesOnlyTheStacksDataVolumes(t *testing.T) {
 func TestDestroyRemovesTheStackAndNothingElse(t *testing.T) {
 	fx := newCacheFixture(t)
 	fx.daemon.volumes = teardownVolumes(fx.alpha)
-	// No unreadable stack, so prune can decide.
 	fx.daemon.containers = slices.DeleteFunc(fx.daemon.containers, func(c fakeContainer) bool { return c.name == "gone-hpds-1" })
 	fx.daemon.images = append(fx.daemon.images, fakeImage{"hms-dbmi/pic-sure-hpds:dev-alpha_beta-aaaaaaaaaaaa", "sha256:beta-dev", 100, cacheNow.AddDate(0, 0, -2)})
 	st := openFixtureStack(t, fx.alpha)
@@ -204,12 +204,12 @@ func TestDestroyRemovesTheStackAndNothingElse(t *testing.T) {
 	for _, it := range report.Pruned.Removed {
 		pruned = append(pruned, it.Name)
 	}
-	// alpha's state named hpds:aaaa; with alpha gone nothing uses it. The
-	// gateway is in use, the visualization recent, and dev images and
-	// cache entries aren't destroy's to prune.
-	if want := []string{"hms-dbmi/pic-sure-hpds:aaaaaaaaaaaa", "hms-dbmi/pic-sure-psama:cccccccccccc"}; !slices.Equal(pruned, want) {
-		t.Errorf("pruned %v, want %v", pruned, want)
+	// The shared volume survives with alpha's label, so its now-unreadable
+	// stack conservatively protects shared images.
+	if len(pruned) != 0 {
+		t.Errorf("pruned %v despite a surviving labelled volume", pruned)
 	}
+
 	for _, ref := range []string{"hms-dbmi/pic-sure-gateway:bbbbbbbbbbbb", "hms-dbmi/pic-sure-psama:dev-zed-aaaaaaaaaaaa-dirty", "hms-dbmi/pic-sure-hpds:dev-alpha_beta-aaaaaaaaaaaa"} {
 		if !slices.Contains(fx.daemon.refs(), ref) {
 			t.Errorf("%s was removed", ref)
@@ -510,8 +510,9 @@ func TestTeardownDryRunMatchesReal(t *testing.T) {
 		t.Run(command, func(t *testing.T) {
 			fx := newCacheFixture(t)
 			fx.daemon.volumes = teardownVolumes(fx.alpha)
-			// Ordinary stack resources, with no falsely stack-labelled shared volume.
+			// No surviving shared volume or unreadable foreign stack to protect images.
 			delete(fx.daemon.volumes, "demo_hpds-data")
+			delete(fx.daemon.volumes, "alpha_beta_hpds-data")
 			fx.daemon.containers = slices.DeleteFunc(fx.daemon.containers, func(c fakeContainer) bool { return c.name == "gone-hpds-1" })
 			labels := map[string]string{stack.LabelStack: "alpha", stack.LabelStackDir: fx.alpha}
 			fx.daemon.containers = append(fx.daemon.containers, fakeContainer{name: "alpha-helper", image: "hms-dbmi/pic-sure-hpds:aaaaaaaaaaaa", imageID: "sha256:hpds-a", labels: labels})
@@ -624,5 +625,51 @@ func TestDestroyDryRunForeignResources(t *testing.T) {
 	b, _ := json.Marshal(real)
 	if string(a) != string(b) {
 		t.Fatalf("preview %s; real %s", a, b)
+	}
+}
+
+func TestDestroyDryRunPruneKeepsImagesWhenMetadataIsRemoved(t *testing.T) {
+	fx := newCacheFixture(t)
+	st := openFixtureStack(t, fx.alpha)
+	manifest, err := st.Manifest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The operator supplied config before init; destroy removes only metadata.
+	manifest.Entries = slices.DeleteFunc(manifest.Entries, func(e stack.Entry) bool { return e.Path == stack.ConfigFile })
+	data, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(st.Path(stack.ManifestFile), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// This old-name helper survives selection but still identifies the stack.
+	fx.daemon.containers = []fakeContainer{{name: "old-helper", image: "alpine:3", imageID: "sha256:alpine", labels: map[string]string{stack.LabelStack: "old", stack.LabelStackDir: fx.alpha}}}
+	fx.daemon.volumes = nil
+	f := teardownRunner(t, fx.daemon)
+	d := &ops.Deps{Runner: f, Docker: docker.NewEngine(f), Clock: ops.FixedClock(cacheNow), Sink: events.Discard}
+	opts := ops.TeardownOptions{Name: "alpha", DryRun: true, PruneImages: true, Cache: fx.cache}
+	before := teardownSnapshot(t, fx.alpha)
+	preview, err := ops.Destroy(context.Background(), d, st, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !maps.Equal(before, teardownSnapshot(t, fx.alpha)) {
+		t.Fatal("preview changed files")
+	}
+	if !slices.Contains(preview.Files.Removed, stack.CLIDir) || slices.Contains(preview.Files.Removed, stack.ConfigFile) {
+		t.Fatalf("unexpected selection %+v", preview.Files)
+	}
+	opts.DryRun = false
+	real, err := ops.Destroy(context.Background(), d, st, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(preview.Pruned.Removed) != 0 || len(real.Pruned.Removed) != 0 {
+		t.Fatalf("preview pruned %v; real pruned %v", preview.Pruned.Removed, real.Pruned.Removed)
+	}
+	if len(preview.Pruned.Stacks) != 1 || preview.Pruned.Stacks[0].Readable || len(real.Pruned.Stacks) != 1 || real.Pruned.Stacks[0].Readable {
+		t.Fatalf("preview stacks %+v; real stacks %+v", preview.Pruned.Stacks, real.Pruned.Stacks)
 	}
 }

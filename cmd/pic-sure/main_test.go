@@ -5,6 +5,8 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -12,6 +14,7 @@ import (
 	"github.com/rogpeppe/go-internal/testscript"
 
 	"github.com/JamesPeck/pic-sure-cli/internal/fakecmd"
+	"github.com/JamesPeck/pic-sure-cli/internal/ops"
 )
 
 func TestMain(m *testing.M) {
@@ -35,8 +38,9 @@ func TestScripts(t *testing.T) {
 			return nil
 		},
 		Cmds: map[string]func(*testscript.TestScript, bool, []string){
-			"exitcode":  cmdExitCode,
-			"jsonlines": cmdJSONLines,
+			"exitcode":      cmdExitCode,
+			"jsonlines":     cmdJSONLines,
+			"teardownmatch": cmdTeardownMatch,
 		},
 	})
 }
@@ -87,5 +91,57 @@ func cmdJSONLines(ts *testscript.TestScript, neg bool, args []string) {
 		if err := json.Unmarshal([]byte(line), &obj); err != nil || obj == nil {
 			ts.Fatalf("%s line %d is not a JSON object: %v\n%s", args[0], i+1, err, line)
 		}
+	}
+}
+
+// teardownmatch compares CLI reports while accounting for artifacts that only
+// the real invocation creates: its own run log, and missing log/lock paths.
+func cmdTeardownMatch(ts *testscript.TestScript, neg bool, args []string) {
+	if neg || len(args) != 2 {
+		ts.Fatalf("usage: teardownmatch PREVIEW REAL")
+	}
+	read := func(name string) ops.TeardownReport {
+		lines := strings.Split(strings.TrimSpace(ts.ReadFile(name)), "\n")
+		var result struct {
+			Type string
+			OK   bool
+			Data ops.TeardownReport
+		}
+		if err := json.Unmarshal([]byte(lines[len(lines)-1]), &result); err != nil || result.Type != "result" || !result.OK || result.Data.Files == nil {
+			ts.Fatalf("%s: invalid teardown result: %v", name, err)
+		}
+		return result.Data
+	}
+	preview, real := read(args[0]), read(args[1])
+	if !preview.DryRun || real.DryRun {
+		ts.Fatalf("expected preview followed by real teardown")
+	}
+	runLog := regexp.MustCompile(`^\.pic-sure/logs/cli-[0-9]{8}T[0-9]{6}\.[0-9]{3}Z-[0-9]+(-[0-9]+)?\.log$`)
+	newLogs := 0
+	real.Files.Removed = slices.DeleteFunc(real.Files.Removed, func(path string) bool {
+		if slices.Contains(preview.Files.Removed, path) {
+			return false
+		}
+		if runLog.MatchString(path) {
+			newLogs++
+			return true
+		}
+		return path == ".pic-sure/lock" || path == ".pic-sure/logs"
+	})
+	if newLogs != 1 {
+		ts.Fatalf("expected exactly one new run log in real report; got %d", newLogs)
+	}
+	preview.DryRun = false
+	preview.Containers = nil // real reports retain their pre-preview wire format
+	a, err := json.Marshal(preview)
+	if err != nil {
+		ts.Fatalf("encoding report: %v", err)
+	}
+	b, err := json.Marshal(real)
+	if err != nil {
+		ts.Fatalf("encoding report: %v", err)
+	}
+	if string(a) != string(b) {
+		ts.Fatalf("preview and real removal sets differ:\npreview %s\nreal %s", a, b)
 	}
 }

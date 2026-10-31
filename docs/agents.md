@@ -168,6 +168,10 @@ Preview assumes the selected removals succeed; a later run may encounter
 write failures or concurrent changes. Real teardown reports retain their
 existing format: absent `dry_run` means false.
 
+Preview lists paths present before execution. The real command also creates and
+removes its own run log, plus the log directory and lock file if missing;
+those execution artifacts appear only in the real `files.removed` report.
+
 `migrate --dry-run` and `db bootstrap --dry-run` preview without changing
 the database; `--check` remains an accepted older spelling.
 

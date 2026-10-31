@@ -104,7 +104,7 @@ func (a *App) teardown(cmd *cobra.Command, opts ops.TeardownOptions) error {
 		}
 		defer func() { _ = lock.Unlock() }()
 	}
-	if d.Compose, err = a.teardownCompose(d.Runner, st, cfg); err != nil {
+	if d.Compose, err = a.teardownCompose(d.Runner, st, cfg, opts.DryRun); err != nil {
 		return err
 	}
 	if destroy && (!opts.DryRun || opts.PruneImages) {
@@ -144,7 +144,7 @@ func openTeardownCache(cmd *cobra.Command, create, dryRun bool) (*cache.Cache, e
 	if _, err := os.Stat(root); !create && errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}
-	return cache.Open(root, cache.Options{Holder: cmd.CommandPath(), LockTimeout: pruneLockTimeout, ReadOnly: dryRun})
+	return cache.Open(root, cache.Options{Holder: cmd.CommandPath(), LockTimeout: pruneLockTimeout, NoCreate: dryRun})
 }
 
 // confirmName asks the user to type the stack name (§9.8). --yes answers
@@ -172,7 +172,7 @@ func (a *App) confirmName(cmd *cobra.Command, name, what string) error {
 // secrets.yaml it can read gets empty secrets: compose down needs the
 // variables set, not their values, and a half-made stack must still be
 // removable.
-func (a *App) teardownCompose(r docker.Runner, st *stack.Stack, cfg *stack.Config) (docker.Composer, error) {
+func (a *App) teardownCompose(r docker.Runner, st *stack.Stack, cfg *stack.Config, dryRun bool) (docker.Composer, error) {
 	c, err := docker.NewCompose(r, st.Dir, nil)
 	if errors.Is(err, docker.ErrNotRendered) {
 		return nil, nil // not a nil *Compose: downStep checks for a nil Composer
@@ -183,7 +183,11 @@ func (a *App) teardownCompose(r docker.Runner, st *stack.Stack, cfg *stack.Confi
 	sec, err := st.LoadSecrets()
 	if err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
-			a.warnStderr("compose down runs without the stack's secrets: %v", err)
+			action := "compose down runs"
+			if dryRun {
+				action = "preview continues"
+			}
+			a.warnStderr("%s without the stack's secrets: %v", action, err)
 		}
 		sec = &stack.Secrets{}
 	}
@@ -263,7 +267,7 @@ func writeTeardownPreview(w io.Writer, command, dir string, r *ops.TeardownRepor
 		}
 	}
 	if len(r.KeptVolumes) > 0 {
-		fmt.Fprintf(&b, "Kept %s.\n", strings.Join(r.KeptVolumes, ", "))
+		fmt.Fprintf(&b, "Would keep %s.\n", strings.Join(r.KeptVolumes, ", "))
 	}
 	if len(r.LeftAlone) > 0 {
 		fmt.Fprintf(&b, "Left another stack's Docker resources alone:\n%s\n", ops.ResourceList(r.LeftAlone))
@@ -273,10 +277,14 @@ func writeTeardownPreview(w io.Writer, command, dir string, r *ops.TeardownRepor
 	}
 	if r.Files != nil {
 		for _, path := range r.Files.Removed {
-			fmt.Fprintf(&b, "Would remove path %s.\n", path)
+			if path == "." {
+				fmt.Fprintf(&b, "Would remove stack directory %s.\n", dir)
+			} else {
+				fmt.Fprintf(&b, "Would remove path %s.\n", path)
+			}
 		}
 		for _, path := range r.Files.Kept {
-			fmt.Fprintf(&b, "Kept path %s.\n", path)
+			fmt.Fprintf(&b, "Would keep path %s.\n", path)
 		}
 		if len(r.Files.Remaining) > 0 {
 			fmt.Fprintf(&b, "Left in %s:\n", dir)

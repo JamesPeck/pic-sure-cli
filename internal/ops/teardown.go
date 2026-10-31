@@ -341,12 +341,17 @@ func selectVolumes(owned *Ownership, remove func(catalog.Volume) bool) (selected
 // images that are st's: labelled for it by the ownership rule, or from
 // before dev images had stack labels.
 func removeDevImages(ctx context.Context, d *Deps, sink events.Sink, st *stack.Stack, name string, report *TeardownReport) error {
-	selected, err := selectDevImages(ctx, d, sink, st, name)
+	selected, err := selectDevImages(ctx, d, st, name)
 	if err != nil {
 		return err
 	}
 	var failed []string
-	for _, ref := range selected {
+	for _, image := range selected {
+		ref := image.ref
+		if image.owner != "" {
+			sink.Emit(events.Warning{ID: StepDevImages, Text: fmt.Sprintf("left image %s alone: it belongs to %s", ref, image.owner)})
+			continue
+		}
 		if report.DryRun {
 			report.Images = append(report.Images, ref)
 			sink.Emit(events.Progress{ID: StepDevImages, Text: "would remove image " + ref})
@@ -366,22 +371,27 @@ func removeDevImages(ctx context.Context, d *Deps, sink events.Sink, st *stack.S
 	return nil
 }
 
-func selectDevImages(ctx context.Context, d *Deps, sink events.Sink, st *stack.Stack, name string) ([]string, error) {
+type devImageSelection struct {
+	ref   string
+	owner string
+}
+
+func selectDevImages(ctx context.Context, d *Deps, st *stack.Stack, name string) ([]devImageSelection, error) {
 	imgs, err := d.Docker.ImageList(ctx, catalog.Namespace+"/*")
 	if err != nil {
 		return nil, fmt.Errorf("listing images: %w", err)
 	}
 	id := st.ID()
-	var selected []string
+	var selected []devImageSelection
 	for _, img := range imgs {
 		if devStack, ok := cachedImage(img.Ref); !ok || devStack != name {
 			continue
 		}
 		if _, labelled := img.Labels[stack.LabelStackDir]; labelled && stack.Owner(id, st.Dir, img.Labels) == stack.Foreign {
-			sink.Emit(events.Warning{ID: StepDevImages, Text: fmt.Sprintf("left image %s alone: it belongs to %s", img.Ref, stack.OwnerName(img.Labels))})
+			selected = append(selected, devImageSelection{ref: img.Ref, owner: stack.OwnerName(img.Labels)})
 			continue
 		}
-		selected = append(selected, img.Ref)
+		selected = append(selected, devImageSelection{ref: img.Ref})
 	}
 	return selected, nil
 }

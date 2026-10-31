@@ -116,7 +116,6 @@ type CacheOptions struct {
 	teardown *teardownProjection
 }
 
-// Leftover labelled resources must still protect the images they may use.
 type teardownProjection struct {
 	dir      string
 	report   *TeardownReport
@@ -171,7 +170,7 @@ func CacheInventory(ctx context.Context, d *Deps, c *cache.Cache, opts CacheOpti
 			if st.Dir != p.dir {
 				continue
 			}
-			if slices.Contains(p.report.Files.Removed, stack.ConfigFile) {
+			if slices.Contains(p.report.Files.Removed, stack.ConfigFile) || slices.Contains(p.report.Files.Removed, stack.CLIDir) {
 				st.Readable, st.state, st.Error = false, nil, stack.ErrNotFound.Error()
 			} else if slices.Contains(p.report.Files.Removed, stack.StateFile) {
 				st.Readable, st.state, st.Error = true, &stack.State{}, ""
