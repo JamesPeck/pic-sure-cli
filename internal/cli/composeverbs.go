@@ -163,7 +163,8 @@ func newLogsCmd(a *App) *cobra.Command {
 		Long: `Show service logs (default: every service) on stdout. With -f, keep
 following new lines until Ctrl-C. With --json, each line is a log event of
 step "logs". Shows the last 200 lines per service by default; use --tail all
-for the whole log, or --since to select a time window.`,
+for the whole log. --since also filters by time and still respects --tail;
+use --tail all --since DUR for every line since that time.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			tailValue, _ := cmd.Flags().GetString("tail")

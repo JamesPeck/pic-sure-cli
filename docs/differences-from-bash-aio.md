@@ -42,7 +42,7 @@ pic-sure needs only `docker` (compose ≥ 2.29.0, buildx ≥ 0.17.0) and
 | The loader, columnmeta and weights containers have fixed names, so a stale one blocks the next run | Each run's containers get unique names and `--rm`. |
 | `compose.sh dev up dictionary` builds only the first service | Each dev variant declares its services. |
 | Teardown: `reset.sh`, `uninstall.sh` | `down`, `reset [--keep-db]`, `destroy`. `destroy` removes only what pic-sure created (`manifest.json`), never your own files, shared data sets or other stacks. |
-| `docker compose logs` prints the whole log by default | `pic-sure logs` defaults to the last 200 lines per service. Use `--tail all` for the whole log, `--tail N` for another bound, and `--since DUR` to also filter by time. Combine `--tail all --since DUR` for every line since that time. |
+| `docker compose logs` prints the whole log by default | `pic-sure logs` defaults to the last 200 lines per service. Use `--tail all` for the whole log, `--tail N` for another bound, and `--since DUR` to also filter by time. Use `--tail all --since DUR` for every line since that time. |
 
 ## Data loading
 
