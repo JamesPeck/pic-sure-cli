@@ -34,9 +34,9 @@ its section.
   `Failed` from a command; any other error exits 1. A condition `--json`
   callers branch on gets a `Condition` instead, such as
   `exitcode.NoStack.Errorf(...)`, which carries both the exit code and the
-  stable slug the failed result's `error.code` reports; add new ones to
-  `Conditions` and to `docs/json-schemas.md`, whose table a test checks.
-  Errors cobra raises
+  stable slug the failed result's `error.code` reports; declare new ones
+  with the others in `internal/exitcode` and add them to
+  `docs/json-schemas.md`, whose table a test checks. Errors cobra raises
   while parsing the command line (unknown command or flag, wrong argument
   count, missing required flag, unknown help topic) exit 2. SIGINT and
   SIGTERM cancel the command's context, and the CLI then exits 128+N even
