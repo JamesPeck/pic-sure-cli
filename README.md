@@ -462,6 +462,10 @@ curl -fsSL -o ~/.claude/skills/pic-sure/SKILL.md \
   https://raw.githubusercontent.com/JamesPeck/pic-sure-cli/main/skills/pic-sure/SKILL.md
 ```
 
+An agent working in a clone of this repo finds [AGENTS.md](AGENTS.md) at
+the root: it points at the skill and the agent docs, and lists the exit
+codes.
+
 ## Development
 
 Package layout, the shared interfaces and how to add a command or an
