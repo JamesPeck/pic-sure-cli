@@ -498,3 +498,12 @@ func TestUniqueName(t *testing.T) {
 		t.Error("short read: no error")
 	}
 }
+
+func TestRunNeverPullsWhenRequested(t *testing.T) {
+	f, e := newEngine(t)
+	f.On(fakerunner.Exact("docker", "run", "--rm", "--pull", "never", "missing-probe", "true")).Exit(125).Stderr("No such image: missing-probe")
+	code, err := e.Run(context.Background(), docker.RunOpts{Image: "missing-probe", Args: []string{"true"}, Remove: true, PullNever: true})
+	if code != 125 || err == nil {
+		t.Fatalf("missing local image = %d, %v", code, err)
+	}
+}

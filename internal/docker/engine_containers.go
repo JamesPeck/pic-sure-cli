@@ -22,6 +22,8 @@ type RunOpts struct {
 	// Name is the container's name; UniqueName makes one that can't collide
 	// with another run's. Empty lets docker pick one.
 	Name string
+	// PullNever prevents a missing image from being downloaded (--pull never).
+	PullNever bool
 	// Remove deletes the container, and its anonymous volumes, when it
 	// exits (--rm).
 	Remove     bool
@@ -165,6 +167,9 @@ func containerFlags(opts RunOpts) (flags, env []string, err error) {
 
 	if opts.Remove {
 		flags = append(flags, "--rm")
+	}
+	if opts.PullNever {
+		flags = append(flags, "--pull", "never")
 	}
 	for _, f := range []struct{ flag, value string }{
 		{"--name", opts.Name},

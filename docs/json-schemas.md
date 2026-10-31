@@ -238,7 +238,7 @@ emitted remains in the NDJSON stream.
 | `partial` | bool | True when at least one step could not be checked because of an earlier action or an unsafe/missing-input Check. False does not guarantee real up will succeed. |
 | `notice` | string | Human explanation of current-input and concurrency limitations. |
 | `preparation` | array | Skipped preparation, each with `id`, `would_write` (bool) and human `reason`. |
-| `probes` | array | Read-only containers run during the preview, each with its actual `name` and `image`. Empty when no probe ran. All mounts are read-only; networking is disabled and containers self-remove. |
+| `probes` | array | Read-only containers run during the preview, each with its actual `name` and `image`. Empty when no probe ran. All mounts are read-only; networking is disabled, containers self-remove, and implicit image pulls are forbidden. |
 | `steps` | array | Ordered plan, each with `id`, human `title`, `status` and human `reason`. |
 
 Preparation IDs are `stack-lock`, `stack-id`, `secrets`, `cache`, `state`
@@ -253,7 +253,7 @@ require networking.
 |---|---|
 | `would_skip` | The Check found the step done, or `--skip-step` explicitly skips it (distinguished by `reason`). |
 | `would_act` | The Check found work required. No Apply ran. For genomic leftovers, the action would refuse the real up until recovery. |
-| `always_runs` | No Check exists. Render and start have this status unless explicitly skipped; they are not predictions that earlier steps will succeed. |
+| `always_runs` | No Check exists. Render, start and HMR volume setup have this status unless explicitly skipped; they are not predictions that earlier steps will succeed. |
 | `depends_on_earlier_step` | The Check was not run because earlier work could change its inputs, preparation was skipped, or it requires an unsafe probe. `reason` explains the boundary. |
 
 Branch on status, not the human reason text. A regular current stack's

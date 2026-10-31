@@ -47,6 +47,7 @@ until the first step requiring work, including that step. Later Checks
 are not run: their inputs could change after the earlier action. On a
 current stack, resolve, genomic-leftovers, images, TLS and truststore can
 all report `would_skip`; render and start still report `always_runs`.
+With HMR enabled, `hmr-volume` also has no Check and reports `always_runs`.
 Database, migration, seed, HPDS-key and restart outcomes then remain
 `depends_on_earlier_step`. A successful preview does not promise that a
 real `up` will succeed, or that the stack needs no changes.
@@ -61,7 +62,9 @@ and host-port preflight checks still run only during real `up`.
 
 When the genomic volume exists, its Check runs a self-removing Alpine
 container to list directories. Every mount is read-only and networking is
-disabled. The output names this read-only probe container, including a
+disabled. The probe uses `--pull never`, so its Alpine image must already
+be available locally; a missing image fails the preview without a download.
+The output names this read-only probe container, including a
 warning before it runs and the successful plan's `probes` list. Nothing in
 the volume, stack directory or database is changed. An interrupted promote
 is reported as `would_act` with a reason explaining that real `up` would

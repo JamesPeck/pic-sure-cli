@@ -18,5 +18,8 @@ func TestUpPreviewRejectsUnsafeProbe(t *testing.T) {
 		if _, err := engine.Run(context.Background(), opts); err == nil {
 			t.Fatal("unsafe probe reached Docker")
 		}
+		if err := engine.Rm(context.Background(), opts.Name, true); err != nil {
+			t.Fatalf("rejected probe cleanup: %v", err)
+		}
 	}
 }

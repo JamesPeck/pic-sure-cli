@@ -40,7 +40,8 @@ the images and recreates its services. It never moves the stack to
 another release; that is pic-sure update.
 
 --dry-run previews Checks until the first step that would act. Later steps
-depend on that change; render and start always run. Nothing is written.
+depend on that change; render, start and HMR volume setup have no Check.
+Nothing is written and no images are pulled.
 A read-only, network-disabled genomic probe container may run and is named
 in the output.`,
 		Example: "  # Preview the partial step plan without changing the stack\n  pic-sure up --dry-run\n\n  # Read the plan from the JSON result's data\n  pic-sure up --dry-run --json",
