@@ -38,8 +38,8 @@ type Cache struct {
 
 // Options configures Open.
 type Options struct {
-	// ReadOnly opens an inventory view without creating cache directories.
-	ReadOnly bool
+	// NoCreate skips directory creation when opening the cache.
+	NoCreate bool
 	// Git fetches and archives source trees. Only EnsureSource uses it.
 	Git git.Client
 	// Holder describes this command in the cache's lock files, for the
@@ -102,14 +102,14 @@ func realPath(p string) string {
 }
 
 // Open opens the cache at root, an absolute path such as DefaultRoot's,
-// creating its directories unless ReadOnly. Open does not apply DefaultRoot's
+// creating its directories unless NoCreate. Open does not apply DefaultRoot's
 // temporary-directory check.
 func Open(root string, opts Options) (*Cache, error) {
 	if !filepath.IsAbs(root) {
 		return nil, fmt.Errorf("cache root %q is not an absolute path", root)
 	}
 	root = filepath.Clean(root)
-	if !opts.ReadOnly {
+	if !opts.NoCreate {
 		// XDG asks for 0700 on a base directory it has to create.
 		if err := os.MkdirAll(filepath.Dir(root), 0o700); err != nil {
 			return nil, err

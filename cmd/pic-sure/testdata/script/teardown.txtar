@@ -106,17 +106,19 @@ stdout '"type":"result","ok":true,"data":\{"stack":"demo","volumes":\["demo_hpds
 
 # destroy --yes: every labelled volume, the dev images of this stack, and
 # the files pic-sure created. The operator's files survive and are listed.
+exec pic-sure --json destroy --dry-run
+cp stdout $WORK/before-destroy.json
 rm $WORK/docker.log
-exec pic-sure --plain --yes destroy
+exec pic-sure --json --yes destroy
+cp stdout $WORK/after-destroy.json
+teardownmatch $WORK/before-destroy.json $WORK/after-destroy.json
 ! stderr 'warning'
 grep '^docker volume rm demo_hpds-logs$' $WORK/docker.log
 grep '^docker image rm hms-dbmi/pic-sure-psama:dev-demo-0123456789ab$' $WORK/docker.log
 ! grep 'image rm hms-dbmi/pic-sure-psama:dev-demo2' $WORK/docker.log
 ! grep 'image rm hms-dbmi/pic-sure-hpds:0123456789ab' $WORK/docker.log
-stdout '^Destroyed stack demo: removed 3 volumes and 1 dev image, and [0-9]+ paths.$'
-stdout '^Left in .*/stack:$'
-stdout '^  notes.txt$'
-stdout '^  overrides/$'
+stdout '"volumes":\["demo_hpds-data","demo_hpds-logs","demo_picsure-db-data"\]'
+stdout '"remaining":\["notes.txt","overrides/"\]'
 ! exists pic-sure.yaml
 ! exists .pic-sure
 exists notes.txt
@@ -125,10 +127,23 @@ exists overrides/10-local.yaml
 # Now there's no stack here.
 exitcode 3 pic-sure --yes destroy
 
+# Compare a fresh stack too: the real run creates its log directory and lock.
+exec cp -R $WORK/half $WORK/fresh
+exec pic-sure --json --stack $WORK/fresh destroy --dry-run
+cp stdout $WORK/fresh-preview.json
+exec pic-sure --json --yes --stack $WORK/fresh destroy
+cp stdout $WORK/fresh-real.json
+teardownmatch $WORK/fresh-preview.json $WORK/fresh-real.json
+! exists $WORK/fresh
+
 # A stack init left before rendering: no compose
 # down, and the files still go.
 rm $WORK/docker.log
+exec pic-sure --plain --stack $WORK/half destroy --dry-run
+stdout '^Would remove stack directory .*/half.$'
+exists $WORK/half/pic-sure.yaml
 exec pic-sure --plain --yes --stack $WORK/half destroy
+stdout '^Destroyed stack half: removed 0 volumes and 0 dev images, and [0-9]+ paths.$'
 stderr 'the stack was never rendered'
 ! grep 'docker compose' $WORK/docker.log
 grep '^docker volume ls -q --filter label=org.hms-dbmi.picsure.stack=half$' $WORK/docker.log
@@ -137,6 +152,9 @@ grep '^docker volume ls -q --filter label=org.hms-dbmi.picsure.stack=half$' $WOR
 # A rendered stack whose secrets.yaml can't be read: a warning, and compose
 # down runs with empty secrets.
 rm $WORK/docker.log
+exec pic-sure --plain --stack $WORK/badsec reset --dry-run
+stderr 'warning: preview continues without the stack''s secrets'
+! grep 'down --remove-orphans$' $WORK/docker.log
 exec pic-sure --plain --yes --stack $WORK/badsec reset
 stderr 'warning: compose down runs without the stack''s secrets'
 grep 'down --remove-orphans$' $WORK/docker.log
