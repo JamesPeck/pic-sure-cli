@@ -151,7 +151,8 @@ prints the failed `result` instead. Re-running a failed converging command (`ini
 - **Event streams.** Every other command prints NDJSON events and ends
   with one `result` line, whose `data` holds the command's report.
   `compose` refuses `--json`. `logs --json` emits each log line as a `log`
-  event of step `logs`.
+  event of step `logs`, defaulting to 200 lines per service. Use `--tail N`
+  or `--tail all` to change the bound, and `--since DUR` for a time window.
 
 Both are specified in [json-schemas.md](json-schemas.md).
 

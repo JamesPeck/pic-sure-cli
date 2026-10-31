@@ -144,7 +144,8 @@ type ComposeLogsOpts struct {
 	Follow bool
 	// Tail limits each service's log to its last Tail lines. Zero or less
 	// means the whole log.
-	Tail  int
+	Tail int
+	// Since is passed to compose verbatim as a duration or timestamp.
 	Since string
 	// Out receives the logs; nil discards them.
 	Out io.Writer

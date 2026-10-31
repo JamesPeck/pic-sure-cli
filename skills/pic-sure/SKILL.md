@@ -151,8 +151,10 @@ Run these inside the stack directory, or add `--stack DIR`.
   KEY.
 - **Start and stop:** `pic-sure up --json` (safe to re-run; it converges),
   `pic-sure down --json` (keeps data), `pic-sure restart --json SERVICE`.
-- **Logs:** `pic-sure logs --json SERVICE | jq -r 'select(.type == "log") | .line' | tail -n 200`
-  (no SERVICE means every service). Avoid `--follow` in a tool call; it
+- **Logs:** `pic-sure logs --json --tail 200 SERVICE | jq -r 'select(.type == "log") | .line'`
+  (no SERVICE means every service). The default is 200 lines per service;
+  use `--tail N` or `--tail all` to change it, and `--since DUR` for a time
+  window. Avoid `--follow` in a tool call; it
   doesn't return.
 - **Database preview:** `pic-sure migrate --dry-run --json` and
   `pic-sure db bootstrap --dry-run --json` leave the database unchanged.
