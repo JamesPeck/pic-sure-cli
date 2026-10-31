@@ -63,7 +63,8 @@ and host-port preflight checks still run only during real `up`.
 When the genomic volume exists, its Check runs a self-removing Alpine
 container to list directories. Every mount is read-only and networking is
 disabled. The probe uses `--pull never`, so its Alpine image must already
-be available locally; a missing image fails the preview without a download.
+be available locally; a missing image exits 3 with an explicit pull command,
+without downloading anything.
 The output names this read-only probe container, including a
 warning before it runs and the successful plan's `probes` list. Nothing in
 the volume, stack directory or database is changed. An interrupted promote
