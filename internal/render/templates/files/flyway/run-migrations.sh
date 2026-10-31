@@ -37,7 +37,7 @@ require_sql() {
 
   if ! has_sql "$dir"; then
     echo "[flyway] Missing required $label migrations at $dir." >&2
-    echo "[flyway] Check the pic-sure and migrations source trees (pic-sure migrate --check)." >&2
+    echo "[flyway] Check the pic-sure and migrations source trees (pic-sure migrate --dry-run)." >&2
     exit 1
   fi
 }

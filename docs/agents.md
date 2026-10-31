@@ -97,9 +97,6 @@ command that fails before it has a report (`status` with no stack, exit 3)
 prints the failed `result` instead. Re-running a failed converging command (`init`, `up`,
 `update`) resumes it: completed steps are skipped.
 
-`migrate --dry-run` and `db bootstrap --dry-run` preview without changing
-the database; `--check` remains an accepted older spelling.
-
 ## JSON output
 
 - **Reports.** `status`, `doctor`, `ps`, `version`, `support-bundle`,
@@ -113,6 +110,9 @@ the database; `--check` remains an accepted older spelling.
   event of step `logs`.
 
 Both are specified in [json-schemas.md](json-schemas.md).
+
+`migrate --dry-run` and `db bootstrap --dry-run` preview without changing
+the database; `--check` remains an accepted older spelling.
 
 ## Recipe: a demo stack from nothing
 

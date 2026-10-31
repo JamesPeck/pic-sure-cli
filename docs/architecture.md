@@ -185,7 +185,7 @@ because `! exec` accepts any failure.
   exit 2 with nothing changed. One whose IDs depend on the config (up,
   update, migrate) opens the stack with `openStackToCheckSkips` and checks
   with `checkStackSkipSteps`, which starts the run log only once the IDs
-  pass. `migrate --check`, `db bootstrap --check` and init on a stack
+  pass. `migrate --dry-run`, `db bootstrap --dry-run` and init on a stack
   that is already initialised run no steps, so they refuse `--skip-step`.
 - `helpers.go`: `newGroup` and the `help`
   command. A group run without a subcommand, or with an unknown one, is a
@@ -1213,7 +1213,7 @@ init, up and update to add, and the `migrate` command.
   date, so the step applies and Flyway decides. Both steps' Checks, and
   status, bound it at 30 s; status reports `unknown` unless both databases
   are healthy, and skips a remote database.
-- `MigrateCheck` is `migrate --check`, ported from AIO's
+- `MigrateCheck` is `migrate --dry-run`, ported from AIO's
   `run-migrations.sh --check`: the mounted SQL directories, dictionary-db's
   `schema.sql`, the project UUIDs, the remote DB settings, and `compose
   config --quiet`. It runs nothing but compose config. Legacy Jenkins
@@ -1258,7 +1258,7 @@ computed before the step must recompute it.
   password, or the step fails with exit 3 suggesting `--sync-passwords`, so
   a stack never silently points at a shared server's users with the wrong
   passwords. Check is `CheckBootstrap` finding nothing missing.
-- `CheckBootstrap` is `db bootstrap --check` (`BootstrapReport`: `ok`,
+- `CheckBootstrap` is `db bootstrap --dry-run` (`BootstrapReport`: `ok`,
   `server`, `version`, `checks[]{name, ok, problem}`). One root query
   (`sql.BootstrapStateQuery`) reads the databases, the `name@'%'` users and
   their database-level ALL PRIVILEGES from information_schema, `mysql.user`
