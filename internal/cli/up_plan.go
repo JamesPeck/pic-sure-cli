@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"slices"
 
 	"github.com/spf13/cobra"
 
@@ -81,7 +82,7 @@ func (a *App) upDryRun(cmd *cobra.Command) error {
 	if cfg.DB.Mode == stack.DBRemote && sec.DBRemoteRootPassword == "" {
 		return exitcode.Precondition("the stack uses a remote database, but no root password was given for it")
 	}
-	if _, err := st.LoadHPDSKey(); err != nil {
+	if err := st.RequireHPDSKey(); err != nil {
 		return err
 	}
 	root, err := cache.DefaultRoot()
@@ -101,7 +102,7 @@ func (a *App) upDryRun(cmd *cobra.Command) error {
 			{ID: "stack-lock", WouldWrite: true, Reason: "would acquire the stack lock; skipped"},
 			{ID: "stack-id", WouldWrite: state.StackID == "", Reason: "would backfill a missing stack ID; skipped"},
 			{ID: "secrets", WouldWrite: needsSecrets, Reason: "would generate missing secrets; skipped; Checks use existing inputs"},
-			{ID: "cache", WouldWrite: true, Reason: "would ensure cache directories and register the stack; skipped"},
+			{ID: "cache", WouldWrite: true, Reason: "would ensure cache directories, take the cache use lock and register the stack; skipped"},
 			{ID: "state", WouldWrite: true, Reason: "would record operation start and completion in state.json; skipped"},
 			{ID: "run-log", WouldWrite: true, Reason: "would open the run log; skipped even at debug level"},
 		},
@@ -173,8 +174,16 @@ func (e *upProbeEngine) Run(ctx context.Context, opts docker.RunOpts) (int, erro
 	}
 	// The reachable container Check is genomic-leftovers' directory listing.
 	// Database client Checks requiring networking are blocked before Plan.
+	opts.PullNever = true
 	e.sink.Emit(events.Warning{ID: ops.GenomicLeftoversStepID, Text: "Running read-only probe container " + opts.Name + " (" + opts.Image + ")"})
 	code, err := e.Engine.Run(ctx, opts)
 	e.report.Probes = append(e.report.Probes, upProbe{Name: opts.Name, Image: opts.Image})
 	return code, err
+}
+
+func (e *upProbeEngine) Rm(ctx context.Context, name string, force bool) error {
+	if !slices.ContainsFunc(e.report.Probes, func(p upProbe) bool { return p.Name == name }) {
+		return nil
+	}
+	return e.Engine.Rm(ctx, name, force)
 }

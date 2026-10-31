@@ -29,7 +29,7 @@ stdout '"probes":\[\{"name":"demo-genomic-list-[0-9a-f]+","image":"alpine:3.23"\
 stdout 'Running read-only probe container demo-genomic-list-'
 ! stdout 'synthetic-secret|admin@example.com|0123456789abcdef0123456789abcdef'
 ! stderr 'synthetic-secret|admin@example.com|0123456789abcdef0123456789abcdef'
-grep -count=1 'docker run .*--rm --name demo-genomic-list-.*--network none .*demo_hpds-genomic:/data:ro ' docker.log
+grep -count=1 'docker run .*--rm --pull never --name demo-genomic-list-.*--network none .*demo_hpds-genomic:/data:ro ' docker.log
 ! grep 'docker (build|pull|compose|exec|volume create)' docker.log
 ! exists stack/.pic-sure/logs
 ! exists stack/.pic-sure/lock
@@ -46,6 +46,13 @@ stdout 'images: would_act'
 stdout 'render: always_runs'
 stdout 'restart: depends_on_earlier_step'
 stdout 'Partial preview of current inputs'
+
+# Missing HPDS keys keep real up's precondition code and recovery guidance.
+rm stack/.pic-sure/hpds/encryption_key
+exitcode 3 pic-sure --stack stack --json up --dry-run
+stdout '"exit_code":3'
+stderr 'restore it from a backup, or replace it with pic-sure secrets rotate hpds-key'
+cp key.before stack/.pic-sure/hpds/encryption_key
 
 # A positive leftovers Check stops before image inspection and never recovers.
 cp leftovers.scenario docker.scenario

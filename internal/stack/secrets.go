@@ -286,14 +286,24 @@ func isHPDSKey(k Secret) bool {
 // is a missing one when mustExist is set: data loaded with the old key would
 // be unreadable under a new one.
 func (s *Stack) ensureHPDSKey(rnd io.Reader, mustExist bool) error {
+	if mustExist {
+		return s.RequireHPDSKey()
+	}
 	_, err := s.LoadHPDSKey()
-	switch {
-	case !errors.Is(err, fs.ErrNotExist):
+	if !errors.Is(err, fs.ErrNotExist) {
 		return err
-	case mustExist:
-		return exitcode.Precondition("%s is missing, but the stack's secrets were made with it; restore it from a backup, or replace it with pic-sure secrets rotate hpds-key", s.Path(HPDSKeyFile))
 	}
 	return s.writeHPDSKey(rnd)
+}
+
+// RequireHPDSKey validates an existing stack's key without generating one:
+// a replacement would make data encrypted with the lost key unreadable.
+func (s *Stack) RequireHPDSKey() error {
+	_, err := s.LoadHPDSKey()
+	if errors.Is(err, fs.ErrNotExist) {
+		return exitcode.Precondition("%s is missing, but the stack's secrets were made with it; restore it from a backup, or replace it with pic-sure secrets rotate hpds-key", s.Path(HPDSKeyFile))
+	}
+	return err
 }
 
 // ReplaceHPDSKey writes a new HPDS key file, whether or not there is one,
