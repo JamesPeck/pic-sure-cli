@@ -15,6 +15,7 @@ import (
 	"github.com/JamesPeck/pic-sure-cli/internal/events"
 	"github.com/JamesPeck/pic-sure-cli/internal/exitcode"
 	"github.com/JamesPeck/pic-sure-cli/internal/log"
+	"github.com/JamesPeck/pic-sure-cli/internal/steps"
 	"github.com/JamesPeck/pic-sure-cli/internal/tui"
 )
 
@@ -174,6 +175,28 @@ func streamingUp(a *App, failed bool, err error, data any) func(*cobra.Command, 
 }
 
 func TestJSONStreamEndsWithResult(t *testing.T) {
+	t.Run("interruption between steps does not name an unstarted step as failed", func(t *testing.T) {
+		a, stdout, _ := testApp(t)
+		root := withRunE(t, a, []string{"up"}, func(cmd *cobra.Command, _ []string) error {
+			ctx, cancel := context.WithCancel(cmd.Context())
+			defer cancel()
+			return steps.Run(ctx, a.newDeps().Sink, []steps.Step{
+				{ID: "first", Apply: func(context.Context, events.Sink) error { cancel(); return nil }},
+				{ID: "next", Apply: func(context.Context, events.Sink) error { t.Fatal("next step ran"); return nil }},
+			}, steps.Options{})
+		})
+		if code := a.execute(context.Background(), root, []string{"up", "--json"}); code != exitcode.CodeInterrupted {
+			t.Fatalf("exit = %d", code)
+		}
+		objs := jsonLines(t, stdout.String())
+		last := objs[len(objs)-1]
+		if last["type"] != "result" || last["ok"] != false {
+			t.Fatalf("result = %v", last)
+		}
+		if _, present := last["error"].(map[string]any)["step"]; present {
+			t.Errorf("interruption reported an unstarted step as failed: %s", stdout)
+		}
+	})
 	t.Run("success carries the report", func(t *testing.T) {
 		a, stdout, stderr := testApp(t)
 		root := withRunE(t, a, []string{"up"}, streamingUp(a, false, nil, map[string]string{"url": "https://localhost:8443"}))

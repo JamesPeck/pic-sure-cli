@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -56,6 +57,14 @@ func TestUpPreviewVolumeDeletionAgainstDocker(t *testing.T) {
 			t.Error(err)
 		}
 	})
+	if _, err := engine.Run(ctx, docker.RunOpts{
+		Image: "alpine:3.23", Remove: true, PullNever: true, Network: "none",
+		Labels: map[string]string{"org.hms-dbmi.picsure.test": "1"},
+		Mounts: []docker.Mount{{Source: volume, Target: "/data"}},
+		Args:   []string{"mkdir", "/data/.promote-test"},
+	}); err != nil {
+		t.Fatalf("seed test volume: %v", err)
+	}
 	st, err := stack.Create(filepath.Join(t.TempDir(), "stack"))
 	if err != nil {
 		t.Fatal(err)
@@ -65,8 +74,8 @@ func TestUpPreviewVolumeDeletionAgainstDocker(t *testing.T) {
 	cfg.Name = name
 	probe := &upProbeEngine{Engine: engine, report: &upPlan{}, sink: events.Discard}
 	d := &ops.Deps{Docker: probe, Rand: rand.Reader}
-	if _, err := ops.GenomicLeftovers(ctx, d, st, &cfg); err != nil {
-		t.Fatalf("existing volume probe: %v", err)
+	if got, err := ops.GenomicLeftovers(ctx, d, st, &cfg); err != nil || !slices.Equal(got, []string{".promote-test"}) {
+		t.Fatalf("existing volume probe: got %v, err %v", got, err)
 	}
 	probe.Engine = deletingProbeEngine{Engine: engine, volume: volume}
 	if _, err := ops.GenomicLeftovers(ctx, d, st, &cfg); err == nil {
