@@ -28,6 +28,22 @@ the cache (see cache prune).
 pic-sure init [DIR] [flags]
 ```
 
+## Examples
+
+```
+  # Create an open-access demo stack on free ports
+  pic-sure init ~/picsure/demo --name demo --auth-mode open --admin-email you@example.com --auto-ports
+
+  # The same, unattended, as a JSON event stream
+  pic-sure init ~/picsure/demo --json --name demo --auth-mode open --admin-email admin@example.com --auto-ports --set hpds.java_opts=-Xmx2g
+
+  # Create an Auth0 stack, with the client secret on stdin
+  printf '%s\n' "$AUTH0_CLIENT_SECRET" | pic-sure init ~/picsure/prod --name prod --admin-email you@gmail.com --auth0-client-id "$AUTH0_CLIENT_ID" --auth0-client-secret-stdin
+
+  # Build the pic-sure backend from a local checkout
+  pic-sure init ~/picsure/dev --name dev --auth-mode open --admin-email you@example.com --source pic-sure="$HOME/src/pic-sure"
+```
+
 ## Flags
 
 ```

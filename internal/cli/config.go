@@ -24,7 +24,12 @@ func newConfigCmd(a *App) *cobra.Command {
 		&cobra.Command{
 			Use:   "show",
 			Short: "Print the stack's config, defaults included",
-			Args:  cobra.NoArgs,
+			Example: `  # Print pic-sure.yaml as validated
+  pic-sure config show
+
+  # Print the config as JSON
+  pic-sure config show --json`,
+			Args: cobra.NoArgs,
 			RunE: func(cmd *cobra.Command, _ []string) error {
 				return a.configShow(cmd)
 			},
@@ -34,6 +39,11 @@ func newConfigCmd(a *App) *cobra.Command {
 			Short: "Print one config value or section",
 			Long: `Print one config value, such as network.http_port, or a whole section,
 such as network. Secrets aren't config; they live in .pic-sure/secrets.yaml.`,
+			Example: `  # Print one value
+  pic-sure config get network.http_port
+
+  # Print a whole section as JSON
+  pic-sure config get network --json`,
 			Args: cobra.ExactArgs(1),
 			RunE: func(cmd *cobra.Command, args []string) error {
 				return a.configGet(cmd, args[0])
@@ -47,6 +57,11 @@ such as network. Secrets aren't config; they live in .pic-sure/secrets.yaml.`,
 When the editor exits, the copy is validated and saved over pic-sure.yaml.
 If it's invalid, the editor reopens with the problems listed at the top;
 exit without saving to give up. Needs a terminal.`,
+			Example: `  # Edit this stack's config in $VISUAL or $EDITOR
+  pic-sure config edit
+
+  # Edit the config of the stack in another directory
+  pic-sure --stack ~/picsure/demo config edit`,
 			Args: cobra.NoArgs,
 			RunE: func(cmd *cobra.Command, _ []string) error {
 				return a.configEdit(cmd)
@@ -63,6 +78,11 @@ func newConfigSetCmd(a *App) *cobra.Command {
 whole config is validated first, and nothing is written if it's invalid.
 A list takes comma-separated values or [a, b]; an empty VALUE clears it.
 Flags go before KEY, so a VALUE such as -Xmx4g needs no quoting.`,
+		Example: `  # Give HPDS more memory, then apply it
+  pic-sure config set hpds.java_opts -Xmx8g && pic-sure up
+
+  # Send outbound HTTPS through a proxy, as JSON
+  pic-sure config set --json proxy.https http://proxy.example.com:3128`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return a.configSet(cmd, args[0], args[1])

@@ -38,6 +38,11 @@ func newDictionaryHydrateCmd(a *App) *cobra.Command {
 		Long: `Build the dictionary from the HPDS data. With local data, CreateColumnmetaCSV
 first writes columnMeta.csv into the hpds-data volume; a shared data set is
 read-only and must already hold one.` + dictionaryLong,
+		Example: `  # Build the dictionary from the HPDS data
+  pic-sure dictionary hydrate
+
+  # Rebuild it from empty with the default facets, as JSON
+  pic-sure dictionary hydrate --clear --include-dataset-facets --json`,
 		Args: cobra.NoArgs,
 	}
 	facets := c.Flags().Bool("include-dataset-facets", false, "also create the default facets")
@@ -62,6 +67,11 @@ func newDictionaryLoadCSVCmd(a *App) *cobra.Command {
 		Long: `Load a custom dictionary: the datasets CSV (with a ref column), then each
 dataset's concepts from the concepts_*.csv files in the zip, matched on their
 dataset_ref column.` + dictionaryLong,
+		Example: `  # Load a custom dictionary
+  pic-sure dictionary load-csv --datasets datasets.csv --concepts concepts.zip
+
+  # Replace the dictionary with it, as JSON
+  pic-sure dictionary load-csv --clear --datasets datasets.csv --concepts concepts.zip --json`,
 		Args: cobra.NoArgs,
 	}
 	datasets := c.Flags().String("datasets", "", "the datasets CSV")
@@ -104,6 +114,11 @@ description; the facets file facet_category, facet_name(unique),
 display_name, description and parent_name; and both need rows, none with
 fewer fields than the header (dictionary-etl would skip it). A file
 without them is exit 2 before anything changes.` + dictionaryLong,
+		Example: `  # Load custom facets
+  pic-sure dictionary load-facets --categories facet_categories.csv --facets facets.csv --concepts facet_concepts.csv
+
+  # The same, as JSON
+  pic-sure dictionary load-facets --categories facet_categories.csv --facets facets.csv --concepts facet_concepts.csv --json`,
 		Args: cobra.NoArgs,
 	}
 	categories := c.Flags().String("categories", "", "the facet categories CSV")
@@ -137,6 +152,11 @@ func newDictionaryWeightsCmd(a *App) *cobra.Command {
 		Short: "Recompute the search weights",
 		Long: `Recompute the dictionary's search weights with the dictionary-weights image.
 The default weights file is the one in the stack's pic-sure source.`,
+		Example: `  # Recompute the search weights from the default weights file
+  pic-sure dictionary weights
+
+  # Use your own weights file, as JSON
+  pic-sure dictionary weights --weights weights.csv --json`,
 		Args: cobra.NoArgs,
 	}
 	weights := c.Flags().String("weights", "", "the weights CSV (default: the pic-sure source's)")

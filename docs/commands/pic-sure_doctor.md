@@ -13,6 +13,19 @@ only the host and Docker are checked. Exits 1 if any check fails.
 pic-sure doctor [flags]
 ```
 
+## Examples
+
+```
+  # Check the host, Docker and the stack
+  pic-sure doctor
+
+  # Also check reachability through the proxy
+  pic-sure doctor --network
+
+  # List the failed checks
+  pic-sure doctor --json | jq -r '.checks[] | select(.status == "fail") | .name'
+```
+
 ## Flags
 
 ```

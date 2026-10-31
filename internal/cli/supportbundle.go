@@ -35,6 +35,14 @@ the archive has the host checks alone. The archive goes to
 ./pic-sure-support-NAME-TIMESTAMP.tar.gz unless -o names a file, and its
 path is printed. It exits 0 once the archive is written, even if parts of
 it couldn't be collected.`,
+		Example: `  # Write a redacted diagnostics archive
+  pic-sure support-bundle
+
+  # Write it to a chosen file
+  pic-sure support-bundle -o /tmp/pic-sure-support.tar.gz
+
+  # Print the archive's path from the JSON result
+  pic-sure support-bundle --json | jq -r .path`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return a.supportBundle(cmd, output)

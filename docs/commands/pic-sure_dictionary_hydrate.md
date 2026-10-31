@@ -15,6 +15,16 @@ then removes it, touches dict.update_info and restarts dictionary-api.
 pic-sure dictionary hydrate [flags]
 ```
 
+## Examples
+
+```
+  # Build the dictionary from the HPDS data
+  pic-sure dictionary hydrate
+
+  # Rebuild it from empty with the default facets, as JSON
+  pic-sure dictionary hydrate --clear --include-dataset-facets --json
+```
+
 ## Flags
 
 ```

@@ -42,6 +42,11 @@ made or changed in the last hour are always kept, as a running command may
 not have recorded them yet. Images tagged by other tools, git clones and
 lock files are never removed. prune waits up to 5 s for a running build to
 finish with the cache, and otherwise fails, removing nothing.`,
+		Example: `  # Preview what prune would remove
+  pic-sure cache prune --dry-run
+
+  # Remove what no stack uses, as JSON
+  pic-sure cache prune --json`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			dryRun, _ := cmd.Flags().GetBool("dry-run")
@@ -55,8 +60,13 @@ finish with the cache, and otherwise fails, removing nothing.`,
 		&cobra.Command{
 			Use:   "list",
 			Short: "List cached sources, images and downloads, and what uses them",
-			Args:  cobra.NoArgs,
-			RunE:  func(cmd *cobra.Command, _ []string) error { return a.cacheList(cmd) },
+			Example: `  # Show what the shared cache holds and which stacks use it
+  pic-sure cache list
+
+  # The same, as JSON
+  pic-sure cache list --json`,
+			Args: cobra.NoArgs,
+			RunE: func(cmd *cobra.Command, _ []string) error { return a.cacheList(cmd) },
 		},
 		prune,
 	)

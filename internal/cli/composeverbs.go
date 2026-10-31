@@ -25,7 +25,12 @@ func newDownCmd(a *App) *cobra.Command {
 	return &cobra.Command{
 		Use:   "down",
 		Short: "Stop the stack's containers (volumes are kept)",
-		Args:  cobra.NoArgs,
+		Example: `  # Stop the containers; the data is kept
+  pic-sure down
+
+  # Stop the stack in another directory, as JSON
+  pic-sure --stack ~/picsure/demo down --json`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return a.composeVerb(cmd, "down", "Stop the stack", func(d *ops.Deps, st *stack.Stack, out io.Writer) error {
 				// A helper a killed command left would keep the data
@@ -45,6 +50,14 @@ func newRestartCmd(a *App) *cobra.Command {
 	return &cobra.Command{
 		Use:   "restart [SERVICE...]",
 		Short: "Restart services (default: all)",
+		Example: `  # Restart every service
+  pic-sure restart
+
+  # Restart HPDS and the dictionary API
+  pic-sure restart hpds dictionary-api
+
+  # Restart HPDS, as JSON
+  pic-sure restart hpds --json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			title := "Restart every service"
 			if len(args) > 0 {
@@ -112,7 +125,12 @@ func newPsCmd(a *App) *cobra.Command {
 	return &cobra.Command{
 		Use:   "ps",
 		Short: "List the stack's containers",
-		Args:  cobra.NoArgs,
+		Example: `  # List the stack's containers
+  pic-sure ps
+
+  # Print each service's state and health from the JSON report
+  pic-sure ps --json | jq -r '.services[] | "\(.service) \(.state) \(.health)"'`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			st, err := a.openStack(cmd)
 			if err != nil {
@@ -165,6 +183,17 @@ following new lines until Ctrl-C. With --json, each line is a log event of
 step "logs". Shows the last 200 lines per service by default; use --tail all
 for the whole log. --since also filters by time and still respects --tail;
 use --tail all --since DUR for every line since that time.`,
+		Example: `  # Show the last 200 lines of every service
+  pic-sure logs
+
+  # Follow HPDS's log until Ctrl-C
+  pic-sure logs -f hpds
+
+  # Show every line from the last ten minutes
+  pic-sure logs --tail all --since 10m
+
+  # Show HPDS's last 50 lines as JSON log events, without progress output
+  pic-sure -q --json logs --tail 50 hpds`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			tailValue, _ := cmd.Flags().GetString("tail")
@@ -228,7 +257,10 @@ pic-sure rendered: ps, logs, top, config, events, images, ls, port,
 version, exec, stats, wait (without --down-project) and attach. Any other
 holds the stack lock until compose exits, as every command that can change
 the stack does.`,
-		Example: `  pic-sure compose -- ps -a
+		Example: `  # List the stack's containers, stopped ones too
+  pic-sure compose -- ps -a
+
+  # Open a shell in the HPDS container
   pic-sure compose -- exec hpds sh`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if cmd.ArgsLenAtDash() != 0 || len(args) == 0 {

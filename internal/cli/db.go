@@ -33,6 +33,14 @@ connect from theirs, so db.remote.host must be reachable from a container:
 localhost or 127.0.0.1 is the container itself. For a MySQL on the Docker
 host, use host.docker.internal where the runtime provides it (Docker Desktop,
 OrbStack).`,
+		Example: `  # Create the schemas, users and grants
+  pic-sure db bootstrap
+
+  # Report what it would change without changing anything, as JSON
+  pic-sure db bootstrap --dry-run --json
+
+  # Also reset the users' passwords to match secrets.yaml
+  pic-sure db bootstrap --sync-passwords`,
 		Args: cobra.NoArgs,
 		RunE: a.dbBootstrap,
 	}

@@ -34,6 +34,22 @@ confirm; otherwise pass --yes.
 pic-sure secrets rotate NAME [flags]
 ```
 
+## Examples
+
+```
+  # Generate a new password for the picsure MySQL user
+  pic-sure secrets rotate db-picsure
+
+  # Re-issue PSAMA's introspection token unattended, as JSON
+  pic-sure --yes secrets rotate introspection-token --json
+
+  # Supply a new Auth0 client secret on stdin
+  printf '%s\n' "$AUTH0_CLIENT_SECRET" | pic-sure --yes secrets rotate auth0-client-secret
+
+  # Replace the HPDS key, deleting the data it encrypted
+  pic-sure --yes secrets rotate hpds-key --discard-data
+```
+
 ## Flags
 
 ```

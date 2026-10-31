@@ -16,6 +16,19 @@ Run it again after changing the source to rebuild and recreate.
 pic-sure dev on SERVICE
 ```
 
+## Examples
+
+```
+  # Run HPDS from its local checkout, with a debug port
+  pic-sure dev on hpds
+
+  # Serve the frontend from its checkout with live reload
+  pic-sure dev on httpd-hmr
+
+  # Rebuild and recreate HPDS after a source change, as JSON
+  pic-sure dev on hpds --json
+```
+
 The [global flags](pic-sure.md#flags) apply too.
 
 See also: [`pic-sure dev`](pic-sure_dev.md)

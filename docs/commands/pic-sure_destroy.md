@@ -20,6 +20,19 @@ terminal by typing the stack name; otherwise pass --yes.
 pic-sure destroy [flags]
 ```
 
+## Examples
+
+```
+  # Preview what destroy would remove
+  pic-sure destroy --dry-run
+
+  # Destroy the stack in another directory without a prompt, as JSON
+  pic-sure --stack ~/picsure/demo destroy --yes --json
+
+  # Also remove shared images no other stack uses
+  pic-sure destroy --prune-images
+```
+
 ## Flags
 
 ```

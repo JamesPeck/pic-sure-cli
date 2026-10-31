@@ -29,6 +29,14 @@ finds the stack, even if parts of it couldn't be read.
 seconds: the gateway's /system/status, a COUNT query that tells whether
 HPDS has data loaded, and which Content-Security-Policy the frontend's
 HTML gets.`,
+		Example: `  # Show the stack's services, URL and data
+  pic-sure status
+
+  # Also probe inside the running containers
+  pic-sure status --deep
+
+  # Fail unless HPDS has data ready
+  pic-sure status --deep --json | jq -e '.deep.data.ready == true'`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			deep, _ := cmd.Flags().GetBool("deep")

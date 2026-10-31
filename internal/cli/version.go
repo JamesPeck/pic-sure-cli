@@ -11,7 +11,12 @@ func newVersionCmd(a *App) *cobra.Command {
 	return &cobra.Command{
 		Use:   "version",
 		Short: "Print the CLI version",
-		Args:  cobra.NoArgs,
+		Example: `  # Print the CLI version
+  pic-sure version
+
+  # Print the version, commit and build date as JSON
+  pic-sure version --json`,
+		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
 			report := versionReport{Version: a.Info.Version, Commit: a.Info.Commit, Date: a.Info.Date}
 			return a.printReport(report, func(w io.Writer) error {

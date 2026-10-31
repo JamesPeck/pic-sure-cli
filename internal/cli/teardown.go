@@ -31,6 +31,11 @@ sets the stack up again, empty.
 Use --dry-run to list what would be removed without changing anything.
 A preview never prompts or needs --yes. For a real removal, confirm on a
 terminal by typing the stack name; otherwise pass --yes.`,
+		Example: `  # Preview what reset would remove
+  pic-sure reset --dry-run
+
+  # Empty HPDS but keep the database, then start again, as JSON
+  pic-sure reset --keep-db --yes --json && pic-sure up --json`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			keepDB, _ := cmd.Flags().GetBool("keep-db")
@@ -58,6 +63,14 @@ Commit-tagged images are shared between stacks and left for ` + "`cache prune`" 
 Use --dry-run to list what would be removed without changing anything.
 A preview never prompts or needs --yes. For a real removal, confirm on a
 terminal by typing the stack name; otherwise pass --yes.`,
+		Example: `  # Preview what destroy would remove
+  pic-sure destroy --dry-run
+
+  # Destroy the stack in another directory without a prompt, as JSON
+  pic-sure --stack ~/picsure/demo destroy --yes --json
+
+  # Also remove shared images no other stack uses
+  pic-sure destroy --prune-images`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			prune, _ := cmd.Flags().GetBool("prune-images")

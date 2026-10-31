@@ -46,6 +46,17 @@ it: --discard-data --yes deletes the data first. Load it again afterwards.
 
 The database must be running for a database secret. On a terminal you
 confirm; otherwise pass --yes.`,
+		Example: `  # Generate a new password for the picsure MySQL user
+  pic-sure secrets rotate db-picsure
+
+  # Re-issue PSAMA's introspection token unattended, as JSON
+  pic-sure --yes secrets rotate introspection-token --json
+
+  # Supply a new Auth0 client secret on stdin
+  printf '%s\n' "$AUTH0_CLIENT_SECRET" | pic-sure --yes secrets rotate auth0-client-secret
+
+  # Replace the HPDS key, deleting the data it encrypted
+  pic-sure --yes secrets rotate hpds-key --discard-data`,
 		Args:      cobra.ExactArgs(1),
 		ValidArgs: ops.RotateNames(),
 		RunE:      a.rotateSecret,

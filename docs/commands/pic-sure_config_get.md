@@ -11,6 +11,16 @@ such as network. Secrets aren't config; they live in .pic-sure/secrets.yaml.
 pic-sure config get KEY
 ```
 
+## Examples
+
+```
+  # Print one value
+  pic-sure config get network.http_port
+
+  # Print a whole section as JSON
+  pic-sure config get network --json
+```
+
 The [global flags](pic-sure.md#flags) apply too.
 
 See also: [`pic-sure config`](pic-sure_config.md)

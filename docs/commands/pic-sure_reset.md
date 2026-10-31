@@ -17,6 +17,16 @@ terminal by typing the stack name; otherwise pass --yes.
 pic-sure reset [flags]
 ```
 
+## Examples
+
+```
+  # Preview what reset would remove
+  pic-sure reset --dry-run
+
+  # Empty HPDS but keep the database, then start again, as JSON
+  pic-sure reset --keep-db --yes --json && pic-sure up --json
+```
+
 ## Flags
 
 ```

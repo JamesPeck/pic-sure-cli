@@ -24,6 +24,19 @@ OrbStack).
 pic-sure db bootstrap [flags]
 ```
 
+## Examples
+
+```
+  # Create the schemas, users and grants
+  pic-sure db bootstrap
+
+  # Report what it would change without changing anything, as JSON
+  pic-sure db bootstrap --dry-run --json
+
+  # Also reset the users' passwords to match secrets.yaml
+  pic-sure db bootstrap --sync-passwords
+```
+
 ## Flags
 
 ```

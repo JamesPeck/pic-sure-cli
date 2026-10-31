@@ -18,6 +18,16 @@ then removes it, touches dict.update_info and restarts dictionary-api.
 pic-sure dictionary load-facets --categories FILE --facets FILE --concepts FILE [flags]
 ```
 
+## Examples
+
+```
+  # Load custom facets
+  pic-sure dictionary load-facets --categories facet_categories.csv --facets facets.csv --concepts facet_concepts.csv
+
+  # The same, as JSON
+  pic-sure dictionary load-facets --categories facet_categories.csv --facets facets.csv --concepts facet_concepts.csv --json
+```
+
 ## Flags
 
 ```

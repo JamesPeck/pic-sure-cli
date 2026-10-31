@@ -27,8 +27,13 @@ func newDevCmd(a *App) *cobra.Command {
 		&cobra.Command{
 			Use:   "list",
 			Short: "List the services that have a dev mode",
-			Args:  cobra.NoArgs,
-			RunE:  a.devList,
+			Example: `  # List the services with a dev mode, and their debug ports
+  pic-sure dev list
+
+  # The same, as JSON
+  pic-sure dev list --json`,
+			Args: cobra.NoArgs,
+			RunE: a.devList,
 		},
 		&cobra.Command{
 			Use:   "on SERVICE",
@@ -40,6 +45,14 @@ JDWP debug port on 127.0.0.1, from the stack's network.dev_ports block;
 dev list shows it. On a stopped stack, pic-sure up starts it.
 
 Run it again after changing the source to rebuild and recreate.`,
+			Example: `  # Run HPDS from its local checkout, with a debug port
+  pic-sure dev on hpds
+
+  # Serve the frontend from its checkout with live reload
+  pic-sure dev on httpd-hmr
+
+  # Rebuild and recreate HPDS after a source change, as JSON
+  pic-sure dev on hpds --json`,
 			Args: cobra.ExactArgs(1),
 			RunE: func(cmd *cobra.Command, args []string) error { return a.dev(cmd, args[0], true) },
 		},
@@ -51,6 +64,11 @@ its debug port. While components.<component>.source is set, SERVICE keeps
 running the build of that checkout, since a source applies to the whole
 component. To return to the release images, unset the source and run
 pic-sure up.`,
+			Example: `  # Put HPDS back on its release image
+  pic-sure dev off hpds
+
+  # The same, as JSON
+  pic-sure dev off hpds --json`,
 			Args: cobra.ExactArgs(1),
 			RunE: func(cmd *cobra.Command, args []string) error { return a.dev(cmd, args[0], false) },
 		},

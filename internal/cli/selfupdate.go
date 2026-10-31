@@ -25,7 +25,15 @@ func newSelfUpdateCmd(a *App) *cobra.Command {
 	c := &cobra.Command{
 		Use:   "self-update",
 		Short: "Replace this binary with a verified release",
-		Args:  cobra.NoArgs,
+		Example: `  # Install the newest stable v2 release
+  pic-sure self-update
+
+  # Install a specific version
+  pic-sure self-update --to 2.1.0
+
+  # Fail unless the signature can be checked, as JSON
+  pic-sure self-update --require-signature --json`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			to, err := cmd.Flags().GetString("to")
 			if err != nil {

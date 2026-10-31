@@ -24,6 +24,16 @@ finish with the cache, and otherwise fails, removing nothing.
 pic-sure cache prune [flags]
 ```
 
+## Examples
+
+```
+  # Preview what prune would remove
+  pic-sure cache prune --dry-run
+
+  # Remove what no stack uses, as JSON
+  pic-sure cache prune --json
+```
+
 ## Flags
 
 ```

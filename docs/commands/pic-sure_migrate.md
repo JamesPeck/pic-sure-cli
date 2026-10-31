@@ -18,6 +18,19 @@ removes failed entries from the history so a fixed migration can run again.
 pic-sure migrate [flags]
 ```
 
+## Examples
+
+```
+  # Run the database migrations
+  pic-sure migrate
+
+  # Verify the migration inputs without running them, as JSON
+  pic-sure migrate --dry-run --json
+
+  # Run Flyway repair after a failed migration
+  pic-sure migrate --repair
+```
+
 ## Flags
 
 ```

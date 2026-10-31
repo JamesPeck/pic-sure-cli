@@ -6,6 +6,19 @@ Replace this binary with a verified release
 pic-sure self-update [flags]
 ```
 
+## Examples
+
+```
+  # Install the newest stable v2 release
+  pic-sure self-update
+
+  # Install a specific version
+  pic-sure self-update --to 2.1.0
+
+  # Fail unless the signature can be checked, as JSON
+  pic-sure self-update --require-signature --json
+```
+
 ## Flags
 
 ```

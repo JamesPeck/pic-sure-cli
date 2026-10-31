@@ -11,6 +11,16 @@ The default weights file is the one in the stack's pic-sure source.
 pic-sure dictionary weights [flags]
 ```
 
+## Examples
+
+```
+  # Recompute the search weights from the default weights file
+  pic-sure dictionary weights
+
+  # Use your own weights file, as JSON
+  pic-sure dictionary weights --weights weights.csv --json
+```
+
 ## Flags
 
 ```

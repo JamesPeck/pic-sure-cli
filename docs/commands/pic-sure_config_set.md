@@ -13,6 +13,16 @@ Flags go before KEY, so a VALUE such as -Xmx4g needs no quoting.
 pic-sure config set KEY VALUE
 ```
 
+## Examples
+
+```
+  # Give HPDS more memory, then apply it
+  pic-sure config set hpds.java_opts -Xmx8g && pic-sure up
+
+  # Send outbound HTTPS through a proxy, as JSON
+  pic-sure config set --json proxy.https http://proxy.example.com:3128
+```
+
 The [global flags](pic-sure.md#flags) apply too.
 
 See also: [`pic-sure config`](pic-sure_config.md)
