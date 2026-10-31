@@ -104,6 +104,12 @@ func TestComposeVerbArgv(t *testing.T) {
 		{"logs follow with tail", func(c *docker.Compose) error {
 			return c.Logs(ctx, docker.ComposeLogsOpts{Follow: true, Tail: 500, Services: []string{"hpds"}})
 		}, composeArgv(false, "logs", "--follow", "--tail", "500", "hpds")},
+		{"logs tail and since", func(c *docker.Compose) error {
+			return c.Logs(ctx, docker.ComposeLogsOpts{Follow: true, Tail: 50, Since: "10m", Services: []string{"hpds"}})
+		}, composeArgv(false, "logs", "--follow", "--tail", "50", "--since", "10m", "hpds")},
+		{"logs negative tail and timestamp", func(c *docker.Compose) error {
+			return c.Logs(ctx, docker.ComposeLogsOpts{Tail: -1, Since: "2026-10-31T10:00:00Z"})
+		}, composeArgv(false, "logs", "--since", "2026-10-31T10:00:00Z")},
 		{"ps", func(c *docker.Compose) error {
 			_, err := c.Ps(ctx)
 			return err

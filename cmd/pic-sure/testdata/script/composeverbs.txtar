@@ -19,6 +19,20 @@ exitcode 3 pic-sure --stack unrendered --json ps
 stdout '"exit_code":3'
 ! exists docker.log
 
+# Invalid bounds fail before opening even a missing stack or calling Docker.
+exitcode 2 pic-sure --stack missing logs --tail 0
+stderr '--tail must be a positive integer or all'
+exitcode 2 pic-sure --stack missing logs --tail -1
+stderr '--tail'
+exitcode 2 pic-sure --stack missing logs --tail nope
+stderr '--tail'
+exitcode 2 pic-sure --stack missing logs --tail 999999999999999999999999
+stderr '--tail'
+exitcode 2 pic-sure --stack missing --json logs --tail ''
+stdout '"exit_code":2'
+stdout '--tail'
+! exists docker.log
+
 cd stack
 
 # down: compose down with the stack's files, its output as step logs,
@@ -102,7 +116,7 @@ grep '--env-file /dev/null -p demo ps --all --format json$' $WORK/docker.log
 exec pic-sure logs hpds
 stdout '^hpds-1  \| started$'
 ! stderr .
-grep '--env-file /dev/null -p demo logs hpds$' $WORK/docker.log
+grep '--env-file /dev/null -p demo logs --tail 200 hpds$' $WORK/docker.log
 exitcode 1 pic-sure logs nosuch
 ! stdout .
 stderr '^no such service: nosuch$'
@@ -111,7 +125,20 @@ stdout '"type":"step_started","id":"logs"'
 stdout '"type":"log","id":"logs","stream":"stdout","line":"hpds-1  \| started"'
 stdout '"type":"step_done","id":"logs","status":"ok"'
 stdout '"type":"result","ok":true'
-grep '--env-file /dev/null -p demo logs --follow$' $WORK/docker.log
+grep '--env-file /dev/null -p demo logs --follow --tail 200$' $WORK/docker.log
+
+exec pic-sure logs --tail all hpds
+grep '--env-file /dev/null -p demo logs hpds$' $WORK/docker.log
+exec pic-sure logs --tail 50 --since 10m hpds
+grep '--env-file /dev/null -p demo logs --tail 50 --since 10m hpds$' $WORK/docker.log
+exec pic-sure --json logs --follow --tail 50 --since 2h hpds
+stdout '"type":"log","id":"logs"'
+grep '--env-file /dev/null -p demo logs --follow --tail 50 --since 2h hpds$' $WORK/docker.log
+exec pic-sure --json logs -f --tail all --since 2026-10-31T10:00:00Z hpds
+stdout '"type":"result","ok":true'
+grep '--env-file /dev/null -p demo logs --follow --since 2026-10-31T10:00:00Z hpds$' $WORK/docker.log
+exitcode 1 pic-sure logs --since invalid
+stderr 'invalid timestamp'
 
 # compose: passthrough with the stack's files and env, pinned to the
 # stack's project; compose's exit code.
@@ -213,7 +240,8 @@ docker compose * --progress json down --remove-orphans => 0 stderr=down.json
 docker compose * restart nosuch => 1 stderr=nosuch.json
 docker compose * --progress plain restart* => 0
 docker compose * ps --all --format json => 0 stdout=ps.json
-docker compose * logs nosuch => 1 stderr=nosuch.txt
+docker compose * logs* nosuch => 1 stderr=nosuch.txt
+docker compose * logs --tail 200 --since invalid => 1 stderr=since-error.txt
 docker compose * logs* => 0 stdout=logs.txt
 docker compose * ps -a => 0 stdout=raw.txt
 docker compose * top => 4
@@ -235,6 +263,8 @@ no such service: nosuch
 -- ps.json --
 {"ID":"aaa","Name":"demo-hpds-1","Project":"demo","Service":"hpds","State":"running","Status":"Up 2 minutes (healthy)","Health":"healthy","ExitCode":0}
 {"ID":"bbb","Name":"demo-psama-1","Project":"demo","Service":"psama","State":"exited","Status":"Exited (1) 1 minute ago","Health":"","ExitCode":1}
+-- since-error.txt --
+invalid timestamp
 -- logs.txt --
 hpds-1  | started
 -- raw.txt --
@@ -243,7 +273,7 @@ raw compose ps
 #!/bin/sh
 # Blocks on compose's up, logs --follow and logs -f; hands the rest to the fake.
 case "$*" in
-*" up" | *" logs --follow" | *" logs -f")
+*" up" | *" logs --follow"* | *" logs -f")
 	echo $PPID > "$HOME/parent.pid"
 	echo $$ > "$HOME/follow.pid"
 	exec sleep 30
