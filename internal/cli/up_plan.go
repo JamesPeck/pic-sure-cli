@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"path"
 	"slices"
 
 	"github.com/spf13/cobra"
@@ -171,6 +172,20 @@ func (e *upProbeEngine) Run(ctx context.Context, opts docker.RunOpts) (int, erro
 		if !m.ReadOnly {
 			return 0, errors.New("dry-run probe requires read-only mounts")
 		}
+	}
+	opts.Mounts = slices.Clone(opts.Mounts)
+	for i := range opts.Mounts {
+		m := &opts.Mounts[i]
+		vol, err := e.VolumeInspect(ctx, m.Source)
+		if err != nil {
+			return 0, fmt.Errorf("inspecting dry-run probe volume %s: %w", m.Source, err)
+		}
+		if vol.Driver != "local" || len(vol.Options) != 0 || !path.IsAbs(vol.Mountpoint) {
+			return 0, exitcode.Precondition("dry-run cannot safely probe volume %s: requires a local volume without driver options and an absolute mountpoint", m.Source)
+		}
+		// A named mount recreates a concurrently deleted volume even with :ro.
+		// An existing bind fails if reset removes the source before Docker mounts it.
+		m.Source, m.ExistingBind = vol.Mountpoint, true
 	}
 	// The reachable container Check is genomic-leftovers' directory listing.
 	// Database client Checks requiring networking are blocked before Plan.

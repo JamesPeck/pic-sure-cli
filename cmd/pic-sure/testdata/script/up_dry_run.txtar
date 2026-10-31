@@ -29,7 +29,7 @@ stdout '"probes":\[\{"name":"demo-genomic-list-[0-9a-f]+","image":"alpine:3.23"\
 stdout 'Running read-only probe container demo-genomic-list-'
 ! stdout 'synthetic-secret|admin@example.com|0123456789abcdef0123456789abcdef'
 ! stderr 'synthetic-secret|admin@example.com|0123456789abcdef0123456789abcdef'
-grep -count=1 'docker run .*--rm --pull never --name demo-genomic-list-.*--network none .*demo_hpds-genomic:/data:ro ' docker.log
+grep -count=1 'docker run .*--rm --pull never --name demo-genomic-list-.*--network none .*--mount type=bind,source=/var/lib/docker/volumes/demo_hpds-genomic/_data,target=/data,readonly ' docker.log
 ! grep 'docker (build|pull|compose|exec|volume create)' docker.log
 ! exists stack/.pic-sure/logs
 ! exists stack/.pic-sure/lock
@@ -53,6 +53,7 @@ rm docker.log
 exitcode 3 pic-sure --stack stack --json up --dry-run
 stdout '"exit_code":3'
 stdout 'step genomic-leftovers failed'
+stdout '"type":"result".*"error":\{.*"step":"genomic-leftovers"'
 stderr 'pull it explicitly with `docker pull alpine:3.23` and retry'
 grep -count=1 'docker run .*--pull never ' docker.log
 ! grep 'docker pull' docker.log
@@ -133,7 +134,7 @@ docker * => 1
 docker volume inspect demo_hpds-genomic => 1 stderr=absent.txt
 docker * => 1
 -- volume.json --
-[{"Name":"demo_hpds-genomic"}]
+[{"Name":"demo_hpds-genomic","Driver":"local","Mountpoint":"/var/lib/docker/volumes/demo_hpds-genomic/_data"}]
 -- clean.txt --
 a
 -- leftovers.txt --
