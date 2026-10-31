@@ -142,7 +142,7 @@ different flag.
 |---|---|
 | `pic-sure up` | Start the stack and converge it: builds missing images, re-renders, migrates, seeds. Safe to re-run. |
 | `pic-sure down` | Stop the containers; data is kept. |
-| `pic-sure restart [SVC...]`, `ps`, `logs [-f] [SVC]` | The usual compose verbs, for this stack. |
+| `pic-sure restart [SVC...]`, `ps`, `logs [-f] [--tail N\|all] [--since DUR] [SVC]` | The usual compose verbs, for this stack. Logs default to the last 200 lines per service; `--tail all` shows the whole log. |
 | `pic-sure update` | Move to the newest release: plan, back up the config, build, migrate, restart what changed. `--dry-run` shows the plan. |
 | `pic-sure data load-phenotype --file F` | Load your own phenotype CSV (plain, `.gz`, `.tar.gz` or `.zip`; `--entry` picks a file in an archive) or `--input-dir D`, then rebuild the dictionary. |
 | `pic-sure data load-genomic --partition P --vcf-index F` | Load VCFs into a genomic partition; `--promote` and `--enable-profile` make it live. `--recover` only repairs an interrupted promote. |

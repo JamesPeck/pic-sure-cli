@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -161,9 +162,20 @@ func newLogsCmd(a *App) *cobra.Command {
 		Short: "Show service logs",
 		Long: `Show service logs (default: every service) on stdout. With -f, keep
 following new lines until Ctrl-C. With --json, each line is a log event of
-step "logs".`,
+step "logs". Shows the last 200 lines per service by default; use --tail all
+for the whole log, or --since to select a time window.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			tailValue, _ := cmd.Flags().GetString("tail")
+			tail := 0
+			if tailValue != "all" {
+				var err error
+				tail, err = strconv.Atoi(tailValue)
+				if err != nil || tail <= 0 {
+					return exitcode.Usage("--tail must be a positive integer or all (got %q)", tailValue)
+				}
+			}
+			since, _ := cmd.Flags().GetString("since")
 			follow, _ := cmd.Flags().GetBool("follow")
 			st, err := a.openStack(cmd)
 			if err != nil {
@@ -176,7 +188,7 @@ step "logs".`,
 				return err
 			}
 			a.warnForeign(cmd.Context(), d, st)
-			opts := docker.ComposeLogsOpts{Services: args, Follow: follow, Out: a.stdout(), Err: a.stderr()}
+			opts := docker.ComposeLogsOpts{Services: args, Follow: follow, Tail: tail, Since: since, Out: a.stdout(), Err: a.stderr()}
 			if a.output().mode != modeJSON {
 				err = c.Logs(cmd.Context(), opts)
 			} else {
@@ -196,6 +208,8 @@ step "logs".`,
 		},
 	}
 	c.Flags().BoolP("follow", "f", false, "follow log output")
+	c.Flags().String("tail", "200", "number of lines per service, or all for the whole log")
+	c.Flags().String("since", "", "show logs since a duration (10m, 2h) or RFC 3339 timestamp")
 	return c
 }
 

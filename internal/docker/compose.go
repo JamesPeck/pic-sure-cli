@@ -144,7 +144,8 @@ type ComposeLogsOpts struct {
 	Follow bool
 	// Tail limits each service's log to its last Tail lines. Zero or less
 	// means the whole log.
-	Tail int
+	Tail  int
+	Since string
 	// Out receives the logs; nil discards them.
 	Out io.Writer
 	// Err receives compose's own messages (warnings, errors); nil means
@@ -303,6 +304,9 @@ func (c *Compose) Logs(ctx context.Context, opts ComposeLogsOpts) error {
 	}
 	if opts.Tail > 0 {
 		args = append(args, "--tail", strconv.Itoa(opts.Tail))
+	}
+	if opts.Since != "" {
+		args = append(args, "--since", opts.Since)
 	}
 	errOut := opts.Err
 	if errOut == nil {
