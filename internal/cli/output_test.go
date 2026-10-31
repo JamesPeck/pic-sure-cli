@@ -303,7 +303,7 @@ func TestQuiet(t *testing.T) {
 		}
 		objs := jsonLines(t, stdout.String())
 		want := map[string]any{"type": "result", "ok": false, "error": map[string]any{
-			"exit_code": 1, "message": "boom", "step": "db",
+			"exit_code": 1, "code": "step_failed", "message": "boom", "step": "db",
 		}}
 		if len(objs) != 1 || !jsonEqual(objs[0], want) {
 			t.Errorf("stdout = %s", stdout)
