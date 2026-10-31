@@ -17,11 +17,14 @@ pic-sure dev off SERVICE
 ## Examples
 
 ```
-  # Put HPDS back on its release image
+  # Take HPDS out of dev mode and drop its debug port
   pic-sure dev off hpds
 
   # The same, as JSON
   pic-sure dev off hpds --json
+
+  # Go back to the release images by unsetting the source
+  pic-sure config set components.pic-sure.source '' && pic-sure up
 ```
 
 The [global flags](pic-sure.md#flags) apply too.

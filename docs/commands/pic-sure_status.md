@@ -22,7 +22,7 @@ pic-sure status [flags]
 ## Examples
 
 ```
-  # Show the stack's services, URL and data
+  # Show the stack's services and URL
   pic-sure status
 
   # Also probe inside the running containers

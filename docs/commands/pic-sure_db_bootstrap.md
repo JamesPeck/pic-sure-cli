@@ -27,7 +27,7 @@ pic-sure db bootstrap [flags]
 ## Examples
 
 ```
-  # Create the schemas, users and grants
+  # Create the databases, users and grants on the remote MySQL
   pic-sure db bootstrap
 
   # Report what it would change without changing anything, as JSON

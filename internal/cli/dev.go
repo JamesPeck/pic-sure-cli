@@ -64,11 +64,14 @@ its debug port. While components.<component>.source is set, SERVICE keeps
 running the build of that checkout, since a source applies to the whole
 component. To return to the release images, unset the source and run
 pic-sure up.`,
-			Example: `  # Put HPDS back on its release image
+			Example: `  # Take HPDS out of dev mode and drop its debug port
   pic-sure dev off hpds
 
   # The same, as JSON
-  pic-sure dev off hpds --json`,
+  pic-sure dev off hpds --json
+
+  # Go back to the release images by unsetting the source
+  pic-sure config set components.pic-sure.source '' && pic-sure up`,
 			Args: cobra.ExactArgs(1),
 			RunE: func(cmd *cobra.Command, args []string) error { return a.dev(cmd, args[0], false) },
 		},

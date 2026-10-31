@@ -29,7 +29,7 @@ finds the stack, even if parts of it couldn't be read.
 seconds: the gateway's /system/status, a COUNT query that tells whether
 HPDS has data loaded, and which Content-Security-Policy the frontend's
 HTML gets.`,
-		Example: `  # Show the stack's services, URL and data
+		Example: `  # Show the stack's services and URL
   pic-sure status
 
   # Also probe inside the running containers
