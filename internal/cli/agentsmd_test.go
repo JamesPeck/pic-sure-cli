@@ -30,6 +30,9 @@ func TestAgentsMDIsShort(t *testing.T) {
 	if n := strings.Count(readRepoFile(t, agentsMDName), "\n"); n >= 60 {
 		t.Errorf("%s has %d lines; keep it under 60 and link to the docs instead", agentsMDName, n)
 	}
+}
+
+func TestReadmeLinksToAgentsMD(t *testing.T) {
 	if !strings.Contains(readRepoFile(t, "README.md"), "](AGENTS.md)") {
 		t.Errorf("README.md doesn't link to %s", agentsMDName)
 	}
@@ -41,7 +44,15 @@ var (
 )
 
 func TestAgentsMDPathsExist(t *testing.T) {
-	md := readRepoFile(t, agentsMDName)
+	// The exit-code table is a verbatim copy of docs/agents.md's, whose
+	// links are relative to docs/ and whose paths may be inside a stack.
+	var lines []string
+	for _, line := range strings.Split(readRepoFile(t, agentsMDName), "\n") {
+		if !strings.HasPrefix(line, "|") {
+			lines = append(lines, line)
+		}
+	}
+	md := strings.Join(lines, "\n")
 	var paths []string
 	for _, m := range mdLinkRe.FindAllStringSubmatch(md, -1) {
 		if !strings.Contains(m[1], "://") {
@@ -69,7 +80,7 @@ func TestAgentsMDPathsExist(t *testing.T) {
 
 func TestAgentsMDFlagsExist(t *testing.T) {
 	allFlags := flagNames(newDocRoot())
-	for _, m := range regexp.MustCompile(`(^|[\s(\x60])--([a-z][a-z0-9-]*)`).FindAllStringSubmatch(readRepoFile(t, agentsMDName), -1) {
+	for _, m := range flagMentionRe.FindAllStringSubmatch(readRepoFile(t, agentsMDName), -1) {
 		if !allFlags[m[2]] {
 			t.Errorf("%s: no command has the flag --%s", agentsMDName, m[2])
 		}
@@ -79,7 +90,7 @@ func TestAgentsMDFlagsExist(t *testing.T) {
 // hasHeadingAnchor reports whether md has a heading whose GitHub anchor is
 // anchor.
 func hasHeadingAnchor(md, anchor string) bool {
-	for _, line := range strings.Split(md, "\n") {
+	for _, line := range strings.Split(fenceRe.ReplaceAllString(md, ""), "\n") {
 		if !strings.HasPrefix(line, "#") {
 			continue
 		}
@@ -107,7 +118,7 @@ func TestAgentsMDExitCodesMatchAgentsDoc(t *testing.T) {
 	}
 	if diffs := exitCodeTableDiffs(src, exitCodeTable(readRepoFile(t, agentsMDName))); len(diffs) > 0 {
 		t.Errorf("%s's exit-code table is out of step with %s's.\n"+
-			"%s is the source: copy the table under its \"## Exit codes\" heading into %s's verbatim.\n"+
+			"%s is the source: copy the table under its \"## Exit codes\" heading into %s verbatim.\n"+
 			"(If you meant to change %s, make the change in %s and copy it back.)\n%s",
 			agentsMDName, agentsDoc, agentsDoc, agentsMDName, agentsMDName, agentsDoc, strings.Join(diffs, "\n"))
 	}

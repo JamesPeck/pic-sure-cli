@@ -41,7 +41,7 @@ func TestSkillCommandsExist(t *testing.T) {
 			}
 		}
 		// Flags in prose or in partial commands still have to exist somewhere.
-		for _, m := range regexp.MustCompile(`(^|[\s(\x60])--([a-z][a-z0-9-]*)`).FindAllStringSubmatch(string(data), -1) {
+		for _, m := range flagMentionRe.FindAllStringSubmatch(string(data), -1) {
 			if !allFlags[m[2]] {
 				t.Errorf("%s: no command has the flag --%s", name, m[2])
 			}
@@ -138,6 +138,8 @@ func flagNames(cmd *cobra.Command) map[string]bool {
 var (
 	fenceRe      = regexp.MustCompile("(?s)```[a-z]*\n(.*?)```")
 	inlineCodeRe = regexp.MustCompile("`([^`]+)`")
+	// flagMentionRe matches a flag named anywhere in Markdown, prose included.
+	flagMentionRe = regexp.MustCompile(`(^|[\s(\x60])--([a-z][a-z0-9-]*)`)
 )
 
 // skillCommandLines returns the lines of fenced code blocks, with
