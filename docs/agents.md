@@ -152,7 +152,8 @@ prints the failed `result` instead. Re-running a failed converging command (`ini
   with one `result` line, whose `data` holds the command's report.
   `compose` refuses `--json`. `logs --json` emits each log line as a `log`
   event of step `logs`, defaulting to 200 lines per service. Use `--tail N`
-  or `--tail all` to change the bound, and `--since DUR` for a time window.
+  or `--tail all` to change the bound. `--since DUR` also filters by time;
+  combine it with `--tail all` for every line since that time.
 
 Both are specified in [json-schemas.md](json-schemas.md).
 
