@@ -109,7 +109,8 @@ func TestExecNotWedgedByOrphanGrandchild(t *testing.T) {
 	// default grace period.
 	r := &docker.ExecRunner{WaitDelay: time.Minute}
 	// Cancel once the grandchild exists, however long the script takes to
-	// start.
+	// start, and while the script sits in wait: a process forked at the
+	// moment of the group's SIGTERM can miss it.
 	forked := filepath.Join(t.TempDir(), "forked")
 	cancelled := make(chan time.Time, 1)
 	go func() {
@@ -127,7 +128,7 @@ func TestExecNotWedgedByOrphanGrandchild(t *testing.T) {
 		}
 	}()
 
-	res, err := r.Run(ctx, sh(`echo started; sleep 60 & : >"$1"; sleep 60`, forked))
+	res, err := r.Run(ctx, sh(`echo started; sleep 60 & : >"$1"; wait`, forked))
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}
@@ -277,12 +278,14 @@ func TestExecCancelSendsSIGTERMFirst(t *testing.T) {
 func TestExecLingeringGrandchildAfterExit(t *testing.T) {
 	t.Parallel()
 	r := &docker.ExecRunner{WaitDelay: 300 * time.Millisecond}
-	start := time.Now()
-	res, err := r.Run(context.Background(), sh("echo hi; sleep 60 & echo $!"))
-	// Wedged, Run would wait out the grandchild's 60 s sleep. The bound
-	// leaves room for a slow start on a loaded machine.
-	if elapsed := time.Since(start); elapsed > 30*time.Second {
-		t.Fatalf("Run took %v", elapsed)
+	// The script's last act is to create exited, so its mtime is when the
+	// script exited, however long it took to start.
+	exited := filepath.Join(t.TempDir(), "exited")
+	res, err := r.Run(context.Background(), sh(`echo hi; sleep 60 & echo $!; : >"$1"`, exited))
+	if fi, serr := os.Stat(exited); serr != nil {
+		t.Errorf("the script didn't finish: %v", serr)
+	} else if elapsed := time.Since(fi.ModTime()); elapsed >= docker.DefaultWaitDelay {
+		t.Errorf("Run returned %v after the exit, want about its own %v WaitDelay", elapsed, r.WaitDelay)
 	}
 	lines := strings.Fields(string(res.Stdout))
 	if len(lines) == 2 {
@@ -488,8 +491,8 @@ func TestWithTimeout(t *testing.T) {
 		t.Parallel()
 		// Its own timeout: on a loaded machine starting sh alone can take
 		// longer than 200ms.
-		r := docker.WithTimeout(&docker.ExecRunner{}, time.Minute)
-		code, err := r.Stream(context.Background(), sh("exit 4"), nil, nil)
+		fast := docker.WithTimeout(&docker.ExecRunner{}, time.Minute)
+		code, err := fast.Stream(context.Background(), sh("exit 4"), nil, nil)
 		if err != nil || code != 4 {
 			t.Errorf("Stream = %d, %v", code, err)
 		}
