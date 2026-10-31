@@ -2871,9 +2871,12 @@ It runs on the Charm v2 modules (`charm.land/bubbletea/v2`, `bubbles/v2`,
 terminal modes to it. `Init` sends `tea.RequestBackgroundColor`, and the
 reply is passed to `styles.SetDarkBackground`. Any non-empty `NO_COLOR`
 forces `colorprofile.Ascii`, because Bubble Tea itself honours only values
-that parse as true. Every embedded huh form is sized with `dialog.Fit`, never
-`WithWidth`. huh v2 still freezes group viewports once a width is set, and
-still ships esc disabled, so the screens handle esc themselves.
+that parse as true. Every embedded huh form is sized with `dialog.Fit`, on
+open and on every resize. Fit sets the width itself, because `huh.NewForm`
+pins forms to 80 columns under `TERM=dumb` and a pinned form ignores resize
+widths, and then sends a synthetic resize, because huh recomputes group
+viewport heights only in its resize handler. huh v2 still ships esc
+disabled, so the screens handle esc themselves.
 
 ## internal/dashboard
 

@@ -80,9 +80,9 @@ func (m *model) startTeardown(destroy bool) (tea.Model, tea.Cmd) {
 }
 
 // sizeForm fits a dialog form (dialog.Fit) to the FORM PANE it renders in
-// (m.width-leftWidth()-8), not the whole terminal. Using WithWidth, or sizing
-// to the terminal, lays the form out wider than the pane so lipgloss re-wraps
-// every line inside it, mangling titles/descriptions below 120 cols.
+// (m.width-leftWidth()-8), not the whole terminal. Sizing it to the terminal
+// lays the form out wider than the pane so lipgloss re-wraps every line
+// inside it, mangling titles/descriptions below 120 cols.
 func (m *model) sizeForm(f *huh.Form) *huh.Form {
 	cols := m.formWidth()
 	// -5 = the frame's chrome rows around the form pane content: header (1) +
