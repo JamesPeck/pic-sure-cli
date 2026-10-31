@@ -91,17 +91,20 @@ usage.` after it, and `--log-level debug` adds the `pic-sure exit` log
 record. With `--json`, stdout's last line on a non-zero exit is the
 failed `result` with the same message and the exit code, unless the
 command already printed its report:
-`doctor` (exit 1), `migrate --check` and `db bootstrap --check` (exit 3)
+`doctor` (exit 1), `migrate --dry-run` and `db bootstrap --dry-run` (exit 3)
 print their report with nothing after it. A report
 command that fails before it has a report (`status` with no stack, exit 3)
 prints the failed `result` instead. Re-running a failed converging command (`init`, `up`,
 `update`) resumes it: completed steps are skipped.
 
+`migrate --dry-run` and `db bootstrap --dry-run` preview without changing
+the database; `--check` remains an accepted older spelling.
+
 ## JSON output
 
 - **Reports.** `status`, `doctor`, `ps`, `version`, `support-bundle`,
-  `cache list`, `dev list`, `shared-data list`, `migrate --check` and
-  `db bootstrap --check` print one object with `schema_version: 2` first,
+  `cache list`, `dev list`, `shared-data list`, `migrate --dry-run` and
+  `db bootstrap --dry-run` print one object with `schema_version: 2` first,
   and no `result`. `config show --json` prints the config and `config get
   KEY --json` prints `{"key", "value"}`, without `schema_version`.
 - **Event streams.** Every other command prints NDJSON events and ends
@@ -194,7 +197,7 @@ scripts written for v1 need updating.
 | `etl load-phenotype`, `etl load-genomic`, other `etl` subcommands | `data load-phenotype`, `data load-genomic`, `dictionary hydrate/load-csv/load-facets/weights` |
 | `demo-data [DATASET] [--all]` | `data demo [nhanes\|synthea\|1000genomes\|all]` |
 | `seed-db` | Part of `up` and `init` |
-| `migrate --check --repair --no-restart --bootstrap-remote-db` | `migrate [--check \| --repair]`; `db bootstrap` for a remote database |
+| `migrate --check --repair --no-restart --bootstrap-remote-db` | `migrate [--dry-run \| --repair]`; `db bootstrap` for a remote database |
 | `release-control` | `update` (moves to the branch head) and `update --release-commit SHA` |
 | `dev up OVERLAY`, `dev off NAME` | `dev on SERVICE`, `dev off SERVICE` |
 | `reset --all`, `reset --repos` | `reset` (removes the database too; `--keep-db` keeps it). There are no sibling repos. |

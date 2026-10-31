@@ -151,6 +151,9 @@ Run these inside the stack directory, or add `--stack DIR`.
 - **Logs:** `pic-sure logs --json SERVICE | jq -r 'select(.type == "log") | .line' | tail -n 200`
   (no SERVICE means every service). Avoid `--follow` in a tool call; it
   doesn't return.
+- **Database preview:** `pic-sure migrate --dry-run --json` and
+  `pic-sure db bootstrap --dry-run --json` leave the database unchanged.
+  `--check` remains an accepted older spelling.
 - **Update:** `pic-sure update --dry-run --json` shows the plan; then
   `pic-sure update --json`. If it exits 5 for a newer pic-sure, ask the
   user before adding `--self-update`.

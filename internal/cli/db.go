@@ -25,7 +25,7 @@ all privileges on their databases. What already exists is left alone, so an
 existing user keeps its password; --sync-passwords sets each user's password
 to the one in secrets.yaml. init, up, update and migrate run the same step.
 
---check reports the databases, users, grants and logins without changing
+--dry-run reports the databases, users, grants and logins without changing
 anything, and exits 3 when bootstrap has work to do.
 
 The mysql client runs in a mysql:8.0 container, and the stack's services
@@ -36,17 +36,18 @@ OrbStack).`,
 		Args: cobra.NoArgs,
 		RunE: a.dbBootstrap,
 	}
-	bootstrap.Flags().Bool("check", false, "report schemas, users and grants without changing anything")
+	addDryRunFlag(bootstrap, "report schemas, users and grants without changing anything", "check")
 	bootstrap.Flags().Bool("sync-passwords", false, "set the users' passwords to match secrets.yaml")
 	bootstrap.MarkFlagsMutuallyExclusive("check", "sync-passwords")
+	bootstrap.MarkFlagsMutuallyExclusive("dry-run", "sync-passwords")
 	return newGroup("db", "Manage a remote MySQL (db.mode remote only)", skippable(bootstrap))
 }
 
 func (a *App) dbBootstrap(cmd *cobra.Command, _ []string) error {
-	check, _ := cmd.Flags().GetBool("check")
+	check, _ := cmd.Flags().GetBool("dry-run")
 	sync, _ := cmd.Flags().GetBool("sync-passwords")
 	if check && len(a.Global.SkipSteps) > 0 {
-		return exitcode.Usage("--skip-step can't be used with --check, which runs no steps")
+		return exitcode.Usage("--skip-step can't be used with --dry-run, which runs no steps")
 	}
 	if err := checkSkipSteps(cmd, ops.BootstrapStepIDs(), a.Global.SkipSteps); err != nil {
 		return err

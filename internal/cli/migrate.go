@@ -20,24 +20,25 @@ the auth and picsure schemas, the migrations project's, and the dictionary's.
 A database that is already migrated is left alone. After a migration, psama
 and dictionary-api are restarted if they are running.
 
---check verifies the migrations' inputs (the SQL directories, the dictionary
+--dry-run verifies the migrations' inputs (the SQL directories, the dictionary
 schema, the project UUIDs, the remote database settings and the compose
 config) without touching the database. --repair runs Flyway repair, which
 removes failed entries from the history so a fixed migration can run again.`,
 		Args: cobra.NoArgs,
 		RunE: a.migrate,
 	}
-	c.Flags().Bool("check", false, "verify the migration inputs without running them")
+	addDryRunFlag(c, "verify the migration inputs without running them", "check")
 	c.Flags().Bool("repair", false, "run Flyway repair")
 	c.MarkFlagsMutuallyExclusive("check", "repair")
+	c.MarkFlagsMutuallyExclusive("dry-run", "repair")
 	return skippable(c)
 }
 
 func (a *App) migrate(cmd *cobra.Command, _ []string) error {
-	check, _ := cmd.Flags().GetBool("check")
+	check, _ := cmd.Flags().GetBool("dry-run")
 	repair, _ := cmd.Flags().GetBool("repair")
 	if check && len(a.Global.SkipSteps) > 0 {
-		return exitcode.Usage("--skip-step can't be used with --check, which runs no steps")
+		return exitcode.Usage("--skip-step can't be used with --dry-run, which runs no steps")
 	}
 	st, err := a.openStackToCheckSkips(cmd)
 	if err != nil {

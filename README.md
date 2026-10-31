@@ -358,6 +358,9 @@ proxy end-to-end test.
 
 ## Updating
 
+`migrate --dry-run` and `db bootstrap --dry-run` preview without changing
+the database; `--check` remains an accepted older spelling.
+
 `pic-sure update` moves the stack to the head of its release branch
 (`release.branch`; `--release-commit SHA` for a specific one). Run
 `update --dry-run` first to see the plan. If the release needs a newer

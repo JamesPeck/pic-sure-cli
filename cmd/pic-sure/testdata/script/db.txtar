@@ -1,3 +1,23 @@
+# Preview has one visible spelling, including completion.
+exec pic-sure db bootstrap --help
+stdout '--dry-run'
+! stdout '--check'
+exec pic-sure __complete db bootstrap --
+stdout '--dry-run'
+! stdout '--check'
+
+# Both spellings name the same flag, even with explicit false values.
+exitcode 2 pic-sure db bootstrap --dry-run --check
+stderr 'same flag'
+exitcode 2 pic-sure db bootstrap --check=false --dry-run=false
+stderr 'same flag'
+exitcode 2 pic-sure db bootstrap --dry-run --sync-passwords
+stderr 'none of the others can be'
+exitcode 2 pic-sure db bootstrap --dry-run --skip-step db
+stderr '--dry-run.*runs no steps'
+exitcode 2 pic-sure db bootstrap --check --skip-step db
+stderr '--dry-run.*runs no steps'
+
 # --check and --sync-passwords are mutually exclusive.
 exitcode 2 pic-sure db bootstrap --check --sync-passwords
 
@@ -20,6 +40,12 @@ exec pic-sure --stack remote --json db bootstrap --check
 stdout '^\{"schema_version":2,"ok":true,"server":"db.example.org:3307","version":"8.0.40","checks":\[\{"name":"database picsure","ok":true\},'
 stdout '"name":"login airflow","ok":true'
 ! stdout '"type"'
+cp stdout check.json
+! stderr .
+exec pic-sure --stack remote --json db bootstrap --dry-run
+cmp stdout check.json
+! stderr .
+! exists remote/.pic-sure/lock
 exec pic-sure --stack remote --plain db bootstrap --check
 stdout '^MySQL 8.0.40 at db.example.org:3307$'
 stdout '^ok   grants airflow on picsure$'

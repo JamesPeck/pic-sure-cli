@@ -42,3 +42,23 @@ func rejectUnknownHelpTopics(root *cobra.Command) {
 		return nil
 	}
 }
+
+// addDryRunFlag optionally accepts a hidden legacy spelling for the same value.
+func addDryRunFlag(cmd *cobra.Command, usage string, aliases ...string) {
+	flags := cmd.Flags()
+	value := flags.Bool("dry-run", false, usage)
+	for _, alias := range aliases {
+		flags.BoolVar(value, alias, false, usage)
+		_ = flags.MarkHidden(alias)
+	}
+	if len(aliases) > 0 {
+		cmd.PreRunE = func(cmd *cobra.Command, _ []string) error {
+			for _, alias := range aliases {
+				if cmd.Flags().Changed("dry-run") && cmd.Flags().Changed(alias) {
+					return exitcode.Usage("--dry-run and --%s are the same flag; pass only one", alias)
+				}
+			}
+			return nil
+		}
+	}
+}

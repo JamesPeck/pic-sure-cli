@@ -1,8 +1,11 @@
 # JSON output
 
+`migrate --dry-run` and `db bootstrap --dry-run` preview without changing
+the database; `--check` remains an accepted older spelling.
+
 `status --json`, `doctor --json`, `ps --json`, `support-bundle --json`,
 `version --json`, `cache list --json`, `dev list --json`, `shared-data
-list --json`, `migrate --check --json` and `db bootstrap --check --json`
+list --json`, `migrate --dry-run --json` and `db bootstrap --dry-run --json`
 print one JSON object on stdout with `schema_version` first, and no
 `result` event. Commands that stream print NDJSON events instead, ending
 with a `result` event. Within `schema_version` 2,
