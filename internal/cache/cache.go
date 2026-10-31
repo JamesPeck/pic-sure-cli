@@ -102,7 +102,7 @@ func realPath(p string) string {
 }
 
 // Open opens the cache at root, an absolute path such as DefaultRoot's,
-// creating its directories as needed. Open does not apply DefaultRoot's
+// creating its directories unless ReadOnly. Open does not apply DefaultRoot's
 // temporary-directory check.
 func Open(root string, opts Options) (*Cache, error) {
 	if !filepath.IsAbs(root) {
