@@ -5,7 +5,7 @@ The stack definition pic-sure embeds (D5) and renders into a stack's
 (`hms-dbmi/pic-sure-all-in-one`, branch `aio-compose`) and changed where v2
 fixes the bash's behaviour (spec §6.4, §13).
 
-AIO commit: `f7ff8b8fc8363511f30f788095d48e42df869971`
+AIO commit: `afa3f001a467fae4992c9e685aebfe56d1b22b46`
 
 The drift job (`.github/workflows/template-drift.yml`) runs
 weekly. It diffs each AIO source below, plus any other AIO compose file,
@@ -104,6 +104,9 @@ Compose:
   labels.
 - No `${VAR:-default}` settings. Config values and AIO's defaults are written
   literally; `services.<name>.env` and `java_opts` override them.
+- Long-running services keep `restart: always`. AIO made it
+  `${RESTART_POLICY:-always}` so throwaway stacks can opt out; pic-sure has
+  no config key for it, and `pic-sure down` removes a stack's containers.
 - Each image is its own reference (`Image`), not one `PICSURE_IMAGE_TAG`.
 - TLS files come from the `certs` volume, not `./certs/*` binds.
 - psama gets a truststore only when the stack has custom certs: the

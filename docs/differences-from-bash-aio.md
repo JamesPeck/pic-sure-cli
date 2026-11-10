@@ -5,7 +5,7 @@ pic-sure v2 installs the same PIC-SURE stack as the bash scripts in
 but it is a separate product. The bash All-in-One is unchanged and still
 works on its own. pic-sure used the bash behaviour as a reference, not a
 spec, and fixed its bugs rather than reproducing them. This page lists what
-behaves differently, compared with `aio-compose` at f7ff8b8.
+behaves differently, compared with `aio-compose` at afa3f00.
 
 pic-sure needs only `docker` (compose ≥ 2.29.0, buildx ≥ 0.17.0) and
 `git` on the host. It doesn't adopt existing bash installs. Create a new stack with
@@ -19,6 +19,7 @@ pic-sure needs only `docker` (compose ≥ 2.29.0, buildx ≥ 0.17.0) and
 | Compose files plus overlays chosen per command, so a plain `up` drops a dev overlay | One merged compose file rendered per stack (`.pic-sure/render/compose.yaml`); overlays are chosen at render time and can't be dropped. Your own `overrides/*.yaml` are applied last. |
 | No top-level compose `name:`; one stack per host | Every stack has its own name, ports, volumes and networks, and several run side by side. Destructive commands select by stack label, never by name prefix. |
 | Fixed debug and HMR ports; the http→https redirect drops a non-443 port | Per-stack debug and HMR ports; the redirect keeps the port. |
+| `RESTART_POLICY` sets every service's restart policy (default `always`) | Services always restart with Docker; there's no setting. `pic-sure down` removes the containers, so a stopped stack stays stopped. |
 | The `.env.example` proxy variables are documented but never read | The `proxy` block reaches every egress path: pic-sure's downloads, git, image builds, Maven, node and the services' JVMs. Proxy URLs must be `http://`. |
 
 ## Secrets and auth
