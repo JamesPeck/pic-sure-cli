@@ -52,8 +52,8 @@ are not run: their inputs could change after the earlier action. On a
 current stack, resolve, genomic-leftovers, images, TLS and truststore can
 all report `would_skip`; render and start still report `always_runs`.
 With HMR enabled, `hmr-volume` also has no Check and reports `always_runs`.
-Database, migration, seed, HPDS-key and restart outcomes then remain
-`depends_on_earlier_step`. A successful preview does not promise that a
+Database, migration, seed, HPDS-key, restart and logging-volume outcomes
+then remain `depends_on_earlier_step`. A successful preview does not promise that a
 real `up` will succeed, or that the stack needs no changes.
 
 The preview takes no stack lock and writes no stack files, run logs or

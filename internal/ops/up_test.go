@@ -34,10 +34,11 @@ func TestUpStepIDsMatchUpSteps(t *testing.T) {
 			t.Errorf("db.mode %s: UpSteps %v, UpStepIDs %v", mode, ids, want)
 		}
 		// up is init's plan with the genomic-leftovers check after resolve
-		// and the restart before start.
+		// and the restart before the logging volume step.
 		init := ops.InitStepIDs(&cfg)
-		want := append([]string{init[0], ops.GenomicLeftoversStepID}, init[1:len(init)-1]...)
-		if want = append(want, ops.RestartStepID, ops.StartStepID); !slices.Equal(ids, want) {
+		lv := slices.Index(init, ops.LoggingVolumeStepID)
+		want := append([]string{init[0], ops.GenomicLeftoversStepID}, init[1:lv]...)
+		if want = append(append(want, ops.RestartStepID), init[lv:]...); !slices.Equal(ids, want) {
 			t.Errorf("db.mode %s: UpSteps %v, want %v", mode, ids, want)
 		}
 	}
@@ -153,7 +154,7 @@ func TestUpPlanCurrentStackReachesRenderWithoutApplying(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []steps.PlanStatus{steps.WouldSkip, steps.WouldSkip, steps.WouldSkip, steps.WouldSkip, steps.WouldSkip, steps.AlwaysRuns, steps.DependsOnEarlierStep, steps.DependsOnEarlierStep, steps.DependsOnEarlierStep, steps.DependsOnEarlierStep, steps.DependsOnEarlierStep, steps.AlwaysRuns}
+	want := []steps.PlanStatus{steps.WouldSkip, steps.WouldSkip, steps.WouldSkip, steps.WouldSkip, steps.WouldSkip, steps.AlwaysRuns, steps.DependsOnEarlierStep, steps.DependsOnEarlierStep, steps.DependsOnEarlierStep, steps.DependsOnEarlierStep, steps.DependsOnEarlierStep, steps.DependsOnEarlierStep, steps.AlwaysRuns}
 	if len(got) != len(want) {
 		t.Fatalf("plan = %+v", got)
 	}
