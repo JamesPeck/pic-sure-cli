@@ -1294,10 +1294,19 @@ init, and the parts `up` and `update` reuse.
   plan source init, up and update share: `images`, `node-image` with
   httpd-hmr, `tls`, `truststore` (`StackTruststoreStep`, which reads the
   psama tag from state when it runs), `render`, then `ConvergeSteps` with
-  `hmr-volume` (httpd-hmr, where `HostUser()` is set) before `start`.
+  `logging-volume` and `hmr-volume` (httpd-hmr, where `HostUser()` is set)
+  before `start`.
   With `restart` (up and update), `planSteps` also wraps `tls`,
   `truststore` and `render` to record restarts (`upRestarts`) and adds
-  `restart` before `hmr-volume`. `InitStepIDs(cfg)` (`planStepIDs`) lists
+  `restart` before `logging-volume`.
+- `LoggingVolumeStep`, ID `logging-volume`: pic-sure-logging runs as a
+  non-root user from pic-sure e4aefc9 on, and a `logging-logs` volume an
+  older, root image wrote stays root's. The step reads the built image's
+  `Config.User` (`Docker.ImageUser`) and, unless it is root or there is no
+  built image, runs that image as `--user 0 --entrypoint chown -R <user>
+  /app/logs` on the volume (`st.EnsureVolume`), as AIO's
+  `start-picsure.sh` does since 8a7aaf7. A root image means done, so
+  releases before e4aefc9 skip it. `InitStepIDs(cfg)` (`planStepIDs`) lists
   the IDs for checking `--skip-step` early.
 - `RenderStep`, ID `render`, always applies: it renders from a fresh
   state.json (the TLS and truststore steps save it themselves), writes the
@@ -1340,7 +1349,7 @@ ConvergeOptions)` is init's plan with `genomic-leftovers` after
 `resolve` and a `restart` step before `start`:
 `resolve`, `genomic-leftovers`, `images`[, `node-image`], `tls`,
 `truststore`, `render`, `db`[, `db-bootstrap`], `migrate`, `seed`,
-`hpds-key`, `restart`[, `hmr-volume`], `start`; `UpStepIDs(cfg)` lists the
+`hpds-key`, `restart`, `logging-volume`[, `hmr-volume`], `start`; `UpStepIDs(cfg)` lists the
 IDs (`plan_test.go` runs the whole init, up and update plans through the
 fakes). Its `resolve` is build's, limited to the components state.json records
 a local source for that the config no longer sets (`unsetSources`): they

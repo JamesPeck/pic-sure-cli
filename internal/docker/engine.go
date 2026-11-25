@@ -45,6 +45,9 @@ type Engine interface {
 	ImageID(ctx context.Context, ref string) (string, error)
 	// ImageLabels returns the local image's labels, empty if it has none.
 	ImageLabels(ctx context.Context, ref string) (map[string]string, error)
+	// ImageUser returns the local image's configured user (its Dockerfile
+	// USER), empty if it runs as the default, root.
+	ImageUser(ctx context.Context, ref string) (string, error)
 	// Build runs `docker build`, streaming its output.
 	Build(ctx context.Context, opts BuildOpts) error
 	// Pull pulls an image, copying docker's progress output to out (nil

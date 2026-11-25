@@ -118,7 +118,8 @@ func TestConvergeStepsBuildTheComposerOnce(t *testing.T) {
 	for _, s := range list {
 		ids = append(ids, s.ID)
 	}
-	if want := []string{"db", "migrate", "seed", "hpds-key", "start"}; !slices.Equal(ids, want) || !slices.Equal(ops.InitStepIDs(&cfg)[5:], want) {
+	want := []string{"db", "migrate", "seed", "hpds-key", "start"}
+	if !slices.Equal(ids, want) || !slices.Equal(ops.InitStepIDs(&cfg)[5:], []string{"db", "migrate", "seed", "hpds-key", ops.LoggingVolumeStepID, "start"}) {
 		t.Fatalf("ConvergeSteps = %v, want %v", ids, want)
 	}
 	remote := cfg

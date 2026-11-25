@@ -33,6 +33,7 @@ type imageInspect struct {
 	ID     string `json:"Id"`
 	Config struct {
 		Labels map[string]string
+		User   string
 	}
 }
 
@@ -73,6 +74,11 @@ func (e *cliEngine) ImageLabels(ctx context.Context, ref string) (map[string]str
 		return map[string]string{}, nil
 	}
 	return img.Config.Labels, nil
+}
+
+func (e *cliEngine) ImageUser(ctx context.Context, ref string) (string, error) {
+	img, err := e.inspectImage(ctx, ref)
+	return img.Config.User, err
 }
 
 func (e *cliEngine) Build(ctx context.Context, opts BuildOpts) error {

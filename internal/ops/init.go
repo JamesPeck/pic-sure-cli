@@ -78,6 +78,7 @@ func planStepIDs(cfg *stack.Config, restart bool) []string {
 	if restart {
 		ids = append(ids, RestartStepID)
 	}
+	ids = append(ids, LoggingVolumeStepID)
 	if hmrOn(cfg) && HostUser() != "" {
 		ids = append(ids, HMRVolumeStepID)
 	}
@@ -87,9 +88,10 @@ func planStepIDs(cfg *stack.Config, restart bool) []string {
 // planSteps are the steps init, up and update share after resolving the
 // components, with images as the image step: the images (and httpd-hmr's
 // Node tag), TLS and the truststore, a fresh render, then ConvergeSteps,
-// with httpd-hmr's volume step before start. With restart (up and update),
-// the TLS, truststore and render steps record the restarts they call for
-// and a restart step runs them before start.
+// with the logging volume step and httpd-hmr's volume step before start.
+// With restart (up and update), the TLS, truststore and render steps
+// record the restarts they call for and a restart step runs them before
+// the volume steps.
 func planSteps(d *Deps, st *stack.Stack, cfg *stack.Config, sec *stack.Secrets, state *stack.State, opts ConvergeOptions, images steps.Step, restart bool) []steps.Step {
 	tls, trust, rend := TLSStep(d, st, cfg), StackTruststoreStep(d, st, cfg, state), RenderStep(d, st, cfg, state, opts)
 	var r *upRestarts
@@ -108,6 +110,7 @@ func planSteps(d *Deps, st *stack.Stack, cfg *stack.Config, sec *stack.Secrets, 
 	if restart {
 		list = append(list, withCompose(d, opts, r.step()))
 	}
+	list = append(list, LoggingVolumeStep(d, st, cfg, state))
 	if user := HostUser(); hmrOn(cfg) && user != "" {
 		list = append(list, HMRVolumeStep(d, st, cfg, user))
 	}

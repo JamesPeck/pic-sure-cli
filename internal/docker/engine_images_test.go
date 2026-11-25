@@ -14,7 +14,7 @@ import (
 
 const (
 	img          = "hms-dbmi/pic-sure-hpds:0123456789ab"
-	imgInspect   = `[{"Id":"sha256:33bee74c","RepoTags":["hms-dbmi/pic-sure-hpds:0123456789ab"],"Config":{"Labels":{"org.hms-dbmi.picsure.reactor-src":"0123456789abcdef"}}}]`
+	imgInspect   = `[{"Id":"sha256:33bee74c","RepoTags":["hms-dbmi/pic-sure-hpds:0123456789ab"],"Config":{"User":"10001:10001","Labels":{"org.hms-dbmi.picsure.reactor-src":"0123456789abcdef"}}}]`
 	noSuchImage  = "Error response from daemon: No such image: hms-dbmi/pic-sure-hpds:0123456789ab\n"
 	daemonDenied = "permission denied while trying to connect to the docker API at unix:///var/run/docker.sock\n"
 )
@@ -33,6 +33,9 @@ func TestImageInspection(t *testing.T) {
 	labels, err := e.ImageLabels(ctx, img)
 	if want := map[string]string{"org.hms-dbmi.picsure.reactor-src": "0123456789abcdef"}; !maps.Equal(labels, want) || err != nil {
 		t.Errorf("ImageLabels = %v, %v", labels, err)
+	}
+	if user, err := e.ImageUser(ctx, img); user != "10001:10001" || err != nil {
+		t.Errorf("ImageUser = %q, %v", user, err)
 	}
 }
 
